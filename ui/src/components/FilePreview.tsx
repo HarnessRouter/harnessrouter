@@ -59,10 +59,19 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
       const kind = kindOf(name, mime);
       if (kind === 'office') {
         // The PDF rendition needs the same auth an <iframe src> can't carry, fetch to a blob URL.
+        // Surface WHY it failed: a build without the document converter is a different problem
+        // from a file that wouldn't convert, and "Could not load this file" said neither.
         try {
           const b = await fetchFileBlob(pdfUrlFor(url)); obj = URL.createObjectURL(b);
           if (alive) setSt({ kind: 'office', objUrl: obj });
-        } catch { if (alive) setSt({ kind: 'binary', error: 'Could not load this file.' }); }
+        } catch (e) {
+          const msg = String((e as Error)?.message || '');
+          if (alive) {
+            setSt({ kind: 'binary',
+                    error: /501/.test(msg) ? 'Preview isn\u2019t available in this build \u2014 download to open it.'
+                         : 'This file couldn\u2019t be rendered for preview.' });
+          }
+        }
         return;
       }
       if (kind === 'sheet') {

@@ -5864,9 +5864,13 @@ async def container_file_pdf(container_id: str, file_id: str, request: Request):
         return Response(content=data, media_type="application/pdf")
     if ext not in _PDF_CONVERTIBLE:
         raise HTTPException(415, f"no pdf preview for .{ext}")
+    if not _SOFFICE:
+        # Distinguish "this build cannot preview documents" from "this document failed to
+        # convert" — they need different actions, and one generic error told the user neither.
+        raise HTTPException(501, "document preview is not available in this build")
     pdf = await asyncio.to_thread(_convert_to_pdf, data, ext)
     if pdf is None:
-        raise HTTPException(503, "conversion unavailable")
+        raise HTTPException(502, f"could not convert this .{ext} file")
     await _blob_put(cache_key, pdf, kb=RESP_BLOB_KB)   # cache so repeat previews are instant
     return Response(content=pdf, media_type="application/pdf")
 

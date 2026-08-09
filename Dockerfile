@@ -60,6 +60,19 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
         curl ca-certificates git bash tini \
     && rm -rf /var/lib/apt/lists/*
 
+# Document preview. The built-in harnesses ship docx/pptx/xlsx skills, so agents produce those
+# files routinely — and a presentation you can only download is a worse answer than one you can
+# look at. Browsers render none of them, so the console asks the gateway for a PDF rendition and
+# LibreOffice headless is what makes it. Impress/Writer/Calc only, no recommends: the full
+# libreoffice metapackage drags in Java and a desktop stack for no benefit here.
+ARG WITH_DOC_PREVIEW=1
+RUN set -eux; \
+    if [ "$WITH_DOC_PREVIEW" = "1" ]; then \
+      apt-get update -y && apt-get install -y --no-install-recommends \
+        libreoffice-impress libreoffice-writer libreoffice-calc fonts-dejavu-core \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Node is needed for the UI server and for the npm-based agent CLIs.
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
