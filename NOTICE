@@ -1,0 +1,42 @@
+HarnessRouter
+Copyright (c) 2026 Epsilla
+
+This product is licensed under the MIT License (see LICENSE).
+
+THIRD-PARTY DEPENDENCIES
+------------------------
+The published container image bundles the following third-party software. All are
+permissive licenses, and their notices are preserved here as those licenses require.
+
+  Python
+    FastAPI              MIT
+    Uvicorn              BSD-3-Clause
+    httpx                BSD-3-Clause
+    Pydantic             MIT
+    python-multipart     Apache-2.0
+    aiohttp              Apache-2.0
+    redis-py             MIT
+    PyJWT                MIT
+    PyYAML               MIT
+
+  JavaScript
+    Next.js              MIT
+    React / ReactDOM     MIT
+    ReifyUI              MIT
+    highlight.js         BSD-3-Clause
+    Mermaid              MIT
+    Apache ECharts       Apache-2.0
+
+AGENT RUNTIMES — NOT REDISTRIBUTED
+----------------------------------
+The agent CLIs are deliberately NOT included in this image. They are installed on first
+run, by you, under their own licenses:
+
+  @anthropic-ai/claude-code   Anthropic's own terms ("SEE LICENSE IN README.md")
+  @openai/codex               Apache-2.0
+  hermes-agent                no license declared by the publisher
+
+Because Claude Code is distributed under Anthropic's terms and hermes-agent declares no
+license, neither may be redistributed inside a public image. Installing them at first
+start keeps that decision — and its terms — with the operator. Review each tool's license
+before enabling its backend. Set HR_BACKENDS to control which are installed.

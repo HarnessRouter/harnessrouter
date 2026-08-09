@@ -1,0 +1,23 @@
+# Self-hosted HarnessRouter.
+#
+#   1. cp .env.example .env      and put YOUR provider key in it
+#   2. docker compose up -d
+#   3. open http://localhost:3000
+#
+# One container, one volume. No external services.
+services:
+  harnessrouter:
+    image: harnessrouter/harnessrouter:latest
+    # Use this instead of `image:` to build locally:
+    # build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # Everything durable lives here: SQLite databases, blobs, and the secret store.
+      - harnessrouter-data:/data
+    restart: unless-stopped
+
+volumes:
+  harnessrouter-data:
