@@ -8,8 +8,8 @@ import { SkelPage } from '@/components/Skel';
 import { useParams, useRouter } from 'next/navigation';
 import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
-  type CustomHarness, type OobHarness,
-} from '@/lib/harness';
+  modelAvailable,
+  type CustomHarness, type OobHarness } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
 import { SkillEditor, McpModal, type McpServer } from '@/components/HarnessEditors';
@@ -159,7 +159,11 @@ export default function HarnessSettingsPage() {
               <div className="field"><label htmlFor="hsModel">Model</label>
                 <select id="hsModel" disabled={readOnly} value={oob ? oobDefaultModel(oob) : (draft?.defaultModel || oobDefaultModel(oobById(draft?.base || '')) || '')}
                   onChange={(e) => upd({ defaultModel: e.target.value })}>
-                  {models.map((m) => <option key={m} value={m}>{m}</option>)}
+{models.map((m) => (
+                    <option key={m} value={m} disabled={!modelAvailable((oob?.backend || oobById(draft?.base || '')?.backend) || '', m)}>
+                      {m}{modelAvailable((oob?.backend || oobById(draft?.base || '')?.backend) || '', m) ? '' : ' — no provider'}
+                    </option>
+                  ))}
                 </select>
                 <span className="field-help">Tasks may choose another compatible model at runtime.</span></div>
             </div>

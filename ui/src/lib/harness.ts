@@ -76,7 +76,13 @@ export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
 // for the tab. The literals above remain ONLY as the pre-fetch placeholder so first paint
 // isn't empty; once the fetch lands the server's list wins. Never add a model here — add it
 // to _MODEL_CATALOG in the gateway and it shows up everywhere.
-export type ModelCatalog = Record<string, { default: string; models: string[] }>;
+export type ModelCatalog = Record<string, {
+  default: string;
+  models: string[];
+  /** Models the server has no provider configured for. Offering one is a promise the router
+   *  then breaks — the picker accepts it and the turn fails at the point of no return. */
+  unavailable: string[];
+}>;
 
 let _catalog: ModelCatalog | null = null;
 let _catalogInflight: Promise<ModelCatalog> | null = null;
@@ -91,9 +97,13 @@ export async function fetchModelCatalog(): Promise<ModelCatalog> {
       const j = await r.json();
       const out: ModelCatalog = {};
       for (const [backend, c] of Object.entries((j?.backends || {}) as Record<string, {
-        default?: string; models?: Array<{ id?: string }> }>)) {
-        out[backend] = { default: String(c?.default || ''),
-                         models: (c?.models || []).map((m) => String(m?.id || '')).filter(Boolean) };
+        default?: string; models?: Array<{ id?: string; available?: boolean }> }>)) {
+        const rows = (c?.models || []).filter((m) => m?.id);
+        out[backend] = {
+          default: String(c?.default || ''),
+          models: rows.map((m) => String(m.id)),
+          unavailable: rows.filter((m) => m.available === false).map((m) => String(m.id)),
+        };
       }
       if (Object.keys(out).length) _catalog = out;
       return _catalog || {};
@@ -112,6 +122,13 @@ export const oobModels = (o: OobHarness | null | undefined): string[] => {
   const fromServer = o.backend ? _catalog?.[o.backend]?.models : undefined;
   return (fromServer && fromServer.length) ? fromServer : o.models;
 };
+
+/** Can this backend actually run this model? False only when the server said so — before the
+ *  catalog loads (or if the fetch failed) nothing is greyed out on a guess. */
+export function modelAvailable(backend: string | null | undefined, id: string): boolean {
+  const list = backend ? _catalog?.[backend]?.unavailable : undefined;
+  return !list || !list.includes(id);
+}
 
 export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
   if (!o) return '';

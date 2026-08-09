@@ -150,7 +150,10 @@ export default function IntegrationsPage() {
 
             <div className="itg-section-head">
               <div><h2>Model, Integration Mapping</h2>
-                <p>When a Harness runs a model, this decides which integration serves it. Unmapped models use the built-in provider routing.</p></div>
+                <p>When a Harness runs a model, this decides which integration serves it.{' '}
+                  {SELF_HOSTED
+                    ? 'A model with no integration has no provider, so it can\u2019t be selected.'
+                    : 'Unmapped models use the built-in provider routing.'}</p></div>
             </div>
             <div className="table-wrap">
               <table className="itg-table itg-map-table">
@@ -279,14 +282,7 @@ export default function IntegrationsPage() {
                         <summary>{models.map((m) => m.canonical).slice(0, 4).join(', ')}
                           {models.length > 4 ? ` and ${models.length - 4} more` : ''}</summary>
                         <ul>
-                          {models.map((m) => (
-                            <li key={m.canonical}>
-                              <span>{m.canonical}</span>
-                              {m.provider_id !== m.canonical
-                                ? <code>{m.provider_id}</code>
-                                : null}
-                            </li>
-                          ))}
+                          {models.map((m) => <li key={m.canonical}>{m.canonical}</li>)}
                         </ul>
                       </details>
                     </div>

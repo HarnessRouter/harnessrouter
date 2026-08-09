@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Mermaid } from '@/components/Mermaid';
-import { OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, saveCustom, listCustom, getSkillFiles, storeMcpSecret, testMcp, type CustomHarness, type OobHarness } from '@/lib/harness';
+import { OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, saveCustom, listCustom, getSkillFiles, storeMcpSecret, testMcp, type CustomHarness, type OobHarness, modelAvailable } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { streamResponse, subscribeHarnessEvents, containerFileUrl, downloadFile, loadSessionTurns, cancelSession, authHeaders, type RespFile, type SessionTurn } from '@/lib/chat';
 import { getSession } from '@/lib/auth';
@@ -505,11 +505,17 @@ function AttachCard({ name, dataUri, onRemove }: { name: string; dataUri?: strin
   );
 }
 
-function ModelSelect({ models, value, onChange }: { models: string[]; value: string; onChange: (m: string) => void }) {
+function ModelSelect({ models, value, onChange, backend }: {
+  models: string[]; value: string; onChange: (m: string) => void; backend?: string | null;
+}) {
   return (
     <div className="wbx-select-wrap block">
       <select className="wbx-select full" value={value} onChange={(e) => onChange(e.target.value)}>
-        {models.map((m) => <option key={m} value={m}>{m}</option>)}
+        {models.map((m) => (
+          <option key={m} value={m} disabled={!modelAvailable(backend, m)}>
+            {m}{modelAvailable(backend, m) ? '' : ' — no provider'}
+          </option>
+        ))}
       </select>
       <span className="wbx-select-chev"><Chevron dir="down" size={15} /></span>
     </div>
@@ -1307,7 +1313,11 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
             {models.length > 0 && (
               <div className="wbx-select-wrap mini">
                 <select className="wbx-select mini" value={target.model || ''} onChange={(e) => onModel(e.target.value)}>
-                  {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                  {models.map((m) => (
+                    <option key={m} value={m} disabled={!modelAvailable(target.backend, m)}>
+                      {m}{modelAvailable(target.backend, m) ? '' : ' — no provider'}
+                    </option>
+                  ))}
                 </select>
                 <span className="wbx-select-chev"><Chevron dir="down" size={13} /></span>
               </div>

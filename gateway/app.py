@@ -2875,6 +2875,9 @@ def _provider_model_id(provider: str, canonical: str) -> str | None:
     if table is not None:
         key = canonical[len("claude-"):] if canonical.startswith("claude-") else canonical
         return table.get(canonical) or table.get(key)
+    if provider in ("openrouter", "tokenrouter"):
+        # Aggregators need the vendor-qualified slug; no entry means they don't serve it.
+        return _AGGREGATOR_SLUGS.get(canonical)
     # Everything else is OpenAI-shaped: _map_model passes the name through untouched, so the
     # canonical name IS the provider id.
     return canonical
@@ -3361,6 +3364,52 @@ _ANTHROPIC_CLAUDE = {
 }
 
 
+# Aggregator model ids. OpenRouter (and TokenRouter, which mirrors its slugs) addresses models as
+# `vendor/slug`, never bare — so passing a canonical name through unchanged produces an id the
+# aggregator rejects. Verified against OpenRouter's live /v1/models catalog; an entry here means
+# the aggregator really serves it.
+#
+# This is the growing list: adding a model is a line here plus a line in _MODEL_CATALOG, and every
+# integration picks it up on the next release without anyone retyping anything.
+_AGGREGATOR_SLUGS = {
+    # OpenAI
+    "gpt-5.6-sol": "openai/gpt-5.6-sol",
+    "gpt-5.6-terra": "openai/gpt-5.6-terra",
+    "gpt-5.6-luna": "openai/gpt-5.6-luna",
+    "gpt-5.5": "openai/gpt-5.5",
+    "gpt-5.4": "openai/gpt-5.4",
+    "gpt-5.4-mini": "openai/gpt-5.4-mini",
+    "gpt-5.2": "openai/gpt-5.2",
+    "gpt-5.3-codex": "openai/gpt-5.3-codex",
+    "gpt-5.2-codex": "openai/gpt-5.2-codex",
+    # Anthropic
+    "claude-opus-5": "anthropic/claude-opus-5",
+    "claude-fable-5": "anthropic/claude-fable-5",
+    "claude-opus-4.8": "anthropic/claude-opus-4.8",
+    "claude-sonnet-5": "anthropic/claude-sonnet-5",
+    "claude-opus-4.7": "anthropic/claude-opus-4.7",
+    "claude-sonnet-4.6": "anthropic/claude-sonnet-4.6",
+    "claude-haiku-4.5": "anthropic/claude-haiku-4.5",
+    # Google
+    "gemini-3.6-flash": "google/gemini-3.6-flash",
+    # open-weight families
+    "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+    "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
+    "kimi-k3": "moonshotai/kimi-k3",
+    "glm-5.2": "z-ai/glm-5.2",
+    "qwen3.7-max": "qwen/qwen3.7-max",
+    "qwen3.8-max": "qwen/qwen3.8-max",
+    "qwen3.7-flash": "qwen/qwen3.7-flash",
+    "kimi-k2.7-code": "moonshotai/kimi-k2.7-code",
+    "minimax-m3": "minimax/minimax-m3",
+    "nemotron-3-ultra": "nvidia/nemotron-3-ultra-550b-a55b",
+    "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
+    "hunyuan-3": "tencent/hy3",
+    "step-3.7-flash": "stepfun/step-3.7-flash",
+    "ling-3.0-flash": "inclusionai/ling-3.0-flash",
+}
+
+
 def _map_model(conn: dict, friendly: str) -> str | None:
     """Map a friendly model name to the connection provider's real id.
 
@@ -3393,7 +3442,11 @@ def _map_model(conn: dict, friendly: str) -> str | None:
                 return friendly
         # empty or unmappable -> a guaranteed-valid id (connection default, else provider sonnet)
         return _valid_default() or table.get("sonnet-4.6") or (default or None)
-    # codex/azure/openai/tokenrouter: the deployment/model name is used as-is (else connection default)
+    if provider in ("openrouter", "tokenrouter") and friendly:
+        # Same vendor/slug requirement as the catalog. A name already in slug form isn't in the
+        # table and passes through untouched, so an existing configured connection is unaffected.
+        return _AGGREGATOR_SLUGS.get(friendly, friendly)
+    # codex/azure/openai: the deployment/model name is used as-is (else connection default)
     return friendly or (default or None)
 
 
@@ -3433,7 +3486,11 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
                           "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                          "glm-5.2", "qwen3.7-max"]},
+                          "glm-5.2", "qwen3.7-max",
+                          # latest open-weight flagships, one per family
+                          "qwen3.8-max", "qwen3.7-flash", "kimi-k2.7-code", "minimax-m3",
+                          "nemotron-3-ultra", "mistral-medium-3.5", "hunyuan-3",
+                          "step-3.7-flash", "ling-3.0-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
@@ -3506,16 +3563,41 @@ def _resolve_model_policy(requested: str, hv: dict | None, backend: str) -> tupl
                                 f"'{backend}'; used the authorized default '{default}'")
 
 
-def _harness_models_view(hv: dict | None, backend: str) -> dict:
-    """The per-harness model capability view: allowed models, default, and authorized fallback."""
+async def _servable_models(org: str | None, backend: str) -> set[str] | None:
+    """Canonical models something can actually run on this backend.
+
+    None means "no restriction": a policy chain exists, and a chain's connections are
+    provider-level rather than per-model, so the backend can attempt its whole catalog.
+
+    Otherwise the only thing that can serve a turn is a model→integration mapping, so the
+    answer is exactly those canonicals whose integration's provider is wired to this backend.
+    Offering a model nothing can serve is a promise the router then breaks — the picker would
+    accept it and the turn would fail at the point of no return."""
+    if await _resolve_chain(org, backend, None):
+        return None
+    integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
+    servable: set[str] = set()
+    for canonical, iname in (await _model_map_doc()).items():
+        integ = integrations.get(iname)
+        if not integ:
+            continue
+        if _INTEGRATION_WIRING.get((str(integ.get("provider") or "").lower(), backend)):
+            servable.add(canonical)
+    return servable
+
+
+def _harness_models_view(hv: dict | None, backend: str, servable: set[str] | None = None) -> dict:
+    """The per-harness model capability view: allowed models, default, and authorized fallback.
+    `servable` (from _servable_models) marks the ones a provider is actually configured for."""
     cat = _MODEL_CATALOG.get(backend, {})
     default = _harness_model_default(hv, backend)
     curated = cat.get("models", [])
-    models = [{"id": m, "label": m, "backend": backend, "available": True, "default": m == default}
+    ok = (lambda m: True) if servable is None else (lambda m: m in servable)
+    models = [{"id": m, "label": m, "backend": backend, "available": ok(m), "default": m == default}
               for m in curated]
     if default and default not in curated:   # a custom default outside the curated list
         models.insert(0, {"id": default, "label": default, "backend": backend,
-                          "available": True, "default": True})
+                          "available": ok(default), "default": True})
     return {"backend": backend, "default": default, "fallback": default, "models": models}
 
 
@@ -4359,9 +4441,15 @@ async def create_response(body: CreateResponseBody, request: Request):
     want_appserver = (backend == "codex" and (
         os.environ.get("HARNESS_CODEX_APPSERVER", "0") == "1" or bool(meta.get("codex_appserver"))))
     chain = await _resolve_chain(org, backend, None)
-    if not chain:
-        raise HTTPException(400, f"no connection/policy for backend '{backend}' "
-                                 f"(org '{org}' or '{GLOBAL_TENANT}')")
+    # The chain is the FALLBACK, not the entry condition: a model mapped to an integration runs on
+    # that integration first (see the candidate list in _resp_execute). Requiring a policy chain
+    # here rejected the turn before the executor could ever reach the integration — so a user who
+    # had just added their own key was told there was no connection for the backend, which was
+    # both wrong and unactionable. Only refuse when NOTHING can serve it.
+    if not chain and not await _mapped_integration_conn(backend, model_req):
+        raise HTTPException(400, f"no provider configured for backend '{backend}' — add an "
+                                 f"integration for a provider that serves '{model_req or backend}', "
+                                 f"or configure a connection policy")
     # Additional Headers (app-level auth pass-through): the harness config declares header NAMES;
     # capture the caller's per-request values here (case-insensitive) and thread them to the MCP
     # resolver, where $headers.{name} references render into the runner's MCP config. Values are
@@ -6076,7 +6164,8 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise HTTPException(404, "harness not found")
     backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
-    return {"harness_id": hid, **_harness_models_view(v, backend)}
+    return {"harness_id": hid,
+            **_harness_models_view(v, backend, await _servable_models(org, backend))}
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}/skills/{skill_id}/files")
@@ -6182,11 +6271,17 @@ async def get_harness_public(hid: str, request: Request) -> dict:
 async def list_models(request: Request) -> dict:
     """Global model catalog (public, Bearer): every backend's available models + default. Callers
     use this to build a model picker; per-harness allowances come from the harness models route."""
-    await _pub_org_member(request)
-    return {"backends": {b: {"default": c["default"],
-                             "models": [{"id": m, "label": m, "backend": b, "available": True,
-                                         "default": m == c["default"]} for m in c["models"]]}
-                         for b, c in _MODEL_CATALOG.items()}}
+    org, _ = await _pub_org_member(request)
+    # `available` is computed, not asserted: a model with no provider behind it is listed as
+    # unavailable so a picker can disable it, instead of offering a choice that fails at run time.
+    out = {}
+    for b, c in _MODEL_CATALOG.items():
+        servable = await _servable_models(org, b)
+        ok = (lambda m: True) if servable is None else (lambda m: m in servable)
+        out[b] = {"default": c["default"],
+                  "models": [{"id": m, "label": m, "backend": b, "available": ok(m),
+                              "default": m == c["default"]} for m in c["models"]]}
+    return {"backends": out}
 
 
 @app.get("/v1/harnesses/{hid}/models")
@@ -6198,7 +6293,8 @@ async def get_harness_models_public(hid: str, request: Request) -> dict:
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise HTTPException(404, "harness not found")
     backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
-    return {"harness_id": hid, **_harness_models_view(v, backend)}
+    return {"harness_id": hid,
+            **_harness_models_view(v, backend, await _servable_models(org, backend))}
 
 
 @app.get("/v1/harnesses/{hid}/skills/{skill_id}/files")
