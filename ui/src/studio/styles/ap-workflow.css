@@ -1,0 +1,434 @@
+/* Workflow editor — React Flow canvas + left palette + right inspector.
+   The previous mock-driven styles for absolute-positioned nodes have
+   been retired; this rewrite tracks the actual editor.
+*/
+
+.wf-editor {
+  flex: 1; min-height: 0;
+  display: flex;
+  background: var(--bg);
+}
+
+/* ── Left palette ─────────────────────────────────────────────────── */
+.wf-palette {
+  width: 248px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: #fff;
+  border-right: 1px solid var(--line);
+  min-height: 0;
+}
+.wf-palette-search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+.wf-palette-search input {
+  flex: 1; min-width: 0;
+  border: 0; outline: 0;
+  font: inherit; font-size: 12px;
+  background: transparent;
+}
+.wf-palette-list {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: 8px 6px;
+}
+.wf-palette-group { margin-bottom: 10px; }
+.wf-palette-group-h {
+  font-size: 10px; font-weight: 600; color: var(--mute);
+  text-transform: uppercase; letter-spacing: .06em;
+  padding: 6px 8px 4px;
+}
+.wf-palette-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit; font-size: 12px;
+  color: var(--ink);
+}
+.wf-palette-item:hover { background: var(--surface-2); border-color: var(--line-soft); }
+.wf-palette-badge {
+  width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.wf-palette-name { flex: 1; min-width: 0; }
+
+/* ── Canvas ───────────────────────────────────────────────────────── */
+.wf-canvas {
+  flex: 1; min-width: 0; min-height: 0;
+  position: relative;
+  background: #FAFBFD;
+}
+
+/* Floating action bar on top of the canvas. No parent container —
+   each button is its own free-floating chip, matching the graph
+   schema toolbar pattern. */
+.wf-canvas-tools {
+  position: absolute; top: 12px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex; align-items: center; gap: 6px;
+  pointer-events: none;
+  font-size: 12px;
+}
+.wf-canvas-tools > * { pointer-events: auto; }
+.wf-slug { font-weight: 600; color: var(--ink); }
+.wf-saved-at { font-size: 10px; color: var(--mute); }
+.wf-title-block { display: flex; flex-direction: column; gap: 2px; min-width: 260px; }
+.wf-title-input {
+  font-size: 13px; font-weight: 600; color: var(--ink);
+  border: 1px solid transparent; background: transparent;
+  padding: 2px 6px; border-radius: 4px; outline: none;
+  width: 320px;
+}
+.wf-title-input:hover { border-color: var(--line); }
+.wf-title-input:focus { border-color: var(--brand); background: #fff; }
+.wf-title-meta { display: flex; align-items: center; gap: 8px; }
+.wf-title-meta .wf-slug { font-size: 10px; color: var(--mute); font-weight: 500; }
+.wf-desc-input {
+  font-size: 11px; color: var(--mute);
+  border: 1px solid transparent; background: transparent;
+  padding: 1px 6px; border-radius: 4px; outline: none;
+  flex: 1; min-width: 200px;
+}
+.wf-desc-input:hover { border-color: var(--line); }
+.wf-desc-input:focus { border-color: var(--brand); background: #fff; color: var(--ink); }
+.wf-run-pill {
+  font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.wf-run-queued    { background: #E2E8F0; color: #475569; }
+.wf-run-running   { background: #DBEAFE; color: #1E40AF; }
+.wf-run-succeeded { background: #D1FAE5; color: #047857; }
+.wf-run-failed    { background: #FEE2E2; color: #B91C1C; }
+.wf-run-suspended { background: #FEF3C7; color: #92400E; }
+.wf-run-err {
+  font-size: 10px; font-weight: 600; color: #B91C1C;
+  padding: 2px 6px; border-radius: 4px; background: #FEF2F2;
+}
+
+/* Node status overlays — set by the SSE-driven run status effect. */
+.wf-node-status-queued    { opacity: .7; }
+
+/* Rainbow border for actively running or recently-pulsed nodes.
+ *
+ * Why both selectors get the same animation: an SSE node_run event for
+ * a fast node (chunk, advance_position) may flip running → succeeded
+ * within 200ms, so the running-status overlay misses it on a single
+ * React render. .wf-node-pulse is applied for ~1.5s after ANY event
+ * (running OR succeeded) and triggers the same border so even
+ * fast nodes visibly light up. Lesson from healthcare-agent 50a7d21.
+ *
+ * Why border-width is in longhand here: React dev-mode warns when
+ * `border: 0` (shorthand) and per-side overrides coexist on the
+ * same element, and our base `.wf-node` uses `border: 1px solid ...`
+ * shorthand. Setting *only* `border-color: ...` in the keyframe and
+ * leaving width to the base rule avoids the conflict.
+ * (Lesson from healthcare-agent 000f197.)
+ *
+ * Why 1s linear cycle and not 2s: at the 200ms engine poll cadence,
+ * a 2s cycle moves the gradient by 10% per node-tick which looks
+ * stuck-on-red even though pulses are firing. 1s spans ~20%/tick,
+ * giving distinguishable color slices for back-to-back nodes.
+ * (Lesson from healthcare-agent 92ee5d6.)
+ */
+.wf-node-status-running,
+.wf-node-pulse {
+  animation: wf-rainbow-border 1s linear infinite;
+  /* Visual weight comes from a thick solid color ring (4px) plus a
+   * soft outer glow (12px) that cycle together. Earlier version used
+   * a 1px border-color tween + faint static halo which read as a
+   * "vague tint" against the white canvas — user couldn't tell at a
+   * glance which node was running. The box-shadow approach also
+   * sidesteps the React border-shorthand-vs-override warning that
+   * blocked making the actual border-width any larger. */
+}
+@keyframes wf-rainbow-border {
+    0% { box-shadow: 0 0 0 4px #EF4444, 0 0 12px 2px rgba(239, 68, 68,.55); }
+   17% { box-shadow: 0 0 0 4px #F59E0B, 0 0 12px 2px rgba(245,158, 11,.55); }
+   33% { box-shadow: 0 0 0 4px #EAB308, 0 0 12px 2px rgba(234,179,  8,.55); }
+   50% { box-shadow: 0 0 0 4px #22C55E, 0 0 12px 2px rgba( 34,197, 94,.55); }
+   67% { box-shadow: 0 0 0 4px #06B6D4, 0 0 12px 2px rgba(  6,182,212,.55); }
+   83% { box-shadow: 0 0 0 4px #6366F1, 0 0 12px 2px rgba( 99,102,241,.55); }
+  100% { box-shadow: 0 0 0 4px #EF4444, 0 0 12px 2px rgba(239, 68, 68,.55); }
+}
+.wf-canvas .react-flow__renderer { background: #FAFBFD; }
+.wf-empty {
+  position: absolute; left: 50%; top: 40%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  color: var(--mute);
+  max-width: 360px;
+}
+.wf-empty-title { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.wf-empty-sub { font-size: 12px; margin-top: 4px; line-height: 1.5; }
+
+/* React Flow control overrides — match our light theme */
+.wf-canvas .react-flow__controls {
+  box-shadow: var(--shadow-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.wf-canvas .react-flow__controls-button {
+  background: #fff;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-2);
+  width: 26px; height: 26px;
+}
+.wf-canvas .react-flow__controls-button:hover { background: var(--surface-2); }
+.wf-canvas .react-flow__controls-button svg { fill: currentColor; }
+.wf-canvas .react-flow__minimap { box-shadow: var(--shadow-1); }
+.wf-canvas .react-flow__edge-path { stroke: #94A3B8; }
+.wf-canvas .react-flow__edge.selected .react-flow__edge-path,
+.wf-canvas .react-flow__edge:focus .react-flow__edge-path {
+  stroke: #42309C; stroke-width: 2;
+}
+.wf-canvas .react-flow__arrowhead { fill: #94A3B8; }
+.wf-canvas .react-flow__edge.selected .react-flow__arrowhead { fill: #42309C; }
+
+/* ── Sticky-note annotation ────────────────────────────────────────── */
+.wf-note {
+  min-width: 180px;
+  max-width: 280px;
+  padding: 14px 16px;
+  background: #FEF6C7;
+  border: 1px solid #F2DD83;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 12px rgba(0,0,0,.06);
+  color: #5C4A04;
+  font-family: var(--ui-font, inherit);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.wf-note:hover { border-color: #E5C24A; }
+.wf-note-selected {
+  border-color: #C99707;
+  box-shadow: 0 0 0 3px rgba(201,151,7,.18);
+}
+.wf-note-placeholder { color: #9A8740; font-style: italic; }
+
+/* ── Node ──────────────────────────────────────────────────────────── */
+.wf-node {
+  display: flex; align-items: center; gap: 10px;
+  min-width: 180px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
+  font-family: var(--ui-font, inherit);
+}
+.wf-node:hover { border-color: var(--brand); }
+.wf-node-selected {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(94,78,190,.15);
+}
+.wf-node-badge {
+  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.wf-node-body { flex: 1; min-width: 0; }
+.wf-node-label { font-size: 12px; font-weight: 600; color: var(--ink); }
+.wf-node-sub  { font-size: 10px; color: var(--mute); margin-top: 1px; line-height: 1.35;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+
+/* Agent nodes that carry tools expand vertically: a head row (the
+   usual badge + label) plus a stack of inner pill-shaped sub-cards
+   listing each tool. The whole thing is still one React Flow node so
+   edges anchor cleanly at the top/bottom of the agent block. */
+.wf-node-agent {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  min-width: 220px;
+}
+.wf-node-head {
+  display: flex; align-items: center; gap: 10px;
+}
+.wf-node-tools {
+  display: flex; flex-direction: column; gap: 4px;
+  padding-left: 36px;
+}
+.wf-node-tool {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  background: var(--brand-soft, #F4F1FF);
+  border: 1px solid rgba(94,78,190,.18);
+  border-radius: 6px;
+  font-size: 10px;
+}
+.wf-node-tool-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--brand, #42309C);
+  flex-shrink: 0;
+}
+.wf-node-tool-name { color: var(--ink); font-weight: 600; }
+.wf-node-tool-slug {
+  color: var(--mute); font-size: 9px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; flex: 1;
+}
+/* Handles stay functional (React Flow needs them to anchor edges) but
+   are visually hidden. Connections drag from any edge of the node. */
+.wf-handle {
+  width: 10px !important; height: 10px !important;
+  background: transparent !important;
+  border: 0 !important;
+  opacity: 0;
+}
+.wf-handle:hover { opacity: 0.5; background: var(--brand-soft) !important; border: 1.5px solid var(--brand) !important; }
+
+/* ── Right inspector ──────────────────────────────────────────────── */
+.wf-inspector {
+  width: 320px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: #fff;
+  border-left: 1px solid var(--line);
+  min-height: 0;
+}
+.wf-inspector-h {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.wf-inspector-badge {
+  width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.wf-inspector-b {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 14px;
+}
+.wf-inspector-f {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-2);
+}
+
+/* Segmented toggle (used by the edge inspector for forward/back) */
+.wf-seg {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+  border: 1px solid var(--line); border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.wf-seg-btn {
+  appearance: none; background: transparent; border: 0;
+  padding: 8px 10px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  font-family: inherit; color: var(--mute);
+  border-right: 1px solid var(--line);
+}
+.wf-seg-btn:last-child { border-right: 0; }
+.wf-seg-btn:hover { background: rgba(94,78,190,.06); color: var(--ink); }
+.wf-seg-active {
+  background: #fff; color: var(--brand);
+  box-shadow: inset 0 -2px 0 0 var(--brand);
+}
+.wf-seg-active .wf-seg-d { color: var(--mute); }
+.wf-seg-l { font-size: 12px; font-weight: 600; }
+.wf-seg-d { font-size: 10px; color: var(--mute); }
+
+/* KV / list editors inside the inspector */
+.wf-kv-list { display: flex; flex-direction: column; gap: 4px; }
+.wf-kv-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px;
+}
+.wf-kv-eq { color: var(--mute); font-weight: 600; }
+.wf-kv-x {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--mute);
+  cursor: pointer; font-size: 14px; line-height: 1;
+}
+.wf-kv-x:hover { color: #B91C1C; border-color: #FECACA; background: #FEF2F2; }
+.wf-kv-add { align-self: flex-start; margin-top: 2px; }
+.wf-cond-row { display: flex; align-items: center; gap: 6px; }
+
+/* Runs rail */
+.wf-rail {
+  width: 320px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: #fff;
+  border-left: 1px solid var(--line);
+  min-height: 0;
+}
+.wf-rail-collapsed { width: 32px; align-items: center; padding-top: 8px; }
+.wf-rail-h {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.wf-rail-list {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: 6px 4px;
+}
+.wf-rail-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 10px;
+  background: transparent; border: 1px solid transparent;
+  border-radius: 6px; cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+.wf-rail-item:hover { background: var(--surface-2); }
+.wf-rail-item.active { background: var(--brand-soft); border-color: var(--brand); }
+.wf-rail-when {
+  color: var(--ink); font-weight: 500;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.wf-rail-badge {
+  font-size: 9px; font-weight: 600;
+  padding: 2px 7px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: .04em;
+  background: #E2E8F0; color: #475569;
+  flex-shrink: 0;
+}
+.wf-rail-badge.wf-run-queued    { background: #E2E8F0; color: #475569; }
+.wf-rail-badge.wf-run-running   { background: #DBEAFE; color: #1E40AF; animation: wf-running-pulse 1.2s ease-in-out infinite; }
+.wf-rail-badge.wf-run-succeeded { background: #D1FAE5; color: #047857; }
+.wf-rail-badge.wf-run-failed    { background: #FEE2E2; color: #B91C1C; }
+.wf-rail-badge.wf-run-suspended { background: #FEF3C7; color: #92400E; }
+.wf-rail-dur { font-size: 10px; }
+
+/* Run-inputs modal — opened by the Run button when the workflow
+   declares a non-empty inputs schema. */
+.wf-run-modal-bg {
+  position: fixed; inset: 0;
+  background: rgba(15, 23, 42, .45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.wf-run-modal {
+  width: 480px; max-height: 80vh; display: flex; flex-direction: column;
+  background: #fff; border-radius: 10px; box-shadow: var(--shadow-2, 0 16px 40px rgba(15,23,42,.18));
+  overflow: hidden;
+}
+.wf-run-modal-h {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px; border-bottom: 1px solid var(--line);
+}
+.wf-run-modal-b { padding: 16px; overflow: auto; }
+.wf-run-modal-f {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 12px 16px; border-top: 1px solid var(--line);
+}

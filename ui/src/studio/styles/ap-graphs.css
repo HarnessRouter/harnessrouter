@@ -1,0 +1,16 @@
+/* Graphs landing — adds a stats row to the wfl-card pattern */
+
+.gph-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 12px;
+  padding: 10px 0 2px;
+  border-top: 1px dashed var(--line-soft);
+}
+.gph-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gph-stat .stat-lbl {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .04em;
+  font-weight: 600; color: var(--mute);
+}
+.gph-stat .num { font-size: 13px; }
+.gph-stat .num b { color: var(--ink); font-weight: 600; }

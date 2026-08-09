@@ -1,0 +1,30 @@
+/* Runs page */
+
+.runs-tbl { display: flex; flex-direction: column; }
+.runs-tbl-head, .runs-tbl-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  font-size: 12px;
+}
+.runs-tbl-head {
+  font-size: 11px; color: var(--mute);
+  text-transform: uppercase; letter-spacing: .04em;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.runs-tbl-row {
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+.runs-tbl-row:hover { background: var(--surface-2); }
+.runs-tbl-row.row-warm { background: #FEF7EB; }
+.runs-tbl-row.row-warm:hover { background: #FCEAC8; }
+.runs-tbl-row.row-hot { background: #FEF2F2; }
+.runs-tbl-row.row-hot:hover { background: #FBE4E4; }
+.runs-tbl-row.row-dim { opacity: 0.6; }
+
+.runs-tbl-head > *, .runs-tbl-row > * {
+  flex-shrink: 0; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.runs-tbl-row > span:has(.pill), .runs-tbl-row > span:has(.btn) { overflow: visible; }

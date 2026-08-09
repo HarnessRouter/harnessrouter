@@ -1,0 +1,170 @@
+/* HarnessRouter app tokens — unified with the marketing landing (paper + accent blue #285AFF). */
+:root {
+  --brand: #285AFF;
+  --brand-ink: #1641D8;
+  --brand-soft: #E1E9FF;
+  --brand-50: #EFF3FF;
+  --accent-bright: #58A9FF;
+
+  --hot: #EF4444;
+  --hot-soft: #FEE4E4;
+  --warm: #F59E0B;
+  --warm-soft: #FEF1D6;
+  --cold: #94A3B8;
+  --cold-soft: #EEF1F5;
+  --ok: #10B981;
+  --ok-soft: #DFF6EC;
+  --info: #0EA5E9;
+  --info-soft: #DCF1FB;
+
+  --bg: #EDEEF2;
+  --surface: #FFFFFF;
+  --surface-2: #F5F7FB;
+  --sidebar: #1F2433;
+  --sidebar-2: #2A3145;
+  --sidebar-mute: #5B5D66;
+  --sidebar-active: #285AFF;
+
+  --ink: #111317;
+  --ink-2: #3A3D45;
+  --mute: #5B5D66;
+  --mute-2: #8A8D96;
+  --line: #DDDFE6;
+  --line-soft: #E9EAEF;
+
+  --r-card: 12px;
+  --r-input: 8px;
+  --r-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(17,24,39,.04), 0 1px 1px rgba(17,24,39,.03);
+  --shadow-2: 0 8px 24px -12px rgba(17,24,39,.12), 0 2px 6px -2px rgba(17,24,39,.06);
+
+  --font: var(--font-ibm-sans), "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: var(--font-ibm-mono), "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-grotesk), var(--font-ibm-sans), "IBM Plex Sans", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin:0; padding:0; }
+body { font-family: var(--font); color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
+
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* Pill / chip */
+.pill {
+  display:inline-flex; align-items:center; gap:6px;
+  height:22px; padding: 0 8px; border-radius: var(--r-pill);
+  font-size: 12px; line-height: 1; font-weight: 500;
+  background: var(--line-soft); color: var(--ink-2);
+  border: 1px solid transparent;
+}
+.pill .dot { width:6px; height:6px; border-radius: 999px; background: currentColor; }
+.pill.hot   { background: var(--hot-soft);  color: #B91C1C; }
+.pill.warm  { background: var(--warm-soft); color: #92400E; }
+.pill.cold  { background: var(--cold-soft); color: #475569; }
+.pill.ok    { background: var(--ok-soft);   color: #047857; }
+.pill.info  { background: var(--info-soft); color: #075985; }
+.pill.brand { background: var(--brand-soft); color: var(--brand-ink); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: var(--r-input);
+  font-size: 13px; font-weight: 500; color: var(--ink-2);
+  background: #fff; border: 1px solid var(--line); cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.btn:hover { border-color: #CBD0DA; }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.btn.primary:hover { background: var(--brand-ink); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--mute); }
+.btn.ghost:hover { background: var(--line-soft); color: var(--ink-2); }
+.btn.sm { height: 26px; padding: 0 8px; font-size: 12px; }
+.btn.lg { height: 38px; padding: 0 16px; font-size: 14px; }
+/* Disabled state: drop opacity, swap cursor, AND override the :hover
+   rules above so a disabled primary doesn't darken to brand-ink on
+   mouseover (which made it look interactive even when blocked). */
+.btn:disabled,
+.btn[disabled] {
+  opacity: .5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.btn:disabled:hover,
+.btn[disabled]:hover {
+  border-color: var(--line);
+}
+.btn.primary:disabled,
+.btn.primary[disabled] {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+/* Inputs */
+.input, .select, .textarea {
+  width:100%; font-family: inherit; font-size: 13px; color: var(--ink);
+  background: #fff; border: 1px solid var(--line); border-radius: var(--r-input);
+  padding: 8px 10px;
+}
+.input:focus, .textarea:focus, .select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(40,90,255,.14); }
+.input.sm { padding: 6px 8px; font-size: 12px; }
+
+/* Card */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-1);
+}
+.card-h { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.card-h h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.card-h .sub { color: var(--mute); font-size: 12px; margin-top: 2px; }
+
+/* Intent dots */
+.intent-dot { width: 8px; height: 8px; border-radius: 999px; display:inline-block; }
+.intent-dot.hot  { background: var(--hot); }
+.intent-dot.warm { background: var(--warm); }
+.intent-dot.cold { background: var(--cold); }
+.intent-dot.new  { background: var(--mute-2); }
+
+/* Avatar circle */
+.av {
+  width: 32px; height: 32px; border-radius: 999px;
+  background: var(--brand);
+  color: #fff; font-size: 12px; font-weight: 600;
+  display:inline-flex; align-items:center; justify-content:center;
+  flex-shrink: 0;
+}
+.av.sm { width: 24px; height: 24px; font-size: 10px; }
+.av.lg { width: 40px; height: 40px; font-size: 14px; }
+.av.client { background: #F59E0B; }
+.av.ai     { background: #10B981; }
+.av.me     { background: #3B82F6; }
+
+/* Striped placeholder backdrop */
+.placeholder-stripe {
+  background-image: repeating-linear-gradient(135deg, #EEF1F5 0 8px, #F7F8FB 8px 16px);
+  border-radius: 8px;
+}
+
+/* Generic divider line */
+.hr { height: 1px; background: var(--line-soft); margin: 12px 0; border: 0; }
+
+/* Tabs */
+.tabs { display:flex; gap: 18px; border-bottom: 1px solid var(--line); padding: 0 4px; }
+.tab { padding: 10px 2px; font-size: 13px; color: var(--mute); cursor: pointer; border-bottom: 2px solid transparent; }
+.tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+
+/* Stat number scale */
+.stat-num { font-size: 22px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.stat-lbl { font-size: 12px; color: var(--mute); }
+
+/* Mini sparkline placeholder */
+.sparkline { height: 28px; width: 100%; }
+
+/* Scrollbars (used inside artboards) */
+.scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: #D7DBE3; border-radius: 999px; }
+.scroll::-webkit-scrollbar-track { background: transparent; }

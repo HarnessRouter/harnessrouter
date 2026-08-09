@@ -1,0 +1,62 @@
+/* AdminPortal-specific shell tweaks */
+
+/* The shell-body for full-bleed pages (Workflow editor, Graph) */
+.ap-shell-full { padding: 0; overflow: hidden; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* AdminPortal topbar: 3-region layout so toggle can sit visually centered */
+.shell .top { position: relative; min-height: 52px; }
+.shell .top .top-crumbs { flex: 1 1 auto; min-width: 0; }
+.top-center {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+}
+
+/* Common page wrapper for table-y pages */
+.ap-page { display: flex; flex-direction: column; gap: 14px; }
+
+/* Top sub-caption next to crumb */
+.top-crumbs .mono { font-family: var(--mono); }
+
+/* Brand mark monogram used on workflow / integration cards */
+.mono-mark {
+  width: 36px; height: 36px; border-radius: 8px;
+  color: #fff; font-weight: 700; font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center;
+  letter-spacing: -.01em; flex-shrink: 0;
+}
+
+/* Polished selects — custom caret, more breathing room */
+.ap-app select,
+.filt-row .filt-grp > select,
+.filt-row > .filt-search {
+  appearance: none;
+  -webkit-appearance: none;
+}
+.filt-row .filt-grp > select {
+  height: 34px;
+  padding: 0 34px 0 12px;
+  font-size: 13.5px; color: var(--ink); font-weight: 500;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  border: 1px solid var(--line); border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.filt-row .filt-grp > select:hover { border-color: var(--mute-2); }
+.filt-row .filt-grp > select:focus { outline: 0; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(94,78,190,.12); }
+.filt-row .filt-grp > label {
+  font-size: 11.5px; color: var(--mute);
+  text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+  margin-right: 2px;
+}
+
+.filt-row > .filt-search {
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13.5px;
+}
+.filt-row > .filt-search:focus { outline: 0; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(94,78,190,.12); }

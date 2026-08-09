@@ -1,0 +1,58 @@
+/* Integrations page */
+
+.int-tabs {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px;
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+}
+.int-tab {
+  padding: 8px 14px; font-size: 13px; color: var(--mute);
+  border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.int-tab:hover { color: var(--ink); background: var(--surface-2); }
+.int-tab.active { color: var(--brand-ink); background: var(--brand-50); border-color: var(--brand); font-weight: 600; }
+
+.int-section-h {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 14px 4px 8px;
+}
+.int-section-t {
+  font-size: 12px; font-weight: 600; color: var(--ink);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+
+.int-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.int-card {
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+.int-card:hover { border-color: var(--brand); box-shadow: var(--shadow-2); transform: translateY(-1px); }
+.int-card.available { background: var(--surface-2); }
+.int-card.available:hover { background: #fff; }
+
+.int-c-top { display: flex; align-items: flex-start; gap: 10px; }
+.int-logo {
+  width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; letter-spacing: -.01em;
+}
+.int-c-name { font-size: 13px; font-weight: 600; line-height: 1.2; color: var(--ink); }
+.int-c-tag  { font-size: 11px; color: var(--mute); margin-top: 4px; }
+.int-c-tag.mono { font-family: var(--mono); }
+
+.int-c-meta {
+  display: flex; align-items: center; gap: 10px;
+  padding-top: 10px; border-top: 1px dashed var(--line-soft);
+}
+.int-c-meta .stat-lbl { font-size: 11px; }

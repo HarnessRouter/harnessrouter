@@ -24,12 +24,23 @@
 # in the image layer.
 
 # ── UI build ──────────────────────────────────────────────────────────────────
+# This is the SAME console the hosted product runs. Surfaces with no self-hosted backend
+# (billing, marketplace, analytics, sign-in) are hidden by the edition flag rather than removed,
+# so the two stay one codebase. See ui/src/lib/edition.ts.
 FROM node:20-slim AS ui
 WORKDIR /ui
-COPY ui/package.json ui/package-lock.json* ./
+# git: the UI depends on the ReifyUI component library straight from its repository.
+RUN apt-get update -y && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# .npmrc matters at THIS layer: it carries legacy-peer-deps, without which npm refuses the
+# tree (several deps still declare React 18 peers while the app runs 19).
+COPY ui/package.json ui/package-lock.json* ui/.npmrc ./
 RUN npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
 COPY ui/ ./
-ENV NEXT_TELEMETRY_DISABLED=1
+# Inlined into the client bundle at build time, so a self-hosted image can never present a
+# hosted-only surface no matter how it is run.
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NEXT_PUBLIC_HR_EDITION=selfhost
 RUN npm run build
 
 # ── runtime ───────────────────────────────────────────────────────────────────

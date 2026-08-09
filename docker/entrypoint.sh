@@ -41,7 +41,10 @@ if [ -z "${HARNESS_INTERNAL_KEY:-}" ]; then
   export HARNESS_INTERNAL_KEY="$("$PY" -c 'import secrets; print(secrets.token_hex(32))')"
 fi
 
-export GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:8080}"
+# The console reaches the gateway over loopback; it is the only process that can, since only
+# the console's port is published.
+export HARNESS_GATEWAY_URL="${HARNESS_GATEWAY_URL:-http://127.0.0.1:8080}"
+export NEXT_PUBLIC_HR_EDITION=selfhost
 export PORT="${PORT:-3000}"
 
 # ── agent CLIs: installed here, not shipped in the image ──────────────────────

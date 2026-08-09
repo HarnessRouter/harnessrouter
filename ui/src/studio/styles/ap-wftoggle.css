@@ -1,0 +1,49 @@
+/* Workflows toggle — segmented pill in the topbar */
+
+.wf-toggle {
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.wf-toggle-opt {
+  display: inline-flex; align-items: center; gap: 7px;
+  position: relative;
+  padding: 4px 16px;
+  height: 32px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  font-family: inherit; font-size: 13.5px; font-weight: 500;
+  color: var(--mute);
+  cursor: pointer;
+  transition: color 120ms, background 120ms;
+  white-space: nowrap;
+}
+
+.wf-toggle-opt:hover { color: var(--ink); }
+
+.wf-toggle-opt.active {
+  background: #fff;
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(17,24,39,.08), 0 0 0 1px var(--line);
+}
+.wf-toggle-opt.active svg { color: var(--brand); }
+
+.wf-toggle-num {
+  font-size: 12px;
+  color: var(--mute);
+  font-weight: 500;
+}
+.wf-toggle-opt.active .wf-toggle-num { color: var(--mute-2); }
+
+.wf-toggle-dot {
+  width: 6px; height: 6px;
+  border-radius: 99px;
+  background: var(--hot);
+  margin-left: 2px;
+}

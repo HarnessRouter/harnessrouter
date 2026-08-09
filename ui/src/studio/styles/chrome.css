@@ -1,0 +1,152 @@
+/* Chrome layout — sidebar + topbar + funnel breadcrumb */
+
+.shell {
+  display: grid;
+  grid-template-columns: 224px 1fr;
+  height: 100vh;            /* lock to viewport so nothing escapes */
+  overflow: hidden;         /* clip any descendant that tries to grow past */
+  background: var(--bg);
+}
+.shell-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;            /* required for flex children to honor overflow */
+  overflow: hidden;
+}
+.shell-body {
+  flex: 1;
+  padding: 16px 24px 24px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;         /* fullscreen pages: inner panes scroll */
+}
+.shell-body-scroll { overflow: auto; }   /* scrollable pages opt in */
+
+/* Sidebar — independent vertical scroll within .side-nav, never on the shell */
+.side {
+  background: var(--sidebar);
+  color: #E5E7EB;
+  display: flex; flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.side-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 16px 14px; border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.side-logo {
+  width: 32px; height: 32px; border-radius: 8px; background: rgba(183,172,255,.12);
+  display: flex; align-items: center; justify-content: center;
+}
+.side-brand-1 { font-size: 14px; font-weight: 600; color: #fff; }
+.side-brand-2 { font-size: 11px; color: var(--sidebar-mute); margin-top: 1px; }
+
+.side-nav {
+  flex: 1; overflow: auto; padding: 8px 0 12px;
+  /* Scrollbar darker than the sidebar so it reads as a recessed
+     channel instead of a bright light-gray gutter that fights the
+     panel. Thumb is a near-black tint of the panel; track is the
+     panel itself. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,.45) transparent;
+}
+.side-nav::-webkit-scrollbar { width: 8px; }
+.side-nav::-webkit-scrollbar-track { background: transparent; }
+.side-nav::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,.45);
+  border-radius: 4px;
+}
+.side-nav::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,.6); }
+.side-cap {
+  font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--sidebar-mute); padding: 12px 16px 6px; display:flex; align-items:center; justify-content: space-between;
+}
+.side-tag {
+  font-size: 9px; letter-spacing: .04em; padding: 2px 6px; border-radius: 999px;
+  background: rgba(255,255,255,.06); color: #C0C7D8; font-weight: 500; text-transform: uppercase;
+}
+
+.side-scope {
+  margin-left: auto;
+  height: 16px; padding: 0 5px;
+  font-size: 9px; font-weight: 600;
+  letter-spacing: .04em;
+}
+.side-link.locked { opacity: .55; cursor: not-allowed; }
+.side-link.locked .ic { opacity: .35; }
+.side-link {
+  display: flex; align-items: center; gap: 10px;
+  height: 32px; padding: 0 16px; font-size: 13px; color: #C7CCDA;
+  cursor: pointer; position: relative;
+}
+.side-link .ic { display:inline-flex; opacity: .75; }
+.side-link .lbl { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-link:hover { background: rgba(255,255,255,.04); color: #fff; }
+.side-link.active {
+  color: #fff; background: rgba(40,90,255,.22);
+}
+.side-link.active::before {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
+  background: var(--sidebar-active); border-radius: 0 3px 3px 0;
+}
+.side-link.active .ic { color: var(--sidebar-active); opacity: 1; }
+.side-badge {
+  font-size: 10px; min-width: 16px; height: 16px; padding: 0 5px;
+  border-radius: 999px; background: var(--hot); color: #fff;
+  display:inline-flex; align-items:center; justify-content:center; font-weight: 600;
+}
+
+.side-foot {
+  display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+
+/* Topbar — pinned by sitting outside the scroll surface */
+.top {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 24px; background: var(--surface); border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+/* Sidebar show/hide toggle, at the left of the topbar. */
+.top-side-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0; margin-right: -4px;
+  border: none; background: none; cursor: pointer; color: var(--mute);
+}
+.top-side-toggle:hover { background: rgba(0, 0, 0, .05); color: var(--ink); }
+.top-crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mute); white-space: nowrap; flex-shrink: 0; }
+.crumb { color: var(--mute); white-space: nowrap; }
+.crumb.active { color: var(--ink); font-weight: 600; }
+.crumb-sep { color: var(--mute-2); }
+.top-search {
+  display: flex; align-items: center; gap: 8px; max-width: 480px;
+  padding: 4px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  flex: 1 1 240px; min-width: 0;
+}
+.top-search input { min-width: 0; flex: 1; }
+.top-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.top-right .btn { white-space: nowrap; }
+
+/* Funnel — also pinned (above the scroll surface) */
+.funnel {
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 24px; background: var(--surface); border-bottom: 1px solid var(--line);
+  font-size: 12px; color: var(--mute);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.funnel-step, .funnel-step .ic, .funnel-step .no { white-space: nowrap; }
+.funnel-step {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 999px; background: #fff;
+  border: 1px solid var(--line); color: var(--ink-2);
+}
+.funnel-step .ic { color: var(--mute-2); display:inline-flex; }
+.funnel-step .no { color: var(--mute); }
+.funnel-step.on {
+  background: var(--brand); border-color: var(--brand); color: #fff;
+}
+.funnel-step.on .ic, .funnel-step.on .no { color: #fff; opacity: .85; }
+.funnel-sep { color: var(--mute-2); display:inline-flex; }
+.funnel-hint { margin-left: 8px; }

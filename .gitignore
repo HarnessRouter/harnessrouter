@@ -1,23 +1,9 @@
-# Local data — SQLite DBs, blobs, and the secret store all live here. NEVER commit.
-.hr-data/
-data/
-*.db
-*.db-wal
-*.db-shm
-
-# Secrets / operator config
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-
 node_modules/
 .next/
-dist/
+*.tsbuildinfo
+.hr-data/
 __pycache__/
 *.pyc
+.env
+.env.local
 .DS_Store
-
-# TypeScript incremental build cache
-*.tsbuildinfo

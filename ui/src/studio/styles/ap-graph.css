@@ -1,0 +1,626 @@
+/* Graph page — dual-pane visual graph */
+
+.dg-shell {
+  display: flex; flex: 1; min-height: 0;
+  background: var(--bg);
+}
+
+.dg-pane {
+  display: flex; flex-direction: column;
+  min-height: 0; min-width: 0;
+  background: #fff;
+  border-right: 1px solid var(--line);
+  flex: 1 1 50%;
+  transition: flex-basis 180ms ease;
+}
+.dg-pane:last-child { border-right: 0; }
+.dg-pane.expanded  { flex: 1 1 100%; }
+.dg-pane.collapsed { flex: 0 0 44px; }
+
+/* Resize handle between the two panes. Visually invisible (no color
+   or border) but it captures clicks across a slim hit area and shows
+   the col-resize cursor on hover. */
+.dg-divider {
+  width: 6px;
+  margin: 0 -3px;       /* overlap the panes so there's no visible gap */
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  z-index: 5;
+}
+.dg-divider.dragging,
+.dg-shell.dragging * { cursor: col-resize !important; }
+.dg-shell.dragging { user-select: none; }
+.dg-pane.collapsed .dg-body { display: none; }
+.dg-pane.collapsed .dg-pane-h { writing-mode: vertical-rl; padding: 14px 8px; gap: 14px; }
+
+.dg-pane-h {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; flex-shrink: 0;
+  height: 52px;
+  box-sizing: border-box;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
+}
+/* Floating action toolbar inside the canvas, top-center. Pencil / chev
+   / expand sit here; Save / Discard appear to their right when dirty.
+   Out of the banner so the banner can stay clean. */
+.dg-canvas { position: relative; }
+.dg-canvas-tools {
+  position: absolute; top: 12px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex; align-items: center; gap: 6px;
+  pointer-events: none;
+}
+.dg-canvas-tools > * { pointer-events: auto; }
+.dg-pane-label {
+  font-size: 11px; color: var(--mute);
+  text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+  flex-shrink: 0;
+}
+.dg-seg { flex-shrink: 0; }
+.dg-pane-h .sbar { flex: 1 1 auto; min-width: 0; max-width: 400px; margin-left: auto; }
+.dg-pane-h .pane-tools { flex-shrink: 0; margin-left: auto; gap: 6px; }
+.dg-pane-h .sbar + .pane-tools { margin-left: 0; }
+/* Normalize control heights inside the banner so the schema seg buttons
+   and the explore search bar both sit at the same row height. */
+.dg-pane-h .sbar,
+.dg-pane-h .seg,
+.dg-pane-h .btn.sm,
+.dg-pane-h .pane-btn { height: 32px; box-sizing: border-box; }
+.dg-pane-h .sbar { padding: 4px 8px; }
+
+.dg-body {
+  flex: 1; min-height: 0; min-width: 0;
+  display: flex;
+  position: relative;
+}
+
+.dg-canvas {
+  flex: 1; min-width: 0; min-height: 0;
+  position: relative;
+  background: #FAFBFD;
+  overflow: hidden;
+}
+
+.dg-grid {
+  position: absolute; inset: 0;
+  background-image: radial-gradient(rgba(0,0,0,.06) 1px, transparent 1px);
+  background-size: 22px 22px;
+  pointer-events: none;
+}
+
+/* Schema (type) node */
+.sg-node {
+  position: absolute;
+  width: 94px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 10px;
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  z-index: 2;
+  transition: box-shadow 120ms, border-color 120ms;
+}
+.sg-node:hover { border-color: var(--brand); }
+.sg-node.selected { border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-50); }
+.sg-node-dot { width: 12px; height: 12px; border-radius: 99px; background: var(--mute-2); }
+.sg-node-name { font-weight: 600; font-size: 12px; color: var(--ink); }
+.sg-node-count { font-size: 10px; color: var(--mute); font-family: var(--mono); }
+
+/* Data (instance) node */
+.dg-node {
+  position: absolute;
+  width: 86px;
+  display: flex; flex-direction: column; align-items: center;
+  background: #fff; border: 1.5px solid var(--line); border-radius: 12px;
+  padding: 6px 8px;
+  font-size: 11px; line-height: 1.3;
+  cursor: pointer;
+  z-index: 2;
+  transition: box-shadow 120ms, border-color 120ms;
+}
+.dg-node:hover { border-color: var(--brand); }
+.dg-node.selected { border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-50); }
+.dg-n-av {
+  width: 22px; height: 22px; border-radius: 99px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 600; font-size: 11px;
+  margin-bottom: 4px;
+}
+.dg-n-name { font-weight: 600; font-size: 11px; color: var(--ink); }
+.dg-n-sub  { color: var(--mute); font-size: 10px; }
+
+/* Edges between graph nodes */
+.g-edge {
+  position: absolute;
+  height: 1.5px;
+  background: var(--mute-2);
+  transform-origin: 0 50%;
+  z-index: 1;
+}
+.g-edge-label {
+  position: absolute;
+  background: #fff; border: 1px solid var(--line); border-radius: 999px;
+  padding: 0 6px; height: 16px; line-height: 16px;
+  font-size: 10px; color: var(--mute);
+  white-space: nowrap;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+}
+
+/* Zoom controls */
+.dg-zoom {
+  position: absolute; right: 14px; bottom: 14px;
+  display: flex; flex-direction: column; gap: 4px;
+  background: #fff; border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px;
+  box-shadow: var(--shadow-1);
+  z-index: 3;
+}
+
+.dg-canvas-hint {
+  position: absolute; left: 14px; bottom: 14px;
+  font-size: 10px; color: var(--mute);
+  background: #fff; border: 1px dashed var(--line); border-radius: 6px;
+  padding: 4px 10px;
+  z-index: 3;
+}
+
+/* Detail panel inside a pane */
+.dg-detail {
+  width: 400px; flex-shrink: 0;
+  background: #fff;
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+/* Container-local responsive: when the pane is narrower than 2× the
+   editor's default width, the editor floats over the canvas at full
+   pane width instead of squeezing it. The close button in the header
+   restores the canvas view. */
+.dg-detail.compact {
+  position: absolute;
+  top: 0; right: 0; bottom: 0; left: 0;
+  width: auto;
+  border-left: 0;
+  box-shadow: -8px 0 24px rgba(15,23,42,.04);
+  z-index: 9;
+}
+.dg-detail-h {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.dg-detail-close {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.dg-detail-b {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 14px;
+}
+.dg-detail-f {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  display: flex; align-items: center; gap: 6px;
+}
+
+/* Property editor table inside schema detail. Header + row share the
+   same grid template so columns line up; the type cell gets enough room
+   for the longest data-type token ("double precision", "timestamptz"). */
+.prop-table { display: flex; flex-direction: column; margin: 0 -14px; }
+.prop-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.1fr) 36px 36px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 14px;
+}
+.prop-head {
+  composes: prop-grid;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.1fr) 36px 36px;
+  gap: 8px;
+  padding: 4px 14px 6px;
+  font-size: 10px; color: var(--mute); text-transform: uppercase; letter-spacing: .04em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line-soft);
+}
+.prop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.1fr) 36px 36px;
+  gap: 8px; align-items: center;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.prop-row .input.sm { height: 28px; padding: 4px 8px; font-size: 11px; min-width: 0; }
+/* Native select chevron has its own horizontal whitespace; pad the
+   text side so chars never collide with it on "timestamptz" etc. */
+.prop-row select.input.sm { padding-right: 22px; }
+
+/* Editor field labels (Color / Icon / Properties). Single visual
+   treatment everywhere instead of one-off inline styles. */
+.dg-field-label {
+  font-size: 11px; font-weight: 600; color: var(--mute);
+  text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px;
+}
+
+/* Inline-editable text and textarea inside the editor header. They
+   read as plain text but reveal a subtle background + border on hover
+   / focus so users discover them. */
+.dg-inline-input {
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-family: inherit;
+  color: inherit;
+  outline: none;
+  resize: none;
+}
+.dg-inline-input:hover:not(:disabled) { background: var(--surface-2); }
+.dg-inline-input:focus:not(:disabled) {
+  background: #fff; border-color: var(--line); box-shadow: 0 0 0 3px rgba(94,78,190,.08);
+}
+.dg-inline-input:disabled { color: var(--ink); -webkit-text-fill-color: var(--ink); cursor: default; }
+
+/* ── Icon combobox ─────────────────────────────────────────────── */
+.icon-combo { position: relative; }
+.icon-combo-trigger {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; height: 32px;
+  padding: 0 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit; font-size: 12px; color: var(--ink);
+  text-align: left;
+}
+.icon-combo-trigger:hover { border-color: var(--brand); }
+.icon-combo-glyph {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--ink-2); flex-shrink: 0;
+}
+.icon-combo-name {
+  flex: 1; min-width: 0;
+  font-family: 'SF Mono', Consolas, monospace; font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.icon-combo-caret { font-size: 10px; color: var(--mute); }
+.icon-combo-popover {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+  z-index: 50;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15,23,42,.12);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.icon-combo-search {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0; border-bottom: 1px solid var(--line-soft);
+  outline: 0; font: inherit; font-size: 12px;
+}
+.icon-combo-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.icon-combo-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.icon-combo-item:hover { background: var(--surface-2); }
+.icon-combo-item.active { background: var(--brand-soft); color: var(--brand-ink); }
+.icon-combo-item .icon-combo-glyph { color: var(--ink-2); }
+.icon-combo-item.active .icon-combo-glyph { color: var(--brand-ink); }
+.icon-combo-empty {
+  padding: 16px 12px; font-size: 12px; color: var(--mute);
+}
+
+/* ── Custom color slot at the end of the swatch row ───────────── */
+/* Same vertical footprint as a preset swatch (22px high incl. 2px
+   border) so the row never breaks. */
+.color-custom {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+  box-sizing: border-box;
+  height: 22px; padding: 0 6px 0 4px;
+  background: #fff;
+  border: 2px solid rgba(0,0,0,.08);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'SF Mono', Consolas, monospace; font-size: 10px; line-height: 1;
+  color: var(--ink);
+}
+.color-custom:hover { border-color: var(--brand); }
+/* When the active color is custom (not one of the presets), put the
+   focus ring on this slot -- same treatment the preset swatches use. */
+.color-custom.active {
+  border-color: #111827;
+  box-shadow: 0 0 0 2px #fff inset;
+}
+.color-custom-sample {
+  width: 10px; height: 10px; border-radius: 2px;
+  border-width: 1px;
+  border-color: rgba(0,0,0,.25);
+  border-style: solid;
+  flex-shrink: 0;
+}
+.color-custom input[type="color"] {
+  position: absolute; inset: 0;
+  opacity: 0; cursor: pointer;
+  border: 0; padding: 0; width: 100%; height: 100%;
+}
+
+/* ── Endpoint table (edge source/target pairs) ──────────────── */
+.endpoint-table { display: flex; flex-direction: column; margin: 0 -14px; }
+.endpoint-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px;
+  gap: 8px;
+  padding: 4px 14px 6px;
+  font-size: 10px; color: var(--mute); text-transform: uppercase; letter-spacing: .04em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line-soft);
+}
+.endpoint-head > :last-child { text-align: center; }
+.endpoint-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px;
+  gap: 8px; align-items: center;
+  padding: 6px 14px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.endpoint-row .mono { font-family: 'SF Mono', Consolas, monospace; }
+.endpoint-row select.input.sm { padding-right: 22px; min-width: 0; }
+.endpoint-row .dg-conn-x { justify-self: center; }
+.endpoint-add .endpoint-add-btn {
+  color: var(--brand-ink);
+  border-color: var(--brand-50);
+  background: #fff;
+  font-size: 16px; line-height: 1;
+}
+.endpoint-add .endpoint-add-btn:hover:not(:disabled) {
+  background: var(--brand-50); border-color: var(--brand);
+}
+
+/* ── Connections (edge endpoint pairs) list ──────────────────── */
+.dg-conn-list { display: flex; flex-direction: column; gap: 6px; }
+.dg-conn-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.dg-conn-row .mono { font-family: 'SF Mono', Consolas, monospace; }
+.dg-conn-row select.input.sm { padding-right: 22px; min-width: 0; flex: 1; }
+.dg-conn-arrow { color: var(--mute); }
+.dg-conn-x {
+  margin-left: auto;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--mute);
+}
+.dg-conn-x:hover { color: #B91C1C; border-color: #FECACA; background: #FEF2F2; }
+.dg-conn-x:disabled { opacity: .3; cursor: not-allowed; }
+
+.prop-edge-row {
+  display: flex; gap: 8px; align-items: center;
+  background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 6px;
+  padding: 6px 10px; font-size: 11px;
+}
+
+.kv-grid {
+  display: grid; grid-template-columns: 1fr;
+  gap: 4px;
+}
+.kv-grid > div { display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+.kv-grid .kv-k { color: var(--mute); font-size: 11px; }
+.kv-grid .kv-v { color: var(--ink); }
+
+/* "Show on explorer label" per-property eye toggle in the schema editor. */
+.dg-label-eye {
+  width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--surface); color: var(--mute-2); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.dg-label-eye:hover { color: var(--ink); border-color: var(--mute-2); }
+.dg-label-eye.on { color: #fff; background: var(--brand, #42309C); border-color: var(--brand, #42309C); }
+
+/* Flat per-property list (one row per property) for the node/edge detail. */
+.dg-prop-list { display: flex; flex-direction: column; }
+.dg-prop-item {
+  display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: baseline;
+  padding: 6px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px;
+}
+.dg-prop-item:last-child { border-bottom: 0; }
+.dg-prop-name { color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.dg-prop-val { color: var(--ink); }
+
+.dg-edge-list { display: flex; flex-direction: column; gap: 6px; }
+.dg-edge-row {
+  display: flex; gap: 8px; align-items: center;
+  background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 6px;
+  padding: 6px 10px; font-size: 11px;
+}
+
+.ap-pre {
+  background: #0F1320; color: #A89DE0;
+  border-radius: 8px; padding: 12px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+/* Search-with-badge */
+.sbar {
+  display: flex; align-items: center; gap: 8px;
+  background: #fff; border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px 8px;
+  flex: 1; min-width: 0; max-width: 380px;
+  position: relative;
+}
+.sbar.is-open { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(94,78,190,.12); }
+.sbar-input {
+  flex: 1; min-width: 0;
+  border: 0; outline: 0;
+  font-family: inherit; font-size: 12px;
+  background: transparent;
+  padding: 4px 0;
+}
+.sbar-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 4px 2px 8px; height: 22px;
+  font-size: 11px; font-weight: 500;
+  border-radius: 6px;
+  background: var(--brand-50); color: var(--brand-ink);
+  border: 1px solid var(--brand);
+}
+.sbar-dot { width: 8px; height: 8px; border-radius: 99px; }
+.sbar-x {
+  width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px; cursor: pointer; color: var(--brand-ink);
+  font-size: 12px; line-height: 1;
+}
+.sbar-x:hover { background: rgba(94,78,190,.16); }
+
+.sb-drop {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px);
+  background: #fff; border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: var(--shadow-2);
+  z-index: 10; padding: 6px;
+  max-height: 360px; overflow-y: auto;
+  min-width: 320px;
+}
+.sb-drop-h {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+  color: var(--mute);
+  padding: 6px 8px 4px;
+}
+.sb-drop-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px;
+  cursor: pointer; font-size: 12px;
+}
+.sb-drop-item:hover { background: var(--surface-2); }
+
+/* Switch (used on Graph header) */
+.switch { position: relative; display: inline-block; width: 32px; height: 18px; }
+.switch input { display: none; }
+.switch .slider {
+  position: absolute; inset: 0; cursor: pointer;
+  background: var(--mute-2); border-radius: 99px; transition: background 120ms;
+}
+.switch .slider::before {
+  content: ""; position: absolute; left: 2px; top: 2px;
+  width: 14px; height: 14px; background: #fff; border-radius: 99px;
+  transition: transform 120ms;
+}
+.switch input:checked + .slider { background: var(--brand); }
+.switch input:checked + .slider::before { transform: translateX(14px); }
+
+/* ── Cytoscape right-click context menu ─────────────────────────────── */
+.cy-ctx-menu {
+  min-width: 180px;
+  background: #fff;
+  border: 1px solid var(--line, #E5E7EB);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
+  padding: 4px;
+  font-size: 13px;
+  user-select: none;
+}
+.cy-ctx-item {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink, #111827);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.cy-ctx-item:hover,
+.cy-ctx-item.open { background: var(--bg-soft, #F3F4F6); }
+.cy-ctx-has-sub  { padding-right: 22px; }
+.cy-ctx-chev     { color: var(--mute, #6B7280); font-size: 14px; line-height: 1; margin-left: 8px; }
+.cy-ctx-sub {
+  position: absolute;
+  top: -4px; left: 100%;
+  margin-left: 2px;
+  min-width: 240px;
+  background: #fff;
+  border: 1px solid var(--line, #E5E7EB);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
+  padding: 4px;
+}
+.cy-ctx-empty { padding: 6px 10px; color: var(--mute, #6B7280); font-size: 12px; }
+
+/* Edge → target leaf items in the 2nd-level submenu */
+.cy-ctx-leaf {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  gap: 6px;
+  align-items: center;
+  padding-right: 10px;
+}
+.cy-ctx-edge-pill {
+  font-size: 10px; font-weight: 600;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.2px;
+  max-width: 130px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cy-ctx-arrow { font-size: 13px; line-height: 1; opacity: 0.9; }
+.cy-ctx-node-chip {
+  width: 18px; height: 18px;
+  border-radius: 99px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 18px;
+}
+.cy-ctx-target-label { font-size: 12px; color: var(--ink, #111827); }
+
+/* ── Collapsed-neighbor badge on a node ─────────────────────────────── */
+.cy-badge {
+  min-width: 18px; height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--brand, #42309C);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px #fff;
+  z-index: 5;
+}

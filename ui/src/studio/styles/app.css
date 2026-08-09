@@ -1,0 +1,78 @@
+/* AdminPortal · app-level typography + spacing.
+ *
+ * Why this layer exists: the shared design tokens are tuned for the
+ * Chinese user-facing console (PingFang first, 13 px base, denser
+ * cadence). AdminPortal is English-only and wants the substance of
+ * Linear / Vercel / Stripe — a 14 px base, Western-first font stack,
+ * and slightly more generous breathing room. Everything here is
+ * scoped to AdminPortal; the shared CSS stays untouched. */
+
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "Segoe UI",
+    Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+.side-brand-1 { font-size: 15px; font-weight: 600; }
+.side-brand-2 { font-size: 11.5px; margin-top: 2px; }
+
+.side-link { font-size: 13.5px; height: 36px; }
+.side-link .lbl { font-weight: 500; letter-spacing: -.005em; }
+.side-link.active .lbl { font-weight: 600; }
+
+.side-badge { font-size: 10.5px; min-width: 18px; height: 18px; }
+
+.side-foot { padding: 14px; font-size: 12.5px; }
+
+/* ── Topbar ────────────────────────────────────────────────────────────── */
+.top { padding: 12px 24px; min-height: 56px; }
+.top-crumbs { font-size: 14px; }
+.crumb { font-size: 14px; }
+.crumb.active { font-weight: 600; letter-spacing: -.005em; }
+
+/* Editable workflow breadcrumb — click to rename in place. */
+.wf-crumb-name {
+  cursor: text;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  transition: background .12s ease, border-color .12s ease;
+}
+.wf-crumb-name:hover { background: var(--brand-soft, #ede9fe); border-color: var(--line); }
+.wf-crumb-edit { display: inline-flex; align-items: center; gap: 6px; }
+.wf-crumb-input {
+  font-size: 14px; font-weight: 600; letter-spacing: -.005em;
+  color: var(--ink); background: #fff;
+  border: 1px solid var(--brand, #42309C); border-radius: 4px;
+  padding: 2px 6px; outline: none;
+  min-width: 240px;
+}
+.wf-crumb-err {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #FEE2E2; color: #B91C1C; font-weight: 700; font-size: 11px;
+}
+
+/* ── Body / shell ─────────────────────────────────────────────────────── */
+.shell-body { padding: 20px 24px 24px; }
+.shell-body.ap-shell-full { padding: 0; }
+
+/* ── Button polish — slightly more substantial than the shared baseline ─ */
+.btn { font-size: 13.5px; height: 34px; padding: 0 14px; gap: 6px; }
+.btn.sm { font-size: 12.5px; height: 28px; padding: 0 10px; }
+.btn.lg { font-size: 14px; height: 40px; padding: 0 18px; }
+
+/* ── Pills sit a hair larger so they read at body weight ───────────────── */
+.pill { font-size: 12px; height: 22px; padding: 0 9px; }
+
+/* ── Cards — give them more presence ─────────────────────────────────── */
+.card-h h3 { font-size: 14.5px; }

@@ -1,0 +1,301 @@
+/* Tasks app — Linear-grade. Flat iris (#42309C) on studio tokens. */
+
+.tk-root { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--bg); }
+.tk-embed { position: relative; height: 100%; min-height: 0; }
+.tk-embed .tk-root { height: 100%; }
+
+/* ── sidebar header (name only, matches Chat/Calendar) ─────────────────── */
+.tk-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 8px; flex-shrink: 0; }
+.tk-head-title { font-size: 17px; font-weight: 700; color: #fff; letter-spacing: .01em; }
+.tk-side-top { padding: 4px 14px 6px; }
+.tk-side-new { width: 100%; height: 38px; justify-content: center; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.tk-side-empty { padding: 8px 16px; color: var(--sidebar-mute); font-size: 12px; }
+/* Match the Spaces tree: the highlight spans the FULL width of the bar. These are
+   <button>s, which shrink to content, so force full width; the active background +
+   left accent then come from the shared .side-link.active base. */
+.tk-side .side-link { width: 100%; box-sizing: border-box; text-align: left; }
+
+/* ── toolbar ───────────────────────────────────────────────────────────── */
+.tk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0; min-height: 56px; }
+.tk-toolbar-l { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.tk-title { font-size: 15px; font-weight: 650; color: var(--ink); }
+.tk-count { font-size: 12px; color: var(--mute); font-weight: 500; }
+.tk-toolbar-r { display: flex; align-items: center; gap: 10px; }
+/* Segmented toggle — matches the Calendar Day/Week/Month switch (.cal-viewswitch). */
+.tk-viewtoggle { display: inline-flex; align-items: center; background: var(--line-soft); border-radius: var(--r-input); padding: 2px; }
+.tk-vt { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--mute);
+  font-size: 12px; font-weight: 600; padding: 0 12px; height: 26px; border-radius: 6px; cursor: pointer; }
+.tk-vt.on { background: #fff; color: var(--brand-ink); box-shadow: var(--shadow-1); }
+.tk-vt:hover:not(.on) { color: var(--ink-2); }
+.tk-new { display: inline-flex; align-items: center; gap: 6px; height: 34px; }
+
+/* surface owns the scroll; min-height/width:0 = clean single scrollbar (no half bar) */
+.tk-surface { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; display: flex; }
+
+/* ── Kanban board ──────────────────────────────────────────────────────── */
+.tk-board { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; gap: 12px;
+  padding: 16px 20px 8px; align-items: flex-start; overflow-x: auto; overflow-y: hidden; }
+.tk-col { width: 300px; flex: 0 0 300px; max-height: 100%; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-1); }
+.tk-col.is-over { outline: 2px solid var(--brand); outline-offset: -1px; }
+.tk-col.col-dragging { opacity: .5; }
+.tk-col-head { display: flex; align-items: center; gap: 7px; padding: 11px 10px 8px; flex-shrink: 0; cursor: grab; }
+.tk-col-head:active { cursor: grabbing; }
+.tk-col-name { font-size: 13px; font-weight: 650; color: var(--ink); }
+.tk-col-count { font-size: 12px; color: var(--mute); }
+/* Always visible so the stage settings (rename / color / delete) + new-task buttons
+   are discoverable without hovering. */
+.tk-col-actions { margin-left: auto; display: flex; gap: 2px; }
+.tk-col-btn { border: 0; background: transparent; color: var(--mute); cursor: pointer; padding: 3px; border-radius: 6px; display: inline-flex; }
+.tk-col-btn:hover { background: var(--surface); color: var(--ink); }
+.tk-col-body { display: flex; flex-direction: column; gap: 8px; padding: 2px 8px 10px; overflow-y: auto; min-height: 24px; }
+.tk-col-newcard { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; border: 0; background: transparent;
+  color: var(--mute); font-size: 12.5px; padding: 8px; border-radius: 8px; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.tk-col:hover .tk-col-newcard { opacity: 1; }
+.tk-col-newcard:hover { background: var(--surface); color: var(--ink); }
+.tk-addstage { flex: 0 0 auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px;
+  border: 1px dashed var(--line); background: transparent; color: var(--mute); font-size: 12.5px; font-weight: 550;
+  padding: 8px 14px; border-radius: 10px; cursor: pointer; }
+.tk-addstage:hover { color: var(--brand); border-color: var(--brand); }
+
+/* per-stage settings popover: rename + recolor + delete */
+.tk-stage-edit { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.tk-stage-name { border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 13px; font-weight: 600;
+  background: var(--surface); color: var(--ink); width: 100%; }
+.tk-stage-name:focus { outline: none; border-color: var(--brand); }
+.tk-swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; padding: 0 2px; }
+.tk-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.tk-swatch.on { border-color: var(--ink); box-shadow: 0 0 0 2px var(--surface) inset; }
+.tk-stage-del { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--hot, #EB5757);
+  font-size: 13px; font-weight: 550; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
+.tk-stage-del:hover { background: rgba(235, 87, 87, .1); }
+.tk-stage-note { font-size: 12px; color: var(--mute); line-height: 1.4; padding: 4px 2px 2px; }
+
+/* Loading skeletons (shown while switching views, so no stale flash). */
+.tk-skel-line { display: inline-block; height: 10px; border-radius: 5px; background: var(--surface-2, #EEF0F4); animation: tk-pulse 1.3s infinite; }
+.tk-skel-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--surface-2, #EEF0F4); animation: tk-pulse 1.3s infinite; flex-shrink: 0; }
+.tk-skel-card { display: flex; flex-direction: column; gap: 9px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 13px 11px; }
+.tk-skel-row { display: flex; align-items: center; padding: 13px 16px; border-bottom: 1px solid var(--line-soft, #F0F1F4); }
+.tk-skel .tk-col-head { gap: 8px; }
+.tk-skel .tk-lgroup-head { gap: 8px; }
+.tk-title-skel { display: inline-block; width: 128px; height: 18px; border-radius: 6px; background: var(--surface-2, #EEF0F4); animation: tk-pulse 1.3s infinite; }
+
+/* Label picker: shared registry options + create */
+.tk-label-opts { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; max-height: 200px; overflow-y: auto; }
+.tk-label-opt { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent;
+  padding: 7px 8px; border-radius: 7px; font-size: 13px; color: var(--ink); cursor: pointer; text-align: left; }
+.tk-label-opt:hover { background: var(--surface-2); }
+.tk-label-opt.create { color: var(--brand); font-weight: 550; }
+.tk-label-opt .tk-label-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+/* Comment replies */
+.tk-comment-reply-btn { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none;
+  color: var(--mute); font-size: 12px; cursor: pointer; padding: 3px 0; margin-top: 2px; }
+.tk-comment-reply-btn:hover { color: var(--brand); }
+.tk-reply { margin-top: 8px; margin-left: 2px; padding-left: 12px; border-left: 2px solid var(--line); }
+.tk-reply-box { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.tk-reply-box input { flex: 1; border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px;
+  font: inherit; font-size: 13px; background: var(--surface); color: var(--ink); outline: none; }
+.tk-reply-box input:focus { border-color: var(--brand); }
+.tk-send.sm { width: 26px; height: 26px; }
+
+/* Sidebar custom boards (saved filters) */
+.side-cap-add { border: 0; background: transparent; color: var(--sidebar-mute); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 5px; }
+.side-cap-add:hover { color: #fff; background: rgba(255,255,255,.08); }
+.tk-board-row { cursor: pointer; }
+.tk-board-acts { margin-left: auto; display: flex; gap: 1px; opacity: 0; transition: opacity .12s; }
+.tk-board-row:hover .tk-board-acts, .tk-board-row.active .tk-board-acts { opacity: 1; }
+.tk-board-act { border: 0; background: transparent; color: var(--sidebar-mute); cursor: pointer; padding: 3px; border-radius: 5px; display: inline-flex; }
+.tk-board-act:hover { color: #fff; background: rgba(255,255,255,.14); }
+.tk-board-empty { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; color: var(--sidebar-mute); font-size: 13px; padding: 7px 16px; cursor: pointer; }
+.tk-board-empty:hover { color: #fff; }
+
+/* Board builder modal (saved-filter editor) */
+.tk-bb { max-height: 88vh; overflow-y: auto; }
+.tk-bb-hint { font-size: 12.5px; color: var(--mute); margin: 2px 0 14px; line-height: 1.5; }
+.tk-bb-sec { margin-bottom: 14px; }
+.tk-bb-label { font-size: 11px; font-weight: 600; color: var(--mute); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 7px; display: block; }
+.tk-bb-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.tk-bb-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); border-radius: 999px; padding: 5px 11px 5px 7px; font-size: 12.5px; cursor: pointer; }
+.tk-bb-chip:hover { background: var(--surface-2); }
+.tk-bb-chip.on { border-color: var(--brand); background: var(--brand-soft, #ECE9F7); color: var(--brand); font-weight: 550; }
+.tk-bb-chip .tk-label-dot { width: 9px; height: 9px; border-radius: 50%; }
+.tk-bb-empty { font-size: 12.5px; color: var(--mute); }
+.tk-bb-dates { display: flex; gap: 16px; }
+.tk-bb-dates label { display: flex; flex-direction: column; gap: 6px; }
+.tk-bb-dates input { border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); }
+.tk-bb-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; padding-top: 12px; }
+
+.tk-card { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px 8px;
+  cursor: pointer; display: flex; flex-direction: column; gap: 6px; box-shadow: var(--shadow-1); transition: border-color .12s, box-shadow .12s; }
+.tk-card:hover { border-color: #C9C2EE; box-shadow: var(--shadow-2); }
+.tk-card.is-dragging { opacity: .35; }
+.tk-card-parent { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--mute);
+  font-family: var(--mono); letter-spacing: .02em; margin-bottom: -1px; }
+.tk-card-parent svg { flex-shrink: 0; opacity: .8; }
+.tk-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 20px; }
+.tk-card-key { font-size: 11px; color: var(--mute); font-family: var(--mono); letter-spacing: .02em; }
+.tk-card-main { display: flex; align-items: flex-start; gap: 8px; }
+.tk-card-title { font-size: 13.5px; line-height: 1.4; color: var(--ink); font-weight: 500; }
+.tk-card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tk-card-foot { font-size: 11px; color: var(--mute); margin-top: 1px; }
+
+/* ── List view ─────────────────────────────────────────────────────────── */
+.tk-list { flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto; padding-bottom: 40px; }
+.tk-lgroup { }
+.tk-lgroup-head { display: flex; align-items: center; gap: 8px; padding: 8px 20px; background: var(--surface-2);
+  position: sticky; top: 0; z-index: 1; }
+.tk-lgroup-name { font-size: 12.5px; font-weight: 650; color: var(--ink); }
+.tk-lgroup-count { font-size: 12px; color: var(--mute); }
+.tk-lgroup-add { margin-left: auto; border: 0; background: transparent; color: var(--mute); cursor: pointer; padding: 3px; border-radius: 6px; opacity: 0; }
+.tk-lgroup-head:hover .tk-lgroup-add { opacity: 1; }
+.tk-lgroup-add:hover { background: var(--surface); color: var(--ink); }
+.tk-lgroup-empty { padding: 8px 20px 8px 44px; font-size: 12.5px; color: var(--mute); }
+.tk-lrow { display: flex; align-items: center; gap: 10px; padding: 9px 20px; cursor: pointer; border-bottom: 1px solid var(--line-soft); }
+.tk-lrow:hover { background: var(--surface-2); }
+.tk-lrow-prio { width: 16px; display: inline-flex; justify-content: center; flex-shrink: 0; }
+.tk-lrow-key { font-size: 11.5px; color: var(--mute); font-family: var(--mono); min-width: 52px; flex-shrink: 0; }
+.tk-lrow-title { flex: 1; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-lrow-sub { display: inline-flex; vertical-align: middle; margin-right: 5px; color: var(--mute); }
+.tk-lrow-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.tk-lrow-date { font-size: 12px; color: var(--mute); min-width: 48px; text-align: right; }
+.tk-lrow-noav { width: 20px; height: 20px; }
+
+/* ── atoms ─────────────────────────────────────────────────────────────── */
+.tk-sicon { flex-shrink: 0; display: block; }
+.tk-av { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: #fff; font-weight: 650; flex-shrink: 0; aspect-ratio: 1; overflow: hidden; }
+.tk-av.ai { border-radius: 6px; }
+.tk-av-img { object-fit: cover; }
+.tk-av-stack { display: inline-flex; }
+.tk-av-stack .tk-av { margin-left: -6px; box-shadow: 0 0 0 2px var(--surface); }
+.tk-av-stack .tk-av:first-child { margin-left: 0; }
+.tk-av-more { background: var(--mute-2); color: var(--ink-2); font-size: 10px; }
+.tk-prio { display: inline-flex; align-items: center; gap: 4px; }
+.tk-prio-none { color: var(--mute); }
+.tk-prio-lbl { font-size: 12.5px; color: var(--ink-2); }
+.tk-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink-2);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 8px; }
+.tk-label-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lc, var(--mute)); }
+.tk-label-x { border: 0; background: transparent; color: var(--mute); cursor: pointer; padding: 0 0 0 2px; font-size: 13px; }
+
+/* ── controls (pickers + popovers) ─────────────────────────────────────── */
+.tk-pop-wrap { position: relative; display: inline-flex; }
+.tk-pop { position: absolute; top: calc(100% + 4px); z-index: 60; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow-2); padding: 5px; min-width: 180px; }
+.tk-pop-left { left: 0; } .tk-pop-right { right: 0; }
+.tk-ctl-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink-2); font-size: 12.5px; font-weight: 500; padding: 4px 10px; border-radius: var(--r-pill); cursor: pointer; }
+.tk-ctl-pill:hover { border-color: var(--brand); }
+.tk-ctl-bare { border: 0; background: transparent; cursor: pointer; padding: 2px; display: inline-flex; border-radius: 6px; }
+.tk-ctl-bare:hover { background: var(--surface-2); }
+.tk-menu { display: flex; flex-direction: column; gap: 1px; }
+.tk-menu-scroll { max-height: 280px; overflow-y: auto; }
+.tk-menu-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; background: transparent;
+  border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--ink); text-align: left; width: 100%; }
+.tk-menu-item:hover { background: var(--surface-2); }
+.tk-menu-item.on { color: var(--brand-ink); }
+.tk-menu-name { flex: 1; min-width: 0; }
+.tk-menu-check { width: 14px; display: inline-flex; color: var(--brand); flex-shrink: 0; }
+.tk-menu-empty { padding: 8px; font-size: 12.5px; color: var(--mute); }
+/* AI-agent tag uses the shared .ai-tag (page.css) */
+.tk-mini-more { font-size: 10px; color: var(--mute); }
+.tk-assign-add { width: 22px; height: 22px; border-radius: 50%; border: 1px dashed var(--line); background: var(--surface-2);
+  color: var(--mute); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.tk-assign-add:hover { border-color: var(--brand); color: var(--brand); }
+.tk-label-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.tk-label-in { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; font-size: 13px; background: var(--surface); color: var(--ink); }
+.tk-label-in:focus { outline: none; border-color: var(--brand); }
+
+/* ── create modal ──────────────────────────────────────────────────────── */
+.tk-modal-back { position: fixed; inset: 0; background: rgba(20, 18, 40, .42); z-index: 200;
+  display: flex; align-items: flex-start; justify-content: center; padding: 10vh 24px 24px; }
+.tk-embed .tk-modal-back { position: absolute; padding: 24px; align-items: center; }
+.tk-cm { width: min(680px, 96%); background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-2); padding: 18px 20px 14px; }
+.tk-cm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.tk-cm-crumb { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--mute); font-weight: 500; }
+.tk-cm-x { border: 0; background: transparent; color: var(--mute); cursor: pointer; padding: 4px; border-radius: 6px; }
+.tk-cm-x:hover { background: var(--surface-2); color: var(--ink); }
+.tk-cm-title { width: 100%; border: 0; font-size: 19px; font-weight: 650; color: var(--ink); background: transparent; padding: 6px 0; }
+.tk-cm-title:focus { outline: none; }
+.tk-cm-props { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0 14px; }
+.tk-cm-foot { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 12px; }
+.tk-cm-hint { font-size: 11.5px; color: var(--mute); }
+.tk-cm-foot-r { display: flex; gap: 8px; }
+
+/* ── detail ────────────────────────────────────────────────────────────── */
+.tk-detail { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+.tk-detail.is-modal { border-radius: 14px; overflow: hidden; }
+.tk-detail-bar { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.tk-detail-bar-title { font-weight: 600; color: var(--ink); flex: 1; }
+.tk-detail-x { border: 0; background: transparent; color: var(--mute); cursor: pointer; padding: 4px; border-radius: 6px; }
+.tk-detail-x:hover { background: var(--surface-2); color: var(--ink); }
+.tk-detail-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
+.tk-detail-main { min-width: 0; overflow-y: auto; padding: 26px 32px 48px; }
+.tk-detail-keyline { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--mute); font-family: var(--mono); margin-bottom: 6px; }
+.tk-detail-title { width: 100%; border: 0; font-size: 24px; font-weight: 680; color: var(--ink); background: transparent; padding: 0 0 4px; line-height: 1.25; }
+.tk-detail-title:focus { outline: none; }
+.tk-ext-link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--brand); margin-bottom: 6px; }
+/* body editor — bounded height so the editor renders; overflow visible so the slash menu isn't clipped */
+.tk-detail-body { min-height: 60px; margin: 8px 0 12px; overflow: visible; }
+.tk-body-skel { height: 120px; border-radius: 10px; background: var(--surface-2); animation: tk-pulse 1.3s infinite; }
+@keyframes tk-pulse { 0%, 100% { opacity: .6 } 50% { opacity: 1 } }
+
+/* reuse the doc editor but: hide its CONTENTS/TOC (#6), un-clip the slash menu (#7),
+   remove the reading-width indentation so content is FULL WIDTH (#38), and let it GROW
+   with content with no inner scroll/max-height (#42). className 'tk-md' is forwarded onto
+   the editor root .shell; CSS-modules hash inner classes → target them structurally. */
+.tk-md { overflow: visible !important; height: auto !important; --content-inline-padding: 0px !important; }
+.tk-md aside { display: none !important; }
+.tk-md [class*="layout"] { grid-template-columns: 1fr !important; gap: 0 !important; height: auto !important; }
+.tk-md [class*="main"] { grid-column: 1 / -1 !important; max-width: 100% !important; }
+.tk-md [class*="editorSurface"] { height: auto !important; max-height: none !important; overflow: visible !important; flex: 0 0 auto !important; padding-right: 0 !important; }
+.tk-md [class*="header"] { display: none !important; }
+/* full-width content has no left gutter → hide the block add/drag handles that would
+   otherwise overlap the text (slash menu + Enter still add blocks). */
+.tk-md [class*="rowControls"] { display: none !important; }
+
+.tk-section { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }
+.tk-section-head { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; color: var(--ink); margin-bottom: 12px; }
+.tk-section-count { color: var(--mute); font-weight: 500; }
+.tk-sub-row { display: flex; align-items: center; gap: 9px; padding: 7px 8px; margin: 0 -8px; border-radius: 7px;
+  border-bottom: 1px solid var(--line-soft); cursor: pointer; transition: background .12s; }
+.tk-sub-row:hover { background: var(--surface-2); }
+.tk-sub-key { font-size: 11px; color: var(--mute); font-family: var(--mono); }
+.tk-sub-title { flex: 1; font-size: 13px; color: var(--ink); }
+.tk-sub-add { display: flex; align-items: center; gap: 8px; padding: 9px 2px; color: var(--mute); }
+.tk-sub-add input { flex: 1; border: 0; background: transparent; font-size: 13px; color: var(--ink); }
+.tk-sub-add input:focus { outline: none; }
+.tk-sub-add input::placeholder { color: var(--mute); }
+
+.tk-timeline { display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px; }
+.tk-act { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--mute); padding-left: 9px; }
+.tk-act-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
+.tk-act-text { color: var(--ink-2); }
+.tk-act-when { margin-left: auto; font-size: 11.5px; }
+.tk-comment { display: flex; gap: 10px; }
+.tk-comment-body { flex: 1; }
+.tk-comment-meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+.tk-comment-meta b { font-size: 13px; color: var(--ink); font-weight: 600; }
+.tk-comment-meta span { font-size: 11.5px; color: var(--mute); }
+.tk-comment-text { font-size: 13.5px; color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
+.tk-composer-c { display: flex; gap: 10px; align-items: flex-start; margin-top: 4px; }
+.tk-composer-box { flex: 1; display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 12px; padding: 6px 8px 6px 12px; background: var(--surface); }
+.tk-composer-box:focus-within { border-color: var(--brand); }
+.tk-composer-box textarea { flex: 1; border: 0; resize: none; font: inherit; font-size: 13.5px; background: transparent; color: var(--ink); max-height: none; overflow: hidden; line-height: 1.5; padding: 3px 0; display: block; }
+.tk-composer-box textarea:focus { outline: none; }
+.tk-send { width: 28px; height: 28px; border-radius: 8px; border: 0; background: var(--brand); color: #fff; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.tk-send:disabled { background: var(--mute-2); color: var(--surface); cursor: default; }
+
+.tk-detail-side { border-left: 1px solid var(--line); padding: 24px 18px; overflow-y: auto; overflow-x: hidden; background: var(--surface); }
+.tk-prop { display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; }
+.tk-prop-k { font-size: 11px; font-weight: 600; color: var(--mute); text-transform: uppercase; letter-spacing: .04em; }
+.tk-prop-v { display: flex; }
+.tk-side-assignees { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.tk-muted { color: var(--mute); font-size: 12.5px; }
+.tk-key { font-size: 12px; color: var(--mute); font-family: var(--mono); }
+.tk-back { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--ink-2); font-size: 13px; font-weight: 550; cursor: pointer; }
+.tk-back:hover { color: var(--brand); }
+.tk-modal { width: min(960px, 96%); height: min(86%, 760px); background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-2); overflow: hidden; }

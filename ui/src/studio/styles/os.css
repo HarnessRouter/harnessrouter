@@ -1,0 +1,320 @@
+/* Business OS shell — a narrow app dock (Slack-style) to the left of the
+   active app's own sidebar. Dock keeps the AdminPortal navbar color
+   (--sidebar); the app sidebar sits one shade lighter (--sidebar-2) so the
+   two read as distinct tiers. */
+
+.os-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* The existing two-column app shell now lives inside the OS shell, so it
+   fills the remaining width instead of the whole viewport. */
+.os-shell .shell {
+  flex: 1;
+  height: 100%;
+  min-width: 0;
+}
+
+/* App sidebar — one shade lighter than the dock. */
+.os-shell .app-side { background: var(--sidebar-2); }
+
+/* Account pages (profile / billing) have no app sidebar — single column. */
+.os-shell .shell.shell-no-side { grid-template-columns: 1fr; }
+
+/* Draggable resize handle on the sidebar/main boundary. */
+.app-side-resize {
+  position: absolute; top: 0; bottom: 0; width: 9px; margin-left: -4px;
+  cursor: col-resize; z-index: 20;
+}
+.app-side-resize::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  background: transparent; transition: background .12s ease;
+}
+.app-side-resize:hover::after { background: var(--brand, #42309C); }
+
+/* ── Dock ─────────────────────────────────────────────────────────────── */
+.os-dock {
+  width: 72px;
+  flex-shrink: 0;
+  background: var(--sidebar);
+  border-right: 1px solid rgba(0, 0, 0, .35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0 14px;
+}
+
+/* Epsilla mark, pinned at the very top of the dock above the apps. Brightened
+   so the brand colors read on the dark navy nav. */
+.os-dock-logo {
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 0 10px;
+  margin-bottom: 6px;
+}
+.os-dock-logo img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  filter: brightness(1.18) saturate(1.3) drop-shadow(0 0 6px rgba(140, 120, 255, .5));
+  transition: filter .14s ease, transform .14s ease;
+}
+.os-dock-logo:hover img {
+  filter: brightness(1.32) saturate(1.4) drop-shadow(0 0 10px rgba(150, 125, 255, .78));
+  transform: scale(1.06);
+}
+
+.os-dock-apps {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+.os-dock-apps::-webkit-scrollbar { width: 0; }
+
+.os-app {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-decoration: none;
+  color: var(--sidebar-mute);
+}
+.os-app-ic {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, .06);
+  color: #C7CCDA;
+  transition: background .14s ease, color .14s ease, border-radius .14s ease;
+}
+.os-app:hover .os-app-ic {
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  border-radius: 12px;
+}
+.os-app-lbl {
+  font-size: 10px;
+  line-height: 1.15;
+  text-align: center;
+  color: var(--sidebar-mute);
+  max-width: 68px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.os-app.active .os-app-ic {
+  background: #42309C;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(74, 55, 204, .4);
+}
+.os-app.active .os-app-lbl { color: #fff; font-weight: 600; }
+
+.os-app-add .os-app-ic {
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, .22);
+  color: var(--sidebar-mute);
+}
+.os-app-add:hover .os-app-ic {
+  background: rgba(255, 255, 255, .06);
+  border-color: rgba(255, 255, 255, .4);
+  color: #fff;
+}
+
+.os-dock-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 10px;
+  width: 100%;
+  margin-top: 6px;
+}
+.os-dock-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, .06);
+  color: #C7CCDA;
+}
+.os-dock-btn:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+.os-dock-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #42309C;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  position: relative;
+}
+/* Avatar + online dot. The avatar clips its image with overflow:hidden, so the
+   dot is a SIBLING (not an ::after on the avatar) — otherwise it gets cut by the
+   circle. It sits on the circle's lower-right edge and renders on top. */
+.os-dock-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.os-dock-status {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #22C55E;
+  border: 2px solid var(--sidebar);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, .25);
+  z-index: 3;
+  pointer-events: none;
+}
+.os-dock-foot { position: relative; }
+
+/* Account popup menu — a light card popping out to the right of the dock. */
+.os-acct-menu {
+  position: absolute;
+  left: calc(100% + 10px);
+  bottom: 0;
+  width: 248px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px -12px rgba(17, 24, 39, .28), 0 4px 12px -4px rgba(17, 24, 39, .12);
+  padding: 6px;
+  z-index: 60;
+  animation: os-acct-in .12s ease-out;
+}
+@keyframes os-acct-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.os-acct-head { display: flex; align-items: center; gap: 10px; padding: 8px 8px 10px; }
+.os-acct-av {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #42309C; color: #fff;
+  font-size: 13px; font-weight: 600;
+}
+.os-acct-id { min-width: 0; }
+.os-acct-name { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-acct-email { font-size: 11.5px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-acct-org {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 8px 6px; padding: 5px 8px; border-radius: 7px;
+  background: var(--brand-50); color: var(--brand-ink);
+  font-size: 11.5px; font-weight: 600;
+}
+.os-acct-org > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-acct-sep { height: 1px; background: var(--line-soft); margin: 4px 6px; }
+.os-acct-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border: 0; background: none; cursor: pointer;
+  border-radius: 8px; font-size: 13px; color: var(--ink-2); text-align: left;
+  font-family: inherit;
+}
+.os-acct-item:hover { background: var(--line-soft); color: var(--ink); }
+.os-acct-item > span { flex: 1; }
+.os-acct-item.os-acct-item-static { color: var(--mute-2); cursor: default; }
+.os-acct-item.os-acct-item-static:hover { background: none; }
+.os-acct-caret { color: var(--mute-2); flex: 0 0 auto !important; }
+.os-acct-danger { color: #DC2626; }
+.os-acct-danger:hover { background: var(--hot-soft); color: #B91C1C; }
+.os-acct-orglist { padding: 2px 6px 4px; }
+.os-acct-orgrow {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  padding: 7px 10px 7px 34px; border: 0; background: none; cursor: pointer;
+  border-radius: 7px; font-size: 12.5px; color: var(--ink-2); text-align: left; font-family: inherit;
+}
+.os-acct-orgrow:hover { background: var(--line-soft); }
+.os-acct-orgrow.active { color: var(--brand-ink); font-weight: 600; }
+.os-acct-orgname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-acct-orgrow:disabled { opacity: .5; cursor: default; }
+
+/* Coming-soon app body */
+.os-soon-wrap {
+  display: grid;
+  place-items: center;
+  min-height: 62vh;
+  text-align: center;
+}
+.os-soon-card { padding: 40px 48px; max-width: 460px; }
+.os-soon-ic {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-soft, #ECE9F7);
+  color: var(--brand, #42309C);
+}
+
+/* ── Help → Chatra modal ──────────────────────────────────────────────────
+   Centered on the viewport, with Chatra embedded (mode 'frame') inside the
+   white card via #chatra-wrapper. */
+.os-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(17, 24, 39, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.os-help-modal {
+  position: relative;
+  width: 480px;
+  max-width: calc(100vw - 48px);
+  height: calc(100vh - 200px);
+  max-height: 760px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px -16px rgba(17, 24, 39, .45);
+  padding: 14px;
+}
+.os-help-close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgba(17, 24, 39, .2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--ink);
+}
+.os-help-close:hover { background: var(--bg); }
+.os-help-chatra { width: 100%; height: 100%; }

@@ -1,0 +1,116 @@
+/* Shared page styles — page headers, KPI strips, tables, filters */
+
+.page { padding: 0; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+
+.page-h {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px;
+}
+.page-t { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.005em; }
+.page-sub { font-size: 12px; color: var(--mute); margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.page-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+/* KPI strip */
+.kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.kpi-card {
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
+}
+.kpi-h { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--mute); }
+.kpi-h .ic { color: var(--mute-2); }
+.kpi-bar { height: 4px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.kpi-fill { height: 100%; border-radius: 999px; }
+.kpi-sub { font-size: 11px; color: var(--mute); }
+.kpi-sub.ok { color: var(--ok); }
+.kpi-card .stat-num { font-size: 22px; }
+
+/* Filter chips */
+.filt-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.filt-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 26px; padding: 0 10px; border-radius: 999px;
+  font-size: 12px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-2);
+  font-family: inherit;
+}
+.filt-chip.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+.filt-chip:hover:not(.active) { border-color: var(--mute-2); }
+
+/* Generic table */
+.tbl { display: flex; flex-direction: column; }
+.tbl-head, .tbl-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  font-size: 12px;
+}
+.tbl-head {
+  color: var(--mute); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; font-size: 11px;
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+}
+.tbl-row {
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px; color: var(--ink-2);
+}
+.tbl-row:hover { background: var(--surface-2); }
+.tbl-head > span, .tbl-row > span { flex: 1; }
+
+.tbl-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; font-size: 12px; color: var(--mute);
+  border-top: 1px solid var(--line-soft);
+}
+.pg { display: flex; gap: 4px; align-items: center; }
+.pg-num {
+  min-width: 26px; height: 26px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer;
+  color: var(--ink-2);
+}
+.pg-num.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+/* Dispatch banner */
+.dispatch { background: #fff; }
+.dispatch-row {
+  display: grid; grid-template-columns: 1.5fr 1fr 1fr 0.7fr; gap: 18px;
+  padding: 14px 20px; align-items: stretch;
+}
+.dispatch-progress { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dispatch-bar { display: flex; height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.dispatch-fill { height: 100%; }
+.dispatch-fill.ok { background: var(--ok); }
+.dispatch-fill.info { background: var(--info); }
+.dispatch-fill.warm { background: var(--warm); }
+.dispatch-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--mute); }
+.dispatch-legend .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; margin-right: 4px; vertical-align: middle; }
+
+.dispatch-w {
+  border-left: 1px dashed var(--line); padding-left: 18px;
+  display: flex; flex-direction: column; justify-content: center; gap: 6px;
+}
+.dispatch-w-h { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.dispatch-w-meta { display: flex; gap: 12px; font-size: 11px; color: var(--mute); }
+.dispatch-w-meta .ok { color: var(--ok); }
+
+.dispatch-eta {
+  border-left: 1px dashed var(--line); padding-left: 18px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+
+/* Empty-state shells used by some pages */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 40px; color: var(--mute); font-size: 12px;
+}
+
+/* ── Shared "AI Agent" tag ────────────────────────────────────────────────────
+   ONE style for the AI-agent label everywhere (chat sidebar/mentions/messages,
+   tasks assignees, calendar people + event popover, org members). On-brand iris
+   pill, mixed case. Light surfaces use brand-soft; the dark app rails (.app-side)
+   get the lavender tint; inside the brand-soft agent chip it goes solid so it stays
+   readable. Single source of truth — don't reintroduce per-page AI tag styles. */
+.ai-tag {
+  font-size: 9px; font-weight: 700; letter-spacing: .05em; line-height: 1.6;
+  padding: 1.5px 5px; border-radius: 5px; white-space: nowrap; margin-left: 2px;
+  background: var(--brand-soft, #ECE9F7); color: var(--brand, #42309C);
+}
+.app-side .ai-tag { background: rgba(40,90,255, .3); color: #9FC0FF; }
+.ch-agent-chip .ai-tag { background: var(--brand, #42309C); color: #fff; }

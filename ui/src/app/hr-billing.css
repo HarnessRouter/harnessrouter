@@ -1,0 +1,126 @@
+/* Billing pages — HR design system (blue), layered on hr.css primitives. */
+
+.hrb-content { display: flex; flex-direction: column; gap: 20px; max-width: 960px; margin: 0 auto; padding: 28px 24px 40px; }
+.hrb-notice { padding: 10px 14px; border: 1px solid var(--brand-soft); background: var(--brand-50); color: var(--brand-ink); border-radius: 10px; font-size: 13px; }
+.hrb-label { font-size: 13px; color: var(--mute, #5B5D66); margin-bottom: 6px; }
+
+.hrb-balance { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px; gap: 16px; }
+.hrb-balance-value { font-size: 36px; font-weight: 680; color: var(--ink); line-height: 1.1; }
+.hrb-balance-low { border-color: #E3B341; background: #FFFBEB; }
+.hrb-balance-deficit { border-color: #DA1E28; background: #FFF1F2; }
+.hrb-alert { margin-top: 10px; font-size: 13px; border-radius: 8px; padding: 8px 12px; }
+.hrb-alert-low { background: #FEF3C7; color: #92400E; }
+.hrb-alert-deficit { background: #FEE2E2; color: #991B1B; }
+
+/* ── Subscription plans: three vertical pricing cards ─────────────────────────── */
+.hrb-plans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;
+  max-width: 860px; margin: 4px 0 8px; align-items: stretch; }
+.hrb-plan { position: relative; display: flex; flex-direction: column; gap: 6px;
+  padding: 26px 22px 20px; background: #fff; border: 1px solid var(--line); border-radius: 14px;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.hrb-plan:hover { border-color: #cbd8ff; box-shadow: 0 8px 26px rgba(40, 90, 255, .09); transform: translateY(-2px); }
+.hrb-plan.popular { border-color: var(--brand); box-shadow: 0 10px 30px rgba(110, 85, 255, .13); }
+/* The CURRENT plan must read differently at a glance from the "Most popular" pitch: a green
+   double ring + green tinted wash — unmistakably "you are here", not another sales card. */
+.hrb-plan.current { border-color: #0E8C6A; box-shadow: 0 0 0 2px rgba(14, 140, 106, .28), 0 10px 26px rgba(14, 140, 106, .12);
+  background: linear-gradient(180deg, #ECFDF5 0%, #fff 52%); }
+.hrb-plan-flag { position: absolute; top: -11px; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 12px; border-radius: 999px; background: var(--brand); color: #fff;
+  font-size: 11px; font-weight: 700; letter-spacing: .03em; white-space: nowrap; }
+.hrb-plan-flag.on { background: #0E8C6A; }
+.hrb-plan-flag iconify-icon { font-size: 13px; }
+.hrb-plan-sub-state { margin-top: auto; display: flex; align-items: center; gap: 6px;
+  padding: 8px 0 2px; font-size: 12.5px; font-weight: 600; color: #0E8C6A; }
+.hrb-plan-sub-state iconify-icon { font-size: 15px; flex: 0 0 auto; }
+.hrb-plan-cancel { margin-top: 8px; color: #B91C1C; border-color: #FECACA; }
+.hrb-plan-cancel:hover { background: #FEF2F2; border-color: #FCA5A5; }
+.hrb-plan.current .hrb-plan-cta.hrb-plan-cancel { margin-top: 8px; }
+.hrb-plan.current .hrb-plan-feats + .hrb-plan-sub-state { margin-top: auto; }
+.hrb-plan-name { font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--brand-ink, var(--brand)); }
+.hrb-plan-price { font-size: 30px; font-weight: 750; letter-spacing: -.03em; color: var(--ink); }
+.hrb-plan-price small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+.hrb-plan-credits { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.hrb-plan-feats { list-style: none; margin: 10px 0 14px; padding: 12px 0 0; display: grid; gap: 7px;
+  border-top: 1px solid var(--line); }
+.hrb-plan-feats li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.hrb-plan-feats iconify-icon { color: var(--brand); font-size: 15px; flex: 0 0 auto; }
+.hrb-plan-cta { margin-top: auto; width: 100%; justify-content: center; }
+.hrb-plan-cta:disabled { opacity: .65; }
+.hrb-plan-note { margin-top: 8px; font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.4; }
+@media (max-width: 860px) { .hrb-plans { grid-template-columns: 1fr; max-width: 440px; } }
+
+/* ── Gift stack: welcome banner, full width ──────────────────────────────────── */
+.hrb-gift-row { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 18px; }
+.hrb-gift-row > * { margin-bottom: 0; }   /* children carry their own bottom margins otherwise */
+
+.hrb-table-card { padding: 8px 0 12px; }
+.hrb-table-scroll { overflow-x: auto; }
+.hrb-table { width: 100%; min-width: 700px; border-collapse: collapse; font-size: 13px; }
+.hrb-table th { text-align: left; padding: 10px 16px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--mute, #5B5D66); font-weight: 600; }
+.hrb-table td { padding: 10px 16px; color: var(--ink); }
+.hrb-table tbody tr:hover { background: var(--brand-50); }
+.hrb-table-empty { text-align: center; color: var(--mute, #5B5D66); padding: 28px 0 !important; }
+.hrb-row-overdraft td { color: #991B1B; }
+.hrb-link { color: var(--brand-ink); text-decoration: none; }
+.hrb-link:hover { text-decoration: underline; }
+.hrb-pager { display: flex; gap: 6px; padding: 12px 16px 4px; align-items: center; }
+
+.hrb-pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
+.hrb-pill-ok { background: #E7F6EC; color: #1F7A3D; }
+.hrb-pill-mute { background: #EDEEF2; color: #5B5D66; }
+.hrb-pill-warn { background: #FEF3C7; color: #92400E; }
+.hrb-pill-danger { background: #FEE2E2; color: #991B1B; }
+
+.hrb-range { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.hrb-range-custom { display: inline-flex; align-items: center; gap: 6px; }
+.hrb-range-custom .hr-input { width: 150px; }
+.hrb-range-sep { color: var(--mute, #5B5D66); font-size: 12px; }
+.hrb-spent { max-width: 260px; padding: 16px 20px; }
+.hrb-spent-value { font-size: 28px; font-weight: 650; color: var(--ink); }
+.hrb-chart-card { padding: 16px 20px 12px; }
+.hrb-section-title { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0 0 12px; }
+.hrb-chart { height: 280px; }
+.hrb-chart-empty { height: 120px; display: flex; align-items: center; justify-content: center; color: var(--mute, #5B5D66); font-size: 13px; }
+.hrb-pricing-card { padding: 16px 20px; }
+.hrb-pricing-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.hrb-price { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.hrb-price-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+.hrb-price-label { font-size: 13px; font-weight: 600; color: var(--ink); }
+.hrb-price-value { font-size: 12px; color: var(--mute, #5B5D66); margin-top: 2px; }
+
+.hrb-skeleton { background: var(--brand-50); border-radius: 8px; animation: hrbPulse 1.4s ease-in-out infinite; }
+.hrb-skeleton-balance { width: 140px; height: 36px; }
+.hrb-skeleton-card { height: 130px; border: 1px solid var(--line); border-radius: 12px; }
+.hrb-skeleton-spent { width: 90px; height: 28px; }
+.hrb-skeleton-chart { height: 280px; }
+@keyframes hrbPulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.hr-input { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-input, 8px); font-size: 13px; background: var(--surface); color: var(--ink); }
+.hr-input:focus { outline: none; border-color: var(--brand); }
+
+/* current subscription strip + cancel flow */
+.hrb-sub-current { display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 13px 16px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.hrb-sub-current > div { display: grid; gap: 2px; }
+.hrb-sub-current strong { font-size: 14px; }
+.hrb-sub-current span { font-size: 12.5px; color: var(--muted); }
+.hrb-cancel-reasons { display: grid; gap: 8px; }
+/* The native radio is HIDDEN (same pattern as .base-choice in revamp.css) — the shell's
+   `.field label { display:block }` / `.field input { width:100%; min-height:40px }` rules
+   otherwise inflate it into a giant block circle. The visible control is our own dot span,
+   so alignment and spacing are fully ours and immune to global input styling. */
+.field label.hrb-cancel-reason { display: flex; align-items: center; gap: 12px; margin: 0;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px;
+  font-size: 13px; font-weight: 550; color: var(--ink); cursor: pointer; line-height: 1.35;
+  transition: border-color .14s ease, background .14s ease, box-shadow .14s ease; }
+.field label.hrb-cancel-reason:hover { border-color: var(--brand); }
+.field label.hrb-cancel-reason.on { border-color: var(--brand); background: var(--brand-50);
+  box-shadow: 0 0 0 1px var(--brand) inset; }
+.field .hrb-cancel-reason input[type='radio'] { position: absolute; width: 1px; height: 1px;
+  min-height: 0; opacity: 0; pointer-events: none; margin: 0; }
+.hrb-cancel-dot { flex: 0 0 auto; width: 17px; height: 17px; border-radius: 50%; box-sizing: border-box;
+  border: 1.6px solid var(--line-strong, #C9CBD3); background: #fff;
+  transition: border-color .14s ease, border-width .14s ease; }
+.hrb-cancel-reason.on .hrb-cancel-dot { border: 5.5px solid var(--brand); }
+.hrb-cancel-label { flex: 1; min-width: 0; }

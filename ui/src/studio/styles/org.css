@@ -1,0 +1,120 @@
+/* Org settings (members + teams) — account-level page. */
+.org-page { padding: 28px 32px 64px; }
+.org-head { max-width: 760px; margin: 0 auto 22px; }
+.org-title { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 4px; color: var(--ink); }
+.org-sub { font-size: 13.5px; color: var(--mute); margin: 0; }
+
+.org-err {
+  max-width: 760px; margin: 0 auto 16px; padding: 10px 14px; border-radius: 10px;
+  background: #fdecec; color: #b42318; font-size: 13px; border: 1px solid #f6c9c6;
+}
+
+.org-card { max-width: 760px; margin: 0 auto 20px; padding: 20px 22px; }
+.org-card-h { margin-bottom: 14px; }
+.org-card-h h2 { font-size: 16px; font-weight: 600; margin: 0; color: var(--ink); }
+.org-count {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px;
+  padding: 0 6px; margin-left: 6px; border-radius: 999px; background: var(--brand-soft, #ECE9F7);
+  color: var(--brand, #42309C); font-size: 12px; font-weight: 600;
+}
+
+.org-form { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.org-form .input { flex: 1; min-width: 180px; }
+.org-form .btn { flex-shrink: 0; }
+
+.org-ok {
+  margin-bottom: 14px; padding: 10px 14px; border-radius: 10px; font-size: 13px;
+  background: #ecfdf3; color: #027a48; border: 1px solid #bbf0d2;
+}
+.org-ok code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+  background: #fff; padding: 1px 6px; border-radius: 5px; border: 1px solid #bbf0d2;
+}
+
+.org-empty { color: var(--mute); font-size: 13px; padding: 8px 0; }
+.org-empty-inline { color: var(--mute); font-size: 12.5px; }
+
+/* Members */
+.org-list { display: flex; flex-direction: column; }
+.org-member { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.org-member:first-child { border-top: 0; }
+.org-av {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #42309C; color: #fff; font-size: 12px; font-weight: 600;
+}
+.org-member-id { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.org-member-name { font-size: 14px; font-weight: 550; color: var(--ink); }
+.org-member-email { font-size: 12px; color: var(--mute); }
+.org-member-teams { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.org-kind {
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--mute); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px;
+}
+
+.org-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  background: var(--brand-soft, #ECE9F7); color: var(--brand-ink, #332578);
+  border-radius: 999px; padding: 3px 9px; white-space: nowrap;
+}
+.org-chip.member { background: var(--surface-2, #f4f5f8); color: var(--ink); border: 1px solid var(--line); }
+.org-chip-x {
+  display: inline-flex; align-items: center; justify-content: center; border: 0; background: none;
+  color: var(--mute); cursor: pointer; padding: 0; margin: 0 -2px 0 1px; border-radius: 50%;
+}
+.org-chip-x:hover { color: #b42318; }
+
+/* Teams */
+.org-teams { display: flex; flex-direction: column; gap: 14px; }
+.org-team { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.org-team-h { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+.org-team-ic {
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--brand-soft, #ECE9F7); color: var(--brand, #42309C);
+}
+.org-team-name { font-size: 14.5px; font-weight: 600; color: var(--ink); }
+.org-team-count { margin-left: auto; font-size: 12px; color: var(--mute); }
+.org-team-members { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.org-team-add { margin-top: 10px; }
+.org-team-add select {
+  font-size: 13px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface); color: var(--ink); cursor: pointer; max-width: 240px;
+}
+
+/* ── Avatar image fill (image variant of any initials chip) ───────────────── */
+.av-fill { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
+.os-dock-avatar, .os-acct-av, .share-av, .org-av, .pf-av { overflow: hidden; }
+
+/* ── Profile page ─────────────────────────────────────────────────────────── */
+.pf-card { max-width: 560px; padding: 24px; }
+.pf-head { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.pf-av {
+  width: 72px; height: 72px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #42309C; color: #fff; font-size: 24px; font-weight: 600;
+}
+.pf-id { min-width: 0; }
+.pf-name { font-size: 18px; font-weight: 600; color: var(--ink); }
+.pf-email { font-size: 13px; color: var(--mute); margin-top: 1px; }
+.pf-change { margin-top: 9px; }
+.pf-err { max-width: none; margin: 0 0 16px; }
+.pf-dl { display: grid; grid-template-columns: 130px 1fr; row-gap: 12px; column-gap: 16px; margin: 0; }
+.pf-dl dt { color: var(--mute); font-size: 13px; }
+.pf-dl dd { margin: 0; font-size: 13px; color: var(--ink-2); }
+.pf-mono { font-size: 12.5px; word-break: break-all; }
+
+/* ── Crop modal ───────────────────────────────────────────────────────────── */
+.pf-modal {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
+  background: rgba(20, 18, 40, 0.55);
+}
+.pf-modal-card {
+  width: 380px; max-width: calc(100vw - 32px); background: var(--surface);
+  border-radius: 16px; padding: 18px; box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .5);
+}
+.pf-modal-h { font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 14px; }
+.pf-cropper { position: relative; width: 100%; height: 300px; background: #1a1830; border-radius: 12px; overflow: hidden; }
+.pf-zoom { padding: 14px 2px 4px; }
+.pf-zoom input { width: 100%; accent-color: var(--brand, #42309C); }
+.pf-modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }

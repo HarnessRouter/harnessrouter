@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 376 64" role="img" aria-label="HarnessRouter">
+  <title>HarnessRouter</title>
+  <!-- icon: a lowercase h routing into a right arrow -->
+  <path d="M14 10V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
+  <path d="M14 30Q14 20 24 20Q34 20 34 30V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
+  <path d="M34 36Q34 28 42 28H46" fill="none" stroke="#2247D6" stroke-width="6" stroke-linecap="round"/>
+  <path d="M45 20.5L56 28L45 35.5Z" fill="#2247D6"/>
+  <!-- wordmark: harness (ink) + router (brand blue) -->
+  <text x="72" y="42" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="34" font-weight="800" letter-spacing="-0.6" dominant-baseline="alphabetic">
+    <tspan fill="#111111">harness</tspan><tspan fill="#2247D6">router.</tspan>
+  </text>
+</svg>

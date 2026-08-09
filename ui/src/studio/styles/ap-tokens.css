@@ -1,0 +1,104 @@
+/* AdminPortal — design tokens layered on top of AutoMarketing tokens.css
+   - Run-state palette (queued / running / success / failed / skipped / suspended)
+   - State pill variants
+   - Mono font helper for slugs / IDs
+*/
+
+:root {
+  --state-queued:    #94A3B8;
+  --state-running:   #42309C;
+  --state-success:   #10B981;
+  --state-failed:    #EF4444;
+  --state-skipped:   #CBD0DA;
+  --state-suspended: #F59E0B;
+}
+
+.pill.state-queued    { background: #EEF1F5; color: #475569; }
+.pill.state-running   { background: #ECE9F7; color: #332578; }
+.pill.state-success   { background: #DFF6EC; color: #047857; }
+.pill.state-failed    { background: #FEE4E4; color: #B91C1C; }
+.pill.state-skipped   { background: #EEF1F5; color: #6B7280; }
+.pill.state-suspended { background: #FEF1D6; color: #92400E; }
+
+/* AdminPortal is English-first; bump density a hair from the Chinese console */
+.ap-app, .ap-app body { font-size: 13px; }
+.ap-app .mono { font-family: var(--mono); }
+
+/* Tabular nums on numeric cells */
+.num { font-variant-numeric: tabular-nums; }
+
+/* Workspace tab strip — used in Workflow detail */
+.ws-tabs {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.ws-tab {
+  padding: 10px 12px; font-size: 13px; color: var(--mute);
+  border-bottom: 2px solid transparent; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap;
+}
+.ws-tab:hover { color: var(--ink); }
+.ws-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+
+/* Filter row — used on Runs / Audit */
+.filt-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; flex-wrap: wrap;
+}
+.filt-row > .filt-search { flex: 1 1 240px; min-width: 200px; max-width: 360px; }
+.filt-row .filt-grp { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.filt-row .filt-grp > label {
+  font-size: 11px; color: var(--mute);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.filt-row .filt-grp > select, .filt-row > .filt-search {
+  height: 30px; padding: 0 10px;
+  font-family: inherit; font-size: 12px; color: var(--ink);
+  background: #fff; border: 1px solid var(--line); border-radius: 6px;
+}
+.filt-row .filt-grp > select { padding-right: 22px; min-width: 110px; max-width: 200px; }
+.filt-row .filt-spacer { flex: 1 1 auto; min-width: 0; }
+.filt-row .filt-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 12px; height: 30px;
+  font-size: 13px; color: var(--ink-2); font-weight: 500;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; cursor: pointer;
+  white-space: nowrap;
+}
+.filt-row .filt-chip:hover { border-color: var(--mute-2); }
+.filt-row .filt-chip.active { color: #fff; background: var(--brand); border-color: var(--brand); font-weight: 600; }
+.filt-row .filt-chip .dot { width: 6px; height: 6px; border-radius: 99px; }
+
+/* Segmented control (Diagram / List) */
+.seg {
+  display: inline-flex; align-items: stretch;
+  border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  background: #fff;
+}
+.seg > * {
+  padding: 4px 12px; font-size: 12px; color: var(--mute);
+  cursor: pointer; border-right: 1px solid var(--line);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.seg > *:last-child { border-right: 0; }
+.seg > .active { color: var(--brand-ink); background: var(--brand-50); font-weight: 600; }
+
+/* Pane tools (expand / collapse) */
+.pane-tools {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex-shrink: 0;
+}
+.pane-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #fff; color: var(--mute); cursor: pointer;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.pane-btn:hover { color: var(--brand); border-color: var(--brand); }
+.pane-btn.active { color: var(--brand-ink); background: var(--brand-50); border-color: var(--brand); }
