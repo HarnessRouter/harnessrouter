@@ -1,0 +1,92 @@
+# harness-runner — the per-session sandbox image for ACA Dynamic Sessions.
+#
+# One sandbox per harness session (Hyper-V isolated, warm-pooled). The agent always works
+# against a REAL local POSIX git working tree at /workspace with real bash + git — its
+# native, trained environment (we never map VectorGraph into the session; see
+# docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md S0.5).
+#
+# Phase 0 base: python + git + bash + Node 20 + Claude Code CLI + a small FastAPI server
+# the gateway proxies turns into. Grows in 0b/1 with: git hydrate/commit of the session
+# branch, the headless CLI one-shot stream-json loop, and the Node Yjs sidecar
+# (fsnotify <-> Hocuspocus room) for the realtime blackboard. Doc-skills / libreoffice
+# layer is added when the doc backend needs it.
+#
+# Build context = backend/harness_runner (see infra/azure/provision-harness.sh).
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/home/agent \
+    HARNESS_WORKSPACE=/workspace
+
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        curl ca-certificates git bash tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node 20 + the npm backend CLIs (global): Claude Code + OpenAI Codex. (Hermes is a pip
+# install further down; Pi would add its CLI here behind the same canonical contract.)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code @openai/codex \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# Pre-installed Node libraries agents commonly reach for (doc/data generation), installed GLOBALLY;
+# NODE_PATH lets `require('docx')` resolve them from a script anywhere in /workspace.
+RUN npm install -g docx exceljs pdfkit pptxgenjs xlsx papaparse csv-parse csv-stringify \
+        archiver jszip marked cheerio dayjs node-fetch \
+    && rm -rf /root/.npm
+ENV NODE_PATH=/usr/lib/node_modules
+
+# Playwright + Chromium baked in (HRP-011): harnesses that generate games/sites/apps can
+# self-verify their output in-session (load the page, assert, screenshot) without a per-run
+# browser download. Browsers live at a fixed world-readable path so the non-root runtime
+# user finds them; in this container Chromium needs chromiumSandbox:false (no user
+# namespaces), which the runner surfaces to agents via the instruction doc.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install -g playwright \
+    && npx playwright install --with-deps chromium \
+    && rm -rf /root/.npm /var/lib/apt/lists/* \
+    && chmod -R a+rX /ms-playwright
+
+# Pre-installed Python libraries for office docs / data / plotting / scraping — so agents don't
+# burn a turn on `pip install`. LibreOffice + fonts also enable doc<->pdf conversion in-sandbox.
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        libreoffice-impress libreoffice-writer libreoffice-calc \
+        fonts-dejavu fonts-noto-cjk fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir \
+        openpyxl xlsxwriter python-docx python-pptx reportlab pypdf pdfplumber \
+        pandas numpy matplotlib pillow tabulate markdown beautifulsoup4 lxml \
+        requests httpx python-dateutil pyyaml jinja2
+
+# Hermes backend CLI (NousResearch hermes-agent) — its own layer so a version bump never
+# invalidates the heavy layers above. System-installed as root, runnable by the `agent` user.
+# boto3/anthropic/mcp are NOT declared deps — hermes lazy-installs them at first use, which
+# fails in this root-owned site-packages (all three hit live: bedrock, anthropic provider,
+# MCP client). Bake them at the exact versions the integration was verified against; the
+# runner also sets HERMES_DISABLE_LAZY_INSTALLS so nothing pip-installs mid-turn in prod.
+RUN pip install --no-cache-dir hermes-agent==0.19.0 boto3==1.42.89 anthropic==0.87.0 mcp==1.28.1
+
+# Non-root runtime user (the CLI refuses --dangerously-skip-permissions as root).
+RUN useradd -m -u 10001 -s /bin/bash agent \
+    && mkdir -p /workspace /app \
+    && chown -R agent:agent /workspace /home/agent /app
+
+COPY requirements.txt /tmp/req.txt
+RUN pip install --no-cache-dir -r /tmp/req.txt
+
+# Yjs blackboard sidecar deps — a cached layer that reinstalls only when sidecar/package.json
+# changes (a code-only change to sidecar.mjs reuses it). .dockerignore excludes
+# sidecar/node_modules so the blanket `COPY . /app/` below can't clobber this install.
+COPY sidecar/package.json /app/sidecar/package.json
+RUN cd /app/sidecar && npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+
+COPY . /app/
+RUN chown -R agent:agent /app
+
+USER agent
+WORKDIR /workspace
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", "--app-dir", "/app"]

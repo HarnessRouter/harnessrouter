@@ -1,0 +1,1903 @@
+"""In-sandbox harness runner server — multi-backend, multi-provider.
+
+Runs INSIDE an ACA Dynamic Sessions custom-container sandbox (one per session, Hyper-V
+isolated, warm-pooled). The `harness-gateway` allocates a session from the pool and proxies
+turn requests here. The agent ALWAYS works on a real local POSIX git working tree at
+/workspace with real bash + git — its native, trained environment (we never map VectorGraph
+into the session; see docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md S0.5).
+
+A turn runs ONE backend CLI one-shot over /workspace and normalizes its events into a
+single canonical schema (Claude Code `stream-json`) so everything downstream is uniform.
+
+Backends + providers (registry-driven; adding Pi = a new BACKENDS entry):
+  backend "claude" (Claude Code CLI), providers:
+    - anthropic   : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
+    - bedrock     : CLAUDE_CODE_USE_BEDROCK=1 + AWS creds/bearer + region
+    - vertex      : CLAUDE_CODE_USE_VERTEX=1 + project/region + SA-JSON
+    - tokenrouter : ANTHROPIC_BASE_URL=<router> + ANTHROPIC_AUTH_TOKEN
+  backend "codex" (OpenAI Codex CLI), providers (config.toml [model_providers.*]):
+    - openai      : api.openai.com/v1, OPENAI_API_KEY
+    - azure       : <azure>/openai/v1, AZURE_OPENAI_API_KEY (wire_api=responses)
+    - tokenrouter : <router base_url>, ROUTER_API_KEY
+  backend "hermes" (NousResearch hermes-agent CLI; events tailed from its state.db —
+  multi-family: runs any frontier model through the matching provider connection):
+    - azure-foundry : AZURE_FOUNDRY_API_KEY + AZURE_FOUNDRY_BASE_URL (gpt family)
+    - bedrock       : AWS_BEARER_TOKEN_BEDROCK (or key pair) + AWS_REGION (claude family)
+    - anthropic     : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
+
+Creds are injected per-session via env (pool secrets) or a body `auth` override for spikes.
+Phase 0b: buffered turn. SSE streaming, git hydrate/commit, mid-turn /input, and the Node
+Yjs sidecar layer on next.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import mimetypes
+import os
+import pathlib
+import re
+import shutil
+import signal
+import socket
+import sqlite3
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+
+import yaml
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+app = FastAPI(title="harness-runner")
+
+WORKSPACE = os.environ.get("HARNESS_WORKSPACE", "/workspace")
+# Where checkpoint/hydrate tarballs spool to disk (HR-INF-015 — never a RAM buffer). MUST be
+# OUTSIDE the workspace (so a leftover temp file can never be caught by a later `git add -A` or
+# re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
+# Default: a dedicated dir on the container's disk-backed rootfs (same overlay as /workspace on
+# ACA Dynamic Sessions), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
+SPOOL_DIR = os.environ.get("HARNESS_SPOOL_DIR", "/var/tmp/harness-spool")
+try:
+    os.makedirs(SPOOL_DIR, exist_ok=True)
+except OSError:
+    SPOOL_DIR = None   # fall back to the OS tmpdir if that path isn't writable
+_SPOOL_STALE_S = 3600  # a spool file older than this can't belong to a live transfer
+
+
+def _reap_spool() -> None:
+    """Remove stale spool tarballs (HR-INF-015 review, LOW). Normal cleanup is a BackgroundTask /
+    finally, but a client disconnect mid-checkpoint-stream skips the BackgroundTask, leaking the
+    temp file. On a warm-pooled sandbox reused across many turns these would slowly fill the disk,
+    so sweep files older than the max transfer window on each checkpoint. Best-effort; never raises."""
+    if not SPOOL_DIR:
+        return
+    import glob as _glob
+    now = time.time()
+    for f in _glob.glob(os.path.join(SPOOL_DIR, "*.tgz")):
+        try:
+            if now - os.path.getmtime(f) > _SPOOL_STALE_S:
+                os.unlink(f)
+        except OSError:
+            pass
+# CLI conversation/rollout state lives INSIDE the workspace so a single checkpoint captures both
+# the working tree AND the conversation — that's what makes `--resume` work on any sandbox.
+HARNESS_STATE = ".harness"
+# Paths never persisted in a checkpoint (secrets + regenerated/scratch). Relative to /workspace.
+# .git history travels in the tarball, so these must be git-ignored too (see _git_ensure).
+# Persist conversation transcripts ($HOME -> .harness/home: ~/.claude/projects, ~/.codex/sessions)
+# so --resume survives sandbox recycling — but NEVER persist credentials inside them.
+CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.json",
+                      "./.harness/claude/.credentials.json",
+                      "./.harness/home/.claude/.credentials.json",
+                      "./.harness/home/.codex/auth.json",
+                      # hermes state (state.db conversations) IS checkpointed; its cred files are not.
+                      "./.harness/home/.hermes/.env",
+                      "./.harness/home/.hermes/auth.json",
+                      # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
+                      # dominate checkpoint size — a node project checkpointed 200MB+ and paid
+                      # that again on every hydrate. The agent reinstalls when it needs them.
+                      "node_modules", ".venv", "venv", "__pycache__", ".pnpm-store",
+                      ".cache/pip", ".npm/_cacache"]
+_GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
+            "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
+CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
+CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
+# Hermes default (the gateway maps friendly names to provider ids before the /turn call).
+HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
+CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
+CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
+# Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+AZURE_OPENAI_BASE_URL = os.environ.get("AZURE_OPENAI_BASE_URL", "")
+# Hard wall-clock cap per turn — resource-abuse protection. A runaway/abusive run is killed
+# at this many seconds (default 6h). The agent finishing earlier ends the turn promptly.
+MAX_TURN_SECONDS = int(os.environ.get("MAX_TURN_SECONDS", "21600"))
+
+# ── Yjs blackboard sidecar (realtime co-edit; bridges a workspace file <-> a Hocuspocus room) ──
+# The sidecar is a Node child process baked into the image at /app/sidecar. It is (re)started per
+# session from /hydrate with the session's COLLAB_URL + room (passed as query params by the gateway).
+_SIDECAR_JS = "/app/sidecar/sidecar.mjs"
+_BLACKBOARD_REL = os.path.join(HARNESS_STATE, "BLACKBOARD.md")   # /workspace/.harness/BLACKBOARD.md
+_sidecar: dict = {"proc": None, "room": None}
+_sidecar_lock = threading.Lock()
+
+
+def _start_sidecar(collab_url: str, room: str, token: str = "") -> None:
+    """(Re)start the blackboard sidecar for THIS session. Kill+respawn on every hydrate — a reused
+    warm-pool sandbox may carry a prior tenant's sidecar (same isolation reasoning as the /workspace
+    wipe). Best-effort: a sidecar failure must never affect the turn."""
+    file = os.path.join(WORKSPACE, _BLACKBOARD_REL)
+    with _sidecar_lock:
+        old = _sidecar.get("proc")
+        if old is not None and old.poll() is None:
+            try:
+                old.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        if not (collab_url and room and os.path.exists(_SIDECAR_JS)):
+            _sidecar.update(proc=None, room=None)
+            return
+        try:
+            pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
+            if not pathlib.Path(file).exists():
+                pathlib.Path(file).write_text("")
+            env = {**os.environ, "COLLAB_URL": collab_url, "ROOM": room,
+                   "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
+            logf = open(os.path.join(WORKSPACE, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
+            _sidecar.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=WORKSPACE, env=env,
+                                                  stdout=logf, stderr=logf),
+                            room=room, error=None)
+        except Exception as e:  # noqa: BLE001
+            _sidecar.update(proc=None, room=None, error=str(e)[:200])
+
+
+def _sidecar_alive() -> bool:
+    p = _sidecar.get("proc")
+    return bool(p is not None and p.poll() is None)
+
+
+def _ver(cmd: list[str]) -> str:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        return (p.stdout or p.stderr).strip()
+    except Exception as e:  # noqa: BLE001
+        return f"(unavailable: {e})"
+
+
+# ── git-backed workspace (hydrate at turn start, checkpoint at turn end) ───────────
+def _git(ws: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True,
+                          env={**os.environ, **_GIT_ENV}, check=check)
+
+
+def _git_ensure(ws: str) -> None:
+    """Make /workspace a git repo with a secret-safe .gitignore (so .git, which travels in the
+    checkpoint tarball, never carries credentials)."""
+    p = pathlib.Path(ws)
+    p.mkdir(parents=True, exist_ok=True)
+    (p / ".gitignore").write_text("\n".join([
+        "# harness: never persist secrets/scratch in the session checkpoint",
+        "tmp/", ".gcp-sa.json", ".codex/", ".credentials.json", ".harness/**/.credentials.json",
+        ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
+        "",
+    ]))
+    if not (p / ".git").exists():
+        _git(ws, "init", "-q")
+        _git(ws, "config", "user.email", _GIT_ENV["GIT_AUTHOR_EMAIL"])
+        _git(ws, "config", "user.name", _GIT_ENV["GIT_AUTHOR_NAME"])
+
+
+# ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
+# Paths never reported as agent-produced output (internal state / scratch / secrets / vcs).
+_PRODUCED_EXCLUDE_PREFIX = (".harness/", "tmp/", ".codex/", ".git/", ".claude/",
+                            "node_modules/", ".venv/", "venv/", "__pycache__/", ".cache/", ".next/")
+_PRODUCED_EXCLUDE_NAMES = {".gitignore", ".gcp-sa.json", ".credentials.json"}
+# Dependency / install / build-cache noise the agent pulls in (apt debs, npm/py deps, byte-compiled
+# files). These are NOT the user's artifact — keep real build OUTPUT (dist/, build/) but drop the
+# package machinery so the produced-files list shows the deliverable, not chrome-deps/*.deb etc.
+_NOISE_SEG = {"node_modules", "chrome-deps", "debs", ".venv", "venv", "site-packages", "vendor",
+              "__pycache__", ".cache", ".git", ".next", ".pytest_cache", ".mypy_cache", ".npm",
+              ".harness", ".codex", ".claude", "bower_components", ".gradle", ".tox"}
+_NOISE_EXT = (".deb", ".whl", ".pyc", ".pyo", ".so", ".o", ".a", ".class", ".rpm", ".apk")
+
+
+def _is_produced_noise(path: str) -> bool:
+    if any(seg in _NOISE_SEG for seg in path.split("/")):
+        return True
+    return path.lower().endswith(_NOISE_EXT)
+
+
+def _safe_join(cwd: str, rel: str) -> pathlib.Path | None:
+    """Resolve rel under cwd, rejecting absolute/traversal escapes (multi-tenant safety)."""
+    base = pathlib.Path(cwd).resolve()
+    p = (base / rel.lstrip("/")).resolve()
+    try:
+        p.relative_to(base)
+    except ValueError:
+        return None
+    return p
+
+
+def _write_input_files(cwd: str, files: list[dict] | None) -> list[str]:
+    """Write caller-attached input files (base64) into the workspace so the agent can read them."""
+    written: list[str] = []
+    for f in (files or []):
+        name = (f or {}).get("filename")
+        b64 = (f or {}).get("content_b64")
+        if not name or b64 is None:
+            continue
+        dest = _safe_join(cwd, name)
+        if dest is None:
+            continue
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(base64.b64decode(b64))
+            written.append(name)
+        except Exception:  # noqa: BLE001
+            continue
+    return written
+
+
+# ── plugins: MCP servers + Skills (materialized into the workspace per turn) ─────────
+# Both are config the harness owner attaches (gateway resolves them from the Harness vertex
+# and any vault token refs, passes only the ENABLED ones here). MCP servers become a
+# .mcp.json the CLI loads; skills become folders the CLI auto-discovers.
+_MCP_NAME_RE = __import__("re").compile(r"[^a-zA-Z0-9_]+")
+
+
+def _mcp_name(s: str) -> str:
+    """Sanitize an MCP server name into a CLI-safe identifier (alnum + underscore)."""
+    n = _MCP_NAME_RE.sub("_", (s or "").strip()).strip("_")
+    return n or "mcp"
+
+
+def _write_mcp_config_claude(cwd: str, servers: list[dict]) -> str | None:
+    """Write a Claude Code .mcp.json for the enabled HTTP/SSE MCP servers. Returns its path
+    (passed via --mcp-config), or None if there are none."""
+    entries: dict = {}
+    for s in servers or []:
+        url = (s or {}).get("url")
+        if not url:
+            continue
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
+        transport = ((s or {}).get("transport") or "http").lower()
+        entry = {"type": "sse" if transport == "sse" else "http", "url": url}
+        auth = (s or {}).get("auth")
+        if auth:  # bearer token (resolved by the gateway) -> Authorization header
+            hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            entry["headers"] = {"Authorization": hdr}
+        if isinstance((s or {}).get("headers"), dict):
+            entry.setdefault("headers", {}).update(s["headers"])
+        entries[name] = entry
+    if not entries:
+        return None
+    path = pathlib.Path(cwd) / HARNESS_STATE / "mcp.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
+    return str(path)
+
+
+def _codex_mcp_toml(servers: list[dict]) -> str:
+    """Render [mcp_servers.*] config.toml blocks for Codex's experimental remote-MCP (rmcp)
+    HTTP client. Returns '' if there are no HTTP servers to add."""
+    blocks: list[str] = []
+    for s in servers or []:
+        url = (s or {}).get("url")
+        if not url:
+            continue
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
+        auth = (s or {}).get("auth")
+        lines = [f"[mcp_servers.{name}]", f'url = "{url}"']
+        # One http_headers inline table: Authorization from `auth` + any extra headers the
+        # gateway resolved (e.g. Additional Headers / $headers.{name} app-auth values).
+        hdrs: dict[str, str] = {}
+        if auth:
+            hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+        extra = (s or {}).get("headers")
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if k and v is not None:
+                    hdrs[str(k)] = str(v)
+        if hdrs:
+            def _tesc(x: str) -> str:
+                return x.replace("\\", "\\\\").replace('"', '\\"')
+            inner = ", ".join(f'"{_tesc(k)}" = "{_tesc(v)}"' for k, v in hdrs.items())
+            lines.append(f"http_headers = {{ {inner} }}")
+        blocks.append("\n".join(lines))
+    if not blocks:
+        return ""
+    # rmcp HTTP client is opt-in in Codex; enable it when any HTTP MCP server is configured.
+    return "\nexperimental_use_rmcp_client = true\n" + "\n".join(blocks) + "\n"
+
+
+def _skill_desc(files: list[dict]) -> str:
+    """Best-effort one-line description from a skill's SKILL.md (YAML `description:` or first prose)."""
+    for f in files or []:
+        if str((f or {}).get("path", "")).lower().endswith("skill.md"):
+            txt = (f or {}).get("content") or ""
+            m = re.search(r"(?im)^description:\s*(.+)$", txt)
+            if m:
+                return m.group(1).strip().strip("\"'")
+            for line in txt.splitlines():
+                s = line.strip().lstrip("#").strip()
+                if s and not s.startswith("---") and not s.lower().startswith("name:"):
+                    return s[:200]
+    return ""
+
+
+def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list[dict]:
+    """Materialize enabled skills for the harness's backend (HRP-008):
+      - claude: `.harness/home/.claude/skills/<name>/` — the CLI discovers personal skills
+        under $CLAUDE_CONFIG_DIR/skills, and the config dir is redirected to
+        <cwd>/.harness/home/.claude (see _build_claude). ALSO mirrored to the project
+        `.claude/skills/<name>/` so direct reads and project-scoped discovery both work.
+      - codex:  .harness/skills/<name>/ (surfaced via AGENTS.md; .harness/ stays out of outputs)
+    Each skill: {name, files:[{path, content}]} (or {content} -> SKILL.md).
+    Returns [{name, desc, entry}] for the skills actually installed (entry = SKILL.md path)."""
+    if backend == "claude":
+        rootrels = [".harness/home/.claude/skills", ".claude/skills"]
+        entryroot = ".claude/skills"
+    else:
+        rootrels = [".harness/skills"]
+        entryroot = ".harness/skills"
+    installed: list[dict] = []
+    for sk in skills or []:
+        name = _mcp_name((sk or {}).get("name") or (sk or {}).get("id") or "")
+        if not name:
+            continue
+        files = (sk or {}).get("files")
+        if not files and (sk or {}).get("content"):
+            files = [{"path": "SKILL.md", "content": sk["content"]}]
+        if not files:
+            continue
+        wrote = False
+        for f in files:
+            rel = (f or {}).get("path")
+            content = (f or {}).get("content")
+            content_b64 = (f or {}).get("content_b64")
+            if not rel or (content is None and content_b64 is None):
+                continue
+            for rootrel in rootrels:
+                dest = _safe_join(str(pathlib.Path(cwd) / rootrel / name), rel)
+                if dest is None:
+                    continue
+                try:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if content_b64 is not None:
+                        dest.write_bytes(base64.b64decode(content_b64))
+                    else:
+                        dest.write_text(content)
+                    wrote = True
+                except Exception:  # noqa: BLE001
+                    continue
+        if wrote:
+            installed.append({"name": name, "desc": _skill_desc(files),
+                              "entry": f"{entryroot}/{name}/SKILL.md"})
+    return installed
+
+
+_AGENTS_BEGIN = "<!-- harness-skills:begin -->"
+_AGENTS_END = "<!-- harness-skills:end -->"
+
+
+def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
+    """The agent's instruction file: AGENTS.md for Codex and Hermes (both read AGENTS.md from the
+    cwd), CLAUDE.md for Claude Code — each CLI reads its own file as project instructions."""
+    return pathlib.Path(cwd) / ("AGENTS.md" if backend in ("codex", "hermes") else "CLAUDE.md")
+
+
+def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
+    """Compose the agent's instruction file from (1) the harness's user-authored doc and (2) a managed
+    'Available skills' block surfacing installed skills. The user doc is the base; the skills block is
+    appended inside HTML-comment markers so it's regenerated each turn without duplicating. Source of
+    truth is the harness config + enabled skills, so this OVERWRITES any stale file each turn. With no
+    user doc and no skills, the file is removed so the CLI runs on its own default system prompt."""
+    p = _agent_doc_path(cwd, backend)
+    base = (agent_doc or "").strip()
+    block = ""
+    if skills_meta:
+        lines = [_AGENTS_BEGIN, "## Available skills", "",
+                 "These skills are installed in this workspace. When a task matches one, read its "
+                 "SKILL.md first and follow its instructions and bundled scripts.", ""]
+        for s in skills_meta:
+            d = f" — {s['desc']}" if s.get("desc") else ""
+            lines.append(f"- **{s['name']}**{d} (`{s['entry']}`)")
+        block = "\n".join(lines) + "\n" + _AGENTS_END + "\n"
+    body = ((base + "\n\n") if base else "") + block if block else base
+    try:
+        if body.strip():
+            p.write_text(body if body.endswith("\n") else body + "\n")
+        elif p.exists():
+            p.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ── auth / provider model ────────────────────────────────────────────────────────
+class Auth(BaseModel):
+    """One-of by provider; the gateway (or a spike body) fills the relevant fields."""
+    api_key: str | None = None             # anthropic / openai / azure / router key|token
+    base_url: str | None = None            # azure endpoint or router/proxy base url
+    # AWS Bedrock
+    aws_region: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_bearer_token: str | None = None    # AWS_BEARER_TOKEN_BEDROCK (simplest)
+    # GCP Vertex
+    gcp_project: str | None = None
+    gcp_region: str | None = None
+    gcp_sa_json: str | None = None         # service-account JSON (string) → file
+    # Codex provider tuning
+    wire_api: str | None = None            # responses | chat (default responses)
+
+
+# ── canonical-event normalizers ──────────────────────────────────────────────────
+import re as _re
+# Claude Code injects transient provider errors into the stream AS assistant text
+# ("API Error: 400 ...", "API Error: 429 ..."), then usually retries and continues. That
+# diagnostic is the CLI's own UX, not model output — rendering it as the reply is wrong (it made
+# a working opus-4.7/4.8 turn look failed). Drop assistant text blocks that ARE such an error line.
+_CLAUDE_ERR_RE = _re.compile(r"^\s*API Error:\s*\d{3}\b", _re.IGNORECASE)
+
+
+def _strip_claude_error_text(obj: dict) -> dict | None:
+    """Remove CLI-injected 'API Error: <code> …' text blocks from an assistant message. Returns the
+    message with those blocks dropped (None if nothing renderable remains), or the object unchanged
+    when it carries no such block."""
+    if obj.get("type") != "assistant":
+        return obj
+    content = (obj.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return obj
+    kept = [c for c in content
+            if not (isinstance(c, dict) and c.get("type") == "text"
+                    and _CLAUDE_ERR_RE.match(str(c.get("text") or "")))]
+    if len(kept) == len(content):
+        return obj                      # no error block — untouched
+    if not kept:
+        return None                     # the message was ONLY the error line — drop it entirely
+    return {**obj, "message": {**(obj.get("message") or {}), "content": kept}}
+
+
+def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
+    # Filter out CLI-injected "API Error: NNN …" diagnostics rendered as assistant text (they are
+    # not model output; the CLI retries around them). Applies to both batch + partial modes.
+    obj2 = _strip_claude_error_text(obj)
+    if obj2 is None:
+        return []
+    obj = obj2
+    # Default (batch) mode: pass the CLI's stream-json through unchanged — the CLI emits one event
+    # per COMPLETE assistant message, so text lands in a batch.
+    if not state.get("partial"):
+        return [obj]
+    # Partial mode (--include-partial-messages): the CLI additionally emits `stream_event` wrappers
+    # around Anthropic streaming events. Turn each text/thinking DELTA into a small canonical
+    # assistant event (the gateway renders it as an incremental response.output_text.delta), and
+    # STRIP text/thinking from the final complete assistant message so it isn't rendered twice.
+    t = obj.get("type")
+    if t == "stream_event":
+        se = obj.get("event") or {}
+        if se.get("type") == "content_block_delta":
+            d = se.get("delta") or {}
+            if d.get("type") == "text_delta" and d.get("text"):
+                state["final"] = state.get("final", "") + d["text"]
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": d["text"]}]}}]
+            if d.get("type") == "thinking_delta" and d.get("thinking"):
+                return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d["thinking"]}]}}]
+        return []   # message_start/stop, content_block_start/stop, ping, etc. — nothing to render
+    if t == "assistant":
+        # deltas already carried text/thinking; keep only non-text blocks (tool_use) from the
+        # complete message so tool calls still render and text isn't duplicated.
+        content = (obj.get("message") or {}).get("content")
+        kept = [c for c in (content if isinstance(content, list) else [])
+                if isinstance(c, dict) and c.get("type") not in ("text", "thinking")]
+        if not kept:
+            return []
+        return [{"type": "assistant", "message": {**(obj.get("message") or {}), "content": kept}}]
+    if t == "result":
+        # keep the accumulated streamed text as the authoritative final (matches what the user saw)
+        return [{**obj, "result": state.get("final") or obj.get("result") or ""}]
+    return [obj]   # system init, user tool_result, etc.
+
+
+def _norm_token_usage(u: dict | None) -> dict:
+    """Normalize a codex/hermes token-usage object into {input_tokens, output_tokens,
+    cache_read_tokens, cache_write_tokens}.
+
+    Verified codex app-server shape (2026-07-23): the notification carries
+    `tokenUsage.total.{inputTokens,outputTokens,cachedInputTokens,cacheWriteInputTokens}` — the
+    counts sit TWO levels deep (tokenUsage → total). codex-exec's turn.completed puts snake_case
+    counts at the top level. Unwrap the known nesting keys, then pick by name across camel/snake.
+    Note: codex's inputTokens already INCLUDES the cached read, so we SUBTRACT it here to make the
+    contract uniform with the Anthropic path (input_tokens = FRESH input only; cache_read_tokens =
+    the cached subset). Billing then charges input_1k on fresh input and the cheaper cache_read rate
+    on the cached subset — without the subtraction the cached tokens were billed at the full input
+    rate (~10x), which on a long conversation (each turn resends the whole cache-hit transcript)
+    inflated cost several-fold. Accepting every field shape means a name drift can never silently
+    zero out billing again."""
+    if not isinstance(u, dict):
+        return {}
+    # Unwrap the running-total nesting: tokenUsage/total_token_usage/… then .total/.last.
+    for key in ("tokenUsage", "total_token_usage", "totalTokenUsage", "info", "usage"):
+        inner = u.get(key)
+        if isinstance(inner, dict):
+            u = inner
+            break
+    for key in ("total", "last"):
+        inner = u.get(key)
+        if isinstance(inner, dict):
+            u = inner
+            break
+
+    def _pick(*names) -> int:
+        for n in names:
+            v = u.get(n)
+            if isinstance(v, (int, float)) and v:
+                return int(v)
+        return 0
+
+    inp = _pick("input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "totalInputTokens")
+    out = _pick("output_tokens", "outputTokens", "completion_tokens", "completionTokens")
+    cache_read = _pick("cache_read_tokens", "cacheReadTokens",
+                       "cached_input_tokens", "cachedInputTokens",
+                       "cache_read_input_tokens", "cacheReadInputTokens")
+    cache_write = _pick("cache_write_tokens", "cacheWriteTokens",
+                        "cache_creation_input_tokens", "cacheWriteInputTokens")
+    # codex reports gross input (fresh + cached read). Net the cached read out so input_tokens is
+    # FRESH only — uniform with the Anthropic contract and priced correctly by the biller. Guard
+    # against a provider that already reports net input (cache_read > input) so we never go negative.
+    fresh = max(inp - cache_read, 0) if cache_read else inp
+    res = {"input_tokens": fresh, "output_tokens": out}
+    if cache_read:
+        res["cache_read_tokens"] = cache_read
+    if cache_write:
+        res["cache_write_tokens"] = cache_write
+    return res
+
+
+def _codex_tool_item(it: dict) -> list[dict]:
+    """A completed codex tool item (command/file/mcp) -> canonical tool_use + tool_result events.
+    Shared by the exec normalizer and the app-server driver (the `item` shape is the same)."""
+    kind = it.get("type")
+    if kind == "command_execution":
+        tuid = it.get("id") or "cmd"
+        out = it.get("aggregated_output") or it.get("output") or ""
+        ec = it.get("exit_code")
+        return [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tuid, "name": "Bash",
+                 "input": {"command": it.get("command") or ""}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tuid,
+                 "is_error": bool(ec not in (0, None)), "content": str(out)}]}},
+        ]
+    if kind == "file_change":
+        changes = it.get("changes") or []
+        summary = "\n".join(f"{c.get('kind', 'change')}: {c.get('path', '')}"
+                            for c in changes) or json.dumps(it)
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": it.get("id") or "edit", "name": "Edit",
+             "input": {"changes": changes}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": it.get("id") or "edit",
+                 "content": summary}]}}]
+    if kind == "mcp_tool_call":
+        tuid = it.get("id") or "mcp"
+        name = f"{it.get('server', 'mcp')}.{it.get('tool', 'call')}"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": name,
+             "input": it.get("arguments") or {}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tuid,
+                 "content": json.dumps(it.get("result") or it, default=str)}]}}]
+    return [{"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": it.get("id") or kind or "item",
+         "name": kind or "codex_item", "input": it}]}}]
+
+
+def _codex_text_delta(it: dict, state: dict) -> str:
+    """Incremental text for a codex agent_message/reasoning item, by diffing the accumulating
+    `item.text` against what we've already streamed for this item id. Returns '' if nothing new
+    (or if the text isn't a prefix-extension, which shouldn't happen — codex text grows append-only).
+    Self-healing: when codex never emits item.updated, `seen` stays empty and item.completed's tail
+    equals the full text — i.e. the current batch behavior."""
+    iid = it.get("id") or "item"
+    full = it.get("text") or ""
+    seen = state.setdefault("_seen", {}).get(iid, "")
+    if full == seen or not full.startswith(seen):
+        # no growth, or a non-append revision — fall back to emitting the whole thing once
+        if full and full != seen:
+            state["_seen"][iid] = full
+            return full
+        return ""
+    state["_seen"][iid] = full
+    return full[len(seen):]
+
+
+def _codex_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE Codex `exec --json` event to zero+ canonical claude stream-json events."""
+    partial = state.get("partial")
+    t = obj.get("type")
+    if t == "thread.started":
+        return [{"type": "system", "subtype": "init",
+                 "session_id": obj.get("thread_id"), "model": state.get("model")}]
+    if partial and t in ("item.started", "item.updated"):
+        it = obj.get("item") or {}
+        kind = it.get("type")
+        if kind in ("agent_message", "reasoning"):
+            d = _codex_text_delta(it, state)
+            if not d:
+                return []
+            if kind == "agent_message":
+                state["final"] = state.get("_seen", {}).get(it.get("id") or "item", "")
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": d}]}}]
+            return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}}]
+        return []   # command/file/mcp items render on completion (below), not while updating
+    if t == "item.completed":
+        it = obj.get("item") or {}
+        kind = it.get("type")
+        if kind == "agent_message":
+            if partial:
+                d = _codex_text_delta(it, state)   # only the un-streamed tail (== full text if no updates)
+                state["final"] = it.get("text") or state.get("final", "")
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": d}]}}] if d else []
+            txt = it.get("text") or ""
+            state["final"] = txt
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+        if kind == "reasoning":
+            if partial:
+                d = _codex_text_delta(it, state)
+                return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}}] if d else []
+            return [{"type": "assistant",
+                     "message": {"content": [{"type": "thinking", "thinking": it.get("text") or ""}]}}]
+        return _codex_tool_item(it)   # command_execution / file_change / mcp_tool_call / other
+    if t == "turn.completed":
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""),
+                 "usage": _norm_token_usage(obj.get("usage"))}]
+    if t in ("error", "turn.failed"):
+        msg = obj.get("message") or (obj.get("error") or {}).get("message") or "codex error"
+        return [{"type": "result", "subtype": "error", "is_error": True, "result": msg}]
+    return [obj]
+
+
+def _status_from_result(result_ev: dict | None, exit_code: int) -> str:
+    if result_ev is not None:
+        sub = result_ev.get("subtype")
+        if sub == "success" and not result_ev.get("is_error"):
+            return "done"
+        if sub == "error_max_turns":
+            return "max_turns"
+        return "failed"
+    return "done" if exit_code == 0 else "failed"
+
+
+# ── per-backend turn builders (env + argv) ───────────────────────────────────────
+CLAUDE_PROVIDERS = {"anthropic", "bedrock", "vertex", "tokenrouter"}
+
+
+def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
+                  cwd: str, env: dict, resume_session_id: str | None = None,
+                  mcp_config: str | None = None, disallowed_tools: list[str] | None = None,
+                  partial: bool = False) -> list[str]:
+    p = provider or "anthropic"
+    if p not in CLAUDE_PROVIDERS:
+        raise HTTPException(400, f"unknown claude provider '{p}' (one of {sorted(CLAUDE_PROVIDERS)})")
+    # Keep conversation state inside the workspace so the checkpoint captures it (resume-anywhere).
+    # $HOME was redirected to <cwd>/.harness/home, and Claude writes BOTH config and the session
+    # transcripts (projects/*.jsonl) under $HOME/.claude — so that's the config dir AND where the
+    # resume-existence check below looks. This is the per-session, checkpointed location.
+    cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".claude"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    env["CLAUDE_CONFIG_DIR"] = str(cfg_dir)
+    # Extended thinking is stripped centrally by the broker (_strip_unsupported in
+    # harness_gateway), not here. MAX_THINKING_TOKENS=0 used to live at this line; it covered
+    # only Claude Code and only the `thinking` field, so when the CLI moved to
+    # `output_config.effort` it silently stopped working and haiku-4.5 began failing. One
+    # mechanism, at the single point every harness's traffic already passes through.
+    if p == "anthropic":
+        if auth.api_key:
+            env["ANTHROPIC_API_KEY"] = auth.api_key
+        if auth.base_url:
+            env["ANTHROPIC_BASE_URL"] = auth.base_url
+    elif p == "bedrock":
+        env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        if auth.aws_region:
+            env["AWS_REGION"] = env["AWS_DEFAULT_REGION"] = auth.aws_region
+        if auth.aws_bearer_token:
+            env["AWS_BEARER_TOKEN_BEDROCK"] = auth.aws_bearer_token
+        if auth.aws_access_key_id:
+            env["AWS_ACCESS_KEY_ID"] = auth.aws_access_key_id
+        if auth.aws_secret_access_key:
+            env["AWS_SECRET_ACCESS_KEY"] = auth.aws_secret_access_key
+        if auth.aws_session_token:
+            env["AWS_SESSION_TOKEN"] = auth.aws_session_token
+    elif p == "vertex":
+        env["CLAUDE_CODE_USE_VERTEX"] = "1"
+        if auth.gcp_project:
+            env["ANTHROPIC_VERTEX_PROJECT_ID"] = auth.gcp_project
+        if auth.gcp_region:
+            env["CLOUD_ML_REGION"] = auth.gcp_region
+        if auth.gcp_sa_json:
+            sa = pathlib.Path(cwd) / ".gcp-sa.json"
+            sa.write_text(auth.gcp_sa_json)
+            env["GOOGLE_APPLICATION_CREDENTIALS"] = str(sa)
+    elif p == "tokenrouter":
+        if auth.base_url:
+            # Claude Code appends /v1/messages itself — a base_url stored with /v1 (the
+            # OpenAI-compat form) would double the segment and 404 every call.
+            env["ANTHROPIC_BASE_URL"] = auth.base_url.rstrip("/").removesuffix("/v1")
+        if auth.api_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = auth.api_key
+    cmd = ["claude", "-p", prompt, "--output-format", "stream-json",
+           "--verbose", "--dangerously-skip-permissions", "--max-turns", str(max_turns)]
+    if partial:   # token-level streaming: emit content_block_delta events (see _claude_passthrough)
+        cmd.append("--include-partial-messages")
+    if mcp_config:   # owner-attached MCP servers (.harness/mcp.json) — adds their tools this turn
+        cmd += ["--mcp-config", mcp_config]
+    if disallowed_tools:   # built-in tools the harness disabled (catalog labels → real Claude tool names)
+        names = [t.split(" (")[0].strip() for t in disallowed_tools if t and t.strip()]
+        if names:
+            cmd += ["--disallowedTools", ",".join(names)]
+    if resume_session_id:
+        # Only resume if the conversation file is ACTUALLY in the (re)hydrated workspace. A prior turn
+        # can record a cli_session_id but fail before checkpointing its .jsonl — then `--resume <id>`
+        # hits a missing session and dies with error_during_execution on EVERY follow-up, permanently
+        # wedging the conversation. If it's absent, start a fresh CLI thread in the SAME workspace
+        # (files preserved) so the follow-up always runs instead of hard-failing.
+        import glob as _glob
+        found = _glob.glob(str(cfg_dir / "projects" / "*" / f"{resume_session_id}.jsonl")) \
+            or _glob.glob(str(cfg_dir / "**" / f"{resume_session_id}.jsonl"), recursive=True)
+        if found:
+            cmd += ["--resume", resume_session_id]   # continue the prior turn's conversation
+        else:
+            print(f"[resume] session {resume_session_id} not found in workspace — starting fresh", flush=True)
+    if model:
+        cmd += ["--model", model]
+    return cmd
+
+
+CODEX_PROVIDERS = {
+    "openai": {"name": "OpenAI", "default_base": OPENAI_BASE_URL, "env_key": "OPENAI_API_KEY"},
+    "azure": {"name": "Azure OpenAI", "default_base": AZURE_OPENAI_BASE_URL, "env_key": "AZURE_OPENAI_API_KEY"},
+    "tokenrouter": {"name": "TokenRouter", "default_base": "", "env_key": "ROUTER_API_KEY"},
+}
+# sandbox_mode = danger-full-access is REQUIRED for the app-server path: `codex exec` disables the
+# sandbox via --dangerously-bypass-approvals-and-sandbox, but `codex app-server` has no such flag and
+# reads its policy from config.toml. Without this it defaults to read-only, so with approval_policy
+# "never" (never escalate) every apply_patch/file write is silently rejected and the agent gives up
+# ("workspace mounted read-only"). We already run one Hyper-V-isolated sandbox per session, so full
+# access INSIDE it matches the exec path's behavior. The [sandbox_workspace_write] block is inert
+# under danger-full-access but kept for anyone who flips the mode down to workspace-write.
+_CODEX_CONFIG_TMPL = """model = "{model}"
+model_provider = "{provider}"
+model_reasoning_effort = "{effort}"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+model_context_window = {ctx}
+[model_providers.{provider}]
+name = "{name}"
+base_url = "{base_url}"
+env_key = "{env_key}"
+wire_api = "{wire_api}"
+[sandbox_workspace_write]
+network_access = true
+exclude_slash_tmp = false
+"""
+
+
+def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
+                       env: dict, mcp_toml: str = "") -> "pathlib.Path":
+    """Shared codex setup for BOTH exec and app-server: write config.toml (model/provider/base_url +
+    MCP), point CODEX_HOME at the checkpointed workspace, set provider auth + TMPDIR. Returns the
+    CODEX_HOME dir. Mutates env."""
+    p = provider or "azure"
+    spec = CODEX_PROVIDERS.get(p)
+    if not spec:
+        raise HTTPException(400, f"unknown codex provider '{p}' (one of {sorted(CODEX_PROVIDERS)})")
+    base_url = auth.base_url or spec["default_base"]
+    if not base_url:
+        raise HTTPException(400, f"codex provider '{p}' needs a base_url (none configured)")
+    # CODEX_HOME under $HOME (.harness/home/.codex) so codex's sessions/rollouts are CHECKPOINTED
+    # and survive sandbox recycling — the top-level ./.codex is excluded from the checkpoint, which is
+    # why codex state used to vanish. (auth.json inside is still creds-excluded.)
+    cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".codex"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg = _CODEX_CONFIG_TMPL.format(
+        model=model, provider=p, effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
+        name=spec["name"], base_url=base_url, env_key=spec["env_key"],
+        wire_api=auth.wire_api or "responses")
+    if mcp_toml:   # owner-attached MCP servers via Codex's experimental rmcp HTTP client
+        cfg += mcp_toml
+    (cfg_dir / "config.toml").write_text(cfg)
+    env["CODEX_HOME"] = str(cfg_dir)
+    env["TMPDIR"] = str(pathlib.Path(cwd) / "tmp")
+    pathlib.Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+    if auth.api_key:
+        env[spec["env_key"]] = auth.api_key
+    return cfg_dir
+
+
+def _strip_codex_encrypted_reasoning(rollouts: list[str]) -> int:
+    """Drop reasoning items from the codex rollout(s) before `resume`, and return how many were removed.
+
+    A Responses reasoning item carries `encrypted_content` (the `gAAA…` chain-of-thought blob) that is
+    bound to the exact upstream account/key that minted it — only that account can decrypt it. Codex
+    replays the whole rollout as the next turn's `input` (with include=reasoning.encrypted_content), so
+    a follow-up served by a DIFFERENT account (chain fallback, key rotation, or a load-balanced proxy)
+    400s with `invalid_encrypted_content`. Worse, the orphaned item stays in the rollout, so EVERY later
+    resume replays it and fails identically — a permanently wedged session.
+
+    Removing reasoning items makes resume account-independent: each turn re-reasons from the visible
+    transcript (messages + tool calls/outputs are untouched, so history is preserved). This mirrors the
+    AI Hub chat path, which already drops reasoning. Reasoning generated during the turn is re-stripped
+    before the next resume, so a session can never re-poison."""
+    stripped = 0
+    for path in rollouts:
+        try:
+            lines = pathlib.Path(path).read_text().splitlines()
+        except OSError:
+            continue
+        out: list[str] = []
+        changed = False
+        for line in lines:
+            # Cheap prefilter before JSON parse; a reasoning response_item always carries both tokens.
+            if '"reasoning"' in line and '"encrypted_content"' in line:
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    out.append(line)
+                    continue
+                pay = o.get("payload") if isinstance(o.get("payload"), dict) else None
+                if o.get("type") == "response_item" and pay and pay.get("type") == "reasoning":
+                    stripped += 1
+                    changed = True
+                    continue  # drop the whole reasoning item
+            out.append(line)
+        if changed:
+            pathlib.Path(path).write_text("\n".join(out) + ("\n" if out else ""))
+    return stripped
+
+
+def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
+                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> list[str]:
+    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml)
+    # Drop --ephemeral so codex PERSISTS the rollout to $CODEX_HOME/sessions (inside the checkpointed
+    # workspace) — that's what makes a follow-up history-aware. Mirror the claude resume guard: only
+    # `resume <id>` if the rollout is actually present in the (re)hydrated workspace, else start fresh
+    # in the SAME workspace (files preserved) so a follow-up never hard-fails on a missing session.
+    common = ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json",
+              "-c", f"model={model}"]
+    if resume_session_id:
+        import glob as _glob
+        rollouts = _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True)
+        if rollouts:
+            # Strip account-bound encrypted reasoning before replay so a follow-up served by a
+            # different upstream account can't 400 with invalid_encrypted_content (see the helper).
+            n = _strip_codex_encrypted_reasoning(rollouts)
+            if n:
+                print(f"[resume] codex: stripped {n} encrypted reasoning item(s) before resume", flush=True)
+            # CODEX_HOME is PER-SESSION (hydrate wipes + restores only THIS session's workspace), so
+            # the most-recent rollout here IS this conversation. Resume by --last instead of matching
+            # the thread UUID to the rollout filename (that match is codex-version-fragile and missed
+            # ~1/3 of the time). --last is exact here precisely because the home is session-isolated.
+            return ["codex", "exec", "resume", "--last", *common, prompt]
+        print(f"[resume] codex: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
+    return ["codex", "exec", *common, "--cd", cwd, prompt]
+
+
+# ── hermes (NousResearch hermes-agent CLI) ──────────────────────────────────────────
+# One-shot turns run `hermes -z` (auto-approves, prints ONLY the final text on stdout, writes a
+# JSON usage report via --usage-file); follow-up turns run `hermes chat -q -r <sid>` because the
+# oneshot path has no resume parameter (verified against 0.19.0 source). The CLI emits NO event
+# stream on stdout — tool calls and assistant text are flushed incrementally into $HERMES_HOME/
+# state.db (SQLite, WAL), which _run_hermes_bg polls to synthesize the canonical claude
+# stream-json events every other backend produces.
+HERMES_PROVIDERS = {"anthropic", "bedrock", "azure-foundry", "openrouter", "openai-api"}
+
+
+def _hermes_mcp_section(servers: list[dict] | None) -> dict:
+    """config.yaml `mcp_servers:` entries for the enabled remote MCP servers (hermes supports
+    Streamable HTTP by url, SSE via `transport: sse`, and per-server headers). Same input contract
+    as the claude/codex materializers: [{name, url, transport?, auth?, headers?}]."""
+    out: dict = {}
+    for s in servers or []:
+        url = (s or {}).get("url")
+        if not url:
+            continue
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
+        entry: dict = {"url": url}
+        if ((s or {}).get("transport") or "").lower() == "sse":
+            entry["transport"] = "sse"
+        hdrs: dict[str, str] = {}
+        auth = (s or {}).get("auth")
+        if auth:  # bearer token (resolved by the gateway) -> Authorization header
+            hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+        if isinstance((s or {}).get("headers"), dict):
+            hdrs.update({str(k): str(v) for k, v in s["headers"].items() if k and v is not None})
+        if hdrs:
+            entry["headers"] = hdrs
+        out[name] = entry
+    return out
+
+
+def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
+                        model: str = "", max_turns: int | None = None,
+                        mcp_servers: list[dict] | None = None) -> list[str]:
+    """Point HERMES_HOME inside the checkpointed workspace home (CODEX_HOME precedent) so the
+    conversation state (state.db) survives sandbox recycling, and inject provider creds as env.
+    Writes config.yaml fresh each turn (harness config is the source of truth, like the agent doc).
+    The model/provider MUST be in config.yaml, not only flags: the chat path's first-run guard
+    treats a default-model config as 'unconfigured' and exits into the setup wizard (verified on
+    0.19.0 — bedrock bearer creds alone don't satisfy it). The -z/-m flags still take precedence."""
+    p = (provider or "bedrock").lower()
+    if p not in HERMES_PROVIDERS:
+        raise HTTPException(400, f"unknown hermes provider '{p}' (one of {sorted(HERMES_PROVIDERS)})")
+    hermes_home = pathlib.Path(env.get("HOME") or cwd) / ".hermes"
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    env["HERMES_HOME"] = str(hermes_home)
+    # Seal runtime lazy-installs (hermes pip-installs undeclared deps at first use — its own
+    # hosted image does the same): everything the shipped features need is baked into the image.
+    env["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+    cfg: dict = {"model": {"provider": p, "default": model}}
+    if p == "bedrock":
+        cfg["bedrock"] = {"region": auth.aws_region or "us-east-1"}
+    if max_turns:
+        # hermes 0.19.0 has no --max-turns CLI flag; agent.max_turns in config.yaml is the knob.
+        cfg["agent"] = {"max_turns": int(max_turns)}
+    # Provider credentials as env — the CLI resolves them at call time.
+    if p == "anthropic":
+        if auth.api_key:
+            env["ANTHROPIC_API_KEY"] = auth.api_key
+        if auth.base_url:
+            env["ANTHROPIC_BASE_URL"] = auth.base_url
+    elif p == "azure-foundry":  # Azure OpenAI (gpt family) — OpenAI-style endpoint + key
+        if auth.api_key:
+            env["AZURE_FOUNDRY_API_KEY"] = auth.api_key
+        if auth.base_url:
+            env["AZURE_FOUNDRY_BASE_URL"] = auth.base_url
+    elif p == "openrouter":  # OpenRouter aggregator (vendor/model ids)
+        if auth.api_key:
+            env["OPENROUTER_API_KEY"] = auth.api_key
+        if auth.base_url:
+            env["OPENROUTER_BASE_URL"] = auth.base_url
+    elif p == "openai-api":  # any OpenAI-compatible endpoint (OpenAI official, TokenRouter, ...)
+        if auth.api_key:
+            env["OPENAI_API_KEY"] = auth.api_key
+        if auth.base_url:
+            env["OPENAI_BASE_URL"] = auth.base_url
+    else:  # bedrock — bearer-token (Bedrock API key) or the standard AWS credential chain
+        region = auth.aws_region or "us-east-1"
+        env["AWS_REGION"] = region
+        env["AWS_DEFAULT_REGION"] = region
+        if auth.aws_bearer_token:
+            env["AWS_BEARER_TOKEN_BEDROCK"] = auth.aws_bearer_token
+        if auth.aws_access_key_id:
+            env["AWS_ACCESS_KEY_ID"] = auth.aws_access_key_id
+        if auth.aws_secret_access_key:
+            env["AWS_SECRET_ACCESS_KEY"] = auth.aws_secret_access_key
+        if auth.aws_session_token:
+            env["AWS_SESSION_TOKEN"] = auth.aws_session_token
+    mcp = _hermes_mcp_section(mcp_servers)
+    if mcp:
+        cfg["mcp_servers"] = mcp
+        # chat mode JOINS background MCP discovery before the first tool snapshot, bounded by
+        # this timeout (default 1.5s — too short for a cold remote connect). The driver runs
+        # MCP turns through chat -q precisely for that join; give real servers time to attach.
+        cfg["mcp_discovery_timeout"] = 20
+    (hermes_home / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return list(mcp)
+
+
+# Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
+# in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
+# (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
+BACKENDS = {
+    "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
+               "normalize": _claude_passthrough},
+    "codex": {"providers": sorted(CODEX_PROVIDERS), "default_model": CODEX_DEFAULT_MODEL,
+              "normalize": _codex_to_claude},
+    "hermes": {"providers": sorted(HERMES_PROVIDERS), "default_model": HERMES_DEFAULT_MODEL,
+               "normalize": None},
+}
+
+
+# ── async turn registry (background execution; turns can run seconds → the 6h cap) ──
+_turns: dict[str, dict] = {}
+_turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retried /turn; see turn())
+_turns_lock = threading.Lock()
+
+
+def _kill_proc_tree(proc: subprocess.Popen) -> None:
+    """SIGKILL the CLI's whole process GROUP (Popen uses start_new_session). Killing only
+    the CLI leaves its shell children (e.g. a `sleep`) holding the inherited stdout pipe,
+    which keeps the reader loop blocked until the child exits — a cancel/timeout then
+    appears to hang for the child's full duration."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
+    rec["capped"] = True
+    _kill_proc_tree(proc)
+
+
+def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
+                 timeout_seconds: int | None = None, partial: bool = False) -> None:
+    rec = _turns[turn_id]
+    state = {"model": model, "final": "", "partial": partial}
+    result_ev = None
+    try:
+        # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
+        # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+    except Exception as e:  # noqa: BLE001
+        rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
+        return
+    rec["pid"] = proc.pid
+    rec["proc"] = proc   # live handle so POST /turn/{id}/cancel can kill on demand
+    if rec.get("cancelled"):
+        _kill_proc_tree(proc)   # Stop raced the spawn — kill immediately, not at pipe EOF
+    # Hard wall-clock cap — the caller's timeout_seconds (harness config / request override),
+    # bounded by the global MAX_TURN_SECONDS ceiling (resource abuse backstop).
+    cap = min(timeout_seconds, MAX_TURN_SECONDS) if timeout_seconds else MAX_TURN_SECONDS
+    killer = threading.Timer(cap, _kill_capped, args=(proc, rec))
+    killer.daemon = True
+    killer.start()
+    errbuf: list[str] = []   # non-JSON output (CLI stderr is merged into stdout) — the REAL error text
+    try:
+        for raw in proc.stdout:  # type: ignore[union-attr]
+            raw = raw.strip()
+            if not raw:
+                continue
+            if not raw.startswith("{"):
+                # diagnostics / stderr (e.g. "API Error ... ThrottlingException", rate limits). Keep a
+                # bounded tail so a failure is never opaque — this is what surfaces the real cause.
+                errbuf.append(raw)
+                if len(errbuf) > 80:
+                    del errbuf[0]
+                continue
+            try:
+                obj = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                continue
+            for ev in normalize(obj, state):
+                ev["_ts"] = time.time()
+                with _turns_lock:
+                    rec["events"].append(ev)
+                if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
+                    rec["session_id"] = ev["session_id"]   # CLI conversation id → next turn's --resume
+                if ev.get("type") == "result":
+                    result_ev = ev
+                    # Claude's stream-json carries the final assistant text on the result event;
+                    # the codex normalizer already fills state['final'], so prefer that.
+                    state["final"] = state.get("final") or ev.get("result") or ""
+        rc = proc.wait()
+    finally:
+        killer.cancel()
+    rec["exit_code"] = rc
+    rec["result"] = state.get("final", "")
+    rec["status"] = ("cancelled" if rec.get("cancelled")
+                     else "timeout" if rec.get("capped")
+                     else _status_from_result(result_ev, rc))
+    # Never leave a failure opaque: surface the captured CLI stderr (and result-event error) so the
+    # gateway/trace shows WHY it failed (throttling, model error, etc.) instead of an empty string.
+    if rec["status"] in ("failed", "error", "timeout"):
+        tail = "\n".join(errbuf[-30:]).strip()
+        ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
+        rec["error"] = (str(ev_err).strip() or tail or f"exit_code={rc}, no diagnostic output")[:2000]
+        if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
+            result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
+    rec["done"] = True
+
+
+# Codex app-server JSON-RPC driver — the ONLY codex mode that streams assistant text (via
+# item/agentMessage/delta). Flag-gated; the default codex path stays `codex exec` (batch). We run
+# one turn per app-server process (spawn -> initialize -> thread start/resume -> turn -> done), a
+# single-threaded read loop that also writes the follow-up requests inline as responses arrive.
+_CODEX_SANDBOX = os.environ.get("CODEX_APPSERVER_SANDBOX", "danger-full-access")  # kebab enum; env-tunable
+
+
+def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str,
+                            resume_session_id: str | None, timeout_seconds: int | None) -> None:
+    rec = _turns[turn_id]
+    state = {"final": ""}
+
+    def append(ev: dict) -> None:
+        ev["_ts"] = time.time()
+        with _turns_lock:
+            rec["events"].append(ev)
+
+    try:
+        proc = subprocess.Popen(["codex", "app-server"], cwd=cwd, env=env, text=True, bufsize=1,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+    except Exception as e:  # noqa: BLE001
+        rec.update(status="failed", error=f"spawn app-server: {e}"[:500], done=True)
+        return
+    rec["pid"] = proc.pid
+    rec["proc"] = proc
+    if rec.get("cancelled"):
+        _kill_proc_tree(proc)   # Stop raced the spawn — kill immediately, not at pipe EOF
+    cap = min(timeout_seconds, MAX_TURN_SECONDS) if timeout_seconds else MAX_TURN_SECONDS
+    killer = threading.Timer(cap, _kill_capped, args=(proc, rec))
+    killer.daemon = True
+    killer.start()
+
+    _nid = [0]
+    def _rid() -> int:
+        _nid[0] += 1
+        return _nid[0]
+
+    def send(method: str, params: dict, notify: bool = False):
+        msg = {"method": method, "params": params}
+        if not notify:
+            msg["id"] = _rid()
+        proc.stdin.write(json.dumps(msg) + "\n")  # type: ignore[union-attr]
+        proc.stdin.flush()  # type: ignore[union-attr]
+        return msg.get("id")
+
+    errbuf: list[str] = []
+    usage: dict = {}
+    turn_status = None
+    thread_id = None
+    id_init = id_thread = id_turn = None
+    try:
+        id_init = send("initialize", {"clientInfo": {"name": "harness-runner", "title": "HarnessRouter", "version": "1"},
+                                      "capabilities": {"experimentalApi": True, "optOutNotificationMethods": []}})
+        for raw in proc.stdout:  # type: ignore[union-attr]
+            raw = raw.strip()
+            if not raw:
+                continue
+            if not raw.startswith("{"):
+                errbuf.append(raw)
+                if len(errbuf) > 80:
+                    del errbuf[0]
+                continue
+            try:
+                msg = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                continue
+            mid = msg.get("id")
+            method = msg.get("method")
+            if method is None and mid is not None:              # a response to one of our requests
+                if msg.get("error") and mid in (id_init, id_thread, id_turn):
+                    errbuf.append(str((msg["error"] or {}).get("message") or "app-server error"))
+                    turn_status = "failed"
+                    break
+                res = msg.get("result") or {}
+                if mid == id_init:
+                    send("initialized", {}, notify=True)
+                    id_thread = (send("thread/resume", {"threadId": resume_session_id}) if resume_session_id
+                                 else send("thread/start", {"cwd": cwd, "model": model,
+                                           "sandbox": _CODEX_SANDBOX, "approvalPolicy": "never"}))
+                elif mid == id_thread:
+                    thread_id = ((res.get("thread") or {}).get("id")) or resume_session_id or ""
+                    if thread_id:
+                        append({"type": "system", "subtype": "init", "session_id": thread_id, "model": model})
+                        rec["session_id"] = thread_id
+                    id_turn = send("turn/start", {"threadId": thread_id, "model": model,
+                                   "approvalPolicy": "never", "input": [{"type": "text", "text": prompt}]})
+                continue
+            p = msg.get("params") or {}                          # a notification
+            if method == "item/agentMessage/delta":
+                d = p.get("delta") or ""
+                if d:
+                    state["final"] += d
+                    append({"type": "assistant", "message": {"content": [{"type": "text", "text": d}]}})
+            elif method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
+                d = p.get("summaryDelta") or p.get("delta") or ""
+                if d:
+                    append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}})
+            elif method == "item/completed":
+                it = p.get("item") or {}
+                if it.get("type") not in ("agent_message", "reasoning"):   # already streamed as deltas
+                    for ev in _codex_tool_item(it):
+                        append(ev)
+            elif method == "turn/completed":
+                # Final cumulative usage may also ride the completed turn; read it as a fallback.
+                turn_obj = p.get("turn") or {}
+                nu = _norm_token_usage(turn_obj or p)
+                if nu.get("input_tokens") or nu.get("output_tokens"):
+                    usage = nu
+                turn_status = turn_obj.get("status") or "completed"
+                break
+            elif ("token" in method.lower() and "usage" in method.lower()) or method.lower().endswith("tokencount"):
+                # codex app-server emits thread/tokenUsage/updated with the running total under
+                # params.tokenUsage.total (verified 2026-07-23). Keep the LATEST (it's cumulative).
+                # Matching on method SHAPE, not one exact string, so a rename can't zero billing.
+                nu = _norm_token_usage(p)
+                if nu.get("input_tokens") or nu.get("output_tokens"):
+                    usage = nu
+            elif method in ("turn/failed", "error"):
+                errbuf.append(str(p.get("message") or (p.get("error") or {}).get("message") or "codex error"))
+                turn_status = "failed"
+                break
+    except Exception as e:  # noqa: BLE001
+        errbuf.append(f"{type(e).__name__}: {str(e)[:150]}")
+        turn_status = turn_status or "failed"
+    finally:
+        killer.cancel()
+        try:
+            if proc.poll() is None:
+                _kill_proc_tree(proc)                            # one turn per process — never reuse
+        except Exception:  # noqa: BLE001
+            pass
+
+    # A turn that produced a final agent answer SUCCEEDED from the caller's view — even if codex then
+    # fumbles the turn close. gpt-5.5 refusals are the sharp case: the model returns a clean final
+    # answer ("I'm sorry, but I cannot assist…"), after which codex app-server prints "Reconnecting…
+    # N/5" and marks the turn failed. That mislabels a completed model response as broken infra. So:
+    # if we captured a non-empty final answer and the only failure signal is reconnect/EOF noise (not a
+    # real execution error), treat the turn as done and show the model's message cleanly.
+    def _is_reconnect_noise(s: str) -> bool:
+        low = s.strip().lower()
+        return (not low) or ("reconnect" in low) or ("stream closed" in low) or low in ("eof", "connection closed")
+    answered = bool(state["final"].strip())
+    noise_only = all(_is_reconnect_noise(l) for l in errbuf) if errbuf else True
+    ok = ((turn_status in ("completed", None)) or (answered and noise_only)) \
+        and not rec.get("cancelled") and not rec.get("capped")
+    err_txt = ("\n".join(errbuf[-30:]).strip() or f"app-server turn status: {turn_status}")[:2000]
+    # On a genuine failure, lead with the agent's own last words (often the real reason, e.g.
+    # "workspace is read-only") and follow with the technical error, so the Result row is never a
+    # blank "Failed" with no explanation.
+    if ok:
+        res_txt = state["final"]
+    else:
+        res_txt = "\n\n".join(x for x in (state["final"].strip(), err_txt) if x)[:4000] or err_txt
+    append({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+            "result": res_txt, "usage": usage})   # surface the error in the trace
+    rec["result"] = state["final"]
+    rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
+                     else "done" if ok else "failed")
+    if not ok:
+        rec["error"] = err_txt
+        rec["tried"] = [{"connection": "codex-app-server", "error": err_txt[:400]}]  # -> gateway failure msg
+    rec["done"] = True
+
+
+# ── hermes driver — DB-polling turn runner ───────────────────────────────────────
+# hermes-agent emits no event stream on stdout, but flushes every message (assistant text,
+# OpenAI-style tool_calls, tool results) incrementally into $HERMES_HOME/state.db during the run.
+# This driver spawns the CLI, tails that table, and synthesizes the same canonical claude
+# stream-json events the other backends produce, so everything downstream stays uniform.
+_HERMES_POLL_S = 0.8
+# A fresh (non-resume) turn's cursor stays at "no session row yet" until the hermes CLI itself
+# writes one to state.db — the driver has NO other progress signal before that. If the subprocess
+# blocks on an unbounded network call (provider auth/model init) before ever reaching that write,
+# the turn shows zero events with no error, indistinguishable from "still working," for as long as
+# MAX_TURN_SECONDS / the caller's timeout_seconds allows (hours by default). This is a SEPARATE,
+# much shorter bound on just that startup window, independent of the overall per-turn cap.
+_HERMES_STARTUP_TIMEOUT_S = float(os.environ.get("HERMES_STARTUP_TIMEOUT_S", "90"))
+
+
+def _hermes_db_ro(db_path: str) -> sqlite3.Connection | None:
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+        db.row_factory = sqlite3.Row
+        return db
+    except Exception:  # noqa: BLE001 — db not created yet / mid-write
+        return None
+
+
+def _hermes_session_row(db_path: str, sid: str) -> dict | None:
+    db = _hermes_db_ro(db_path)
+    if db is None:
+        return None
+    try:
+        # SELECT * (not a fixed column list): a schema drift in the token column names must not
+        # throw and zero out billing. Normalize the token counters by name after the read.
+        r = db.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        cols = {k.lower(): k for k in d.keys()}
+
+        def _tok(*names) -> int:
+            for n in names:
+                col = cols.get(n)
+                if col is not None and isinstance(d[col], (int, float)) and d[col]:
+                    return int(d[col])
+            return 0
+
+        return {"id": d.get(cols.get("id", "id")),
+                "input_tokens": _tok("input_tokens", "inputtokens", "prompt_tokens",
+                                     "prompt_token_count", "total_input_tokens"),
+                "output_tokens": _tok("output_tokens", "outputtokens", "completion_tokens",
+                                      "completion_token_count", "total_output_tokens")}
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        db.close()
+
+
+def _hermes_msg_events(row: sqlite3.Row, state: dict) -> list[dict]:
+    """Map ONE state.db message row to canonical events (the _codex_to_claude shapes)."""
+    evs: list[dict] = []
+    role = row["role"]
+    content = row["content"] or ""
+    if role == "assistant":
+        keys = row.keys()
+        reasoning = ((row["reasoning_content"] if "reasoning_content" in keys else None)
+                     or (row["reasoning"] if "reasoning" in keys else None) or "")
+        if str(reasoning).strip():
+            evs.append({"type": "assistant", "message": {"content": [
+                {"type": "thinking", "thinking": str(reasoning)}]}})
+        if content.strip():
+            evs.append({"type": "assistant", "message": {"content": [{"type": "text", "text": content}]}})
+            state["final"] = content   # last assistant text wins
+        for tc in json.loads(row["tool_calls"]) if row["tool_calls"] else []:
+            fn = (tc or {}).get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:  # noqa: BLE001
+                args = {"raw": fn.get("arguments")}
+            evs.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tc.get("id") or f"htool_{row['id']}",
+                 "name": fn.get("name") or "tool", "input": args}]}})
+    elif role == "tool":
+        evs.append({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": row["tool_call_id"] or "",
+             "is_error": False, "content": content[:20000]}]}})
+    # role == "user" rows are the prompt echo — the gateway already has it; skip.
+    return evs
+
+
+def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str, prompt: str,
+                   resume_session_id: str | None, timeout_seconds: int | None,
+                   mcp_toolsets: list[str] | None = None) -> None:
+    rec = _turns[turn_id]
+    state: dict = {"final": ""}
+    db_path = os.path.join(env["HERMES_HOME"], "state.db")
+    t0 = time.time()
+
+    def append(ev: dict) -> None:
+        ev["_ts"] = time.time()
+        with _turns_lock:
+            rec["events"].append(ev)
+
+    # Resume guard (claude/codex precedent): only resume a session that actually exists in the
+    # (re)hydrated state.db — a recorded-but-never-checkpointed id must start fresh, not wedge.
+    resume = None
+    pre = None
+    if resume_session_id:
+        pre = _hermes_session_row(db_path, resume_session_id)
+        if pre:
+            resume = resume_session_id
+        else:
+            print(f"[resume] hermes: session {resume_session_id} not in workspace — starting fresh", flush=True)
+            # Make the lost continuity a VISIBLE event, not just a server log line — the caller
+            # believed this was a continuation; silently starting fresh instead is a correctness
+            # surprise (missing context) the user/gateway has no way to detect otherwise. Gateway
+            # translates this subtype into a short note at the top of the reply (_blocks_from_canonical).
+            append({"type": "system", "subtype": "resume_lost", "requested_session_id": resume_session_id})
+    usage_path = os.path.join(env.get("TMPDIR") or tempfile.gettempdir(), f"hermes-usage-{turn_id}.json")
+    # chat -q is REQUIRED for two cases; plain -z covers the rest (cleanest stdout/usage contract):
+    #  - resume: oneshot has no resume parameter; chat honors -r.
+    #  - MCP:    only chat's agent setup JOINS background MCP discovery before the first tool
+    #            snapshot (bounded by config mcp_discovery_timeout). A one-shot races discovery
+    #            and runs without the MCP tools (verified live on 0.19.0).
+    use_chat = bool(resume) or bool(mcp_toolsets)
+    if use_chat:
+        # Final text + per-turn usage come from state.db (chat stdout carries banner noise).
+        cmd = ["hermes", "chat", "-q", prompt, "-Q", "--yolo", "--accept-hooks",
+               "--provider", provider, "--model", model]
+        if resume:
+            cmd += ["-r", resume]
+    else:
+        cmd = ["hermes", "-z", prompt, "--provider", provider, "--model", model,
+               "--usage-file", usage_path]
+    try:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True)
+    except Exception as e:  # noqa: BLE001
+        rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
+        return
+    rec["pid"] = proc.pid
+    rec["proc"] = proc
+    if rec.get("cancelled"):
+        _kill_proc_tree(proc)
+    cap = min(timeout_seconds, MAX_TURN_SECONDS) if timeout_seconds else MAX_TURN_SECONDS
+    killer = threading.Timer(cap, _kill_capped, args=(proc, rec))
+    killer.daemon = True
+    killer.start()
+    out_buf: list[str] = []
+    err_buf: list[str] = []
+
+    def _drain(pipe, buf, cap_lines=200):
+        for line in pipe:
+            buf.append(line.rstrip("\n"))
+            if len(buf) > cap_lines:
+                del buf[0]
+    t_out = threading.Thread(target=_drain, args=(proc.stdout, out_buf), daemon=True)
+    t_err = threading.Thread(target=_drain, args=(proc.stderr, err_buf), daemon=True)
+    t_out.start(); t_err.start()
+
+    sid = resume
+    cursor = 0
+    if resume:
+        db = _hermes_db_ro(db_path)
+        if db is not None:
+            try:  # only rows appended by THIS turn become events
+                cursor = db.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?",
+                                    (resume,)).fetchone()[0]
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                db.close()
+        append({"type": "system", "subtype": "init", "session_id": resume, "model": model})
+
+    def _sweep() -> None:
+        nonlocal sid, cursor
+        db = _hermes_db_ro(db_path)
+        if db is None:
+            return
+        try:
+            if sid is None:
+                r = db.execute(
+                    "SELECT id FROM sessions WHERE CAST(started_at AS REAL) >= ? ORDER BY started_at DESC LIMIT 1",
+                    (t0 - 5,)).fetchone()
+                if r:
+                    sid = r["id"]
+                    rec["session_id"] = sid
+                    append({"type": "system", "subtype": "init", "session_id": sid, "model": model})
+            if sid is None:
+                return
+            for row in db.execute(
+                    "SELECT * FROM messages WHERE session_id=? AND id>? ORDER BY id", (sid, cursor)):
+                cursor = row["id"]
+                for ev in _hermes_msg_events(row, state):
+                    append(ev)
+        except Exception:  # noqa: BLE001 — mid-write reads can transiently fail; next poll catches up
+            pass
+        finally:
+            db.close()
+
+    try:
+        while proc.poll() is None:
+            _sweep()
+            # A RESUME turn starts with sid already set (line above), so this only ever fires for a
+            # fresh session — exactly the cold-start-provider-call window this guards.
+            if sid is None and (time.time() - t0) > _HERMES_STARTUP_TIMEOUT_S:
+                rec["capped"] = True
+                rec["startup_timeout"] = True
+                _kill_proc_tree(proc)
+                break
+            time.sleep(_HERMES_POLL_S)
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+        _sweep()   # final drain after EOF so the last messages always land
+    finally:
+        killer.cancel()
+    rc = proc.returncode
+    if sid:
+        rec["session_id"] = sid
+    # Usage: the session row's cumulative token counters are the one uniform source — absolute
+    # for a fresh session, diffed against the pre-read for a resume. The -z usage report is the
+    # authority on the run's failed flag (exit 0 can still mean failure, verified live) and the
+    # session-id fallback when the DB was never seen.
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    run_failed = False
+    if sid:
+        post = _hermes_session_row(db_path, sid) or {}
+        usage = {"input_tokens": max(0, int(post.get("input_tokens") or 0) - int((pre or {}).get("input_tokens") or 0)),
+                 "output_tokens": max(0, int(post.get("output_tokens") or 0) - int((pre or {}).get("output_tokens") or 0))}
+    if not use_chat:
+        try:
+            with open(usage_path) as f:
+                u = json.load(f)
+            run_failed = bool(u.get("failed"))
+            if not usage["input_tokens"] and u.get("input_tokens"):
+                usage = {"input_tokens": int(u.get("input_tokens") or 0),
+                         "output_tokens": int(u.get("output_tokens") or 0)}
+            if not sid and u.get("session_id"):
+                sid = u["session_id"]
+                rec["session_id"] = sid
+                append({"type": "system", "subtype": "init", "session_id": sid, "model": model})
+        except Exception:  # noqa: BLE001 — no report ⇒ judge by exit code alone
+            pass
+        finally:
+            try:
+                os.unlink(usage_path)
+            except OSError:
+                pass
+    # -z prints ONLY the final text on stdout — authoritative there; chat runs read the DB
+    # (their stdout carries banner noise).
+    final = state.get("final", "")
+    if not use_chat:
+        final = "\n".join(out_buf).strip() or final
+    ok = rc == 0 and not run_failed and not rec.get("cancelled") and not rec.get("capped") and bool(final.strip())
+    err_txt = ("\n".join(err_buf[-30:]).strip() or f"exit_code={rc}")[:2000]
+    if rec.get("startup_timeout"):
+        # The generic exit_code/stderr text is useless here (the process was killed by US, not a
+        # normal failure) — say what actually happened instead of leaving a cryptic "exit_code=-9".
+        err_txt = (f"Hermes did not start a session within {_HERMES_STARTUP_TIMEOUT_S:.0f}s — the "
+                   f"model provider call likely hung before producing any output.\n{err_txt}")[:2000]
+    res_txt = final if ok else ("\n\n".join(x for x in (final.strip(), err_txt) if x)[:4000] or err_txt)
+    append({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+            "result": res_txt, "usage": usage})
+    rec["exit_code"] = rc
+    rec["result"] = final
+    rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
+                     else "done" if ok else "failed")
+    if not ok and rec["status"] in ("failed", "timeout"):
+        rec["error"] = err_txt
+    rec["done"] = True
+
+
+# ── HTTP surface ─────────────────────────────────────────────────────────────────
+@app.get("/healthz")
+def healthz() -> dict:
+    return {"ok": True, "host": socket.gethostname(),
+            "sidecar": _sidecar_alive(), "room": _sidecar.get("room")}
+
+
+@app.get("/backends")
+def backends() -> dict:
+    return {b: {"providers": v["providers"], "default_model": v["default_model"]}
+            for b, v in BACKENDS.items()}
+
+
+_WS_MARKER = "/tmp/hr-ws.sha"   # per-sandbox: sha256 of the checkpoint tar /workspace holds
+
+
+def _ws_marker_set(sha: str) -> None:
+    try:
+        pathlib.Path(_WS_MARKER).write_text(sha or "")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _ws_marker_get() -> str:
+    try:
+        return pathlib.Path(_WS_MARKER).read_text().strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@app.post("/hydrate")
+async def hydrate(request: Request) -> dict:
+    """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
+    repo. The CLI conversation state under .harness/ is restored too, so `--resume` can continue
+    a prior turn that ran on a DIFFERENT sandbox.
+
+    The body is SPOOLED TO LOCAL DISK as it arrives (HR-INF-015): a GB checkpoint no longer
+    materializes in the sandbox's ~2 GiB RAM. sha256 folds over the incoming stream; untar reads
+    from the spooled file. CRITICALLY, the spool completes BEFORE the workspace wipe — a truncated
+    upload (client disconnect) raises during spooling and leaves the current workspace untouched."""
+    ws = WORKSPACE
+    ws_path = pathlib.Path(ws)
+    ws_path.mkdir(parents=True, exist_ok=True)
+    fd, spool_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
+    h = hashlib.sha256()
+    nbytes = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            async for chunk in request.stream():
+                if chunk:
+                    out.write(chunk)
+                    h.update(chunk)
+                    nbytes += len(chunk)
+    except Exception as e:  # truncated/aborted upload: workspace NOT touched yet — safe to 400
+        try:
+            os.unlink(spool_path)
+        except OSError:
+            pass
+        raise HTTPException(400, f"hydrate body incomplete: {str(e)[:200]}")
+    try:
+        # Probe: the gateway asks "do you already hold checkpoint <sha>?" BEFORE downloading and
+        # re-pushing a potentially huge tarball. A warm sandbox that just ran the previous turn
+        # answers yes — making follow-up turns start instantly instead of paying wipe + untar.
+        probe = request.query_params.get("probe", "")
+        if probe and nbytes == 0:
+            if _ws_marker_get() == probe:
+                collab_url = request.query_params.get("collab_url", "")
+                room = request.query_params.get("room", "")
+                if collab_url and room:
+                    _start_sidecar(collab_url, room, request.query_params.get("collab_token", ""))
+                return {"ok": True, "skipped": True, "restored": False,
+                        "sidecar": _sidecar_alive(), "room": _sidecar.get("room")}
+            return {"ok": True, "skipped": False}
+        # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
+        # files (incl. another tenant's). Wipe it before restoring so this session starts from
+        # exactly its own checkpoint (or empty) — multi-tenant isolation, not best-effort.
+        for child in ws_path.iterdir():
+            try:
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+        restored = False
+        if nbytes:
+            with open(spool_path, "rb") as tar_in:
+                proc = subprocess.run(["tar", "xzf", "-", "-C", ws], stdin=tar_in, capture_output=True)
+            if proc.returncode != 0:
+                raise HTTPException(500, f"untar failed: {proc.stderr.decode(errors='replace')[:300]}")
+            restored = True
+        _ws_marker_set(h.hexdigest() if nbytes else "")
+    finally:
+        try:
+            os.unlink(spool_path)
+        except OSError:
+            pass
+    _git_ensure(ws)
+    # (Re)start the realtime blackboard sidecar for this session if the gateway passed a room.
+    collab_url = request.query_params.get("collab_url", "")
+    room = request.query_params.get("room", "")
+    if collab_url and room:
+        _start_sidecar(collab_url, room, request.query_params.get("collab_token", ""))
+    n = sum(1 for p in pathlib.Path(ws).rglob("*") if ".git" not in p.parts)
+    return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws,
+            "sidecar": _sidecar_alive(), "room": _sidecar.get("room")}
+
+
+@app.get("/checkpoint")
+def checkpoint(background_tasks: BackgroundTasks) -> Response:
+    """Commit /workspace and return it as a gzip tarball (secrets/scratch excluded). The gateway
+    persists this to durable blob storage; the next turn's /hydrate restores it on any sandbox.
+
+    Spools the tar to LOCAL DISK instead of a RAM buffer (HR-INF-015): a big (GB) workspace no
+    longer materializes the whole tarball in the sandbox's ~2 GiB RAM alongside the CLI. tar writes
+    straight to a temp file; sha256 is folded over a chunked read of that file; FileResponse then
+    streams it to the gateway. The temp file is removed after the response is sent."""
+    _reap_spool()   # clear any spool file leaked by a prior mid-stream disconnect
+    ws = WORKSPACE
+    _git_ensure(ws)
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-q", "-m", f"checkpoint {int(time.time())}", "--allow-empty")
+    excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
+    fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
+    try:
+        with os.fdopen(fd, "wb") as out:
+            proc = subprocess.run(["tar", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
+                                  stdout=out, stderr=subprocess.PIPE)
+        if proc.returncode != 0:
+            os.unlink(tar_path)
+            raise HTTPException(500, f"tar failed: {proc.stderr.decode(errors='replace')[:300]}")
+        h = hashlib.sha256()
+        nbytes = 0
+        with open(tar_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+                nbytes += len(chunk)
+        head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
+        _ws_marker_set(h.hexdigest())     # sandbox now HOLDS this checkpoint
+        background_tasks.add_task(os.unlink, tar_path)   # cleanup after the response streams out
+        return FileResponse(tar_path, media_type="application/gzip", background=background_tasks,
+                            headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head})
+    except HTTPException:
+        raise
+    except Exception:
+        try:
+            os.unlink(tar_path)
+        except OSError:
+            pass
+        raise
+
+
+@app.get("/produced")
+def produced() -> dict:
+    """Files created/modified during the current turn (uncommitted vs the hydrated checkpoint).
+    Call BEFORE /checkpoint commits them. Excludes internal state / scratch / secrets / vcs."""
+    ws = WORKSPACE
+    _git_ensure(ws)
+    p = _git(ws, "status", "--porcelain", "-uall")
+    out = []
+    for line in (p.stdout or "").splitlines():
+        if len(line) < 4:
+            continue
+        status, path = line[:2], line[3:]
+        if " -> " in path:                       # rename: take the new path
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        if not path or path.endswith("/") or status == "D ":
+            continue
+        if path in _PRODUCED_EXCLUDE_NAMES or path.startswith(_PRODUCED_EXCLUDE_PREFIX):
+            continue
+        if _is_produced_noise(path):
+            continue
+        out.append({"path": path, "status": status.strip() or "?"})
+    return {"files": out, "count": len(out)}
+
+
+@app.get("/file")
+def get_file(path: str) -> Response:
+    """Raw bytes of a workspace file (for downloading turn-produced container files)."""
+    dest = _safe_join(WORKSPACE, path)
+    if dest is None or not dest.is_file():
+        raise HTTPException(404, "file not found")
+    media = mimetypes.guess_type(str(dest))[0] or "application/octet-stream"
+    return Response(content=dest.read_bytes(), media_type=media)
+
+
+@app.get("/capabilities")
+def capabilities() -> dict:
+    return {
+        "host": socket.gethostname(),
+        "workspace": WORKSPACE,
+        "workspace_writable": os.path.isdir(WORKSPACE) and os.access(WORKSPACE, os.W_OK),
+        "user": _ver(["whoami"]),
+        "git": _ver(["git", "--version"]),
+        "node": _ver(["node", "--version"]),
+        "backends": {"claude": _ver(["claude", "--version"]), "codex": _ver(["codex", "--version"]),
+                     "hermes": _ver(["hermes", "--version"])},
+        "providers": {b: v["providers"] for b, v in BACKENDS.items()},
+    }
+
+
+class TurnReq(BaseModel):
+    backend: str = "claude"          # claude | codex | hermes  (pi future)
+    provider: str | None = None      # see BACKENDS[...].providers
+    model: str | None = None
+    prompt: str
+    max_turns: int = 400
+    timeout_seconds: int | None = None     # per-turn wall-clock cap (bounded by MAX_TURN_SECONDS)
+    cwd: str | None = None
+    auth: Auth | None = None
+    resume_session_id: str | None = None   # claude session id of a prior turn → conversational resume
+    files: list[dict] | None = None        # caller-attached input files: [{filename, content_b64}]
+    mcp_servers: list[dict] | None = None  # enabled MCP servers: [{name, url, transport?, auth?, headers?}]
+    skills: list[dict] | None = None       # enabled skills: [{name, files:[{path, content|content_b64}]}]
+    agent_doc: str | None = None           # harness instruction doc → AGENTS.md (codex) / CLAUDE.md (claude)
+    skills_suppressed: list[str] | None = None  # built-in skill names to NOT mount (harness disabled them)
+    tools_disabled: list[str] | None = None     # built-in tool names to disable (claude: --disallowedTools)
+    idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
+    partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
+    codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
+
+
+@app.post("/turn")
+def turn(req: TurnReq) -> dict:
+    """Start a turn asynchronously and return immediately. Poll GET /turn/{id} for progress —
+    a turn may run seconds to the 6h cap, far beyond a synchronous HTTP request.
+
+    Idempotent by idempotency_key: the gateway retries this call on a lost/slow reply (a turn can
+    take minutes to acknowledge), and without dedup each retry would start a SECOND CLI process in
+    this sandbox — the same request executed twice. A key seen before returns the existing turn."""
+    key = (req.idempotency_key or "").strip()
+    if key:
+        with _turns_lock:
+            prior_id = _turn_by_key.get(key)
+            if prior_id and prior_id in _turns:
+                r = _turns[prior_id]
+                return {"turn_id": prior_id, "status": r.get("status", "running"),
+                        "backend": r.get("backend", ""), "model": r.get("model", ""),
+                        "host": socket.gethostname(), "deduplicated": True,
+                        "max_seconds": MAX_TURN_SECONDS}
+    backend = (req.backend or "claude").lower()
+    spec = BACKENDS.get(backend)
+    if not spec:
+        raise HTTPException(400, f"unknown backend '{backend}' (one of {sorted(BACKENDS)})")
+    cwd = req.cwd or WORKSPACE
+    _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
+    # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
+    # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
+    # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
+    _skip = set(req.skills_suppressed or [])
+    installed_skills = _write_skills(
+        cwd, [s for s in (req.skills or []) if (s.get("name") or s.get("id")) not in _skip], backend,
+    )   # materialize enabled skills for this backend (minus suppressed built-ins)
+    # Seed the agent's instruction file (AGENTS.md/CLAUDE.md) from the harness doc + installed skills.
+    # The model's system prompt stays the CLI default; persistent instructions live in this file.
+    # Codex has no per-tool CLI flag, so disabled tools are surfaced as an instruction (claude uses the
+    # hard --disallowedTools flag below instead).
+    agent_doc = req.agent_doc or ""
+    if backend == "codex" and req.tools_disabled:
+        _off = ", ".join(t for t in req.tools_disabled if t)
+        if _off:
+            agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
+                f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
+    _write_agent_doc(cwd, backend, agent_doc, installed_skills)
+    env = os.environ.copy()
+    # CRITICAL for resume: both CLIs write their conversation transcripts under $HOME
+    # (~/.claude/projects/*.jsonl, ~/.codex/sessions/*) — NOT under CLAUDE_CONFIG_DIR. The default
+    # $HOME is outside /workspace, so transcripts were never checkpointed and `--resume` found nothing
+    # after a sandbox recycled (every follow-up on an older session failed). Redirect $HOME INTO the
+    # checkpointed workspace so the transcript travels in the tarball and resume works WITH history.
+    home = os.path.join(cwd, ".harness", "home")
+    os.makedirs(home, exist_ok=True)
+    env["HOME"] = home
+    auth = req.auth or Auth()
+    model = req.model or spec["default_model"]
+    use_appserver = backend == "codex" and bool(req.codex_appserver)
+    cmd = None
+    hermes_provider = ""
+    hermes_mcp: list[str] = []
+    if backend == "codex":
+        model = model or CODEX_DEFAULT_MODEL
+        mcp_toml = _codex_mcp_toml(req.mcp_servers)
+        if use_appserver:
+            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml)   # config.toml + CODEX_HOME + auth
+        else:
+            cmd = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
+                               mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)
+    elif backend == "hermes":
+        model = model or HERMES_DEFAULT_MODEL
+        hermes_provider = (req.provider or "bedrock").lower()
+        hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
+                                         max_turns=req.max_turns, mcp_servers=req.mcp_servers)
+    else:
+        mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
+        cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,
+                            resume_session_id=req.resume_session_id, mcp_config=mcp_config,
+                            disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages))
+    turn_id = "turn" + uuid.uuid4().hex
+    with _turns_lock:
+        # Double-check under the lock: a concurrent retry with the same key may have raced past the
+        # top-of-handler check before this one recorded the key. If so, use the winner and let this
+        # freshly-built cmd drop (no thread started for it).
+        if key and _turn_by_key.get(key) in _turns:
+            prior_id = _turn_by_key[key]; r = _turns[prior_id]
+            return {"turn_id": prior_id, "status": r.get("status", "running"),
+                    "backend": r.get("backend", ""), "model": r.get("model", ""),
+                    "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
+        _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
+                           "backend": backend, "model": model, "started": time.time()}
+        if key:
+            _turn_by_key[key] = turn_id
+    if use_appserver:
+        threading.Thread(target=_run_codex_appserver_bg,
+                         args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds),
+                         daemon=True).start()
+    elif backend == "hermes":
+        threading.Thread(target=_run_hermes_bg,
+                         args=(turn_id, cwd, env, model, hermes_provider, req.prompt,
+                               req.resume_session_id, req.timeout_seconds, hermes_mcp),
+                         daemon=True).start()
+    else:
+        threading.Thread(target=_run_turn_bg,
+                         args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
+                               bool(req.partial_messages)),   # claude: CLI flag added above
+                         daemon=True).start()
+    cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
+    return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,
+            "host": socket.gethostname(), "max_seconds": cap}
+
+
+@app.post("/turn/{turn_id}/cancel")
+def cancel_turn(turn_id: str) -> dict:
+    """Kill a running turn's CLI process on demand (user-initiated stop). The reader loop
+    in _run_turn_bg then drains and finalizes the record with status='cancelled'."""
+    rec = _turns.get(turn_id)
+    if not rec:
+        raise HTTPException(404, "turn not found")
+    if rec.get("done"):
+        return {"turn_id": turn_id, "status": rec["status"], "cancelled": False}
+    rec["cancelled"] = True
+    proc = rec.get("proc")
+    if proc is not None:
+        _kill_proc_tree(proc)
+    return {"turn_id": turn_id, "status": "cancelling", "cancelled": True}
+
+
+@app.get("/turn/{turn_id}")
+def get_turn(turn_id: str, since: int = 0) -> dict:
+    """Incremental turn status + normalized events (events[since:]). Polling also keeps the
+    Timed sandbox alive (every request resets the idle cooldown)."""
+    rec = _turns.get(turn_id)
+    if not rec:
+        raise HTTPException(404, "turn not found")
+    with _turns_lock:
+        evs = rec["events"][since:]
+        n = len(rec["events"])
+    return {"turn_id": turn_id, "status": rec["status"], "done": rec["done"],
+            "result": rec.get("result", ""), "exit_code": rec.get("exit_code"),
+            "error": rec.get("error"), "backend": rec["backend"], "model": rec["model"],
+            "session_id": rec.get("session_id"),
+            "events": evs, "n_total": n, "elapsed": round(time.time() - rec["started"], 1)}

@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+pydantic==2.10.4
+python-multipart==0.0.20
+azure-identity==1.19.0
+azure-cosmos==4.9.0
+aiohttp==3.11.11
+redis==5.2.1
+PyJWT==2.10.1

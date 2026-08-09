@@ -1,0 +1,26 @@
+# Local data — SQLite DBs, blobs, and the secret store all live here. NEVER commit.
+.hr-data/
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets / operator config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+node_modules/
+.next/
+dist/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Never bake build context extras into the image
+.git/
+docs/
+*.md
+!README.md
