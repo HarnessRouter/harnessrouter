@@ -775,6 +775,10 @@ CODEX_PROVIDERS = {
 # ("workspace mounted read-only"). We already run one Hyper-V-isolated sandbox per session, so full
 # access INSIDE it matches the exec path's behavior. The [sandbox_workspace_write] block is inert
 # under danger-full-access but kept for anyone who flips the mode down to workspace-write.
+# The provider KEY is ours to choose — it only has to match `model_provider`. It is namespaced
+# because Codex reserves its built-in ids: a [model_providers.openai] block is rejected outright
+# ("Built-in providers cannot be overridden"), which broke every bring-your-own OpenAI key. All
+# providers are namespaced rather than just that one, so a future reserved id can't break us again.
 _CODEX_CONFIG_TMPL = """model = "{model}"
 model_provider = "{provider}"
 model_reasoning_effort = "{effort}"
@@ -810,7 +814,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".codex"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     cfg = _CODEX_CONFIG_TMPL.format(
-        model=model, provider=p, effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
+        model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
     if mcp_toml:   # owner-attached MCP servers via Codex's experimental rmcp HTTP client

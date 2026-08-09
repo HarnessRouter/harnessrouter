@@ -20,6 +20,7 @@ import { CodeBlock } from 'reifyui';
 import { Composer } from 'reifyui';
 import { withText, withReasoning, withStep, withResult, asstText } from 'reifyui';
 import { createConversationStore } from 'reifyui';
+import { SELF_HOSTED } from '@/lib/edition';
 import TracesMain from '@/studio/traces/TracesMain.jsx';
 import { traceStore } from '@/studio/traces/store';
 import { FilePreview } from '@/components/FilePreview';
@@ -465,12 +466,16 @@ function ConfigChat({ oob, ch, harnessId, harnessName, harnessSelect, deepSid, o
               </div>
             </div>
           </div>
-          <div className="tabs" role="tablist" aria-label="Task detail">
-            <button className="tab" type="button" role="tab" aria-selected={detailTab === 'conversation'}
-              onClick={() => setDetailTab('conversation')}>Conversation</button>
-            <button className="tab" type="button" role="tab" aria-selected={detailTab === 'trace'}
-              disabled={!shownSid} onClick={() => shownSid && setDetailTab('trace')}>Trace</button>
-          </div>
+          {/* Trace is a diagnostics surface backed by the hosted tracing pipeline; a self-hosted
+              box has no such pipeline, so a single tab with nothing behind it is worse than none. */}
+          {SELF_HOSTED ? null : (
+            <div className="tabs" role="tablist" aria-label="Task detail">
+              <button className="tab" type="button" role="tab" aria-selected={detailTab === 'conversation'}
+                onClick={() => setDetailTab('conversation')}>Conversation</button>
+              <button className="tab" type="button" role="tab" aria-selected={detailTab === 'trace'}
+                disabled={!shownSid} onClick={() => shownSid && setDetailTab('trace')}>Trace</button>
+            </div>
+          )}
         </div>
         {/* Conversation stays MOUNTED while the Trace tab shows, its store writes + bus rendering
             must not be interrupted by a diagnostics peek. */}
@@ -483,7 +488,7 @@ function ConfigChat({ oob, ch, harnessId, harnessName, harnessSelect, deepSid, o
             onSession={(sid) => { setActiveSid(sid); setRecentsKey((k) => k + 1); }}
             onRan={() => setRecentsKey((k) => k + 1)} />
         </div>
-        {detailTab === 'trace' && <TraceView sid={shownSid} />}
+        {!SELF_HOSTED && detailTab === 'trace' && <TraceView sid={shownSid} />}
       </article>
       {shareOpen && shownSid && <ShareModal sid={shownSid} onClose={() => setShareOpen(false)} />}
     </div>

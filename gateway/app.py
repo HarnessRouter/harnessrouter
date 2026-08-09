@@ -2864,42 +2864,30 @@ _PROVIDER_CATALOG: dict[str, dict] = {
 }
 
 
+# Runner-side provider names differ from the integration console's names for the same vendor;
+# this is the ONE place that reconciles them, so every lookup below goes through one table.
+_RUNNER_VENDOR = {"azure": "azure-foundry", "openai-api": "openai"}
+
+
+def _vendor_models(provider: str) -> dict[str, str]:
+    """The {canonical: vendor id} table for a provider, by either of its names. Empty when we
+    have no table for that vendor — callers must decide explicitly what that means."""
+    p = (provider or "").lower()
+    return _VENDOR_MODELS.get(_RUNNER_VENDOR.get(p, p), {})
+
+
 def _provider_model_id(provider: str, canonical: str) -> str | None:
-    """This provider's real id for a canonical model name, or None when it can't serve it.
+    """This vendor's own id for a canonical model, or None when it does not serve it.
 
-    Deliberately reuses the SAME tables the turn loop's _map_model consults, so the catalog can
-    never advertise a model the router would then fail to address. A canonical with no entry in
-    a mapped provider's table (claude-opus-5 today) is omitted rather than guessed — emitting an
-    id the provider rejects is worse than not listing it."""
-    table = {"anthropic": _ANTHROPIC_CLAUDE, "bedrock": _BEDROCK_CLAUDE}.get(provider)
-    if table is not None:
-        key = canonical[len("claude-"):] if canonical.startswith("claude-") else canonical
-        return table.get(canonical) or table.get(key)
-    if provider in ("openrouter", "tokenrouter"):
-        # Aggregators need the vendor-qualified slug; no entry means they don't serve it.
-        return _AGGREGATOR_SLUGS.get(canonical)
-    # Everything else is OpenAI-shaped: _map_model passes the name through untouched, so the
-    # canonical name IS the provider id.
-    return canonical
+    A pure table lookup, deliberately: anything cleverer (name heuristics, family guessing) has
+    to decide what to do about a model it doesn't recognise, and every such answer is a guess.
+    Not listed means not served."""
+    return _vendor_models(provider).get(canonical)
 
 
-def _provider_models(provider: str) -> list[dict]:
-    """The models an integration with this provider serves, derived rather than configured.
-
-    Union of the catalogs of every backend this provider can carry (_INTEGRATION_WIRING), each
-    resolved to the provider's own id. Growing the model list is therefore a one-line change to
-    _MODEL_CATALOG, not a support ticket asking every user to retype their integrations."""
-    seen: dict[str, str] = {}
-    for (prov, backend), _runner in _INTEGRATION_WIRING.items():
-        if prov != provider:
-            continue
-        for canonical in _MODEL_CATALOG.get(backend, {}).get("models", []):
-            if canonical in seen:
-                continue
-            pid = _provider_model_id(provider, canonical)
-            if pid:
-                seen[canonical] = pid
-    return [{"canonical": c, "provider_id": p} for c, p in seen.items()]
+def _provider_backends(provider: str) -> list[str]:
+    """Runner backends that can carry this vendor (which agent CLI can drive it)."""
+    return sorted({b for (p, b) in _INTEGRATION_WIRING if p == provider})
 
 
 def _provider_catalog_public() -> list[dict]:
@@ -2911,8 +2899,9 @@ def _provider_catalog_public() -> list[dict]:
              "secret": meta["secret"],
              "secret_label": meta["secret_label"],
              "key_hint": meta.get("key_hint", ""),
-             "models": _provider_models(pid),
-             "backends": sorted({b for (p, b) in _INTEGRATION_WIRING if p == pid})}
+             "models": [{"canonical": c, "provider_id": v}
+                        for c, v in _VENDOR_MODELS.get(pid, {}).items()],
+             "backends": _provider_backends(pid)}
             for pid, meta in _PROVIDER_CATALOG.items()]
 
 
@@ -2985,6 +2974,10 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     # to a connection chain that doesn't exist, and the user is told there is no connection for
     # the backend — having just supplied one. First integration to claim a model wins; an
     # explicit mapping above is never overwritten.
+    servable_by = {i["name"]: {m["canonical"] for m in i["models"]} for i in out}
+    for model, iname in list(mm.items()):
+        if model not in servable_by.get(iname, set()):
+            del mm[model]          # that integration cannot serve it — a dead route, not a choice
     for integ in out:
         for m in integ["models"]:
             mm.setdefault(m["canonical"], integ["name"])
@@ -3364,50 +3357,101 @@ _ANTHROPIC_CLAUDE = {
 }
 
 
-# Aggregator model ids. OpenRouter (and TokenRouter, which mirrors its slugs) addresses models as
-# `vendor/slug`, never bare — so passing a canonical name through unchanged produces an id the
-# aggregator rejects. Verified against OpenRouter's live /v1/models catalog; an entry here means
-# the aggregator really serves it.
+# ── what each vendor actually serves ────────────────────────────────────────────────
+# EXPLICIT, per vendor: canonical name -> that vendor's own model id. Not derived, not
+# inferred from the model's name.
 #
-# This is the growing list: adding a model is a line here plus a line in _MODEL_CATALOG, and every
-# integration picks it up on the next release without anyone retyping anything.
-_AGGREGATOR_SLUGS = {
-    # OpenAI
-    "gpt-5.6-sol": "openai/gpt-5.6-sol",
-    "gpt-5.6-terra": "openai/gpt-5.6-terra",
-    "gpt-5.6-luna": "openai/gpt-5.6-luna",
-    "gpt-5.5": "openai/gpt-5.5",
-    "gpt-5.4": "openai/gpt-5.4",
-    "gpt-5.4-mini": "openai/gpt-5.4-mini",
-    "gpt-5.2": "openai/gpt-5.2",
-    "gpt-5.3-codex": "openai/gpt-5.3-codex",
-    "gpt-5.2-codex": "openai/gpt-5.2-codex",
-    # Anthropic
-    "claude-opus-5": "anthropic/claude-opus-5",
-    "claude-fable-5": "anthropic/claude-fable-5",
-    "claude-opus-4.8": "anthropic/claude-opus-4.8",
-    "claude-sonnet-5": "anthropic/claude-sonnet-5",
-    "claude-opus-4.7": "anthropic/claude-opus-4.7",
-    "claude-sonnet-4.6": "anthropic/claude-sonnet-4.6",
-    "claude-haiku-4.5": "anthropic/claude-haiku-4.5",
-    # Google
-    "gemini-3.6-flash": "google/gemini-3.6-flash",
-    # open-weight families
-    "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
-    "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
-    "kimi-k3": "moonshotai/kimi-k3",
-    "glm-5.2": "z-ai/glm-5.2",
-    "qwen3.7-max": "qwen/qwen3.7-max",
-    "qwen3.8-max": "qwen/qwen3.8-max",
-    "qwen3.7-flash": "qwen/qwen3.7-flash",
-    "kimi-k2.7-code": "moonshotai/kimi-k2.7-code",
-    "minimax-m3": "minimax/minimax-m3",
-    "nemotron-3-ultra": "nvidia/nemotron-3-ultra-550b-a55b",
-    "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
-    "hunyuan-3": "tencent/hy3",
-    "step-3.7-flash": "stepfun/step-3.7-flash",
-    "ling-3.0-flash": "inclusionai/ling-3.0-flash",
+# The previous version classified a model by substring ("qwen" -> other family) and let anything
+# it couldn't classify through. That fails OPEN, and it did: five models added without a matching
+# hint were unclassified, so an OpenAI integration happily claimed to serve Qwen, Kimi and
+# Nemotron. A vendor now serves exactly what is written here and nothing else — an unlisted model
+# is unavailable, and adding one is a deliberate line in this table.
+#
+# Sources: Anthropic's models overview and AWS's Bedrock model cards for the claude ids;
+# developers.openai.com model pages for the gpt ids; OpenRouter's live /v1/models for the
+# vendor/slug forms. TokenRouter mirrors OpenRouter's slugs.
+_VENDOR_MODELS: dict[str, dict[str, str]] = {
+    "anthropic": {
+        "claude-opus-5":     "claude-opus-5",
+        "claude-fable-5":    "claude-fable-5",
+        "claude-opus-4.8":   "claude-opus-4-8",
+        "claude-sonnet-5":   "claude-sonnet-5",
+        "claude-opus-4.7":   "claude-opus-4-7",
+        "claude-sonnet-4.6": "claude-sonnet-4-6",
+        "claude-haiku-4.5":  "claude-haiku-4-5-20251001",
+    },
+    "bedrock": {
+        "claude-opus-5":     "us.anthropic.claude-opus-5",
+        "claude-fable-5":    "us.anthropic.claude-fable-5",
+        "claude-opus-4.8":   "us.anthropic.claude-opus-4-8",
+        "claude-sonnet-5":   "us.anthropic.claude-sonnet-5",
+        "claude-opus-4.7":   "us.anthropic.claude-opus-4-7",
+        "claude-sonnet-4.6": "us.anthropic.claude-sonnet-4-6",
+        "claude-haiku-4.5":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    },
+    "openai": {
+        "gpt-5.6-sol":   "gpt-5.6-sol",
+        "gpt-5.6-terra": "gpt-5.6-terra",
+        "gpt-5.6-luna":  "gpt-5.6-luna",
+        "gpt-5.5":       "gpt-5.5",
+        "gpt-5.4":       "gpt-5.4",
+        "gpt-5.4-mini":  "gpt-5.4-mini",
+        "gpt-5.2":       "gpt-5.2",
+        "gpt-5.3-codex": "gpt-5.3-codex",
+        "gpt-5.2-codex": "gpt-5.2-codex",
+    },
+    "azure-foundry": {
+        "gpt-5.6-sol":   "gpt-5.6-sol",
+        "gpt-5.6-terra": "gpt-5.6-terra",
+        "gpt-5.6-luna":  "gpt-5.6-luna",
+        "gpt-5.5":       "gpt-5.5",
+        "gpt-5.4":       "gpt-5.4",
+        "gpt-5.4-mini":  "gpt-5.4-mini",
+        "gpt-5.2":       "gpt-5.2",
+        "gpt-5.3-codex": "gpt-5.3-codex",
+        "gpt-5.2-codex": "gpt-5.2-codex",
+    },
+    "openrouter": {
+        "gpt-5.6-sol":        "openai/gpt-5.6-sol",
+        "gpt-5.6-terra":      "openai/gpt-5.6-terra",
+        "gpt-5.6-luna":       "openai/gpt-5.6-luna",
+        "gpt-5.5":            "openai/gpt-5.5",
+        "gpt-5.4":            "openai/gpt-5.4",
+        "gpt-5.4-mini":       "openai/gpt-5.4-mini",
+        "gpt-5.2":            "openai/gpt-5.2",
+        "gpt-5.3-codex":      "openai/gpt-5.3-codex",
+        "gpt-5.2-codex":      "openai/gpt-5.2-codex",
+        "claude-opus-5":      "anthropic/claude-opus-5",
+        "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-opus-4.8":    "anthropic/claude-opus-4.8",
+        "claude-sonnet-5":    "anthropic/claude-sonnet-5",
+        "claude-opus-4.7":    "anthropic/claude-opus-4.7",
+        "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
+        "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
+        "gemini-3.6-flash":   "google/gemini-3.6-flash",
+        "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
+        "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
+        "kimi-k3":            "moonshotai/kimi-k3",
+        "glm-5.2":            "z-ai/glm-5.2",
+        "qwen3.7-max":        "qwen/qwen3.7-max",
+        "qwen3.8-max":        "qwen/qwen3.8-max",
+        "qwen3.7-flash":      "qwen/qwen3.7-flash",
+        "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
+        "minimax-m3":         "minimax/minimax-m3",
+        "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
+        "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
+        "hunyuan-3":          "tencent/hy3",
+        "step-3.7-flash":     "stepfun/step-3.7-flash",
+        "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
+    },
 }
+# TokenRouter is OpenRouter-slug compatible — one table, not a second copy to drift.
+_VENDOR_MODELS["tokenrouter"] = _VENDOR_MODELS["openrouter"]
+
+# The chain path (_map_model) maps aggregator ids from the same table.
+_AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
+
+
 
 
 def _map_model(conn: dict, friendly: str) -> str | None:
@@ -3425,14 +3469,17 @@ def _map_model(conn: dict, friendly: str) -> str | None:
         # a connection default is only useful if it's a real id, not the bare backend name
         return default if default and default.lower() not in ("claude", "anthropic", "bedrock") else None
 
+    # One lookup for every vendor we have a table for: canonical -> that vendor's own id.
+    table = _vendor_models(provider)
+    if friendly and friendly in table:
+        return table[friendly]
     if backend == "claude" or (backend == "hermes" and provider in ("anthropic", "bedrock")):
-        # hermes serves the claude family through the same anthropic/bedrock providers (shared
-        # friendly->id tables); its gpt-family connections take the codex-style pass-through below.
-        table = _BEDROCK_CLAUDE if provider == "bedrock" else _ANTHROPIC_CLAUDE if provider == "anthropic" else {}
+        # Older claude ids the catalog no longer lists still map, and a caller may pass a
+        # provider-native id directly; _LEGACY_CLAUDE_IDS carries both, keyed bare (opus-4.5).
+        legacy = _BEDROCK_CLAUDE if provider == "bedrock" else _ANTHROPIC_CLAUDE
         if friendly:
-            # UI shows industry-standard claude-<x> names; the maps are keyed bare (opus-4.8) — try both.
             key = friendly[len("claude-"):] if friendly.startswith("claude-") else friendly
-            mapped = table.get(friendly) or table.get(key)
+            mapped = legacy.get(friendly) or legacy.get(key)
             if mapped:
                 return mapped
             # already a provider-native id (bedrock inference-profile / direct claude-<x>-<date>)? keep it.
@@ -3441,12 +3488,9 @@ def _map_model(conn: dict, friendly: str) -> str | None:
             if provider == "anthropic" and friendly.startswith("claude-") and friendly != "claude":
                 return friendly
         # empty or unmappable -> a guaranteed-valid id (connection default, else provider sonnet)
-        return _valid_default() or table.get("sonnet-4.6") or (default or None)
-    if provider in ("openrouter", "tokenrouter") and friendly:
-        # Same vendor/slug requirement as the catalog. A name already in slug form isn't in the
-        # table and passes through untouched, so an existing configured connection is unaffected.
-        return _AGGREGATOR_SLUGS.get(friendly, friendly)
-    # codex/azure/openai: the deployment/model name is used as-is (else connection default)
+        return _valid_default() or legacy.get("sonnet-4.6") or (default or None)
+    # Aggregators: an id already in vendor/slug form isn't a canonical and passes through.
+    # Direct gpt vendors: the deployment/model name is used as-is.
     return friendly or (default or None)
 
 
@@ -3498,26 +3542,24 @@ _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
 
 
-# Model family <-> provider family, for multi-family backends (hermes). A chain is walked on
-# FAILURE only, so without this a claude-model request landing on a gpt connection would silently
-# run that connection's default instead. Unknown models/providers never filter (fail-open).
-_MODEL_FAMILY_HINTS = {"claude": ("claude", "opus", "sonnet", "haiku", "fable", "anthropic"),
-                       "gpt": ("gpt", "codex", "o3", "o4"),
-                       # aggregator-only families: no direct-provider connection serves these, so
-                       # azure/bedrock get filtered and only tokenrouter/openrouter (no provider
-                       # family -> fail-open) remain eligible.
-                       "other": ("gemini", "deepseek", "kimi", "glm", "qwen", "grok",
-                                 "llama", "minimax", "hermes-4")}
-_PROVIDER_FAMILY = {"anthropic": "claude", "bedrock": "claude", "vertex": "claude",
-                    "azure": "gpt", "azure-foundry": "gpt", "openai": "gpt", "openai-api": "gpt"}
-
-
 def _conn_serves(conn: dict, friendly: str) -> bool:
-    """Whether this connection's provider can serve the requested model's family."""
-    m = (friendly or "").lower()
-    fam = next((f for f, hints in _MODEL_FAMILY_HINTS.items() if any(h in m for h in hints)), "")
-    pfam = _PROVIDER_FAMILY.get((conn.get("provider") or "").lower(), "")
-    return not fam or not pfam or fam == pfam
+    """Whether this connection's vendor actually serves the requested model.
+
+    Table membership, not a name heuristic. The heuristic this replaces classified models by
+    substring and treated "unrecognised" as "fine" — so every model whose family nobody had
+    added a hint for was served by whatever connection came first, which is how an OpenAI
+    connection ended up claiming Qwen and Nemotron.
+
+    A vendor we have no table for cannot be filtered at all; that is stated here rather than
+    happening by accident, and it is NOT the path the model catalog uses (see
+    _provider_model_id, which is a pure lookup and refuses anything unlisted)."""
+    table = _vendor_models(conn.get("provider") or "")
+    if not table:
+        return True
+    m = (friendly or "").strip()
+    if not m:
+        return True                      # no model requested: the connection default decides
+    return m in table or m in table.values()
 
 
 def _backend_of_harness(hv: dict | None) -> str:
