@@ -860,6 +860,9 @@ def _conn_public(conn: dict) -> dict:
 # platform org only; customer BYOK rides the same schema later (org-tenant copies).
 _INTEGRATIONS_KEY = "harness-integrations"
 _MODEL_MAP_KEY = "harness-model-map"
+# The document as it was before the most recent write. See admin_integrations_put.
+_INTEGRATIONS_PREV_KEY = "harness-integrations.prev"
+_MODEL_MAP_PREV_KEY = "harness-model-map.prev"
 _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token")
 # integration provider type × runner backend -> the runner-side provider that carries it.
 # Absent pair = that backend can't use the integration (mapping falls through to the chain).
@@ -3003,9 +3006,38 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     for integ in out:
         for m in integ["models"]:
             mm.setdefault(m["canonical"], integ["name"])
+    # This write REPLACES the whole document, which is what the console needs (it always sends
+    # the full list) and is exactly how a careless caller destroys every integration in one
+    # request — a mistake with no undo, because the API keys inside are never readable again.
+    # So the previous document is kept before every write. One generation is enough: it turns an
+    # "everything is gone" into a "restore the last one", which is the whole difference.
+    prior = await _vault_get(GLOBAL_TENANT, _INTEGRATIONS_KEY)
+    if prior:
+        await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, prior)
+        prior_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY)
+        await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, prior_mm or "{}")
     await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
     return {"ok": True, "integrations": [_integration_public(i) for i in out], "model_map": mm}
+
+
+@app.post("/v1/admin/integrations/restore")
+async def admin_integrations_restore(request: Request) -> dict:
+    """Put back the document as it was before the last write, and keep the current one as the
+    new previous — so an accidental restore is itself undoable."""
+    await _require_integrations_admin(request)
+    prev = await _vault_get(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY)
+    if not prev:
+        raise HTTPException(404, "no previous version to restore")
+    prev_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY) or "{}"
+    cur = await _vault_get(GLOBAL_TENANT, _INTEGRATIONS_KEY) or "[]"
+    cur_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY) or "{}"
+    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, prev)
+    await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, prev_mm)
+    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, cur)
+    await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, cur_mm)
+    return {"ok": True, "integrations": [_integration_public(i) for i in json.loads(prev)],
+            "model_map": json.loads(prev_mm)}
 
 
 @app.get("/v1/orgs/{org}/connections/{name}", dependencies=[Depends(_internal_only)])
