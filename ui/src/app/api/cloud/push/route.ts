@@ -10,20 +10,15 @@
 // is never written to disk, never logged, and never stored server-side — if you close the tab,
 // it is gone. That is why the key is a parameter here rather than instance configuration.
 import { NextRequest } from 'next/server';
+import { harnessBody, type Harness } from '@/lib/harness';
 
 const DEFAULT_CLOUD = 'https://api.harnessrouter.ai';
 
 interface PushBody {
   apiKey: string;
   cloudUrl?: string;
-  harnesses: Record<string, unknown>[];
+  harnesses: Harness[];
 }
-
-/** Fields that describe a harness's behaviour. Local-only bookkeeping (ids, timestamps,
- *  workspace, org) is intentionally dropped so the hosted side mints its own. */
-const PORTABLE = ['name', 'base', 'defaultModel', 'systemPrompt', 'tools', 'skills',
-                  'mcpServers', 'maxStep', 'timeoutSeconds', 'additionalHeaders',
-                  'baseLabel', 'instructions'];
 
 export const runtime = 'nodejs';
 
@@ -43,8 +38,10 @@ export async function POST(req: NextRequest) {
 
   const results: { name: string; ok: boolean; id?: string; error?: string }[] = [];
   for (const h of list) {
-    const payload: Record<string, unknown> = {};
-    for (const k of PORTABLE) if (h[k] !== undefined && h[k] !== null) payload[k] = h[k];
+    // The same mapping the local console writes with — the hosted API takes the same body, which
+    // is what makes promotion a copy rather than a translation. Local bookkeeping (id, timestamps,
+    // org, workspace) isn't in it, so the hosted side mints its own.
+    const payload = harnessBody(h);
     const name = String(payload.name || 'untitled');
     try {
       const r = await fetch(`${base}/v1/harnesses`, {

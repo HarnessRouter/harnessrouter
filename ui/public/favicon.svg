@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="HarnessRouter">
+  <rect width="32" height="32" rx="7" fill="#285AFF"/>
+  <!-- One input fanning out to three backends: the router, in the smallest form that reads at 16px. -->
+  <g fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round">
+    <path d="M7 16h5"/>
+    <path d="M12 16c4 0 4-7 8-7"/>
+    <path d="M12 16h8"/>
+    <path d="M12 16c4 0 4 7 8 7"/>
+  </g>
+  <g fill="#fff">
+    <circle cx="7" cy="16" r="2.6"/>
+    <circle cx="22" cy="9" r="2.3"/>
+    <circle cx="22" cy="16" r="2.3"/>
+    <circle cx="22" cy="23" r="2.3"/>
+  </g>
+</svg>

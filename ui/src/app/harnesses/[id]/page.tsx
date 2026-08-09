@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useDialog } from 'reifyui';
 import {
   deleteHarness, getHarness, listModels, updateHarness, type Harness, type ModelCatalog,
 } from '@/lib/api';
@@ -9,6 +10,7 @@ import {
 export default function HarnessDetail() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const dialog = useDialog();
   const [h, setH] = useState<Harness | null>(null);
   const [draft, setDraft] = useState<Harness | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog>({});
@@ -32,13 +34,8 @@ export default function HarnessDetail() {
   const save = async () => {
     setSaving(true); setErr(''); setMsg('');
     try {
-      const saved = await updateHarness(id, {
-        name: draft.name,
-        defaultModel: draft.defaultModel,
-        systemPrompt: draft.systemPrompt,
-        maxStep: draft.maxStep,
-        timeoutSeconds: draft.timeoutSeconds,
-      });
+      // The whole draft, not the edited subset: a write replaces the record.
+      const saved = await updateHarness(id, draft);
       setH(saved); setDraft(saved); setMsg('Saved.');
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -48,7 +45,13 @@ export default function HarnessDetail() {
   };
 
   const remove = async () => {
-    if (!window.confirm(`Delete "${draft.name}"? Its tasks are kept but it can no longer run.`)) return;
+    const ok = await dialog.confirm({
+      title: `Delete "${draft.name}"?`,
+      message: 'Its tasks are kept, but it can no longer run.',
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     try {
       await deleteHarness(id);
       router.push('/harnesses');

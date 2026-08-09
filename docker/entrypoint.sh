@@ -9,6 +9,12 @@ set -euo pipefail
 DATA_DIR="${HR_DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
 
+# Our own processes must run on the image's interpreter, never on whatever a backend puts on
+# PATH. Hermes installs into its own venv and that venv's bin joins PATH below so the runner can
+# spawn `hermes` — but that venv has none of the gateway's dependencies, so resolving `python3`
+# through PATH would start the gateway inside it and fail on the first import.
+PY=/usr/local/bin/python3
+
 # ── configuration: self-contained defaults ────────────────────────────────────
 # Local storage: SQLite + files on the mounted volume. No external services.
 export HR_BACKING="${HR_BACKING:-local}"
@@ -32,7 +38,7 @@ export HR_SANDBOX_TRUST="${HR_SANDBOX_TRUST:-owner}"
 # The gateway signs its own internal calls. Generated per container if not supplied, so a
 # default install has no shared secret and nothing to leak; it never leaves this process tree.
 if [ -z "${HARNESS_INTERNAL_KEY:-}" ]; then
-  export HARNESS_INTERNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  export HARNESS_INTERNAL_KEY="$("$PY" -c 'import secrets; print(secrets.token_hex(32))')"
 fi
 
 export GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:8080}"
@@ -51,31 +57,40 @@ export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
 export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes}"
 
+wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
+# The executable IS the definition of "installed" — an installer that exits 0 without producing
+# one is still a failed install, and reporting it as success is how a backend silently vanishes
+# from the console with no explanation.
+backend_bin() {
+  case "$1" in
+    claude) echo "$TOOLS/bin/claude" ;;
+    codex)  echo "$TOOLS/bin/codex" ;;
+    hermes) echo "$TOOLS/venv/bin/hermes" ;;
+  esac
+}
+
 install_backends() {
   mkdir -p "$TOOLS"
-  local want="$HR_BACKENDS"
 
-  if [[ ",$want," == *",claude,"* ]] && [ ! -x "$TOOLS/bin/claude" ]; then
+  # -g is what creates $TOOLS/bin/<cmd>; --prefix alone just drops a node_modules tree with no
+  # entry point, which npm reports as success.
+  if wanted claude && [ ! -x "$(backend_bin claude)" ]; then
     echo "[harnessrouter] installing Claude Code (Anthropic's terms apply)…"
-    npm install --prefix "$TOOLS" --global-style --no-audit --no-fund \
-      @anthropic-ai/claude-code >/dev/null 2>&1 \
-      || echo "[harnessrouter] WARN: Claude Code install failed — that backend is unavailable"
+    npm install -g --prefix "$TOOLS" --no-audit --no-fund @anthropic-ai/claude-code >/dev/null 2>&1 || true
   fi
 
-  if [[ ",$want," == *",codex,"* ]] && [ ! -x "$TOOLS/bin/codex" ]; then
+  if wanted codex && [ ! -x "$(backend_bin codex)" ]; then
     echo "[harnessrouter] installing Codex (Apache-2.0)…"
-    npm install --prefix "$TOOLS" --global-style --no-audit --no-fund \
-      @openai/codex >/dev/null 2>&1 \
-      || echo "[harnessrouter] WARN: Codex install failed — that backend is unavailable"
+    npm install -g --prefix "$TOOLS" --no-audit --no-fund @openai/codex >/dev/null 2>&1 || true
   fi
 
-  if [[ ",$want," == *",hermes,"* ]] && [ ! -x "$TOOLS/venv/bin/hermes" ]; then
+  if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
-    python3 -m venv "$TOOLS/venv" >/dev/null 2>&1 \
-      && "$TOOLS/venv/bin/pip" install --no-cache-dir -q \
-           "hermes-agent==0.19.0" anthropic mcp >/dev/null 2>&1 \
-      || echo "[harnessrouter] WARN: Hermes install failed — that backend is unavailable"
+    { "$PY" -m venv "$TOOLS/venv" \
+        && "$TOOLS/venv/bin/pip" install --no-cache-dir -q "hermes-agent==0.19.0" anthropic mcp; } \
+      >/dev/null 2>&1 || true
   fi
+
   [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"
   # Hermes otherwise tries to install its own dependencies mid-turn.
   export HERMES_DISABLE_LAZY_INSTALLS=1
@@ -87,22 +102,22 @@ pids=()
 cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup TERM INT EXIT
 
-avail=""
+avail=""; missing=""
 for b in claude codex hermes; do
-  case "$b" in
-    claude) [ -x "$TOOLS/bin/claude" ] && avail="$avail claude" ;;
-    codex)  [ -x "$TOOLS/bin/codex" ]  && avail="$avail codex" ;;
-    hermes) [ -x "$TOOLS/venv/bin/hermes" ] && avail="$avail hermes" ;;
-  esac
+  wanted "$b" || continue
+  if [ -x "$(backend_bin "$b")" ]; then avail="$avail $b"; else missing="$missing $b"; fi
 done
 echo "[harnessrouter] data=$DATA_DIR  backends available:${avail:- none}"
+if [ -n "$missing" ]; then
+  echo "[harnessrouter] WARN: requested but not installed:$missing — those backends cannot run"
+fi
 
 # runner (loopback only)
-( cd /app/runner && exec python3 -m uvicorn server:app --host 127.0.0.1 --port 8081 --log-level warning ) &
+( cd /app/runner && exec "$PY" -m uvicorn server:app --host 127.0.0.1 --port 8081 --log-level warning ) &
 pids+=($!)
 
 # gateway (loopback only)
-( cd /app/gateway && exec python3 -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning ) &
+( cd /app/gateway && exec "$PY" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning ) &
 pids+=($!)
 
 # Wait for the gateway before the UI starts serving, so a first page load never races a

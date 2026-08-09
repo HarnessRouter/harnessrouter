@@ -8,11 +8,10 @@
 // /v1 routes, the same workspace headers, the same Responses SSE shape. That is what makes
 // "push my harnesses to the cloud" a straight copy later rather than a translation.
 
-/** The implicit single tenant. The gateway still scopes every record by org, so keeping a real
- *  value (rather than empty) means the same storage layout works if this instance is ever
- *  pointed at a multi-tenant backing. */
-export const LOCAL_ORG = 'local';
-export const LOCAL_MEMBER = 'local@localhost';
+import { LOCAL_ORG } from './identity';
+import { harnessBody, type Harness } from './harness';
+
+export type { Harness };
 
 const BASE = '/api/gw';
 
@@ -51,13 +50,14 @@ export function setCurrentWorkspace(id: string): void {
   try { window.localStorage.setItem(WS_KEY, id); } catch { /* private mode */ }
 }
 
-/** Headers every gateway call carries: who we are, and which workspace we're scoped to. */
+/** Headers every gateway call carries: which workspace we're scoped to.
+ *
+ *  Identity is deliberately absent — the proxy pins org and member server-side, so the browser
+ *  cannot name a different one. */
 export function gwHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const ws = currentWorkspace();
   return {
     'content-type': 'application/json',
-    'x-harness-org': LOCAL_ORG,
-    'x-harness-member': LOCAL_MEMBER,
     'x-harness-workspace': ws,
     ...(ws === DEFAULT_WORKSPACE.id ? { 'x-harness-workspace-default': '1' } : {}),
     ...extra,
@@ -87,28 +87,17 @@ async function gw<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 // ── harnesses ─────────────────────────────────────────────────────────────────
-export interface Harness {
-  id: string;
-  name: string;
-  base: string;
-  defaultModel?: string;
-  systemPrompt?: string;
-  maxStep?: number | null;
-  timeoutSeconds?: number | null;
-  createdAt?: number;
-  [k: string]: unknown;
-}
-
 export const listHarnesses = () =>
   gw<{ harnesses?: Harness[] }>(`/v1/harnesses?${qs({})}`).then((d) => d.harnesses || []);
 
 export const getHarness = (id: string) => gw<Harness>(`/v1/harnesses/${encodeURIComponent(id)}`);
 
-export const createHarness = (body: Partial<Harness> & { name: string; base: string }) =>
-  gw<Harness>('/v1/harnesses', { method: 'POST', body: JSON.stringify(body) });
+export const createHarness = (h: Partial<Harness> & { name: string; base: string }) =>
+  gw<Harness>('/v1/harnesses', { method: 'POST', body: JSON.stringify(harnessBody(h)) });
 
-export const updateHarness = (id: string, body: Partial<Harness>) =>
-  gw<Harness>(`/v1/harnesses/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) });
+export const updateHarness = (id: string, h: Harness) =>
+  gw<Harness>(`/v1/harnesses/${encodeURIComponent(id)}`,
+              { method: 'PUT', body: JSON.stringify(harnessBody(h)) });
 
 export const deleteHarness = (id: string) =>
   gw<{ ok?: boolean }>(`/v1/harnesses/${encodeURIComponent(id)}`, { method: 'DELETE' });

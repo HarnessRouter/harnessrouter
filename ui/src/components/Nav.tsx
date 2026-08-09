@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { useDialog } from 'reifyui';
 import {
   DEFAULT_WORKSPACE, currentWorkspace, listWorkspaces, saveWorkspaces, setCurrentWorkspace,
   type Workspace,
@@ -15,20 +16,35 @@ import {
  *  "stale list from the previous workspace" bugs. */
 export function Nav() {
   const path = usePathname();
+  const dialog = useDialog();
   const [list, setList] = useState<Workspace[]>([DEFAULT_WORKSPACE]);
   const [ws, setWs] = useState(DEFAULT_WORKSPACE.id);
 
   useEffect(() => { setList(listWorkspaces()); setWs(currentWorkspace()); }, []);
 
-  const onSwitch = (id: string) => {
+  const onSwitch = async (id: string) => {
     if (id === '__new') {
-      const name = window.prompt('New workspace name');
+      // Keep the select showing the workspace we're actually in while the dialog is open, so a
+      // cancel doesn't leave "+ New workspace…" selected.
+      setWs(currentWorkspace());
+      const name = await dialog.prompt({
+        title: 'New workspace',
+        label: 'Name',
+        placeholder: 'Backend rewrite',
+        help: 'A workspace scopes its own harnesses and tasks.',
+        validate: (v) => {
+          const t = v.trim();
+          if (!t) return 'Give the workspace a name.';
+          const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+          if (!slug) return 'Use at least one letter or number.';
+          if (listWorkspaces().some((w) => w.id === slug)) return 'A workspace with that name already exists.';
+          return null;
+        },
+      });
       if (!name?.trim()) return;
-      const id2 = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-        || `ws-${Date.now()}`;
-      const next = [...listWorkspaces(), { id: id2, name: name.trim() }];
-      saveWorkspaces(next);
-      setCurrentWorkspace(id2);
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      saveWorkspaces([...listWorkspaces(), { id: slug, name: name.trim() }]);
+      setCurrentWorkspace(slug);
       window.location.reload();
       return;
     }

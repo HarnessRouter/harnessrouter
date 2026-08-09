@@ -5,7 +5,7 @@ Responsibilities (see docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md):
     turns into the in-sandbox runner (`{POOL}/turn?identifier=<session_id>`, Entra token
     aud `dynamicsessions.io` via the gateway's managed identity).
   - Credential BROKER over the existing Vault service: resolve a provider *connection*
-    (org-own first, Epsilla `global` pool fallback) and try an ordered fallback chain.
+    (org-own first, a shared `global` pool as fallback) and try an ordered fallback chain.
   - Concurrency gating (global + per-tenant); session state externalized to VectorGraph
     (`HarnessSession` vertex) so any replica serves any session.
 
@@ -687,7 +687,7 @@ def _vault_tenant_ok(org: str | None) -> bool:
 
 
 def _tenants_for(org: str | None) -> list[str]:
-    """Resolution order: the org's own keys first (bill to the org), then Epsilla's pool.
+    """Resolution order: the org's own keys first (bill to the org), then the shared pool.
     Skip the org tenant if it isn't a valid vault tenant (e.g. dotted ids) -> straight to global."""
     return ([org] if _vault_tenant_ok(org) else []) + [GLOBAL_TENANT]
 

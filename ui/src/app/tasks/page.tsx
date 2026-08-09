@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  ChatMessages, Composer, TaskList, createConversationStore, pumpResponsesStream,
+  ChatMessages, Composer, TaskList, createConversationStore, pumpResponsesStream, useDialog,
 } from 'reifyui';
 import {
   cancelTask, deleteTask, listHarnesses, listTasks, loadTurns, streamTurn,
@@ -12,6 +12,7 @@ import {
 
 function TasksInner() {
   const params = useSearchParams();
+  const dialog = useDialog();
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [harnessId, setHarnessId] = useState(params.get('h') || '');
   const [sid, setSid] = useState<string | null>(null);
@@ -74,7 +75,13 @@ function TasksInner() {
   };
 
   const removeTask = async (t: TaskCard) => {
-    if (!window.confirm('Delete this task?')) return;
+    const ok = await dialog.confirm({
+      title: 'Delete this task?',
+      message: `"${t.title || 'Untitled task'}" and its conversation will be removed. This cannot be undone.`,
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     try {
       await deleteTask(t.session_id);
       if (t.session_id === sid) setSid(null);
