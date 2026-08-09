@@ -9,6 +9,7 @@ import { OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, createCustom
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
 import { fetchHarnessRows, groupByHarness, timeAgo, p95Of, avgCreditsOf, type HarnessRow, type TraceCard } from '@/lib/revamp-data';
+import { SELF_HOSTED } from '@/lib/edition';
 
 export default function HarnessesPage() {
   useModelCatalog();   // model list comes from the gateway, not a local copy
@@ -94,7 +95,7 @@ export default function HarnessesPage() {
         </div>
         <div className="table-wrap">
           <table className="harness-inventory-table">
-            <thead><tr><th>Harness</th><th className="harness-desktop-col">Harness ID</th><th>Health</th><th className="harness-desktop-col">Base Harness</th><th className="harness-desktop-col">Tasks (7d)</th><th className="harness-desktop-col">Success</th><th className="harness-desktop-col">p95</th><th className="harness-desktop-col">Credits / Task</th><th className="harness-desktop-col">Last activity</th><th aria-label="Open"></th></tr></thead>
+            <thead><tr><th>Harness</th><th className="harness-desktop-col">Harness ID</th><th>Health</th><th className="harness-desktop-col">Base Harness</th><th className="harness-desktop-col">Tasks (7d)</th><th className="harness-desktop-col">Success</th><th className="harness-desktop-col">p95</th>{SELF_HOSTED ? null : <th className="harness-desktop-col">Credits / Task</th>}<th className="harness-desktop-col">Last activity</th><th aria-label="Open"></th></tr></thead>
             <tbody>
               {filtered.map((r) => {
                 const bad = isDegraded(r);
@@ -112,7 +113,7 @@ export default function HarnessesPage() {
                     <td className="number harness-desktop-col">{r.stats.tasks7d}</td>
                     <td className="number harness-desktop-col">{r.stats.success != null ? (r.stats.success * 100).toFixed(1) + '%' : '—'}</td>
                     <td className="number harness-desktop-col">{p95Of(byHarness.get(r.id)) ?? '—'}</td>
-                    <td className="number harness-desktop-col">{avgCreditsOf(byHarness.get(r.id)) ?? '—'}</td>
+                    {SELF_HOSTED ? null : <td className="number harness-desktop-col">{avgCreditsOf(byHarness.get(r.id)) ?? '—'}</td>}
                     <td className="harness-desktop-col">{timeAgo(r.stats.lastActivity)}</td>
                     <td><button className="row-action" type="button" aria-label={`Open ${r.name}`}><iconify-icon icon="tabler:chevron-right"></iconify-icon></button></td>
                   </tr>

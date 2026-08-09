@@ -2796,9 +2796,121 @@ _SECRET_SENTINEL = "__secret__"
 
 async def _require_integrations_admin(request: Request) -> dict:
     p = await _principal(request)
+    # Self-hosted (identity off) is single-tenant: the one operator IS the administrator, and
+    # bringing your own key is the whole point of running it yourself. Requiring an allow-list
+    # there would lock the owner out of their own box.
+    if HR_IDENTITY_MODE == "off":
+        return p
     if (p.get("org") or "") not in _INTEGRATIONS_ADMIN_ORGS:
         raise HTTPException(403, "not available for this organization")
     return p
+
+
+# ── provider catalog ─────────────────────────────────────────────────────────────────
+# What we already know about each vendor, so adding an integration asks for a key and nothing
+# else. A base_url we can look up ourselves is not a question worth putting to a user, and a
+# wrong answer there is a broken integration they can't debug.
+#
+# `base_url` present  -> fixed, applied automatically and never asked for.
+# `base_url` None     -> genuinely per-deployment (an Azure resource, an AWS region), so it IS
+#                        asked for, with `fields` naming exactly what to ask.
+_PROVIDER_CATALOG: dict[str, dict] = {
+    "anthropic": {
+        "label": "Anthropic",
+        "base_url": "https://api.anthropic.com",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "sk-ant-…",
+    },
+    "openai": {
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "sk-…",
+    },
+    "openrouter": {
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "sk-or-…",
+    },
+    "tokenrouter": {
+        "label": "TokenRouter",
+        "base_url": "https://api.tokenrouter.com/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+    },
+    "azure-foundry": {
+        "label": "Azure OpenAI",
+        "base_url": None,          # one resource per customer — there is no default to know
+        "fields": [{"key": "base_url", "label": "Endpoint URL",
+                    "placeholder": "https://<resource>.openai.azure.com/openai/v1"}],
+        "secret": "api_key",
+        "secret_label": "API Key",
+    },
+    "bedrock": {
+        "label": "AWS Bedrock",
+        "base_url": None,          # region-addressed, not a URL
+        "fields": [{"key": "aws_region", "label": "AWS Region", "placeholder": "us-east-1"}],
+        "secret": "aws_bearer_token",
+        "secret_label": "API Key (bearer token)",
+    },
+}
+
+
+def _provider_model_id(provider: str, canonical: str) -> str | None:
+    """This provider's real id for a canonical model name, or None when it can't serve it.
+
+    Deliberately reuses the SAME tables the turn loop's _map_model consults, so the catalog can
+    never advertise a model the router would then fail to address. A canonical with no entry in
+    a mapped provider's table (claude-opus-5 today) is omitted rather than guessed — emitting an
+    id the provider rejects is worse than not listing it."""
+    table = {"anthropic": _ANTHROPIC_CLAUDE, "bedrock": _BEDROCK_CLAUDE}.get(provider)
+    if table is not None:
+        key = canonical[len("claude-"):] if canonical.startswith("claude-") else canonical
+        return table.get(canonical) or table.get(key)
+    # Everything else is OpenAI-shaped: _map_model passes the name through untouched, so the
+    # canonical name IS the provider id.
+    return canonical
+
+
+def _provider_models(provider: str) -> list[dict]:
+    """The models an integration with this provider serves, derived rather than configured.
+
+    Union of the catalogs of every backend this provider can carry (_INTEGRATION_WIRING), each
+    resolved to the provider's own id. Growing the model list is therefore a one-line change to
+    _MODEL_CATALOG, not a support ticket asking every user to retype their integrations."""
+    seen: dict[str, str] = {}
+    for (prov, backend), _runner in _INTEGRATION_WIRING.items():
+        if prov != provider:
+            continue
+        for canonical in _MODEL_CATALOG.get(backend, {}).get("models", []):
+            if canonical in seen:
+                continue
+            pid = _provider_model_id(provider, canonical)
+            if pid:
+                seen[canonical] = pid
+    return [{"canonical": c, "provider_id": p} for c, p in seen.items()]
+
+
+def _provider_catalog_public() -> list[dict]:
+    """The catalog the console renders its Add-Integration form from."""
+    return [{"id": pid,
+             "label": meta["label"],
+             "base_url": meta["base_url"],
+             "fields": meta["fields"],
+             "secret": meta["secret"],
+             "secret_label": meta["secret_label"],
+             "key_hint": meta.get("key_hint", ""),
+             "models": _provider_models(pid),
+             "backends": sorted({b for (p, b) in _INTEGRATION_WIRING if p == pid})}
+            for pid, meta in _PROVIDER_CATALOG.items()]
 
 
 def _integration_public(integ: dict) -> dict:
@@ -2815,7 +2927,8 @@ async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
     return {"integrations": [_integration_public(i) for i in await _integrations_doc()],
             "model_map": await _model_map_doc(),
-            "providers": sorted({p for p, _ in _INTEGRATION_WIRING})}
+            "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
+            "catalog": _provider_catalog_public()}
 
 
 class IntegrationsBody(BaseModel):
@@ -2841,10 +2954,20 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
                 if not prior_cfg.get(k):
                     raise HTTPException(400, f"integration '{name}': missing {k}")
                 cfg[k] = prior_cfg[k]
+        # A provider whose endpoint we know supplies its own base_url. Asking the user for a
+        # value we can look up is a question with exactly one right answer and many wrong ones.
+        known_base = (_PROVIDER_CATALOG.get(provider) or {}).get("base_url")
+        if known_base and not cfg.get("base_url"):
+            cfg["base_url"] = known_base
         models = [{"canonical": str(m.get("canonical") or "").strip(),
                    "provider_id": str(m.get("provider_id") or "").strip()}
                   for m in (i.get("models") or [])
                   if str(m.get("canonical") or "").strip() and str(m.get("provider_id") or "").strip()]
+        # No models given: serve the provider's whole catalog. The list lives in source and grows
+        # there, so an existing integration picks up new models on the next release instead of
+        # every user editing every integration by hand.
+        if not models:
+            models = _provider_models(provider)
         out.append({"name": name, "provider": provider, "config": cfg, "models": models})
     names = {i["name"] for i in out}
     if len(names) != len(out):
@@ -2854,6 +2977,14 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     for model, iname in mm.items():
         if iname not in names:
             raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
+    # Anything an integration can serve but nothing yet routes gets pointed at it. Without this,
+    # adding a key changes nothing observable: the model stays unmapped, the turn falls through
+    # to a connection chain that doesn't exist, and the user is told there is no connection for
+    # the backend — having just supplied one. First integration to claim a model wins; an
+    # explicit mapping above is never overwritten.
+    for integ in out:
+        for m in integ["models"]:
+            mm.setdefault(m["canonical"], integ["name"])
     await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
     return {"ok": True, "integrations": [_integration_public(i) for i in out], "model_map": mm}
@@ -3219,13 +3350,13 @@ _BEDROCK_CLAUDE = {
     "opus-4.8": "us.anthropic.claude-opus-4-8", "opus-4.7": "us.anthropic.claude-opus-4-7",
     "opus-4.6": "us.anthropic.claude-opus-4-6", "opus-4.5": "us.anthropic.claude-opus-4-5",
     "sonnet-4.6": "us.anthropic.claude-sonnet-4-6", "sonnet-4.5": "us.anthropic.claude-sonnet-4-5",
-    "sonnet-5": "us.anthropic.claude-sonnet-5",
+    "opus-5": "us.anthropic.claude-opus-5", "sonnet-5": "us.anthropic.claude-sonnet-5",
     "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "fable-5": "us.anthropic.claude-fable-5",
 }
 _ANTHROPIC_CLAUDE = {
     "opus-4.8": "claude-opus-4-8", "opus-4.7": "claude-opus-4-7", "opus-4.6": "claude-opus-4-6",
     "opus-4.5": "claude-opus-4-5", "sonnet-4.6": "claude-sonnet-4-6", "sonnet-4.5": "claude-sonnet-4-5",
-    "sonnet-5": "claude-sonnet-5",
+    "opus-5": "claude-opus-5", "sonnet-5": "claude-sonnet-5",
     "haiku-4.5": "claude-haiku-4-5-20251001", "fable-5": "claude-fable-5",
 }
 
@@ -3277,10 +3408,13 @@ _MODEL_CATALOG: dict[str, dict] = {
     # claude additions probed through the Bedrock path).
     "codex":  {"default": "gpt-5.4",
                "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
-                          "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"]},
-    # claude-opus-5 (Anthropic, launched 2026-07-24): listed for selection; its friendly->provider-id
-    # mapping is intentionally LEFT EMPTY for now (not yet in _ANTHROPIC_CLAUDE/_BEDROCK_CLAUDE), so a
-    # request resolves through the existing unmapped fallback until the provider id is wired.
+                          "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
+                          # Codex-optimized line (separate from the general one; 5.3-codex is
+                          # OpenAI's most capable agentic coding model, there is no 5.6-codex).
+                          "gpt-5.3-codex", "gpt-5.2-codex"]},
+    # claude-opus-5 is now wired in both _ANTHROPIC_CLAUDE and _BEDROCK_CLAUDE (ids read off
+    # Anthropic's models overview and AWS's own model card), so it routes directly instead of
+    # falling through to the unmapped default it used at launch.
     "claude": {"default": "claude-sonnet-4.6",
                "models": ["claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"]},
@@ -3292,6 +3426,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     "hermes": {"default": "gpt-5.4",
                "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
+                          "gpt-5.3-codex", "gpt-5.2-codex",
                           "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                           # frontier US+China set, served via the TokenRouter/OpenRouter

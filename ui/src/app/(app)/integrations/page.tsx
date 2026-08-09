@@ -1,60 +1,54 @@
 'use client';
-// Integrations, token-provider routing console (platform org only for now; the config is
-// GLOBAL: it decides which provider serves each model for every harness). Two sections per
-// the 2026-07-22 wireframe: (1) named provider integrations, each with credentials and its
-// supported-model list (canonical name -> the provider's real model id); (2) the
-// Model - Integration Mapping (canonical model -> which integration serves it).
+// Integrations — bring your own provider keys.
+//
+// An integration is a provider connection plus the models it serves; the mapping below decides
+// which integration serves each model when a harness runs it.
+//
+// The form is driven by the SERVER's provider catalog, not by a copy of it here. That catalog
+// knows each vendor's endpoint and the models it can address, so adding an integration asks for
+// a key and nothing else: a base URL we can look up is not a question worth asking, and a model
+// id the user has to transcribe is a support ticket waiting to happen. Both would also rot here
+// the moment the gateway learns a new model.
+//
 // Server: GET/PUT /v1/admin/integrations (secrets sentinel'd, never round-tripped).
-// Later: customer BYOK writes the same schema to the org tenant.
 import { harnessFetch } from '@/lib/hfetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { SkelRows } from '@/components/Skel';
 import { getSession } from '@/lib/auth';
 import { authHeaders } from '@/lib/chat';
-import { PLATFORM_ADMIN_ORGS } from '@/lib/edition';
+import { PLATFORM_ADMIN_ORGS, SELF_HOSTED } from '@/lib/edition';
 
 interface ModelRow { canonical: string; provider_id: string }
 interface Integration { name: string; provider: string; config: Record<string, string>; models: ModelRow[] }
-interface Doc { integrations: Integration[]; model_map: Record<string, string>; providers: string[] }
+interface ProviderField { key: string; label: string; placeholder?: string }
+interface ProviderMeta {
+  id: string;
+  label: string;
+  /** Known endpoint, applied server-side. null means it genuinely varies, so `fields` asks. */
+  base_url: string | null;
+  fields: ProviderField[];
+  secret: string;
+  secret_label: string;
+  key_hint?: string;
+  models: ModelRow[];
+  backends: string[];
+}
+interface Doc {
+  integrations: Integration[];
+  model_map: Record<string, string>;
+  providers: string[];
+  catalog: ProviderMeta[];
+}
 
 const SECRET = '__secret__';
-// Per-provider config fields (which of them is the secret). Shown in the Add/Edit panel.
-const PROVIDER_FIELDS: Record<string, { key: string; label: string; secret?: boolean; placeholder?: string }[]> = {
-  'azure-foundry': [
-    { key: 'base_url', label: 'Endpoint URL', placeholder: 'https://<resource>.openai.azure.com/openai/v1' },
-    { key: 'api_key', label: 'API Key', secret: true },
-  ],
-  bedrock: [
-    { key: 'aws_region', label: 'AWS Region', placeholder: 'us-east-1' },
-    { key: 'aws_bearer_token', label: 'API Key (bearer token)', secret: true },
-  ],
-  openrouter: [
-    { key: 'base_url', label: 'Base URL', placeholder: 'https://openrouter.ai/api/v1' },
-    { key: 'api_key', label: 'API Key', secret: true },
-  ],
-  tokenrouter: [
-    { key: 'base_url', label: 'Base URL', placeholder: 'https://api.tokenrouter.com/v1' },
-    { key: 'api_key', label: 'API Key', secret: true },
-  ],
-  openai: [
-    { key: 'base_url', label: 'Base URL', placeholder: 'https://api.openai.com/v1' },
-    { key: 'api_key', label: 'API Key', secret: true },
-  ],
-  anthropic: [
-    { key: 'base_url', label: 'Base URL (optional)', placeholder: 'https://api.anthropic.com' },
-    { key: 'api_key', label: 'API Key', secret: true },
-  ],
-};
-const PROVIDER_LABEL: Record<string, string> = {
-  'azure-foundry': 'Azure OpenAI', bedrock: 'AWS Bedrock', openrouter: 'OpenRouter',
-  tokenrouter: 'TokenRouter', openai: 'OpenAI', anthropic: 'Anthropic',
-};
 
 export default function IntegrationsPage() {
   const router = useRouter();
   const org = getSession()?.orgId || '';
-  const allowed = PLATFORM_ADMIN_ORGS.includes(org);
+  // Self-hosted is single-tenant: the operator owns the box and the keys, so there is nobody
+  // to withhold this from. The gateway makes the same call server-side.
+  const allowed = SELF_HOSTED || PLATFORM_ADMIN_ORGS.includes(org);
   const [doc, setDoc] = useState<Doc | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -89,6 +83,12 @@ export default function IntegrationsPage() {
       return false;
     } finally { setBusy(false); }
   }
+
+  const catalog = useMemo(() => doc?.catalog || [], [doc]);
+  const metaFor = useCallback(
+    (id: string) => catalog.find((c) => c.id === id), [catalog]);
+  const labelFor = useCallback(
+    (id: string) => metaFor(id)?.label || id, [metaFor]);
 
   // All canonical model names across integrations, the option set for the mapping rows.
   const allCanonicals = useMemo(() => {
@@ -136,7 +136,7 @@ export default function IntegrationsPage() {
                     <tr key={i.name} className="object-row" style={{ cursor: 'pointer' }}
                       onClick={() => { setEditing(JSON.parse(JSON.stringify(i))); setEditingOriginal(i.name); }}>
                       <td><strong>{i.name}</strong></td>
-                      <td>{PROVIDER_LABEL[i.provider] || i.provider}</td>
+                      <td>{labelFor(i.provider)}</td>
                       <td className="itg-desktop-col"><span className="itg-models">{i.models.map((m) => m.canonical).join(', ') || '—'}</span></td>
                       <td className="itg-row-actions">
                         <button className="button danger-ghost" type="button" disabled={busy}
@@ -222,48 +222,76 @@ export default function IntegrationsPage() {
                     onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></div>
                 <div className="field"><label>Provider</label>
                   <div className="itg-provider-list">
-                    {(doc.providers.length ? doc.providers : Object.keys(PROVIDER_FIELDS)).map((p) => (
-                      <button key={p} type="button"
-                        className={'itg-provider' + (editing.provider === p ? ' on' : '')}
+                    {catalog.map((c) => (
+                      <button key={c.id} type="button"
+                        className={'itg-provider' + (editing.provider === c.id ? ' on' : '')}
                         disabled={Boolean(editingOriginal)}
-                        onClick={() => setEditing({ ...editing, provider: p, config: {} })}>
-                        {PROVIDER_LABEL[p] || p}
+                        onClick={() => setEditing({ ...editing, provider: c.id, config: {} })}>
+                        {c.label}
                       </button>
                     ))}
                   </div>
                 </div>
-                <div className="field"><label>Configs</label>
-                  <div className="field-stack">
-                    {(PROVIDER_FIELDS[editing.provider] || []).map((f) => (
-                      <div className="field" key={f.key}>
-                        <label htmlFor={`itg-${f.key}`} className="itg-sublabel">{f.label}</label>
-                        <input id={`itg-${f.key}`} type={f.secret ? 'password' : 'text'}
-                          value={editing.config[f.key] || ''} placeholder={f.secret && editing.config[f.key] === SECRET ? '•••••••• (saved)' : f.placeholder || ''}
-                          onChange={(e) => setEditing({ ...editing, config: { ...editing.config, [f.key]: e.target.value } })} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="field"><label>Supported models</label>
-                  <p className="field-help">Canonical name (what users pick) → this provider&rsquo;s model id (what the API call uses).</p>
-                  <div className="itg-modelgrid">
-                    {editing.models.map((m, idx) => (
-                      <div className="itg-modelrow" key={idx}>
-                        <input value={m.canonical} placeholder="claude-opus-4.8" aria-label="Canonical model name"
-                          onChange={(e) => setEditing({ ...editing, models: editing.models.map((x, k) => k === idx ? { ...x, canonical: e.target.value } : x) })} />
-                        <span className="itg-arrow">→</span>
-                        <input value={m.provider_id} placeholder="anthropic/claude-opus-4.8" aria-label="Provider model id"
-                          onChange={(e) => setEditing({ ...editing, models: editing.models.map((x, k) => k === idx ? { ...x, provider_id: e.target.value } : x) })} />
-                        <button className="icon-button" type="button" aria-label="Remove model"
-                          onClick={() => setEditing({ ...editing, models: editing.models.filter((_, k) => k !== idx) })}>
-                          <iconify-icon icon="tabler:x"></iconify-icon></button>
-                      </div>
-                    ))}
-                    <button className="button" type="button"
-                      onClick={() => setEditing({ ...editing, models: [...editing.models, { canonical: '', provider_id: '' }] })}>
-                      <iconify-icon icon="tabler:plus"></iconify-icon>Add model</button>
-                  </div>
-                </div>
+                {(() => {
+                  const meta = metaFor(editing.provider);
+                  if (!meta) return null;
+                  // Only what varies by deployment. A provider with a known endpoint never
+                  // shows a Base URL field — the server fills it in.
+                  const fields = [...meta.fields,
+                                  { key: meta.secret, label: meta.secret_label,
+                                    placeholder: meta.key_hint }];
+                  return (
+                    <div className="field-stack">
+                      {fields.map((f) => {
+                        const secret = f.key === meta.secret;
+                        const saved = secret && editing.config[f.key] === SECRET;
+                        return (
+                          <div className="field" key={f.key}>
+                            <label htmlFor={`itg-${f.key}`}>{f.label}</label>
+                            <input id={`itg-${f.key}`} type={secret ? 'password' : 'text'}
+                              value={saved ? '' : (editing.config[f.key] || '')}
+                              placeholder={saved ? '•••••••• (saved, leave blank to keep)' : f.placeholder || ''}
+                              autoComplete="off"
+                              onChange={(e) => setEditing({
+                                ...editing,
+                                config: { ...editing.config, [f.key]: e.target.value },
+                              })} />
+                          </div>
+                        );
+                      })}
+                      {meta.base_url ? (
+                        <p className="field-help">Endpoint: <code>{meta.base_url}</code></p>
+                      ) : null}
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const models = metaFor(editing.provider)?.models || [];
+                  return (
+                    <div className="field">
+                      <label>Supported models</label>
+                      <p className="field-help">
+                        Maintained here, not by you: this integration serves the{' '}
+                        <strong>{models.length}</strong> model{models.length === 1 ? '' : 's'} below, and
+                        picks up new ones as they are added.
+                      </p>
+                      <details className="itg-modellist">
+                        <summary>{models.map((m) => m.canonical).slice(0, 4).join(', ')}
+                          {models.length > 4 ? ` and ${models.length - 4} more` : ''}</summary>
+                        <ul>
+                          {models.map((m) => (
+                            <li key={m.canonical}>
+                              <span>{m.canonical}</span>
+                              {m.provider_id !== m.canonical
+                                ? <code>{m.provider_id}</code>
+                                : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="modal-actions">
                 <button className="button" type="button" onClick={() => setEditing(null)} disabled={busy}>Cancel</button>
@@ -273,7 +301,10 @@ export default function IntegrationsPage() {
                     // renames retarget the mapping rows that pointed at the old name
                     const mm = Object.fromEntries(Object.entries(doc.model_map).map(([k, v]) =>
                       [k, v === editingOriginal ? editing.name.trim() : v]));
-                    if (await persist({ integrations: [...rest, { ...editing, name: editing.name.trim() }], model_map: mm })) setEditing(null);
+                    if (await persist({
+                      integrations: [...rest, { ...editing, name: editing.name.trim(), models: [] }],
+                      model_map: mm,
+                    })) setEditing(null);
                   }}>{busy ? 'Saving…' : editingOriginal ? 'Save' : 'Create'}</button>
               </div>
             </div>

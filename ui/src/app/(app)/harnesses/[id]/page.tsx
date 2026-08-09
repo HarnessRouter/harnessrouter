@@ -14,6 +14,7 @@ import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
 import { SkillEditor, McpModal, type McpServer } from '@/components/HarnessEditors';
 import { fetchTraceWindow, statsFor, p95Of, avgCreditsOf, type TraceCard } from '@/lib/revamp-data';
+import { SELF_HOSTED } from '@/lib/edition';
 
 type Skill = CustomHarness['skills'][number];
 const isOwnSkill = (s: Skill) => Boolean((s.files && s.files.length) || (s as { content?: string }).content || s.blob);
@@ -127,7 +128,9 @@ export default function HarnessSettingsPage() {
           <button className="detail-metric" type="button" onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
             <span>Tasks</span><strong>{stats.tasks7d.toLocaleString()}</strong><small>Last 7 days</small></button>
           <div className="detail-metric"><span>p95 duration</span><strong>{p95 ?? '—'}</strong><small>Recent tasks</small></div>
-          <div className="detail-metric"><span>Credits / Task</span><strong>{creditsPerTask ?? '—'}</strong><small>Avg over priced runs</small></div>
+          {SELF_HOSTED ? null : (
+            <div className="detail-metric"><span>Credits / Task</span><strong>{creditsPerTask ?? '—'}</strong><small>Avg over priced runs</small></div>
+          )}
         </div>
 
         <form className="settings-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>

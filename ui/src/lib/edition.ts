@@ -23,8 +23,12 @@ export const LOCAL_ORG = 'local';
 export const LOCAL_MEMBER = 'local@localhost';
 
 /** Sidebar entries a self-hosted box can actually serve. Everything else in the nav needs a
- *  service that isn't in the container. */
-export const SELF_HOSTED_NAV = ['/harnesses', '/tasks'];
+ *  service that isn't in the container.
+ *
+ *  Integrations is here because bring-your-own-key IS the self-hosted product: without it the
+ *  box has no credentials and every turn fails. Hosted it stays a platform-admin surface, since
+ *  there the routing config is global. */
+export const SELF_HOSTED_NAV = ['/harnesses', '/tasks', '/integrations'];
 
 /** Orgs allowed to see platform-admin surfaces (global model routing).
  *

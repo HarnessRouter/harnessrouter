@@ -341,7 +341,9 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
               <iconify-icon icon={n.icon}></iconify-icon>{n.label}
             </Link>
           ))}
-          {PLATFORM_NAV.filter((n) => n.orgs.includes(s?.orgId || '')).map((n) => (
+          {PLATFORM_NAV.filter((n) => (SELF_HOSTED
+            ? SELF_HOSTED_NAV.includes(n.href)     // your own keys, on your own box
+            : n.orgs.includes(s?.orgId || ''))).map((n) => (
             <Link key={n.href} className="side-nav" href={n.href} aria-current={isActive(n.href) ? 'page' : undefined}>
               <iconify-icon icon={n.icon}></iconify-icon>{n.label}
             </Link>
