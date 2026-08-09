@@ -12,7 +12,7 @@ import { getSession, logout } from '@/lib/auth';
 import { useWorkspace } from '@/lib/workspace';
 import { listCustom, OOB } from '@/lib/harness';
 import { fetchTraceWindow, type TraceCard } from '@/lib/revamp-data';
-import { SELF_HOSTED, SELF_HOSTED_NAV } from '@/lib/edition';
+import { PLATFORM_ADMIN_ORGS, SELF_HOSTED, SELF_HOSTED_NAV } from '@/lib/edition';
 
 // Global search result, a workspace to switch to, a harness to open, or a task to jump into.
 type SearchItem =
@@ -49,7 +49,7 @@ const WORKSPACE_NAV = [
 // Platform-org-only surfaces (the Integrations console configures GLOBAL model routing).
 // Customer BYOK later widens this to every org.
 const PLATFORM_NAV = [
-  { href: '/integrations', icon: 'tabler:plug-connected', label: 'Integrations', orgs: ['org.founderepsilla'] },
+  { href: '/integrations', icon: 'tabler:plug-connected', label: 'Integrations', orgs: PLATFORM_ADMIN_ORGS },
 ];
 
 export function Shell({ children, credits }: { children: React.ReactNode; credits?: number | null }) {

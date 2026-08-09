@@ -5,8 +5,11 @@
 // flow (/v1/auth/login, /switch-org, /me) and any other engine call from the UI.
 // Authorization: Bearer is forwarded verbatim so the engine verifies the JWT.
 //
-//   WORKFLOW_ENGINE_URL  e.g. https://workflow-engine.<env>.eastus2.azurecontainerapps.io
+//   WORKFLOW_ENGINE_URL  the engine to proxy to. There is deliberately NO default: an
+//   unconfigured deployment must fail closed rather than silently reach someone else's engine.
+//   Self-hosted there is no engine at all, and this route refuses outright.
 import type { NextRequest } from 'next/server';
+import { SELF_HOSTED } from '@/lib/edition';
 
 export const dynamic = 'force-dynamic';
 // Allow long-lived SSE run-progress streams + slow engine calls. On Vercel Hobby
@@ -14,11 +17,19 @@ export const dynamic = 'force-dynamic';
 // the getRun poll fills any gap); raise on Pro if you want longer single streams.
 export const maxDuration = 60;
 
-const ENGINE =
-  process.env.WORKFLOW_ENGINE_URL ||
-  'https://workflow-engine.calmrock-23b12d3f.eastus2.azurecontainerapps.io';
+const ENGINE = process.env.WORKFLOW_ENGINE_URL || '';
+
+const unavailable = (detail: string) =>
+  new Response(JSON.stringify({ detail }), {
+    status: 501, headers: { 'content-type': 'application/json' },
+  });
 
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  // A self-hosted box has no accounts service. Refusing here is the point: the alternative is
+  // reaching out to whatever host happened to be compiled in, which would make "nothing leaves
+  // the box" false.
+  if (SELF_HOSTED) return unavailable('this instance has no accounts service');
+  if (!ENGINE) return unavailable('WORKFLOW_ENGINE_URL is not configured');
   const { path } = await ctx.params;
   const target = `${ENGINE.replace(/\/$/, '')}/${(path || []).join('/')}${req.nextUrl.search}`;
 

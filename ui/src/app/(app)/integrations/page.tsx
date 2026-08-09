@@ -12,8 +12,7 @@ import { useRouter } from 'next/navigation';
 import { SkelRows } from '@/components/Skel';
 import { getSession } from '@/lib/auth';
 import { authHeaders } from '@/lib/chat';
-
-const INTEGRATIONS_ORGS = ['org.founderepsilla'];
+import { PLATFORM_ADMIN_ORGS } from '@/lib/edition';
 
 interface ModelRow { canonical: string; provider_id: string }
 interface Integration { name: string; provider: string; config: Record<string, string>; models: ModelRow[] }
@@ -55,7 +54,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 export default function IntegrationsPage() {
   const router = useRouter();
   const org = getSession()?.orgId || '';
-  const allowed = INTEGRATIONS_ORGS.includes(org);
+  const allowed = PLATFORM_ADMIN_ORGS.includes(org);
   const [doc, setDoc] = useState<Doc | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);

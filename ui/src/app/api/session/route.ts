@@ -7,13 +7,13 @@
 // it server-side via the engine's /v1/auth/me and return ONLY {authed, name, dashboardUrl} — never
 // the token. GET + no side effects, so no CSRF surface. CORS is restricted to the apex origins.
 import type { NextRequest } from 'next/server';
+import { SELF_HOSTED } from '@/lib/edition';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 15;
 
-const ENGINE =
-  process.env.WORKFLOW_ENGINE_URL ||
-  'https://workflow-engine.calmrock-23b12d3f.eastus2.azurecontainerapps.io';
+// No default: see the engine BFF. Unconfigured means unavailable, not "use someone else's".
+const ENGINE = process.env.WORKFLOW_ENGINE_URL || '';
 
 // Only the marketing site (apex + www) may read cross-origin login state.
 const ALLOWED_ORIGINS = new Set([
@@ -45,7 +45,9 @@ export async function OPTIONS(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const origin = req.headers.get('origin');
   const headers = { ...corsHeaders(origin), 'content-type': 'application/json' };
-  const token = req.cookies.get('hr_auth')?.value || '';
+  // Self-hosted has no sign-in and no engine to ask, so the answer is always "not signed in" —
+  // the same fail-closed answer this route already gives when the engine can't be reached.
+  const token = SELF_HOSTED || !ENGINE ? '' : (req.cookies.get('hr_auth')?.value || '');
   if (!token) {
     return new Response(JSON.stringify({ authed: false }), { status: 200, headers });
   }

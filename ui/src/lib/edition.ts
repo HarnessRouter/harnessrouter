@@ -25,3 +25,14 @@ export const LOCAL_MEMBER = 'local@localhost';
 /** Sidebar entries a self-hosted box can actually serve. Everything else in the nav needs a
  *  service that isn't in the container. */
 export const SELF_HOSTED_NAV = ['/harnesses', '/tasks'];
+
+/** Orgs allowed to see platform-admin surfaces (global model routing).
+ *
+ *  Read from the environment, never hardcoded: an org id is an internal identifier, and a
+ *  deployment that doesn't set this simply has no platform admins. The gateway enforces the
+ *  same list server-side (HR_INTEGRATIONS_ADMIN_ORGS) — this only decides what is shown. */
+export const PLATFORM_ADMIN_ORGS: string[] =
+  (process.env.NEXT_PUBLIC_HR_PLATFORM_ADMIN_ORGS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
