@@ -4,10 +4,14 @@
 own data. Configure a harness, give it work, watch it run — no account, no cloud, no telemetry.
 
 ```bash
-cp .env.example .env      # add your provider key
-docker compose up -d
+docker run -d -p 3000:3000 -v harnessrouter:/data \
+  -e HR_SECRET_GLOBAL_HARNESS_CONN_ANTHROPIC='{"name":"anthropic","provider":"anthropic","api_key":"sk-ant-…"}' \
+  -e HR_SECRET_GLOBAL_HARNESS_POLICY_CLAUDE='{"chain":["anthropic"]}' \
+  harnessrouter/harnessrouter
 open http://localhost:3000
 ```
+
+Or `cp .env.example .env`, put your key in it, and `docker compose up -d`.
 
 That's the whole install. State is SQLite and files on one Docker volume.
 
@@ -22,6 +26,10 @@ bash and git, streamed back as it happens.
 HarnessRouter gives you the full protocol for both: an OpenAI **Responses-compatible** API for
 running turns, harness CRUD, sessions, streaming, cancellation, and idempotency. The console is
 a thin client over that API — anything the UI does, you can do from `curl`.
+
+**The console is the hosted product's console.** Not a cut-down rebuild: the same pages, the
+same components, the same API client. Surfaces that need a service a single box doesn't have —
+accounts, billing, marketplace — are simply not shown.
 
 **Backends:** Claude Code, OpenAI Codex, and Hermes. They are installed on first run rather than
 shipped in the image — Claude Code is distributed under Anthropic's own terms and hermes-agent
