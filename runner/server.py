@@ -55,7 +55,25 @@ from pydantic import BaseModel
 
 app = FastAPI(title="harness-runner")
 
-WORKSPACE = os.environ.get("HARNESS_WORKSPACE", "/workspace")
+WORKSPACE_ROOT = os.environ.get("HARNESS_WORKSPACE", "/workspace")
+# Session ids are opaque to us and arrive over the wire, so they are sanitized before becoming a
+# path component — a `..` would otherwise escape the root.
+_SID_SAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _ws(identifier: str = "") -> str:
+    """This session's workspace directory.
+
+    The workspace has ALWAYS been per session; the hosted deployment just satisfies that by
+    giving each session its own sandbox, so a single directory was enough there. Run several
+    sessions in ONE container — which self-hosting does — and that implicit assumption becomes
+    false: /hydrate wipes and restores, so two sessions would destroy each other's files.
+
+    The gateway already addresses every runner call as ?identifier=<session_id>, so the session
+    id IS the directory and nothing on the wire changes. Hosted keeps one session per sandbox
+    and simply lands in one subdirectory."""
+    sid = _SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default"
+    return os.path.join(WORKSPACE_ROOT, sid)
 # Where checkpoint/hydrate tarballs spool to disk (HR-INF-015 — never a RAM buffer). MUST be
 # OUTSIDE the workspace (so a leftover temp file can never be caught by a later `git add -A` or
 # re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
@@ -123,24 +141,26 @@ MAX_TURN_SECONDS = int(os.environ.get("MAX_TURN_SECONDS", "21600"))
 # session from /hydrate with the session's COLLAB_URL + room (passed as query params by the gateway).
 _SIDECAR_JS = "/app/sidecar/sidecar.mjs"
 _BLACKBOARD_REL = os.path.join(HARNESS_STATE, "BLACKBOARD.md")   # /workspace/.harness/BLACKBOARD.md
-_sidecar: dict = {"proc": None, "room": None}
+_sidecars: dict[str, dict] = {}          # session id -> {proc, room, error}
 _sidecar_lock = threading.Lock()
 
 
-def _start_sidecar(collab_url: str, room: str, token: str = "") -> None:
+def _start_sidecar(sid: str, collab_url: str, room: str, token: str = "") -> None:
     """(Re)start the blackboard sidecar for THIS session. Kill+respawn on every hydrate — a reused
     warm-pool sandbox may carry a prior tenant's sidecar (same isolation reasoning as the /workspace
     wipe). Best-effort: a sidecar failure must never affect the turn."""
-    file = os.path.join(WORKSPACE, _BLACKBOARD_REL)
+    ws = _ws(sid)
+    file = os.path.join(ws, _BLACKBOARD_REL)
     with _sidecar_lock:
-        old = _sidecar.get("proc")
+        entry = _sidecars.setdefault(sid, {"proc": None, "room": None})
+        old = entry.get("proc")
         if old is not None and old.poll() is None:
             try:
                 old.terminate()
             except Exception:  # noqa: BLE001
                 pass
         if not (collab_url and room and os.path.exists(_SIDECAR_JS)):
-            _sidecar.update(proc=None, room=None)
+            entry.update(proc=None, room=None)
             return
         try:
             pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
@@ -148,16 +168,16 @@ def _start_sidecar(collab_url: str, room: str, token: str = "") -> None:
                 pathlib.Path(file).write_text("")
             env = {**os.environ, "COLLAB_URL": collab_url, "ROOM": room,
                    "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
-            logf = open(os.path.join(WORKSPACE, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
-            _sidecar.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=WORKSPACE, env=env,
-                                                  stdout=logf, stderr=logf),
-                            room=room, error=None)
+            logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
+            entry.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=ws, env=env,
+                                               stdout=logf, stderr=logf),
+                         room=room, error=None)
         except Exception as e:  # noqa: BLE001
-            _sidecar.update(proc=None, room=None, error=str(e)[:200])
+            entry.update(proc=None, room=None, error=str(e)[:200])
 
 
-def _sidecar_alive() -> bool:
-    p = _sidecar.get("proc")
+def _sidecar_alive(sid: str = "") -> bool:
+    p = (_sidecars.get(sid) or {}).get("proc")
     return bool(p is not None and p.poll() is None)
 
 
@@ -1547,7 +1567,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "host": socket.gethostname(),
-            "sidecar": _sidecar_alive(), "room": _sidecar.get("room")}
+            "sidecars": sum(1 for s in _sidecars if _sidecar_alive(s))}
 
 
 @app.get("/backends")
@@ -1556,25 +1576,35 @@ def backends() -> dict:
             for b, v in BACKENDS.items()}
 
 
-_WS_MARKER = "/tmp/hr-ws.sha"   # per-sandbox: sha256 of the checkpoint tar /workspace holds
+# sha256 of the checkpoint each session's workspace currently holds. PER SESSION, and outside
+# the workspace so it survives the wipe: one shared marker meant a second session's hydrate
+# answered the first session's "do you already have this checkpoint?" probe.
+_WS_MARKER_DIR = "/tmp/hr-ws"
 
 
-def _ws_marker_set(sha: str) -> None:
+def _ws_marker_path(identifier: str) -> pathlib.Path:
+    sid = _SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default"
+    return pathlib.Path(_WS_MARKER_DIR) / f"{sid}.sha"
+
+
+def _ws_marker_set(identifier: str, sha: str) -> None:
     try:
-        pathlib.Path(_WS_MARKER).write_text(sha or "")
+        p = _ws_marker_path(identifier)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(sha or "")
     except Exception:  # noqa: BLE001
         pass
 
 
-def _ws_marker_get() -> str:
+def _ws_marker_get(identifier: str) -> str:
     try:
-        return pathlib.Path(_WS_MARKER).read_text().strip()
+        return _ws_marker_path(identifier).read_text().strip()
     except Exception:  # noqa: BLE001
         return ""
 
 
 @app.post("/hydrate")
-async def hydrate(request: Request) -> dict:
+async def hydrate(request: Request, identifier: str = "") -> dict:
     """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
     repo. The CLI conversation state under .harness/ is restored too, so `--resume` can continue
     a prior turn that ran on a DIFFERENT sandbox.
@@ -1583,7 +1613,7 @@ async def hydrate(request: Request) -> dict:
     materializes in the sandbox's ~2 GiB RAM. sha256 folds over the incoming stream; untar reads
     from the spooled file. CRITICALLY, the spool completes BEFORE the workspace wipe — a truncated
     upload (client disconnect) raises during spooling and leaves the current workspace untouched."""
-    ws = WORKSPACE
+    ws = _ws(identifier)
     ws_path = pathlib.Path(ws)
     ws_path.mkdir(parents=True, exist_ok=True)
     fd, spool_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
@@ -1608,13 +1638,15 @@ async def hydrate(request: Request) -> dict:
         # answers yes — making follow-up turns start instantly instead of paying wipe + untar.
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
-            if _ws_marker_get() == probe:
+            if _ws_marker_get(identifier) == probe:
                 collab_url = request.query_params.get("collab_url", "")
                 room = request.query_params.get("room", "")
                 if collab_url and room:
-                    _start_sidecar(collab_url, room, request.query_params.get("collab_token", ""))
+                    _start_sidecar(identifier, collab_url, room,
+                                   request.query_params.get("collab_token", ""))
                 return {"ok": True, "skipped": True, "restored": False,
-                        "sidecar": _sidecar_alive(), "room": _sidecar.get("room")}
+                        "sidecar": _sidecar_alive(identifier),
+                        "room": (_sidecars.get(identifier) or {}).get("room")}
             return {"ok": True, "skipped": False}
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
         # files (incl. another tenant's). Wipe it before restoring so this session starts from
@@ -1634,7 +1666,7 @@ async def hydrate(request: Request) -> dict:
             if proc.returncode != 0:
                 raise HTTPException(500, f"untar failed: {proc.stderr.decode(errors='replace')[:300]}")
             restored = True
-        _ws_marker_set(h.hexdigest() if nbytes else "")
+        _ws_marker_set(identifier, h.hexdigest() if nbytes else "")
     finally:
         try:
             os.unlink(spool_path)
@@ -1645,14 +1677,15 @@ async def hydrate(request: Request) -> dict:
     collab_url = request.query_params.get("collab_url", "")
     room = request.query_params.get("room", "")
     if collab_url and room:
-        _start_sidecar(collab_url, room, request.query_params.get("collab_token", ""))
+        _start_sidecar(identifier, collab_url, room, request.query_params.get("collab_token", ""))
     n = sum(1 for p in pathlib.Path(ws).rglob("*") if ".git" not in p.parts)
     return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws,
-            "sidecar": _sidecar_alive(), "room": _sidecar.get("room")}
+            "sidecar": _sidecar_alive(identifier),
+            "room": (_sidecars.get(identifier) or {}).get("room")}
 
 
 @app.get("/checkpoint")
-def checkpoint(background_tasks: BackgroundTasks) -> Response:
+def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Response:
     """Commit /workspace and return it as a gzip tarball (secrets/scratch excluded). The gateway
     persists this to durable blob storage; the next turn's /hydrate restores it on any sandbox.
 
@@ -1661,7 +1694,7 @@ def checkpoint(background_tasks: BackgroundTasks) -> Response:
     straight to a temp file; sha256 is folded over a chunked read of that file; FileResponse then
     streams it to the gateway. The temp file is removed after the response is sent."""
     _reap_spool()   # clear any spool file leaked by a prior mid-stream disconnect
-    ws = WORKSPACE
+    ws = _ws(identifier)
     _git_ensure(ws)
     _git(ws, "add", "-A")
     _git(ws, "commit", "-q", "-m", f"checkpoint {int(time.time())}", "--allow-empty")
@@ -1696,10 +1729,10 @@ def checkpoint(background_tasks: BackgroundTasks) -> Response:
 
 
 @app.get("/produced")
-def produced() -> dict:
+def produced(identifier: str = "") -> dict:
     """Files created/modified during the current turn (uncommitted vs the hydrated checkpoint).
     Call BEFORE /checkpoint commits them. Excludes internal state / scratch / secrets / vcs."""
-    ws = WORKSPACE
+    ws = _ws(identifier)
     _git_ensure(ws)
     p = _git(ws, "status", "--porcelain", "-uall")
     out = []
@@ -1721,9 +1754,9 @@ def produced() -> dict:
 
 
 @app.get("/file")
-def get_file(path: str) -> Response:
+def get_file(path: str, identifier: str = "") -> Response:
     """Raw bytes of a workspace file (for downloading turn-produced container files)."""
-    dest = _safe_join(WORKSPACE, path)
+    dest = _safe_join(_ws(identifier), path)
     if dest is None or not dest.is_file():
         raise HTTPException(404, "file not found")
     media = mimetypes.guess_type(str(dest))[0] or "application/octet-stream"
@@ -1731,11 +1764,12 @@ def get_file(path: str) -> Response:
 
 
 @app.get("/capabilities")
-def capabilities() -> dict:
+def capabilities(identifier: str = "") -> dict:
+    _wsdir = _ws(identifier)
     return {
         "host": socket.gethostname(),
-        "workspace": WORKSPACE,
-        "workspace_writable": os.path.isdir(WORKSPACE) and os.access(WORKSPACE, os.W_OK),
+        "workspace": _wsdir,
+        "workspace_writable": os.path.isdir(_wsdir) and os.access(_wsdir, os.W_OK),
         "user": _ver(["whoami"]),
         "git": _ver(["git", "--version"]),
         "node": _ver(["node", "--version"]),
@@ -1767,7 +1801,7 @@ class TurnReq(BaseModel):
 
 
 @app.post("/turn")
-def turn(req: TurnReq) -> dict:
+def turn(req: TurnReq, identifier: str = "") -> dict:
     """Start a turn asynchronously and return immediately. Poll GET /turn/{id} for progress —
     a turn may run seconds to the 6h cap, far beyond a synchronous HTTP request.
 
@@ -1788,7 +1822,8 @@ def turn(req: TurnReq) -> dict:
     spec = BACKENDS.get(backend)
     if not spec:
         raise HTTPException(400, f"unknown backend '{backend}' (one of {sorted(BACKENDS)})")
-    cwd = req.cwd or WORKSPACE
+    cwd = req.cwd or _ws(identifier)
+    os.makedirs(cwd, exist_ok=True)
     _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
     # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
     # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers

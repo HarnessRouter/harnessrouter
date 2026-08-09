@@ -239,8 +239,11 @@ DEFAULT_BACKEND = os.environ.get("HARNESS_DEFAULT_BACKEND", "claude")
 # Concurrency caps are a back-pressure ceiling, not the scaling limit — the Dynamic Sessions pool
 # scales sandboxes on demand (maxConcurrentSessions). Keep these high so a burst of turns runs
 # concurrently and waits for the pool to scale, rather than being queued/starved in-process.
-GLOBAL_CONC = int(os.environ.get("HARNESS_GLOBAL_CONCURRENCY", "512"))
-TENANT_CONC = int(os.environ.get("HARNESS_TENANT_CONCURRENCY", "256"))
+# Self-hosted, the ceiling is this ONE machine rather than a pool that scales on demand, so 512
+# would just be 512 agent CLIs contending for the same cores. The limit is therefore resolved at
+# first use — _pool_is_local() is defined further down, and an env var still overrides either way.
+_CONC_ENV_GLOBAL = os.environ.get("HARNESS_GLOBAL_CONCURRENCY", "").strip()
+_CONC_ENV_TENANT = os.environ.get("HARNESS_TENANT_CONCURRENCY", "").strip()
 # OpenAI Responses-compatible /v1 surface. The web app's BFF (already behind the engine JWT) calls
 # /v1/responses with X-Harness-Internal == this key + X-Harness-Org/X-Harness-Member, so it doesn't
 # need a user-minted API key. Public callers use Authorization: Bearer sk-hr-... (per-org API keys).
@@ -344,7 +347,25 @@ async def _harness_path_prefix(request: Request, call_next):
 # are kept small by the compact transcript (?compact=1), so global gzip isn't needed; if a specific
 # non-streaming endpoint ever needs compression, gzip that Response explicitly.
 _http: httpx.AsyncClient | None = None
-_global_sem = asyncio.Semaphore(GLOBAL_CONC)
+_sems: dict[str, asyncio.Semaphore] = {}
+
+
+def _conc_limit(scope: str) -> int:
+    """Turn concurrency for this deployment. Cloud pools scale sandboxes on demand, so the cap is
+    just back-pressure; one container cannot scale, so its cap is what the box can actually run."""
+    env = _CONC_ENV_GLOBAL if scope == "global" else (_CONC_ENV_TENANT or _CONC_ENV_GLOBAL)
+    if env.isdigit() and int(env) > 0:
+        return int(env)
+    if _pool_is_local():
+        return max(2, os.cpu_count() or 2)
+    return 512 if scope == "global" else 256
+
+
+def _global_sem() -> asyncio.Semaphore:
+    s = _sems.get("_global")
+    if s is None:
+        s = _sems["_global"] = asyncio.Semaphore(_conc_limit("global"))
+    return s
 _tenant_sems: dict[str, asyncio.Semaphore] = {}
 _tok: dict = {"v": None, "exp": 0.0}
 _cred = None  # lazy azure credential
@@ -620,7 +641,7 @@ def _relay_client() -> httpx.AsyncClient:
 
 
 def _tenant_sem(t: str) -> asyncio.Semaphore:
-    return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(TENANT_CONC))
+    return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
 
 def _pool_is_local() -> bool:
@@ -4652,7 +4673,7 @@ async def create_response(body: CreateResponseBody, request: Request):
 
         async def run_bg():
             try:
-                async with _global_sem, _tenant_sem(org):
+                async with _global_sem(), _tenant_sem(org):
                     for ev in tr.start():
                         await bus_emit_bg(ev)
                     status, produced, rec = await _resp_execute(
@@ -4703,7 +4724,7 @@ async def create_response(body: CreateResponseBody, request: Request):
 
             async def run():
                 try:
-                    async with _global_sem, _tenant_sem(org):
+                    async with _global_sem(), _tenant_sem(org):
                         for ev in tr.start():
                             await emit(ev)
                         status, produced, rec = await _resp_execute(
@@ -4762,7 +4783,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     async def bus_emit(ev):
         _bus_publish(org, harness_id, member, sid, resp_id, ev)
     try:
-        async with _global_sem, _tenant_sem(org):
+        async with _global_sem(), _tenant_sem(org):
             for ev in tr.start():
                 await bus_emit(ev)
             status, produced, rec = await _resp_execute(
