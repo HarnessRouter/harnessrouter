@@ -2980,7 +2980,8 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         # there, so an existing integration picks up new models on the next release instead of
         # every user editing every integration by hand.
         if not models:
-            models = _provider_models(provider)
+            models = [{"canonical": c, "provider_id": v}
+                      for c, v in _vendor_models(provider).items()]
         out.append({"name": name, "provider": provider, "config": cfg, "models": models})
     names = {i["name"] for i in out}
     if len(names) != len(out):

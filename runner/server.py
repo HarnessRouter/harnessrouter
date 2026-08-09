@@ -1714,7 +1714,7 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Respo
                 h.update(chunk)
                 nbytes += len(chunk)
         head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
-        _ws_marker_set(h.hexdigest())     # sandbox now HOLDS this checkpoint
+        _ws_marker_set(identifier, h.hexdigest())   # this session now HOLDS this checkpoint
         background_tasks.add_task(os.unlink, tar_path)   # cleanup after the response streams out
         return FileResponse(tar_path, media_type="application/gzip", background=background_tasks,
                             headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head})
