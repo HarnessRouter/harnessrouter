@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { login, register, googleSignIn, requestPasswordReset, resendVerification, switchOrg, getSession, type Org, type Session } from '@/lib/auth';
 import { GoogleButton, GOOGLE_ENABLED } from '@/components/GoogleButton';
 import { stashInvite, takePendingInvite } from '@/app/(app)/billing/lib';
+import { SELF_HOSTED } from '@/lib/edition';
+import { SelfHostLogin } from '@/components/SelfHostLogin';
 
 // HarnessRouter is a subscribable product over AgentStudio orgs. The sign-in org picker lists ONLY
 // orgs that subscribed to HR (hr_subscribed flag). The account itself is the shared AgentStudio user.
@@ -11,6 +13,18 @@ function hrSubscribed(orgs: Org[]): Org[] {
 }
 
 export default function LoginPage() {
+  // One route, two sign-ins. The hosted form registers accounts, picks an org, resets by email
+  // and offers Google — all of which need services a single box doesn't have.
+  if (SELF_HOSTED) {
+    const next = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('next') || ''
+      : '';
+    return <SelfHostLogin next={next} />;
+  }
+  return <HostedLoginPage />;
+}
+
+function HostedLoginPage() {
   const [mode, setMode] = useState<'signin' | 'register' | 'forgot'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

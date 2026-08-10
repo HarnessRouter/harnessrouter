@@ -63,6 +63,15 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
   const [wsBusy, setWsBusy] = useState(false);
   const [wsErr, setWsErr] = useState('');
   const [acctMenu, setAcctMenu] = useState(false);
+  // Not a build-time constant: the image is built once and credentials are set when it runs.
+  const [selfHostUser, setSelfHostUser] = useState('');
+  useEffect(() => {
+    if (!SELF_HOSTED) return;
+    fetch('/api/selfhost/session')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.user) setSelfHostUser(String(d.user)); })
+      .catch(() => { /* the menu just says "this instance" */ });
+  }, []);
   const [mobileNav, setMobileNav] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const wsRef = useRef<HTMLDivElement>(null);
@@ -268,7 +277,28 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
         </div>
         <div className="header-utils">
           <a className="utility-link" href="https://harnessrouter.ai/docs" target="_blank" rel="noreferrer"><iconify-icon icon="tabler:book-2"></iconify-icon>Docs</a>
-          {SELF_HOSTED ? null : (
+          {SELF_HOSTED ? (
+            <div className="account-wrap" ref={acctRef}>
+              <button className="account-button" type="button" aria-expanded={acctMenu}
+                      aria-label="Account" onClick={() => setAcctMenu((v) => !v)}>
+                <iconify-icon icon="tabler:user"></iconify-icon>
+              </button>
+              {acctMenu && (
+                <div className="account-menu">
+                  <div className="account-meta">
+                    <strong>Signed in</strong>
+                    <span>{selfHostUser || 'this instance'}</span>
+                  </div>
+                  <button className="menu-item" type="button" onClick={async () => {
+                    setAcctMenu(false);
+                    await fetch('/api/selfhost/logout', { method: 'POST' }).catch(() => undefined);
+                    // Full navigation: the middleware must re-evaluate without the cookie.
+                    window.location.assign('/login');
+                  }}><iconify-icon icon="tabler:logout"></iconify-icon>Sign out</button>
+                </div>
+              )}
+            </div>
+          ) : (
           <div className="account-wrap" ref={acctRef}>
             <button className="account-button" type="button" aria-expanded={acctMenu} onClick={() => setAcctMenu((v) => !v)}>
               {avatarUrl

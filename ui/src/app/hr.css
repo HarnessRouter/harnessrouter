@@ -729,3 +729,56 @@ body.hr-resizing iframe { pointer-events: none; }
 .hr-consent { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0 2px; font-size: 13px; color: var(--ink-2, #4b4b55); cursor: pointer; line-height: 1.45; }
 .hr-consent input { width: 16px; height: 16px; margin-top: 1px; accent-color: var(--brand); flex: 0 0 auto; cursor: pointer; }
 .hr-consent a { color: var(--brand); text-decoration: underline; text-underline-offset: 2px; }
+
+
+/* ── self-hosted sign-in ───────────────────────────────────────────────────────
+   Self-contained on purpose: /login sits outside the (app) route group, so revamp.css — where
+   .field and .button live — is not loaded here. Depending on it produced a form with inline
+   labels and bare inputs. */
+.sh-login {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: #fbfbfc;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+.sh-login-card {
+  width: 100%; max-width: 380px; padding: 32px;
+  background: #fff; border: 1px solid #e7e7eb; border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(20, 20, 40, .08);
+}
+.sh-login-mark { display: block; height: 26px; width: auto; }
+.sh-login-sub { margin: 14px 0 24px; color: #6f6f78; font-size: 13.5px; }
+
+.sh-login .field { display: block; }
+.sh-login .field + .field { margin-top: 14px; }
+.sh-login .field label {
+  display: block; margin-bottom: 6px;
+  color: #55555f; font-size: 12px; font-weight: 650;
+}
+.sh-login .field input {
+  width: 100%; min-height: 40px; padding: 0 11px;
+  border: 1px solid #d8d8df; border-radius: 8px;
+  background: #fff; color: #17171a; font: inherit; font-size: 13px;
+}
+.sh-login .field input:focus {
+  outline: none; border-color: #285aff; box-shadow: 0 0 0 3px rgba(40, 90, 255, .14);
+}
+
+.sh-login-go {
+  width: 100%; min-height: 40px; margin-top: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid #285aff; border-radius: 8px;
+  background: #285aff; color: #fff;
+  font: inherit; font-size: 13px; font-weight: 620; cursor: pointer;
+}
+.sh-login-go:hover:not(:disabled) { background: #1641d8; }
+.sh-login-go:disabled { opacity: .45; cursor: default; }
+
+.sh-login .notice {
+  display: block; margin-bottom: 16px; padding: 10px 12px;
+  border: 1px solid #f3c9cd; border-radius: 9px;
+  background: #fff0f1; color: #8d1b24; font-size: 13px; line-height: 1.5;
+}
+
+.sh-login-hint { margin: 18px 0 0; color: #9696a0; font-size: 11.5px; line-height: 1.5; }
+.sh-login-hint code { font-size: 11px; }
+
