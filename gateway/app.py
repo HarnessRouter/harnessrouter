@@ -3488,15 +3488,6 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "kimi-k3":            "moonshotai/kimi-k3",
         "glm-5.2":            "z-ai/glm-5.2",
         "qwen3.7-max":        "qwen/qwen3.7-max",
-        "qwen3.8-max":        "qwen/qwen3.8-max",
-        "qwen3.7-flash":      "qwen/qwen3.7-flash",
-        "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
-        "minimax-m3":         "minimax/minimax-m3",
-        "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
-        "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
-        "hunyuan-3":          "tencent/hy3",
-        "step-3.7-flash":     "stepfun/step-3.7-flash",
-        "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
     },
 }
 # TokenRouter is OpenRouter-slug compatible — one table, not a second copy to drift.
@@ -3554,7 +3545,14 @@ def _map_model(conn: dict, friendly: str) -> str | None:
 # the harness's backend family is NOT run — the harness's authorized fallback (its default) runs
 # instead, and the substitution is recorded in the response's run metadata so it is auditable.
 _MODEL_CATALOG: dict[str, dict] = {
-    # Every entry is probe-verified against the live provider before listing (2026-07-19:
+    # THE BAR FOR ADDING A MODEL: a real turn on the harness that will run it, completed against
+    # the live provider. Not "the vendor lists it", not "the aggregator says it supports tools" —
+    # both are necessary and neither is sufficient. Nine models were once added on that metadata
+    # alone; every one technically completed a trivial turn, and none of them belonged in a picker
+    # for driving a coding agent. Metadata tells you a model COULD be addressed. Only a turn tells
+    # you it should be offered.
+    #
+    # Probe-verified against the live provider before listing (2026-07-19:
     # gpt-5.6 sol/terra/luna + gpt-5.2 deployed on the Azure resource and probed OK;
     # claude additions probed through the Bedrock path).
     "codex":  {"default": "gpt-5.4",
@@ -3584,11 +3582,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
                           "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                          "glm-5.2", "qwen3.7-max",
-                          # latest open-weight flagships, one per family
-                          "qwen3.8-max", "qwen3.7-flash", "kimi-k2.7-code", "minimax-m3",
-                          "nemotron-3-ultra", "mistral-medium-3.5", "hunyuan-3",
-                          "step-3.7-flash", "ling-3.0-flash"]},
+                          "glm-5.2", "qwen3.7-max"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
