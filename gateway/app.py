@@ -895,6 +895,59 @@ async def _model_map_doc() -> dict:
         return {}
 
 
+def _integration_models(integ: dict) -> dict[str, str]:
+    """Canonical → provider-native id for one integration.
+
+    The vendor table in source is the base; anything stored on the integration overlays it. Only
+    genuine overrides are stored (see admin_integrations_put), so this is "what the source says
+    today, unless this instance was told otherwise".
+
+    Derived on read, never frozen on write. A stored copy of this list is a snapshot of the
+    catalog on the day someone last pressed Save: ship a release that adds nine models and every
+    existing instance keeps serving the old set, with no signal that anything is stale. That is
+    exactly what happened — models restored to the source table stayed dark in the picker.
+
+    An override may CHANGE the id used for a model this vendor serves; it may not ADD one the
+    vendor's table doesn't list. That keeps the table the sole authority on what a vendor can
+    reach — and it makes documents written by older versions harmless, because those stored the
+    whole derived list, which would otherwise re-add exactly the models later found unreachable
+    (a stale snapshot is indistinguishable from a deliberate override, so it cannot be trusted
+    to introduce models). Nothing is lost: only canonicals in the catalog can be requested.
+    """
+    models = dict(_vendor_models(str(integ.get("provider") or "").lower()))
+    for m in (integ.get("models") or []):
+        canonical = str(m.get("canonical") or "").strip()
+        pid = str(m.get("provider_id") or "").strip()
+        if canonical in models and pid:
+            models[canonical] = pid
+    return models
+
+
+async def _effective_model_map() -> dict[str, str]:
+    """Canonical → integration name: which connection serves each model, right now.
+
+    Explicit routes win; every other model an integration can serve is claimed by the first
+    integration that can serve it. Both halves are computed here rather than baked into the
+    stored document, so adding a key or upgrading the image changes what runs without anyone
+    re-saving a form.
+
+    "Can serve" is decided by the vendor tables and nothing else. When a model went to the wrong
+    integration the fix belongs there — gpt-5.2-codex was claimed by an aggregator that answers
+    "no available channel" for it, and the answer is to stop listing it under that aggregator,
+    not to teach this function a preference order it would then apply to everything.
+
+    A stored route to a model its integration cannot serve is dropped, not honoured — that is a
+    dead route left behind by an edit, and following it would fail at the point of no return.
+    """
+    integrations = await _integrations_doc()
+    servable = {str(i.get("name") or ""): _integration_models(i) for i in integrations}
+    mm = {k: v for k, v in (await _model_map_doc()).items() if k in servable.get(v, {})}
+    for name, models in servable.items():
+        for canonical in models:
+            mm.setdefault(canonical, name)
+    return mm
+
+
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     """The synthetic connection for a model→integration mapping, or None when unmapped /
     unusable by this backend. Shaped exactly like a vault connection so the turn loop treats
@@ -902,7 +955,7 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     canon = (canonical or "").strip()
     if not canon:
         return None
-    mm = await _model_map_doc()
+    mm = await _effective_model_map()
     iname = mm.get(canon) or mm.get(canon.lower())
     if not iname:
         return None
@@ -912,8 +965,8 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     provider = _INTEGRATION_WIRING.get(((integ.get("provider") or "").lower(), backend))
     if not provider:
         return None
-    pid = next((str(m.get("provider_id") or "") for m in (integ.get("models") or [])
-                if str(m.get("canonical") or "").lower() == canon.lower()), "")
+    models = _integration_models(integ)
+    pid = models.get(canon) or models.get(canon.lower()) or ""
     conn = {"name": f"integration:{iname}", "backend": backend, "provider": provider,
             **{k: v for k, v in (integ.get("config") or {}).items() if v not in (None, "")}}
     if pid:
@@ -2930,19 +2983,24 @@ def _provider_catalog_public() -> list[dict]:
 
 
 def _integration_public(integ: dict) -> dict:
-    """Integration with secret config values replaced by a sentinel (never round-trip secrets)."""
+    """Integration as the console should see it: secrets replaced by a sentinel (never round-trip
+    a secret), and `models` resolved to everything this integration actually serves — the stored
+    field holds overrides only, which would read as "one model" for an integration serving thirty.
+    """
     cfg = dict(integ.get("config") or {})
     for k in _INTEGRATION_SECRET_FIELDS:
         if cfg.get(k):
             cfg[k] = _SECRET_SENTINEL
-    return {**integ, "config": cfg}
+    return {**integ, "config": cfg,
+            "models": [{"canonical": c, "provider_id": v}
+                       for c, v in _integration_models(integ).items()]}
 
 
 @app.get("/v1/admin/integrations")
 async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
     return {"integrations": [_integration_public(i) for i in await _integrations_doc()],
-            "model_map": await _model_map_doc(),
+            "model_map": await _effective_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
             "catalog": _provider_catalog_public()}
 
@@ -2975,16 +3033,18 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         known_base = (_PROVIDER_CATALOG.get(provider) or {}).get("base_url")
         if known_base and not cfg.get("base_url"):
             cfg["base_url"] = known_base
-        models = [{"canonical": str(m.get("canonical") or "").strip(),
-                   "provider_id": str(m.get("provider_id") or "").strip()}
-                  for m in (i.get("models") or [])
-                  if str(m.get("canonical") or "").strip() and str(m.get("provider_id") or "").strip()]
-        # No models given: serve the provider's whole catalog. The list lives in source and grows
-        # there, so an existing integration picks up new models on the next release instead of
-        # every user editing every integration by hand.
-        if not models:
-            models = [{"canonical": c, "provider_id": v}
-                      for c, v in _vendor_models(provider).items()]
+        # Store ONLY what the source table doesn't already say: an id this instance overrides
+        # (a custom deployment name, say). Everything else is derived on read by
+        # _integration_models, so the catalog in source stays the single source of truth and a
+        # release that adds models reaches existing integrations without anyone re-saving.
+        # Persisting the derived list instead is what made this list go stale — and worse, a
+        # model later retired from the table would live on forever in whatever was written here.
+        table = _vendor_models(provider)
+        models = [{"canonical": c, "provider_id": pid}
+                  for c, pid in ((str(m.get("canonical") or "").strip(),
+                                  str(m.get("provider_id") or "").strip())
+                                 for m in (i.get("models") or []))
+                  if c and pid and table.get(c) != pid]
         out.append({"name": name, "provider": provider, "config": cfg, "models": models})
     names = {i["name"] for i in out}
     if len(names) != len(out):
@@ -2994,18 +3054,11 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     for model, iname in mm.items():
         if iname not in names:
             raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
-    # Anything an integration can serve but nothing yet routes gets pointed at it. Without this,
-    # adding a key changes nothing observable: the model stays unmapped, the turn falls through
-    # to a connection chain that doesn't exist, and the user is told there is no connection for
-    # the backend — having just supplied one. First integration to claim a model wins; an
-    # explicit mapping above is never overwritten.
-    servable_by = {i["name"]: {m["canonical"] for m in i["models"]} for i in out}
-    for model, iname in list(mm.items()):
-        if model not in servable_by.get(iname, set()):
-            del mm[model]          # that integration cannot serve it — a dead route, not a choice
-    for integ in out:
-        for m in integ["models"]:
-            mm.setdefault(m["canonical"], integ["name"])
+    # Only EXPLICIT routes are stored. Claiming every servable model here is what froze the map:
+    # a model added to the source table afterwards had no entry and read as "no provider", while
+    # the console showed a full list and no way to tell anything was missing. _effective_model_map
+    # does the claiming on read instead, so a key added today serves a model shipped tomorrow.
+    #
     # This write REPLACES the whole document, which is what the console needs (it always sends
     # the full list) and is exactly how a careless caller destroys every integration in one
     # request — a mistake with no undo, because the API keys inside are never readable again.
@@ -3018,7 +3071,10 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, prior_mm or "{}")
     await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
-    return {"ok": True, "integrations": [_integration_public(i) for i in out], "model_map": mm}
+    # Answer with what will actually route, not with what was just filed away — the two differ by
+    # every model claimed on read, and the console renders this straight into the picker.
+    return {"ok": True, "integrations": [_integration_public(i) for i in out],
+            "model_map": await _effective_model_map()}
 
 
 @app.post("/v1/admin/integrations/restore")
@@ -3489,18 +3545,36 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "glm-5.2":            "z-ai/glm-5.2",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
-        "qwen3.7-flash":      "qwen/qwen3.7-flash",
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
+        "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
+        "step-3.7-flash":     "stepfun/step-3.7-flash",
         "minimax-m3":         "minimax/minimax-m3",
         "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
-        "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
         "hunyuan-3":          "tencent/hy3",
-        "step-3.7-flash":     "stepfun/step-3.7-flash",
         "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
+        "qwen3.7-flash":      "qwen/qwen3.7-flash",
     },
 }
-# TokenRouter is OpenRouter-slug compatible — one table, not a second copy to drift.
-_VENDOR_MODELS["tokenrouter"] = _VENDOR_MODELS["openrouter"]
+
+# TokenRouter speaks OpenRouter's slugs, so it starts from that table rather than a second copy
+# that would drift. It is not the same catalogue though: an aggregator only serves what it has an
+# upstream channel for, and for these it answers
+#   HTTP 503: No available channel for model <slug> under group default
+# which surfaces as a model that appears in the picker and then fails on send. Listing a model a
+# vendor cannot actually reach is the same broken promise as listing one that doesn't exist, so
+# it comes off THIS vendor's list — not out of the catalog, because OpenRouter still serves them
+# and a user who brings an OpenRouter key should get them.
+#
+# Verified by calling each one on a TokenRouter connection (2026-08-10). Re-check before adding
+# back: channels come and go on an aggregator, which is exactly why this lives next to the table
+# and not in someone's memory.
+_TOKENROUTER_NO_CHANNEL = {
+    "gpt-5.2-codex",      # OpenAI publishes it; TokenRouter has no channel. Routed here, it 503s
+                          # and reads as a fake model — it is not, it is a misrouted one.
+    "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
+}
+_VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
+                                 if c not in _TOKENROUTER_NO_CHANNEL}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
@@ -3560,11 +3634,20 @@ _MODEL_CATALOG: dict[str, dict] = {
     #      capable: picking one produces a task that dies at the first tool call. Vision input is
     #      welcome, so a VLM qualifies; a model that only EMITS pixels does not. Enforced by
     #      tests/test_model_catalog_capabilities.py against the live capability data.
-    #   2. A real turn on the harness that will run it, completed against the live provider.
-    # Neither half substitutes for the other: metadata says a model CAN be addressed, a turn says
-    # the wiring actually reaches it. Do not trim this list on taste — "too many open-weight
-    # models" is a UI problem, and removing a working chat model to solve it takes a model the
-    # user picked out of their hands.
+    #   2. A real turn on the harness that will run it, completed against the live provider,
+    #      CHECKED FOR SUBSTITUTION. An unauthorized model is silently replaced by the harness
+    #      default and the run records `requested_model` next to it — so a probe that only reads
+    #      "completed" measures the default. Nine models once "passed" a file-writing test that
+    #      was claude-sonnet-4.6 writing the file nine times, because the probe named a harness
+    #      id that did not exist and every turn fell back to the claude default.
+    # Neither half substitutes for the other, and being listed by an aggregator is not either of
+    # them: minimax-m3, nemotron-3-ultra, hunyuan-3, ling-3.0-flash and qwen3.7-flash are all real
+    # tool-using chat models, all published in OpenRouter's catalog with correct modalities, and
+    # all answered "HTTP 503: No available channel for model X under group default" when actually
+    # called. A slug in a catalog is an advertisement; a channel behind it is the product.
+    #
+    # Do not trim this list on taste either — "too many open-weight models" is a UI problem, and
+    # removing a model that runs takes it out of the user's hands for a cosmetic reason.
     #
     # Probe-verified against the live provider before listing (2026-07-19:
     # gpt-5.6 sol/terra/luna + gpt-5.2 deployed on the Azure resource and probed OK;
@@ -3596,10 +3679,10 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
                           "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                          "glm-5.2", "qwen3.7-max", "qwen3.8-max", "qwen3.7-flash",
-                          "kimi-k2.7-code", "minimax-m3", "nemotron-3-ultra",
-                          "mistral-medium-3.5", "hunyuan-3", "step-3.7-flash",
-                          "ling-3.0-flash"]},
+                          "glm-5.2", "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
+                          "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
+                          "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
+                          "qwen3.7-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
@@ -3684,7 +3767,7 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         return None
     integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
     servable: set[str] = set()
-    for canonical, iname in (await _model_map_doc()).items():
+    for canonical, iname in (await _effective_model_map()).items():
         integ = integrations.get(iname)
         if not integ:
             continue
