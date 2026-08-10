@@ -117,6 +117,41 @@ Harness CRUD (`/v1/harnesses`), the model catalog (`/v1/models`), sessions
 (`/v1/sessions/{id}/turns`, `/cancel`) and task listing (`/v1/traces`) are all available on the
 same surface.
 
+## Putting it on a public URL
+
+The console can create harnesses, read every task transcript, and run an agent with your
+provider key. So it ships with a login, on by default, covering the pages and the API alike:
+
+| | |
+|---|---|
+| `HR_AUTH_USER` | `harnessrouter` |
+| `HR_AUTH_PASSWORD` | `harnessrouter` |
+
+**Change the password before anyone else can reach the instance.** The defaults are printed
+right here, which makes them a placeholder, not a secret — the container warns on every start
+while the default is still in place. `HR_AUTH_DISABLED=1` removes the gate entirely, which is
+only reasonable on a machine nobody else can reach.
+
+For TLS, keep the console on loopback and put a terminating proxy in front. With Caddy that is
+one file and a real certificate, automatically:
+
+```caddyfile
+console.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1      # agent turns stream for minutes; never buffer them
+    }
+}
+```
+
+```bash
+docker run -d -p 127.0.0.1:3000:3000 -v harnessrouter:/data \
+  -e HR_AUTH_PASSWORD='something only you know' harnessrouter/harnessrouter
+```
+
+The `flush_interval -1` matters: without it a proxy buffers the event stream and the console
+looks frozen until the turn ends.
+
 ## Moving to the hosted service
 
 When a harness is working the way you want, **Harnesses → Push to cloud** copies it into a

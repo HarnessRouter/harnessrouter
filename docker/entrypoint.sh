@@ -51,6 +51,18 @@ fi
 # the console's port is published.
 export HARNESS_GATEWAY_URL="${HARNESS_GATEWAY_URL:-http://127.0.0.1:8080}"
 export NEXT_PUBLIC_HR_EDITION=selfhost
+
+# ── console login ─────────────────────────────────────────────────────────────
+# The console can create harnesses, read every transcript, and run an agent with your provider
+# key, so an instance anyone can reach needs a gate. Defaults exist so the first run works; they
+# are also published in the README, which makes them a placeholder rather than a secret.
+export HR_AUTH_USER="${HR_AUTH_USER:-harnessrouter}"
+export HR_AUTH_PASSWORD="${HR_AUTH_PASSWORD:-harnessrouter}"
+if [ "${HR_AUTH_DISABLED:-}" = "1" ]; then
+  echo "[harnessrouter] WARNING: login is DISABLED (HR_AUTH_DISABLED=1) — anyone who can reach this port has full control"
+elif [ "$HR_AUTH_PASSWORD" = "harnessrouter" ]; then
+  echo "[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD before exposing this instance."
+fi
 export PORT="${PORT:-3000}"
 
 # ── agent CLIs: installed here, not shipped in the image ──────────────────────
