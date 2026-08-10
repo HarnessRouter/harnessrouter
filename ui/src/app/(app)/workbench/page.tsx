@@ -817,6 +817,21 @@ function useConvState(key: string): ConvState { return convStore.use(key) as Con
 // The gateway broadcasts every event of every session of a harness. We apply each event to the
 // conv store keyed by the REAL session id, so any conversation renders live regardless of which tab
 // (or none) started the turn, fixing "open a running session and see nothing until a hard refresh".
+/** Add a produced file to a turn, at most once.
+ *
+ *  A turn is rendered by TWO paths — this tab's own POST stream and the broadcast bus that keeps
+ *  other tabs (and this one, after a transport drop) current. Suppression stops the bus while the
+ *  POST stream owns a session, but it is released when that stream ends, so a citation arriving in
+ *  the handover was applied by both and the file appeared twice until a reload.
+ *
+ *  Rather than tighten the timing, applying a citation is idempotent: a file IS its
+ *  (container_id, file_id), so the same one landing twice is the same file, not a second one.
+ *  That holds however many renderers, replays or reconnects there are. */
+function withFile(files: RespFile[], f: RespFile): RespFile[] {
+  const key = (x: RespFile) => `${x.container_id}:${x.file_id}` || x.filename;
+  return files.some((x) => key(x) === key(f)) ? files : [...files, f];
+}
+
 // `_busSuppress` holds session ids whose turn THIS tab is already rendering via its own POST stream
 // (convKey === sid), so we don't double-apply deltas for those.
 const _busSuppress = new Set<string>();
@@ -873,7 +888,7 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
       busUpdateLast(sid, (a) => { a.blocks = withText(a.blocks, ev.delta as string); }); break;
     case 'response.output_text.annotation.added': {
       const a = ev.annotation as Record<string, unknown>;
-      if (a?.type === 'container_file_citation') busUpdateLast(sid, (m) => { m.files = [...m.files, { container_id: a.container_id as string, file_id: a.file_id as string, filename: a.filename as string }]; });
+      if (a?.type === 'container_file_citation') busUpdateLast(sid, (m) => { m.files = withFile(m.files, { container_id: a.container_id as string, file_id: a.file_id as string, filename: a.filename as string }); });
       break;
     }
     case 'response.completed':
@@ -1128,7 +1143,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
           onToolCall: (name, args, callId) => updateLast((a) => { a.blocks = withStep(a.blocks, { name, args, callId }); }),
           onToolResult: (callId, output) => updateLast((a) => { a.blocks = withResult(a.blocks, callId, output); }),
           onTextDelta: (d) => updateLast((a) => { a.blocks = withText(a.blocks, d); }),
-          onFile: (f) => updateLast((a) => { a.files = [...a.files, f]; }),
+          onFile: (f) => updateLast((a) => { a.files = withFile(a.files, f); }),
           onError: (msg) => updateLast((a) => { a.blocks = withText(a.blocks, '\n\nError: ' + msg); }),
           onDone: (status) => updateLast((a) => {
             a.status = status === 'completed' ? 'done'
