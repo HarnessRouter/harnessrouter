@@ -61,6 +61,43 @@ WORKSPACE_ROOT = os.environ.get("HARNESS_WORKSPACE", "/workspace")
 _SID_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
+# How long an untouched session workspace is kept. Sessions are resumable from their checkpoint,
+# so a reaped directory costs a rehydrate, not the work — but keeping every one forever fills the
+# disk of a box nobody is watching. 0 disables.
+WS_TTL_HOURS = float(os.environ.get("HR_WORKSPACE_TTL_HOURS", "72") or 0)
+
+
+def _reap_workspaces(keep: str = "") -> int:
+    """Delete session workspaces untouched for longer than the TTL. Cheap, and only ever called
+    at hydrate — the moment we already know a session is starting fresh."""
+    if WS_TTL_HOURS <= 0:
+        return 0
+    cutoff = time.time() - WS_TTL_HOURS * 3600
+    removed = 0
+    try:
+        entries = list(os.scandir(WORKSPACE_ROOT))
+    except OSError:
+        return 0
+    for e in entries:
+        if not e.is_dir() or e.name == keep:
+            continue
+        try:
+            # mtime of the directory tracks the last write into it; a running turn keeps it fresh.
+            if e.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(e.path, ignore_errors=True)
+            try:
+                _ws_marker_path(e.name).unlink()
+            except OSError:
+                pass
+            removed += 1
+        except OSError:
+            continue
+    if removed:
+        print(f"[reap] removed {removed} workspace(s) idle > {WS_TTL_HOURS}h", flush=True)
+    return removed
+
+
 def _ws(identifier: str = "") -> str:
     """This session's workspace directory.
 
@@ -1613,6 +1650,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
     materializes in the sandbox's ~2 GiB RAM. sha256 folds over the incoming stream; untar reads
     from the spooled file. CRITICALLY, the spool completes BEFORE the workspace wipe — a truncated
     upload (client disconnect) raises during spooling and leaves the current workspace untouched."""
+    _reap_workspaces(keep=_SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default")
     ws = _ws(identifier)
     ws_path = pathlib.Path(ws)
     ws_path.mkdir(parents=True, exist_ok=True)

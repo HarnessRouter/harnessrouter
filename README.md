@@ -94,6 +94,8 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `POOL_MGMT_ENDPOINT` | `http://127.0.0.1:8081` | The runner is in this container. |
 | `HR_POOL_AUTH` | `none` | No cloud identity to present to a loopback runner. |
 | `HR_SANDBOX_TRUST` | `owner` | You own the box, the agent and the key, so the key is handed over directly rather than brokered. |
+| `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume — so a restart doesn't discard work in flight. |
+| `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HARNESS_INTERNAL_KEY` | generated | Per-container; never leaves the process tree. |
 
 </details>
@@ -127,15 +129,21 @@ each claiming to be current. Your hosted key is used for that one request and is
 ## Architecture
 
 ```
-┌─ container ────────────────────────────────────────────┐
-│  UI (Next.js)  :3000  ← the only published port        │
-│      │ same-origin proxy                               │
-│  Gateway       :8080  Responses API, harness CRUD       │
-│      │ loopback                                        │
-│  Runner        :8081  spawns the agent CLI on /workspace│
-└────────────────────────┬───────────────────────────────┘
-                    /data (volume): SQLite, blobs, secrets
+┌─ container ─────────────────────────────────────────────┐
+│  UI (Next.js)  :3000  ← the only published port         │
+│      │ same-origin proxy                                │
+│  Gateway       :8080  Responses API, harness CRUD        │
+│      │ loopback                                         │
+│  Runner        :8081  one agent CLI per session          │
+└─────────────────────────┬───────────────────────────────┘
+       /data (volume): SQLite, blobs, secrets, workspaces
 ```
+
+Sessions run concurrently and are isolated: each gets its own workspace directory, its own
+conversation state, and its own checkpoint. Turn concurrency defaults to the machine's core
+count — this box cannot scale sandboxes on demand the way the hosted deployment does, so the
+limit is what it can actually run. Publish the port to loopback (`-p 127.0.0.1:3000:3000`) if
+the host is reachable from anywhere you don't control: there is no login to stop a visitor.
 
 Storage sits behind a small adapter interface (graph / blob / secret). This repo ships the local
 implementations; the hosted deployment overlays its own against the same interface. That seam is

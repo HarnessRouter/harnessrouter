@@ -53,7 +53,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     NEXT_TELEMETRY_DISABLED=1 \
     HOME=/home/agent \
-    HARNESS_WORKSPACE=/workspace \
+    HARNESS_WORKSPACE=/data/workspaces \
     HR_DATA_DIR=/data
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
@@ -108,8 +108,8 @@ COPY --from=ui /ui/public           /app/ui/public
 # The agent CLIs refuse to run as root (they gate their own permission bypass on it), so the
 # runtime user is unprivileged and owns the workspace and data volume.
 RUN useradd -m -u 10001 agent \
-    && mkdir -p /workspace /data \
-    && chown -R agent:agent /workspace /data /app
+    && mkdir -p /data \
+    && chown -R agent:agent /data /app
 USER agent
 
 EXPOSE 3000

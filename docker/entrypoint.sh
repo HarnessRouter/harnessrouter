@@ -9,6 +9,12 @@ set -euo pipefail
 DATA_DIR="${HR_DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
 
+# Session workspaces live on the volume so a restart doesn't discard work in flight. Created HERE
+# rather than in the image: /data is a volume mount, and Docker only seeds a volume from the image
+# when the volume is empty — so an image-time mkdir is invisible on every existing install.
+export HARNESS_WORKSPACE="${HARNESS_WORKSPACE:-$DATA_DIR/workspaces}"
+mkdir -p "$HARNESS_WORKSPACE"
+
 # Our own processes must run on the image's interpreter, never on whatever a backend puts on
 # PATH. Hermes installs into its own venv and that venv's bin joins PATH below so the runner can
 # spawn `hermes` — but that venv has none of the gateway's dependencies, so resolving `python3`
