@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SkelPage } from '@/components/Skel';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
+  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
   modelAvailable,
   type CustomHarness, type OobHarness } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
@@ -52,6 +52,11 @@ export default function HarnessSettingsPage() {
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
   useModelCatalog();   // model list comes from the gateway, not a local copy
   const base = oob || oobById(draft?.base || '') || null;
+  // Capabilities come from the server, never from the static table: it once advertised four
+  // built-in skills that existed nowhere, with controls beside them that acted on nothing.
+  const bases = useBases();
+  const srvBase = bases?.[base?.id || draft?.base || ''] || null;
+  const baseTools = srvBase?.tools || [];
   const models = oobModels(base);
   const upd = (p: Partial<CustomHarness>) => setDraft((d) => (d ? { ...d, ...p } : d));
 
@@ -88,7 +93,7 @@ export default function HarnessSettingsPage() {
   const readOnly = Boolean(oob);
   const skills = draft?.skills || [];
   const ownSkills = skills.map((s, idx) => ({ s, idx })).filter(({ s }) => isOwnSkill(s));
-  const baseSkillNames = (base?.skills || []).filter((n) => !ownSkills.some(({ s }) => s.name === n));
+  const baseSkillNames = (srvBase?.builtinSkills || []).filter((n) => !ownSkills.some(({ s }) => s.name === n));
   const disabledTools = new Set(draft?.disabledTools || []);
 
   const stats = statsFor(cards);
@@ -183,17 +188,19 @@ export default function HarnessSettingsPage() {
           <section className="form-section">
             <div><h3>Tools</h3><p>Control inherited tools and add MCP servers for external capabilities.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{(base?.tools?.length || 0) + (draft?.mcpServers?.length || 0)} configured tools</strong>
+              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0)} configured tools</strong>
                 {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add MCP</button>}</div>
               <div className="capability-list">
-                {(base?.tools || []).map((t) => (
-                  <div key={t} className="capability-row">
+                {baseTools.map((t) => (
+                  <div key={t.name} className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:plug"></iconify-icon></span>
-                    <div className="capability-copy"><strong>{t}</strong><span>Inherited from {base?.name}</span></div>
+                    <div className="capability-copy"><strong>{t.label}</strong>
+                      <span>Built into {base?.name}
+                        {t.enforcement === 'instruction' && ' · disabling asks the agent not to use it'}</span></div>
                     <div className="capability-actions">
-                      <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={!disabledTools.has(t)}
-                        onClick={() => upd({ disabledTools: disabledTools.has(t) ? (draft?.disabledTools || []).filter((x) => x !== t) : [...(draft?.disabledTools || []), t] })}>
-                        {disabledTools.has(t) ? 'Disabled' : 'Enabled'}</button>
+                      <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={!disabledTools.has(t.name)}
+                        onClick={() => upd({ disabledTools: disabledTools.has(t.name) ? (draft?.disabledTools || []).filter((x) => x !== t.name) : [...(draft?.disabledTools || []), t.name] })}>
+                        {disabledTools.has(t.name) ? 'Disabled' : 'Enabled'}</button>
                     </div>
                   </div>
                 ))}
@@ -256,6 +263,15 @@ export default function HarnessSettingsPage() {
                     </div>
                   );
                 })}
+                {ownSkills.length === 0 && baseSkillNames.length === 0 && (
+                  <div className="capability-row">
+                    <span className="capability-icon"><iconify-icon icon="tabler:bulb"></iconify-icon></span>
+                    <div className="capability-copy"><strong>No Skills added yet</strong>
+                      <span>{srvBase && !srvBase.builtinSkillsEnumerable
+                        ? `${base?.name} brings its own Skills and discovers them when it runs, so they can't be listed here. Add a Skill to give this Harness something of your own.`
+                        : 'Add a Skill to give this Harness a workflow of your own.'}</span></div>
+                  </div>
+                )}
               </div>
             </div>
           </section>

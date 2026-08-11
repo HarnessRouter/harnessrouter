@@ -830,10 +830,26 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
         cmd.append("--include-partial-messages")
     if mcp_config:   # owner-attached MCP servers (.harness/mcp.json) — adds their tools this turn
         cmd += ["--mcp-config", mcp_config]
-    if disallowed_tools:   # built-in tools the harness disabled (catalog labels → real Claude tool names)
+    # Disabled tools go in settings.json, NOT on the command line. `--disallowedTools` is part of
+    # the permission prompt system, and we pass --dangerously-skip-permissions (autonomous runs
+    # cannot answer a prompt), which disables that system wholesale — so the flag was accepted,
+    # ignored, and the console showed "Disabled" next to a tool the agent went on using. Verified
+    # both ways against the CLI: with the flag the agent still ran bash; with this deny list it
+    # reported having no shell tool and did not run it.
+    if disallowed_tools:
         names = [t.split(" (")[0].strip() for t in disallowed_tools if t and t.strip()]
         if names:
-            cmd += ["--disallowedTools", ",".join(names)]
+            settings_path = cfg_dir / "settings.json"
+            try:
+                current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+                if not isinstance(current, dict):
+                    current = {}
+            except Exception:  # noqa: BLE001 — a corrupt file must not lose the restriction
+                current = {}
+            perms = current.get("permissions") if isinstance(current.get("permissions"), dict) else {}
+            perms["deny"] = names
+            current["permissions"] = perms
+            settings_path.write_text(json.dumps(current, indent=2))
     if resume_session_id:
         # Only resume if the conversation file is ACTUALLY in the (re)hydrated workspace. A prior turn
         # can record a cli_session_id but fail before checkpointing its .jsonl — then `--resume <id>`

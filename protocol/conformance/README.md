@@ -121,6 +121,23 @@ config-level check would have seen:
 7. **The MCP URL policy was advisory.** It ran only on the console's "Test connection" button, so
    the console refused a URL that a turn then connected to anyway. It is now one function applied at
    both config time and run time.
+8. **Claude's hard block was a no-op, and the product claimed it was hard.** Disabled tools were
+   passed as `--disallowedTools`, which belongs to the permission-prompt system — and autonomous
+   runs pass `--dangerously-skip-permissions`, which turns that system off. The flag was accepted
+   and ignored, so an operator who disabled `Bash` watched the agent run `Bash`. The restriction is
+   now written into the runtime's settings file as a deny rule, which the skip-permissions flag does
+   not override. Proven both ways against a live agent: with the tool enabled it ran the command;
+   with it disabled the agent reported having no such tool and did not run it.
+
+### What these checks do not establish
+
+The suite verifies that `disabledTools` **persists**, not that it is **enforced**. Enforcement is
+deliberately not checked, because §4.3 permits instruction-level enforcement, and an agent that
+obeys an instruction is indistinguishable over HTTP from a runtime that blocks the tool — so a
+behavioural check would pass a server whose block does nothing whenever the model happened to
+comply. Defect 8 was a no-op block that a behavioural check would have called conformant on most
+runs. Enforcement is verified against the runtime, by disabling a tool and asserting the agent never
+invokes it, and it belongs in an implementation's own test suite rather than here.
 
 ## Adding a check
 

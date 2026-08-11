@@ -1,6 +1,11 @@
-// Harness data layer. Out-of-box catalog is static for v1 (will read the runner /backends
-// metadata next). Custom harnesses are persisted server-side per-org in the VectorGraph tenant
-// via the gateway (/api/harness/v1/orgs/{org}/harnesses); the BFF injects the internal trust key.
+// Harness data layer.
+//
+// What a base harness CAN DO — its models, its tools, its built-in skills, its system prompt —
+// comes from the server (/v1/bases), never from this file. It used to be hard-coded here, and it
+// drifted: the console advertised four built-in skills (docx, pdf, pptx, xlsx) that exist nowhere,
+// with Replace and Disable buttons next to them acting on nothing, while the agent actually had a
+// completely different set the CLI discovers for itself. The static table below now carries only
+// identity and presentation; every capability field is filled in from the server.
 import { useEffect, useState } from 'react';
 
 import { harnessFetch } from '@/lib/hfetch';
@@ -44,13 +49,11 @@ export const OOB: OobHarness[] = [
   { id: 'codex', name: 'Codex', version: 'v1.0.1', backend: 'codex', status: 'ready',
     models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2'], defaultModel: 'gpt-5.5', moreModels: 0,
     systemPrompt: 'You are Codex, an autonomous software-engineering agent. You operate on a real git workspace with shell access, reading and editing files and running commands to complete the task, returning reviewable diffs and results.',
-    tools: ['Shell', 'Apply Patch', 'File Read/Write', 'Git', 'Network (sandboxed)'],
-    skills: ['docx', 'pdf', 'pptx', 'xlsx'] },
+    tools: [], skills: [] },
   { id: 'claude-code', name: 'Claude Code', version: 'v1.0.1', backend: 'claude', status: 'ready',
     models: ['claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5'], defaultModel: 'claude-opus-4.8', moreModels: 0,
     systemPrompt: 'You are Claude Code, an agentic coding assistant. You work on a real local git working tree with bash, edit files, run tests, and use sub-agents to complete engineering tasks end to end.',
-    tools: ['Bash', 'Read', 'Edit', 'Write', 'Grep', 'Glob', 'WebFetch', 'Task (subagents)'],
-    skills: ['docx', 'pdf', 'pptx', 'xlsx'] },
+    tools: [], skills: [] },
   { id: 'pi', name: 'Pi', version: 'v1.0.1', backend: null, status: 'soon',
     models: [], moreModels: 0,
     systemPrompt: 'Pi harness, coming soon.', tools: [], skills: [] },
@@ -58,8 +61,7 @@ export const OOB: OobHarness[] = [
     // Multi-family: Hermes runs any frontier model, the gpt + claude catalogs, default gpt-5.5.
     models: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'kimi-k3', 'glm-5.2', 'qwen3.7-max'], defaultModel: 'gpt-5.5', moreModels: 0,
     systemPrompt: 'You are Hermes, a self-improving autonomous agent. You work on a real project workspace with shell and file access, complete tasks end to end, and build a persistent memory and skill library from what you learn, getting more capable the longer you run.',
-    tools: ['Terminal', 'File Read/Write', 'Patch', 'Search', 'Web Search', 'Web Extract', 'Browser'],
-    skills: ['docx', 'pdf', 'pptx', 'xlsx'] },
+    tools: [], skills: [] },
 ];
 
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
@@ -135,6 +137,51 @@ export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
   const fromServer = o.backend ? _catalog?.[o.backend]?.default : '';
   return o.defaultModel || fromServer || oobModels(o)[0] || '';
 };
+
+export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
+export interface BaseInfo {
+  id: string; label: string; backend: string; status: string; systemPrompt: string;
+  defaultModel: string;
+  models: { id: string; available: boolean; default: boolean }[];
+  tools: BaseTool[];
+  /** Built-in skills the SERVER can enumerate. Empty when it cannot — see builtinSkillsEnumerable. */
+  builtinSkills: string[];
+  /** false means the base brings its own skills but nothing outside a turn can list them. The UI
+   *  must say that rather than render an empty list as "this base has no skills". */
+  builtinSkillsEnumerable: boolean;
+}
+
+let _bases: Record<string, BaseInfo> | null = null;
+let _basesInflight: Promise<Record<string, BaseInfo>> | null = null;
+
+async function fetchBases(): Promise<Record<string, BaseInfo>> {
+  if (_bases) return _bases;
+  if (_basesInflight) return _basesInflight;
+  _basesInflight = (async () => {
+    try {
+      const r = await harnessFetch('/api/harness/v1/bases', { headers: gwHeaders(), cache: 'no-store' });
+      if (!r.ok) return {};
+      const doc = await r.json();
+      const map: Record<string, BaseInfo> = {};
+      for (const b of doc.bases || []) map[b.id] = b as BaseInfo;
+      _bases = map;
+      return map;
+    } catch { return {}; }
+    finally { _basesInflight = null; }
+  })();
+  return _basesInflight;
+}
+
+/** Server-described bases. null until loaded — a caller shows nothing rather than a guess. */
+export function useBases(): Record<string, BaseInfo> | null {
+  const [b, setB] = useState<Record<string, BaseInfo> | null>(_bases);
+  useEffect(() => {
+    let alive = true;
+    fetchBases().then((m) => { if (alive && Object.keys(m).length) setB(m); });
+    return () => { alive = false; };
+  }, []);
+  return b;
+}
 
 /** Load the server catalog once per tab and re-render when it lands. Any surface that shows a
  *  model picker calls this; without it the placeholder literals would be what the user sees. */

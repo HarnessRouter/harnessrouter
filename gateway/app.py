@@ -6333,10 +6333,56 @@ async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
 
 
 # ── custom harnesses (per-org, server-persisted; replaces the client localStorage seam) ───────
-# Bases this server can execute. Derived from the same mapping the turn loop uses
-# (_backend_of_harness), so the two cannot disagree: anything not listed here has no backend and
-# could only fail at task time.
-_SUPPORTED_BASES = ("codex", "claude-code", "claude", "hermes")
+# ── base harness catalog ─────────────────────────────────────────────────────────────────
+# What each base IS. The console used to carry its own copy of this — models, tools, skills and
+# system prompts hard-coded in the frontend — which drifted from what the server actually runs: it
+# advertised four built-in skills (docx/pdf/pptx/xlsx) that exist nowhere, and a model list that
+# went stale the moment the catalog here changed. Anything a user sees about a base is served from
+# this table plus the live model catalog, so there is one answer and it is the running one.
+#
+# `tools` carries BOTH the real name and how far disabling it actually goes, because those differ by
+# runtime and the console must not imply a guarantee the runtime cannot keep (see the protocol's
+# harnesses.md §4.3):
+#   hard        — the CLI enforces it (claude: --disallowedTools takes these exact names).
+#   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
+_BASE_CATALOG: dict[str, dict] = {
+    "codex": {
+        "label": "Codex", "backend": "codex", "status": "ready",
+        "system_prompt": ("You are Codex, an autonomous software-engineering agent. You operate on "
+                          "a real git workspace with shell access, reading and editing files and "
+                          "running commands to complete the task, returning reviewable diffs and "
+                          "results."),
+        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("git", "Git")],
+        "tool_enforcement": "instruction",
+    },
+    "claude-code": {
+        "label": "Claude Code", "backend": "claude", "status": "ready",
+        "system_prompt": ("You are Claude Code, an agentic coding assistant. You work on a real "
+                          "local git working tree with bash, edit files, run tests, and use "
+                          "sub-agents to complete engineering tasks end to end."),
+        # These are the names Claude Code's --disallowedTools accepts. They are the real thing, not
+        # display labels: a label with a suffix would silently fail to match and disable nothing.
+        "tools": [("Bash", "Bash"), ("Read", "Read"), ("Edit", "Edit"), ("Write", "Write"),
+                  ("Grep", "Grep"), ("Glob", "Glob"), ("WebFetch", "WebFetch"),
+                  ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
+        "tool_enforcement": "hard",
+    },
+    "hermes": {
+        "label": "Hermes", "backend": "hermes", "status": "ready",
+        "system_prompt": ("You are Hermes, a self-improving autonomous agent. You work on a real "
+                          "project workspace with shell and file access, complete tasks end to end, "
+                          "and build a persistent memory and skill library from what you learn."),
+        "tools": [("terminal", "Terminal"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("patch", "Patch"), ("search_files", "Search"), ("web_search", "Web Search"),
+                  ("web_extract", "Web Extract")],
+        "tool_enforcement": "instruction",
+    },
+}
+
+# Bases this server can execute. Derived from the catalog above so the two cannot disagree —
+# `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
+_SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
 
 
 def _require_supported_base(base: str) -> str:
@@ -6622,6 +6668,40 @@ async def get_harness_public(hid: str, request: Request) -> dict:
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     return _harness_out(v)
+
+
+@app.get("/v1/bases")
+async def list_bases(request: Request) -> dict:
+    """What each base harness is, and what it can actually do here.
+
+    The console renders bases entirely from this: models with live availability, the real tool names
+    and how far disabling one goes, and the built-in skills — which is an EMPTY list, deliberately.
+    Codex, Claude Code and Hermes each discover their own bundled skills at run time and expose no
+    way to enumerate them from outside a turn, so this server does not know them. It says so rather
+    than listing plausible names: the console previously showed four (docx, pdf, pptx, xlsx) that
+    exist nowhere, and every control next to them — Replace, Disable — acted on nothing.
+    """
+    org, _ = await _pub_org_member(request)
+    out = []
+    for bid, b in _BASE_CATALOG.items():
+        backend = b["backend"]
+        cat = _MODEL_CATALOG.get(backend, {})
+        servable = await _servable_models(org, backend)
+        ok = (lambda m: True) if servable is None else (lambda m: m in servable)
+        out.append({
+            "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
+            "status": b["status"], "systemPrompt": b["system_prompt"],
+            "defaultModel": cat.get("default", ""),
+            "models": [{"id": m, "available": ok(m), "default": m == cat.get("default")}
+                       for m in cat.get("models", [])],
+            "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
+                      for n, lbl in b["tools"]],
+            # Honest emptiness: see the docstring. `builtinSkillsEnumerable` lets the console say
+            # "this base brings its own" instead of implying the base has none at all.
+            "builtinSkills": [],
+            "builtinSkillsEnumerable": False,
+        })
+    return {"bases": out}
 
 
 @app.get("/v1/models")
