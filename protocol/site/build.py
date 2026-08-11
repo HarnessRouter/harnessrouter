@@ -48,6 +48,7 @@ NAV = [
         ("spec/sessions.html", "Sessions", ROOT / f"versions/{VERSION}/sessions.md"),
         ("spec/files.html", "Files", ROOT / f"versions/{VERSION}/files.md"),
         ("spec/errors.html", "Errors", ROOT / f"versions/{VERSION}/errors.md"),
+        ("spec/security.html", "Security", ROOT / f"versions/{VERSION}/security.md"),
         ("spec/schema.html", "Schema", ROOT / f"versions/{VERSION}/schema.md"),
     ]),
     ("Conformance", [

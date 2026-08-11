@@ -69,6 +69,7 @@ your client depends on, that is a specification bug — please
 | [Sessions](versions/2026-08-11/sessions.md) | Continuing a conversation, and cancelling one |
 | [Files](versions/2026-08-11/files.md) | Sending files in, getting artifacts out |
 | [Errors](versions/2026-08-11/errors.md) | Failure taxonomy, retries and idempotency |
+| [Security](versions/2026-08-11/security.md) | What an implementer must get right, collected in one place |
 | [Schema](versions/2026-08-11/schema.md) | The machine-readable definitions and how to use them |
 
 ## Quick shape of it

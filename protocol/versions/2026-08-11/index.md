@@ -17,7 +17,8 @@ the [protocol README](../../README.md).
 | 6 | [Sessions](sessions.md) | Continuing, inspecting, cancelling, sharing, deleting |
 | 7 | [Files](files.md) | File input, artifacts, download, retention and scope |
 | 8 | [Errors](errors.md) | The error envelope, codes, retry rules, timeouts |
-| 9 | [Schema](schema.md) | Machine-readable definitions and how to generate from them |
+| 9 | [Security](security.md) | Credentials, object scope, artifacts, injection, exhaustion, error hygiene |
+| 10 | [Schema](schema.md) | Machine-readable definitions and how to generate from them |
 
 ## Endpoint summary
 
