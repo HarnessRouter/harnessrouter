@@ -1,8 +1,9 @@
 // Sign in to a self-hosted instance. Sets the session cookie; the middleware does the checking.
 import type { NextRequest } from 'next/server';
 import {
-  AUTH_DISABLED, SELF_HOSTED, SESSION_COOKIE, SESSION_TTL_MS, credentialsValid, mintSession,
+  AUTH_DISABLED, SELF_HOSTED, SESSION_COOKIE, SESSION_TTL_MS, mintSession,
 } from '@/lib/selfhost-auth';
+import { credentialsValid } from '@/lib/selfhost-credentials';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

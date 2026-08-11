@@ -289,6 +289,10 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
                     <strong>Signed in</strong>
                     <span>{selfHostUser || 'this instance'}</span>
                   </div>
+                  <button className="menu-item" type="button" onClick={() => {
+                    setAcctMenu(false);
+                    router.push('/profile');
+                  }}><iconify-icon icon="tabler:user-cog"></iconify-icon>Profile</button>
                   <button className="menu-item" type="button" onClick={async () => {
                     setAcctMenu(false);
                     await fetch('/api/selfhost/logout', { method: 'POST' }).catch(() => undefined);

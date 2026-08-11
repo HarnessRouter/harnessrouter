@@ -132,6 +132,20 @@ right here, which makes them a placeholder, not a secret — the container warns
 while the default is still in place. `HR_AUTH_DISABLED=1` removes the gate entirely, which is
 only reasonable on a machine nobody else can reach.
 
+You can also change the username and password from **Profile**, in the account menu at the top
+right. Those are stored on the data volume (`/data/selfhost-auth.json`, a salted hash — never the
+password) and take precedence over the environment from then on, so an `HR_AUTH_PASSWORD` set at
+`docker run` months ago cannot quietly undo a password change.
+
+Changing them signs out every other browser and restarts the console, which takes about a second.
+The gate runs in Next.js middleware on the Edge runtime, which reads its signing key once at
+start-up and cannot be told about a change in place; restarting is what makes "signed out
+everywhere" true rather than merely displayed. The gateway and runner are left alone, so a task
+that is mid-turn runs straight through it.
+
+Forgot the password? There is no reset email to send, so delete `/data/selfhost-auth.json` and
+restart — the instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
+
 For TLS, keep the console on loopback and put a terminating proxy in front. With Caddy that is
 one file and a real certificate, automatically:
 

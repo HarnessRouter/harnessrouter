@@ -58,10 +58,45 @@ export NEXT_PUBLIC_HR_EDITION=selfhost
 # are also published in the README, which makes them a placeholder rather than a secret.
 export HR_AUTH_USER="${HR_AUTH_USER:-harnessrouter}"
 export HR_AUTH_PASSWORD="${HR_AUTH_PASSWORD:-harnessrouter}"
+export HR_AUTH_STORE="${HR_AUTH_STORE:-/data/selfhost-auth.json}"
+
+# Credentials changed from the profile page live in HR_AUTH_STORE and win over the environment:
+# an env var set at `docker run` months ago must not silently undo a password change. The console
+# signs its session cookie with HR_SESSION_KEY, which is derived from whichever source wins —
+# so the key changes when the credentials do, and every existing session stops verifying.
+#
+# It is derived HERE, at boot, because the gate runs in Next.js middleware on the Edge runtime:
+# no filesystem, and no visibility into environment changes made after start-up. That is why
+# changing credentials restarts the console (below) instead of taking effect in place.
+hr_session_key() {
+  if [ -f "$HR_AUTH_STORE" ]; then
+    "$PY" - "$HR_AUTH_STORE" <<'PYEOF' 2>/dev/null && return 0
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    if d.get("user") and d.get("hash"):
+        print("%s:%s" % (d["user"], d["hash"]))
+    else:
+        raise ValueError
+except Exception:
+    raise SystemExit(1)
+PYEOF
+  fi
+  printf '%s:%s\n' "$HR_AUTH_USER" "$HR_AUTH_PASSWORD"
+}
+
+hr_stored_user() {
+  [ -f "$HR_AUTH_STORE" ] || { printf '%s\n' "$HR_AUTH_USER"; return 0; }
+  "$PY" -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["user"])' "$HR_AUTH_STORE" 2>/dev/null \
+    || printf '%s\n' "$HR_AUTH_USER"
+}
+
 if [ "${HR_AUTH_DISABLED:-}" = "1" ]; then
   echo "[harnessrouter] WARNING: login is DISABLED (HR_AUTH_DISABLED=1) — anyone who can reach this port has full control"
+elif [ -f "$HR_AUTH_STORE" ]; then
+  echo "[harnessrouter] sign in as '$(hr_stored_user)' (credentials set from the profile page)"
 elif [ "$HR_AUTH_PASSWORD" = "harnessrouter" ]; then
-  echo "[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD before exposing this instance."
+  echo "[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance."
 fi
 export PORT="${PORT:-3000}"
 
@@ -148,8 +183,34 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-# UI (the only published port)
-( cd /app/ui && exec node server.js ) &
+# UI (the only published port).
+#
+# Supervised, unlike the other two: changing the console password has to take effect in the
+# middleware, which only reads its signing key at boot — so the profile route writes the new
+# credentials and exits, and this loop brings the console back with them about a second later.
+# The gateway and runner are untouched, so a task mid-turn keeps running through the blip.
+#
+# A crash-loop is not silent: the console is the only published port, so a UI that cannot start
+# is immediately visible, and the message below says how many times it has restarted.
+(
+  cd /app/ui
+  restarts=0
+  while :; do
+    HR_SESSION_KEY="$(hr_session_key)" \
+    HR_AUTH_USER="$(hr_stored_user)" \
+      node server.js
+    status=$?
+    # A clean exit is the credential change asking for a restart. Anything else is a real
+    # failure, and repeating it forever would hide it — so give up and let the container die.
+    if [ "$status" -ne 0 ]; then
+      echo "[harnessrouter] console exited with status $status — not restarting"
+      exit "$status"
+    fi
+    restarts=$((restarts + 1))
+    echo "[harnessrouter] console restarting to pick up new credentials (restart #$restarts)"
+    sleep 1
+  done
+) &
 pids+=($!)
 
 echo "[harnessrouter] ready on :$PORT"

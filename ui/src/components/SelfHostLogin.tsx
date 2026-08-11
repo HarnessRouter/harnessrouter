@@ -61,7 +61,8 @@ export function SelfHostLogin({ next }: { next: string }) {
         </button>
 
         <p className="sh-login-hint">
-          Set by <code>HR_AUTH_USER</code> and <code>HR_AUTH_PASSWORD</code> on the container.
+          First sign-in uses <code>HR_AUTH_USER</code> and <code>HR_AUTH_PASSWORD</code> from the
+          container. You can change them from your profile once you are in.
         </p>
       </form>
     </div>

@@ -10,8 +10,10 @@
 // Middleware is the chokepoint deliberately: pages, the /api/harness proxy, static assets and any
 // route added later all pass through here, so no individual handler can forget to check.
 //
-//   HR_AUTH_USER / HR_AUTH_PASSWORD   set them. Defaults are published in the README, so an
-//                                     instance still running them is open to anyone who read it.
+//   HR_AUTH_USER / HR_AUTH_PASSWORD   the initial credentials. Defaults are published in the
+//                                     README, so an instance still running them is open to
+//                                     anyone who read it. Change them here or on the profile
+//                                     page, which stores them on the data volume and wins.
 //   HR_AUTH_DISABLED=1                no gate at all. Only for a box nobody else can reach.
 import { NextResponse, type NextRequest } from 'next/server';
 import { AUTH_DISABLED, SELF_HOSTED, SESSION_COOKIE, sessionValid } from '@/lib/selfhost-auth';

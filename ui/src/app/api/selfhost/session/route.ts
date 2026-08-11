@@ -5,12 +5,13 @@
 // it is a label, not a secret, and the password never leaves the server.
 //
 // Reaching this route at all means the middleware already validated the session.
-import { AUTH_DISABLED, AUTH_USER, SELF_HOSTED } from '@/lib/selfhost-auth';
+import { AUTH_DISABLED, SELF_HOSTED } from '@/lib/selfhost-auth';
+import { authUser } from '@/lib/selfhost-credentials';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   if (!SELF_HOSTED) return Response.json({ detail: 'not a self-hosted instance' }, { status: 404 });
-  return Response.json({ user: AUTH_USER, gated: !AUTH_DISABLED });
+  return Response.json({ user: authUser(), gated: !AUTH_DISABLED });
 }
