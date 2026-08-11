@@ -135,15 +135,13 @@
         "mcpServers": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/McpServer"
           }
         },
         "skills": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/$defs/Skill"
           }
         },
         "disabledTools": {
@@ -171,6 +169,106 @@
       },
       "additionalProperties": true
     },
+    "McpServer": {
+      "type": "object",
+      "required": [
+        "name",
+        "url"
+      ],
+      "description": "A remote MCP server attached to a harness. Only enabled entries are connected for a turn; a\ndisabled entry must not be contacted at all. An unreachable server must not fail the task.\n",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Sanitised to a CLI-safe identifier by the server."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "http",
+            "sse"
+          ],
+          "default": "http"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "auth": {
+          "type": "string",
+          "description": "Bearer token, or a server-side reference the server resolves. A server must never return\na resolved credential to a client.\n"
+        }
+      },
+      "additionalProperties": true
+    },
+    "Skill": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "description": "A skill is a FOLDER, not a file. A server must materialise the whole folder where the agent\ncan read it — materialising only SKILL.md breaks every skill carrying references, scripts or\ndata. Round-tripping a harness through GET and PUT must not lose skill contents.\n",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "false suppresses the skill, including one inherited from the base."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillFile"
+          },
+          "description": "The bundle. Must contain a SKILL.md."
+        },
+        "content": {
+          "type": "string",
+          "description": "Shorthand for a single-file bundle whose only member is SKILL.md."
+        },
+        "blob": {
+          "type": "string",
+          "description": "Server-assigned handle for a bundle stored out of line. A client receives it, passes it\nback unchanged, and reads the files from the skill files endpoint.\n"
+        }
+      },
+      "additionalProperties": true
+    },
+    "SkillFile": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative to the skill's own folder; nested directories are supported. A server must\nreject a path that escapes the folder.\n",
+          "examples": [
+            "SKILL.md",
+            "references/codes.md",
+            "assets/logo.png"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "description": "Text content."
+        },
+        "content_b64": {
+          "type": "string",
+          "description": "Base64 for binary content; preserved byte-for-byte."
+        }
+      },
+      "additionalProperties": true
+    },
     "HarnessCreate": {
       "type": "object",
       "required": [
@@ -188,6 +286,18 @@
         },
         "system_prompt": {
           "type": "string"
+        },
+        "mcp_servers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/McpServer"
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Skill"
+          }
         },
         "disabled_tools": {
           "type": "array",

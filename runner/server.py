@@ -1950,10 +1950,16 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     )   # materialize enabled skills for this backend (minus suppressed built-ins)
     # Seed the agent's instruction file (AGENTS.md/CLAUDE.md) from the harness doc + installed skills.
     # The model's system prompt stays the CLI default; persistent instructions live in this file.
-    # Codex has no per-tool CLI flag, so disabled tools are surfaced as an instruction (claude uses the
-    # hard --disallowedTools flag below instead).
+    #
+    # Disabled tools, by what each CLI can actually enforce:
+    #   claude — `--disallowedTools`, a hard block (applied in _build_claude below).
+    #   codex, hermes — no per-tool switch exists. Codex has none at all; hermes only disables whole
+    #     TOOLSETS, which is a different granularity from the per-tool names a harness configures.
+    #     Both read the agent doc, so both get the same instruction. It is a request to the model,
+    #     not a guarantee, and is written here once rather than as two divergent branches — hermes
+    #     previously had neither, and silently ignored every disabled tool.
     agent_doc = req.agent_doc or ""
-    if backend == "codex" and req.tools_disabled:
+    if backend in ("codex", "hermes") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \

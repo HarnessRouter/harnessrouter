@@ -690,6 +690,131 @@ def f01(ctx):
     return f"created, updated and deleted {hid}"
 
 
+def _managed_harness(ctx, **cfg) -> dict:
+    """Create a throwaway harness carrying `cfg`, remembered for cleanup."""
+    base = _supported_base(ctx)
+    body = {"name": f"uhp-conformance-{uuid.uuid4().hex[:6]}", "base": base, **cfg}
+    r = ctx.client.post("/v1/harnesses", body=body)
+    if r.status != 200:
+        raise Skip(f"could not create a harness to configure (HTTP {r.status})")
+    h = r.json or {}
+    ctx.state.setdefault("_cleanup_harnesses", []).append(h.get("id"))
+    return h
+
+
+def _supported_base(ctx) -> str:
+    if ctx.state.get("_base"):
+        return ctx.state["_base"]
+    probe = ctx.client.post("/v1/harnesses", body={"name": "uhp-conformance-probe",
+                                                  "base": "uhp-conformance-unknown-base"})
+    supported = (((probe.json or {}).get("error") or {}).get("detail") or {}).get("supported") or []
+    if probe.status == 200:
+        ctx.client.delete(f"/v1/harnesses/{(probe.json or {}).get('id')}")
+    base = (supported or [(_harness(ctx)).get("base") or "claude-code"])[0]
+    ctx.state["_base"] = base
+    return base
+
+
+# A folder, not a file: the point of the check is the members that are NOT SKILL.md.
+_SKILL_BUNDLE = {
+    "name": "uhp-conformance-skill",
+    "enabled": True,
+    "files": [
+        {"path": "SKILL.md",
+         "content": "---\nname: uhp-conformance-skill\ndescription: A conformance fixture.\n---\n\nSee references/data.md.\n"},
+        {"path": "references/data.md", "content": "nested reference file\n"},
+        {"path": "assets/blob.bin", "content_b64": "AAECAwQF"},
+    ],
+}
+
+
+@check("F-03", "A skill folder round-trips through create and read", "full",
+       f"{SPEC}/harnesses.md#42-skills")
+def f03(ctx):
+    h = _managed_harness(ctx, skills=[_SKILL_BUNDLE])
+    r = ctx.client.get(f"/v1/harnesses/{h['id']}/skills/uhp-conformance-skill/files")
+    assert r.status == 200, f"skill files endpoint returned HTTP {r.status}"
+    body = r.json
+    files = body.get("files") if isinstance(body, dict) else body
+    paths = sorted(str((f or {}).get("path")) for f in (files or []))
+    want = ["SKILL.md", "assets/blob.bin", "references/data.md"]
+    assert paths == want, (
+        f"the folder did not round-trip: got {paths}, expected {want}. Materialising or storing "
+        "only SKILL.md breaks every skill that carries references, scripts or data.")
+    blob = json.dumps(files)
+    assert "AAECAwQF" in blob, "the binary member's content_b64 was not preserved byte-for-byte"
+    return f"{len(paths)} files incl. nested + binary"
+
+
+@check("F-04", "An unrelated harness edit does not destroy skill contents", "full",
+       f"{SPEC}/harnesses.md#42-skills")
+def f04(ctx):
+    h = _managed_harness(ctx, skills=[_SKILL_BUNDLE])
+    hid = h["id"]
+    got = (ctx.client.get(f"/v1/harnesses/{hid}").json or {})
+    # Rename only — exactly what a client does when it PUTs back what it read.
+    r = ctx.client.put(f"/v1/harnesses/{hid}", body={
+        "name": "uhp-conformance-renamed", "base": got.get("base"),
+        "skills": got.get("skills") or [], "mcp_servers": got.get("mcpServers") or [],
+        "disabled_tools": got.get("disabledTools") or []})
+    assert r.status == 200, f"rename returned HTTP {r.status}"
+    after = ctx.client.get(f"/v1/harnesses/{hid}/skills/uhp-conformance-skill/files")
+    files = (after.json or {}).get("files") if isinstance(after.json, dict) else after.json
+    paths = sorted(str((f or {}).get("path")) for f in (files or []))
+    assert paths == ["SKILL.md", "assets/blob.bin", "references/data.md"], (
+        f"after renaming the harness the skill folder is {paths} — the round trip lost contents, "
+        "which a user cannot detect until an agent behaves oddly.")
+
+
+@check("F-05", "A skill bundle without SKILL.md is refused at config time", "full",
+       f"{SPEC}/harnesses.md#42-skills")
+def f05(ctx):
+    base = _supported_base(ctx)
+    r = ctx.client.post("/v1/harnesses", body={
+        "name": "uhp-conformance-badskill", "base": base,
+        "skills": [{"name": "no-manifest", "enabled": True,
+                    "files": [{"path": "notes.md", "content": "no manifest here"}]}]})
+    if r.status == 200:
+        ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
+        raise AssertionError(
+            "a bundle with no SKILL.md was accepted; it would be stored and then silently ignored "
+            "at run time, which is the hardest kind of failure for a user to diagnose")
+    assert r.status in (400, 422), f"expected 400/422, got HTTP {r.status}"
+    return f"refused with HTTP {r.status}"
+
+
+@check("F-06", "MCP servers and disabled tools round-trip", "full",
+       f"{SPEC}/harnesses.md#41-mcp-servers")
+def f06(ctx):
+    mcp = [{"name": "conformance-mcp", "url": "https://mcp.example.invalid/mcp",
+            "transport": "http", "enabled": False}]
+    h = _managed_harness(ctx, mcp_servers=mcp, disabled_tools=["WebSearch"])
+    got = ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}
+    servers = got.get("mcpServers") or []
+    assert servers, "mcpServers came back empty after being set"
+    ctx.validate(servers[0], "McpServer")
+    assert servers[0].get("enabled") is False, (
+        "the server's `enabled: false` was not preserved; a client cannot tell a disabled entry "
+        "from an enabled one, and the difference decides whether a third party is contacted")
+    assert got.get("disabledTools") == ["WebSearch"], (
+        f"disabledTools round-tripped as {got.get('disabledTools')}")
+    return "mcp + disabledTools preserved"
+
+
+@check("F-07", "Configured harnesses are cleaned up", "full", f"{SPEC}/harnesses.md#53-delete")
+def f07(ctx):
+    ids = [i for i in ctx.state.get("_cleanup_harnesses") or [] if i]
+    if not ids:
+        raise Skip("no harnesses were created by earlier checks")
+    left = []
+    for hid in ids:
+        ctx.client.delete(f"/v1/harnesses/{hid}")
+        if ctx.client.get(f"/v1/harnesses/{hid}").status != 404:
+            left.append(hid)
+    assert not left, f"these harnesses still resolve after delete: {left}"
+    return f"{len(ids)} removed"
+
+
 @check("F-02", "Creating a harness with an unsupported base is refused", "full",
        f"{SPEC}/harnesses.md#41-create")
 def f02(ctx):

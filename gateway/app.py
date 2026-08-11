@@ -2163,7 +2163,16 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         if not s.get("url"):
             continue
         _hvals = hdr_vals or {}   # (renamed from hv — that name is now the harness-vertex param)
-        entry = {"name": s.get("name") or s.get("id") or "mcp", "url": _sub_headers(s["url"], _hvals),
+        _url = _sub_headers(s["url"], _hvals)
+        # Same rule the console's Test connection applies. Enforced here too, because this is the
+        # call that actually reaches the network: a URL the policy rejects must never be handed to
+        # a sandbox, whatever is stored on the harness.
+        _blocked = _ssrf_check(_url)
+        if _blocked:
+            print(f"[mcp] refusing '{s.get('name') or 'mcp'}' for harness {harness_id}: {_blocked}",
+                  flush=True)
+            continue
+        entry = {"name": s.get("name") or s.get("id") or "mcp", "url": _url,
                  "transport": s.get("transport") or "http"}
         # $headers refs resolve BEFORE vault: an auth of "$headers.X-App-JWT" is the caller's
         # per-request token, not a vault key. Values are injected here, gateway-side, so the
@@ -6176,10 +6185,34 @@ def _parse_jsonrpc(text: str) -> dict:
 
 
 def _ssrf_check(url: str) -> str | None:
-    """V1C02-006: gate a caller-supplied MCP URL before the server fetches it. HTTPS only;
-    resolve EVERY DNS answer and reject loopback / link-local / RFC1918 / IPv6 private / cloud
-    metadata (169.254.169.254 falls under link-local) so a hostname can't rebind to an internal
-    target. Returns an error string to reject, or None to allow."""
+    """The ONE rule for whether this server may talk to an MCP endpoint.
+
+    V1C02-006: gate a caller-supplied MCP URL before the server fetches it. HTTPS only; resolve
+    EVERY DNS answer and reject loopback / link-local / RFC1918 / IPv6 private / cloud metadata
+    (169.254.169.254 falls under link-local) so a hostname can't rebind to an internal target.
+    Returns an error string to reject, or None to allow.
+
+    Applied at BOTH config time (the console's Test connection) and run time (_harness_plugins).
+    It used to run only on the test button, so the console refused a URL that a turn then connected
+    to anyway: the check was advisory, the operator got a red error and a working server, and on a
+    multi-tenant deployment the actual protection was absent. A test that does not predict run time
+    is worse than no test.
+
+    On a self-hosted instance the private-address rules are dropped, because there the "internal"
+    network is the operator's own laptop: a local MCP server on 127.0.0.1 is a legitimate and
+    common setup, the operator already has full access to that machine, and blocking it would
+    remove a real capability while protecting nobody from anybody.
+    """
+    if _pool_is_local():
+        from urllib.parse import urlparse
+        try:
+            u = urlparse(url)
+        except Exception:  # noqa: BLE001
+            return "invalid url"
+        if u.scheme not in ("http", "https"):
+            return "MCP endpoints must be http or https"
+        return None if u.hostname else "url has no host"
+
     import ipaddress
     import socket
     from urllib.parse import urlparse

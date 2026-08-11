@@ -37,13 +37,13 @@ anything that only inspects a schema.
 
 ## What it checks
 
-47 checks across three classes.
+52 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
 | **Core** | 37 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation |
 | **Extended** | +8 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
-| **Full** | +2 | Harness create / update / delete, and refusal of an unsupported base |
+| **Full** | +7 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence |
 
 Every check names the section of the specification it enforces, so a failure points at the sentence
 it violates rather than at a test name.
@@ -64,6 +64,9 @@ A few of them are worth calling out, because they catch things a schema check ne
   own origin.
 - **X-08** — artifact ids do not traverse out of their container. Probes for `../` and its
   percent-encoded form.
+- **F-03/F-04** — a skill is a folder, and it survives an unrelated edit. A server that stores only
+  `SKILL.md`, or that empties a bundle when the harness is renamed, passes every other check: the
+  config still looks right, and the loss only shows up later as an agent behaving oddly.
 
 ## Outcomes
 
@@ -85,7 +88,7 @@ a live instance on 2026-08-11:
 
 ```
   Summary
-    47/47 passed · 0 failed · 0 skipped · 0 errored
+    52/52 passed · 0 failed · 0 skipped · 0 errored
     CONFORMANT — UHP 2026-08-11 (full)
 ```
 
@@ -103,6 +106,21 @@ in the suite itself:
    retry.
 4. `POST /v1/harnesses` accepted a base the server could not run, deferring the failure to the first
    task — after the client had committed to it. Caught by **F-02** on the first full run.
+
+Testing the tool and skill surface against live agents found three more, none of which any
+config-level check would have seen:
+
+5. **Hermes could not use HTTP MCP servers at all.** The image installed an unpinned `mcp` SDK,
+   which resolved to a version that removed the symbol Hermes gates HTTP transport on. Every remote
+   MCP server configured for that backend was silently dropped, and the agent replied "I can't
+   access that tool" — indistinguishable from a model refusal. The SDK is now pinned, verified on
+   start-up, and repaired in place on volumes that already have the broken version.
+6. **Hermes ignored `disabledTools` entirely.** Claude enforces them with a hard flag and Codex
+   receives them as an instruction; Hermes had neither branch, so an operator who disabled a tool
+   got no enforcement and no warning.
+7. **The MCP URL policy was advisory.** It ran only on the console's "Test connection" button, so
+   the console refused a URL that a turn then connected to anyway. It is now one function applied at
+   both config time and run time.
 
 ## Adding a check
 

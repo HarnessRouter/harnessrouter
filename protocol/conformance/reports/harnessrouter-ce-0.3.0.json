@@ -6,11 +6,11 @@
   "conformant": true,
   "highest_class_passed": "full",
   "summary": {
-    "pass": 47,
+    "pass": 52,
     "fail": 0,
     "skip": 0,
     "error": 0,
-    "total": 47
+    "total": 52
   },
   "checks": [
     {
@@ -131,7 +131,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/harnesses.md#1-discovering-harnesses",
       "outcome": "pass",
-      "detail": "4 harness(es)"
+      "detail": "5 harness(es)"
     },
     {
       "id": "H-02",
@@ -163,7 +163,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/tasks.md#3-the-response-object",
       "outcome": "pass",
-      "detail": "status=completed in 5.2s"
+      "detail": "status=completed in 6.4s"
     },
     {
       "id": "T-02",
@@ -179,7 +179,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/tasks.md#13-model-selection-and-substitution",
       "outcome": "pass",
-      "detail": "model=claude-sonnet-4.6"
+      "detail": "model=claude-opus-4.8"
     },
     {
       "id": "T-04",
@@ -187,7 +187,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/lifecycle.md#4-session-lifecycle",
       "outcome": "pass",
-      "detail": "session_id=hsess572496c66b58478cb133db32e794aa90"
+      "detail": "session_id=hsess3db19fb79ef74a34a425e165e49ccd3c"
     },
     {
       "id": "T-05",
@@ -219,7 +219,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/streaming.md#1-opening-a-stream",
       "outcome": "pass",
-      "detail": "14 events"
+      "detail": "9 events"
     },
     {
       "id": "S-02",
@@ -235,7 +235,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/schema.md",
       "outcome": "pass",
-      "detail": "14 events valid"
+      "detail": "9 events valid"
     },
     {
       "id": "S-04",
@@ -283,7 +283,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/streaming.md#1-opening-a-stream",
       "outcome": "pass",
-      "detail": "events spread over 8.7s"
+      "detail": "events spread over 5.1s"
     },
     {
       "id": "C-01",
@@ -291,7 +291,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-08-11/sessions.md#1-continuing-a-session",
       "outcome": "pass",
-      "detail": "session hsess572496c66b58478cb133db32e794aa90 extended"
+      "detail": "session hsess3db19fb79ef74a34a425e165e49ccd3c extended"
     },
     {
       "id": "C-02",
@@ -379,7 +379,47 @@
       "class": "full",
       "spec": "protocol/versions/2026-08-11/harnesses.md#4-managing-harnesses",
       "outcome": "pass",
-      "detail": "created, updated and deleted chrn_beb16b3632d148aabdd8164fcb98fed6"
+      "detail": "created, updated and deleted chrn_89269ae2a0b04d30b053333ac207e050"
+    },
+    {
+      "id": "F-03",
+      "title": "A skill folder round-trips through create and read",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#42-skills",
+      "outcome": "pass",
+      "detail": "3 files incl. nested + binary"
+    },
+    {
+      "id": "F-04",
+      "title": "An unrelated harness edit does not destroy skill contents",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#42-skills",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "F-05",
+      "title": "A skill bundle without SKILL.md is refused at config time",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#42-skills",
+      "outcome": "pass",
+      "detail": "refused with HTTP 400"
+    },
+    {
+      "id": "F-06",
+      "title": "MCP servers and disabled tools round-trip",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#41-mcp-servers",
+      "outcome": "pass",
+      "detail": "mcp + disabledTools preserved"
+    },
+    {
+      "id": "F-07",
+      "title": "Configured harnesses are cleaned up",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#53-delete",
+      "outcome": "pass",
+      "detail": "3 removed"
     },
     {
       "id": "F-02",

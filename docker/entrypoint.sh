@@ -143,13 +143,44 @@ install_backends() {
   if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
     { "$PY" -m venv "$TOOLS/venv" \
-        && "$TOOLS/venv/bin/pip" install --no-cache-dir -q "hermes-agent==0.19.0" anthropic mcp; } \
+        && "$TOOLS/venv/bin/pip" install --no-cache-dir -q \
+             "hermes-agent==0.19.0" anthropic "$HERMES_MCP_PIN"; } \
       >/dev/null 2>&1 || true
   fi
 
   [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"
   # Hermes otherwise tries to install its own dependencies mid-turn.
   export HERMES_DISABLE_LAZY_INSTALLS=1
+  wanted hermes && verify_hermes_mcp
+}
+
+# hermes 0.19.0 gates HTTP MCP on importing `streamablehttp_client`, the name the mcp SDK
+# deprecated and REMOVED in 2.0.0. With an unpinned `mcp`, pip resolves 2.0.0, that import fails,
+# and hermes disables HTTP MCP entirely — every remote MCP server a user configures is dropped with
+# only a line in a log file inside the workspace. The agent then answers "I can't access that tool",
+# which reads as a model refusal rather than a broken install.
+#
+# So the SDK is pinned below 2.0, and the pin is VERIFIED rather than assumed: lazy installs are
+# sealed, so hermes cannot repair this itself, and a volume provisioned before the pin still has
+# the broken version. Checking the exact symbol hermes checks turns a silent capability loss into
+# one line on start-up — and repairs it in place.
+HERMES_MCP_PIN="${HERMES_MCP_PIN:-mcp>=1.9,<2}"
+
+verify_hermes_mcp() {
+  [ -x "$TOOLS/venv/bin/python" ] || return 0
+  "$TOOLS/venv/bin/python" - <<'PYEOF' && return 0
+try:
+    from mcp.client.streamable_http import streamablehttp_client  # noqa: F401
+except Exception:
+    raise SystemExit(1)
+PYEOF
+  echo "[harnessrouter] repairing Hermes MCP support (installed mcp SDK lacks the transport it needs)…"
+  "$TOOLS/venv/bin/pip" install --no-cache-dir -q "$HERMES_MCP_PIN" >/dev/null 2>&1 || true
+  if "$TOOLS/venv/bin/python" -c "from mcp.client.streamable_http import streamablehttp_client" 2>/dev/null; then
+    echo "[harnessrouter] Hermes MCP support restored"
+  else
+    echo "[harnessrouter] WARNING: Hermes cannot use HTTP MCP servers — remote tools will be unavailable on that backend"
+  fi
 }
 
 install_backends

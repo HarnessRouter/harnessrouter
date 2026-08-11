@@ -114,11 +114,97 @@ work fails after they have committed to it.
 A client SHOULD present unavailable models as disabled rather than hiding them, so a user can see
 that a model exists and is not configured, rather than wondering why it is missing.
 
-## 4. Managing harnesses
+## 4. Tools and skills
+
+A configured harness carries three things that decide what its agent can do. All three are part of
+the harness object and are set the same way it is.
+
+### 4.1 MCP servers
+
+```json
+{ "mcpServers": [
+    { "name": "vault", "url": "https://mcp.example.com/mcp", "transport": "http", "enabled": true }
+] }
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Identifies the server to the agent; sanitised to a CLI-safe identifier |
+| `url` | yes | Endpoint |
+| `transport` | no | `http` (Streamable HTTP, default) or `sse` |
+| `enabled` | no | Absent or `true` means enabled |
+| `headers` | no | Extra request headers |
+| `auth` | no | Bearer token, or a server-side reference the server resolves |
+
+A server MUST connect only the **enabled** entries for a turn. A disabled entry MUST NOT be
+contacted at all — not connected and then hidden, which would still leak the turn's existence to
+whoever operates that endpoint.
+
+An MCP server that cannot be reached MUST NOT fail the task. The turn MUST proceed without those
+tools, because a third-party endpoint being down is not a reason to lose the user's work. A server
+SHOULD make the degradation visible in the run rather than silent.
+
+> A server MUST NOT advertise MCP support it cannot deliver. If the harness runtime behind it cannot
+> speak the configured transport, that is a broken installation, and reporting it only in a log file
+> inside the workspace is indistinguishable — to the user — from the model refusing to use the tool.
+
+### 4.2 Skills
+
+A skill is a **folder**, not a file:
+
+```json
+{ "skills": [
+    { "name": "vault-manual", "enabled": true, "files": [
+        { "path": "SKILL.md",            "content": "---\nname: vault-manual\n---\n…" },
+        { "path": "references/codes.md", "content": "…" },
+        { "path": "scripts/helper.sh",   "content": "#!/bin/sh\n…" },
+        { "path": "assets/logo.png",     "content_b64": "iVBORw0KGgo…" }
+    ]}
+] }
+```
+
+- `files[].path` is relative to the skill's own folder and MUST support nested directories. A server
+  MUST reject a path that escapes the folder.
+- Text is carried in `content`; binary in `content_b64`. A server MUST preserve both byte-for-byte.
+- A bundle MUST contain a `SKILL.md`; a server MUST reject one that does not, at configuration time
+  rather than at run time.
+- A server MUST materialise the **whole folder** where the agent can read it. Materialising only
+  `SKILL.md` breaks every skill that carries references, scripts or data — which is most non-trivial
+  skills.
+- `enabled: false` suppresses a skill, including one inherited from the base.
+
+A server MAY store large bundles out of line, and MUST return the complete file list from:
+
+```http
+GET /v1/harnesses/{harness_id}/skills/{skill_id}/files
+```
+
+Round-tripping a harness through `GET` and `PUT` MUST NOT lose skill contents. This is the failure
+worth designing against: an unrelated edit — renaming the harness — silently emptying a skill folder
+that the user cannot tell is gone until an agent behaves oddly weeks later.
+
+### 4.3 Disabled tools
+
+```json
+{ "disabledTools": ["WebSearch"] }
+```
+
+Names come from the harness base's own tool catalogue. Enforcement differs by runtime and a server
+MUST NOT overstate it:
+
+- Where the runtime supports per-tool restriction, the server MUST enforce it as a hard block.
+- Where it does not, the server MUST still convey the restriction to the agent — as a standing
+  instruction — and MUST NOT silently drop it. Dropping it is the worst outcome: the operator
+  believes a tool is off, and it is not.
+
+A client that requires a guaranteed block SHOULD confirm the harness base supports one rather than
+assuming `disabledTools` is always hard.
+
+## 5. Managing harnesses
 
 Conformance class **Full** only. A client MUST check the `harness_management` capability first.
 
-### 4.1 Create
+### 5.1 Create
 
 ```http
 POST /v1/harnesses
@@ -131,7 +217,7 @@ POST /v1/harnesses
 Returns the created harness object. `base` is REQUIRED and MUST be one the server supports;
 otherwise `422` with `code: "unsupported_base"`.
 
-### 4.2 Update
+### 5.2 Update
 
 ```http
 PUT /v1/harnesses/{harness_id}
@@ -141,7 +227,7 @@ Replaces the mutable configuration. A server MUST NOT change `id`, `base`, or `c
 the base of an existing harness would silently change the behaviour of every session already
 attached to it; a client that wants a different base MUST create a different harness.
 
-### 4.3 Delete
+### 5.3 Delete
 
 ```http
 DELETE /v1/harnesses/{harness_id}
@@ -150,7 +236,7 @@ DELETE /v1/harnesses/{harness_id}
 A server MUST NOT delete the sessions or responses that used the harness. History that disappears
 when configuration changes cannot be audited.
 
-## 5. Choosing a harness
+## 6. Choosing a harness
 
 Non-normative, but the question every client faces:
 
