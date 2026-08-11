@@ -160,8 +160,11 @@ console.example.com {
 
 ```bash
 docker run -d -p 127.0.0.1:3000:3000 -v harnessrouter:/data \
-  -e HR_AUTH_PASSWORD='something only you know' harnessrouter/harnessrouter
+  -e HR_AUTH_PASSWORD='something only you know' harnessrouter/harnessrouter:0.3.0
 ```
+
+Pin the tag. `0.3.0` is the first release with the sign-in gate; `0.1.x` and `0.2.0` have none, so
+an instance running them is open to anyone who can reach the port.
 
 The `flush_interval -1` matters: without it a proxy buffers the event stream and the console
 looks frozen until the turn ends.
