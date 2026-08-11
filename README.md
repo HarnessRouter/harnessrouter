@@ -201,6 +201,28 @@ Storage sits behind a small adapter interface (graph / blob / secret). This repo
 implementations; the hosted deployment overlays its own against the same interface. That seam is
 why this is genuinely the same codebase rather than a fork that drifts.
 
+## The Unified Harness Protocol
+
+This repository is both an implementation and a standard. The protocol the gateway speaks is
+specified, versioned and testable in [`protocol/`](protocol/):
+
+| | |
+|---|---|
+| [Specification](protocol/versions/2026-08-11/) | Ten normative chapters, version `2026-08-11` |
+| [Machine-readable](protocol/schema/) | OpenAPI 3.1 + JSON Schema 2020-12, generated from one source |
+| [Conformance suite](protocol/conformance/) | 47 runnable checks — passing it is what "conformant" means |
+| [Governance](protocol/GOVERNANCE.md) | How the standard changes: prose first, three artifacts together |
+
+This edition is the reference implementation and
+[passes at class Full](protocol/conformance/reports/harnessrouter-ce-0.3.0.json). **The standard can
+be implemented without HarnessRouter Cloud** — it is an HTTP contract, and nothing in it requires a
+hosted service. Run the suite against your own server:
+
+```bash
+pip install -e protocol/conformance
+uhp-conformance --base-url https://your-server --api-key "$KEY" --class full
+```
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE). Third-party notices are in [NOTICE](NOTICE).

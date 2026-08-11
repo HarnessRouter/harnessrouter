@@ -1,0 +1,949 @@
+openapi: 3.1.0
+info:
+  title: Unified Harness Protocol
+  version: '2026-08-11'
+  summary: An open standard for running complete agent harnesses as shared infrastructure.
+  description: |
+    UHP defines how a product drives a complete agent harness — Codex, Claude Code, Hermes, or any
+    other — over HTTP: selecting and configuring a harness, sending work, following progress,
+    continuing a session, cancelling execution, handling errors and files, and receiving results.
+
+    This document is normative for **structure**. The prose specification in `protocol/versions/`
+    is normative for **behaviour**; where they disagree about behaviour, the prose wins, because
+    behaviour is not expressible in OpenAPI.
+
+    Conformance is defined by the suite in `protocol/conformance/`, not by this document.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  contact:
+    name: UHP maintainers
+    url: https://github.com/HarnessRouter/harnessrouter
+
+servers:
+  - url: https://your-uhp-server
+    description: Any conformant UHP server. The protocol requires no hosted service.
+  - url: http://127.0.0.1:3000/api/harness
+    description: HarnessRouter Community Edition, default local deployment
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Discovery
+    description: Protocol version and capability discovery (conformance class Core)
+  - name: Harnesses
+    description: Discovering, selecting and managing configured harnesses
+  - name: Tasks
+    description: Running work and reading results
+  - name: Sessions
+    description: Continuing, inspecting and cancelling sessions
+  - name: Files
+    description: File input and artifact retrieval (conformance class Extended)
+
+paths:
+  /v1/uhp:
+    get:
+      tags: [Discovery]
+      operationId: getDiscovery
+      summary: Protocol discovery document
+      description: |
+        Served without authentication: a client must be able to learn whether it is talking to a UHP
+        server, and which versions it speaks, before presenting credentials. The document contains
+        nothing principal-specific.
+      security: []
+      responses:
+        '200':
+          description: The discovery document
+          headers:
+            UHP-Version: { $ref: '#/components/headers/UHPVersion' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Discovery' }
+
+  /v1/harnesses:
+    get:
+      tags: [Harnesses]
+      operationId: listHarnesses
+      summary: List configured harnesses
+      responses:
+        '200':
+          description: Harnesses within the caller's scope. May be empty.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [harnesses]
+                properties:
+                  harnesses:
+                    type: array
+                    items: { $ref: '#/components/schemas/Harness' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Harnesses]
+      operationId: createHarness
+      summary: Create a configured harness
+      description: Conformance class Full. Check the `harness_management` capability first.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HarnessCreate' }
+      responses:
+        '200':
+          description: The created harness
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Harness' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/harnesses/{harness_id}:
+    parameters:
+      - $ref: '#/components/parameters/HarnessId'
+    get:
+      tags: [Harnesses]
+      operationId: getHarness
+      summary: Get one harness
+      responses:
+        '200':
+          description: The harness
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Harness' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Harnesses]
+      operationId: updateHarness
+      summary: Update a harness configuration
+      description: |
+        Conformance class Full. `id`, `base` and `createdAt` are immutable — changing the base of an
+        existing harness would silently change the behaviour of every session attached to it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HarnessCreate' }
+      responses:
+        '200':
+          description: The updated harness
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Harness' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Harnesses]
+      operationId: deleteHarness
+      summary: Delete a harness
+      description: Must not delete the sessions or responses that used it.
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  deleted: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/models:
+    get:
+      tags: [Harnesses]
+      operationId: listModels
+      summary: The model catalogue, by backend
+      responses:
+        '200':
+          description: Models grouped by backend, each with computed availability
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelCatalog' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/harnesses/{harness_id}/models:
+    parameters:
+      - $ref: '#/components/parameters/HarnessId'
+    get:
+      tags: [Harnesses]
+      operationId: listHarnessModels
+      summary: Models this harness can run
+      responses:
+        '200':
+          description: The harness's allowed models, default and authorized fallback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HarnessModels' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/responses:
+    post:
+      tags: [Tasks]
+      operationId: createResponse
+      summary: Run a task
+      description: |
+        The core of the protocol. With `stream: false` the server returns one Response object when
+        the task reaches a terminal state. With `stream: true` it returns `text/event-stream`
+        carrying the events defined in the Streaming chapter.
+
+        Retries MUST carry `Idempotency-Key`: without one, a retry after a timeout runs the task a
+        second time while the first may still be running.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 255 }
+          description: Repeating a key returns the first request's result and does not re-execute.
+        - name: UHP-Version
+          in: header
+          required: false
+          schema: { type: string, examples: ['2026-08-11'] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateResponseRequest' }
+      responses:
+        '200':
+          description: |
+            The finished Response (non-streaming), or the event stream (streaming).
+          headers:
+            UHP-Version: { $ref: '#/components/headers/UHPVersion' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Response' }
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE; each `data:` line is one Event object.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/responses/{response_id}:
+    parameters:
+      - $ref: '#/components/parameters/ResponseId'
+    get:
+      tags: [Tasks]
+      operationId: getResponse
+      summary: Read a task back
+      responses:
+        '200':
+          description: The Response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Response' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Tasks]
+      operationId: deleteResponse
+      summary: Delete a stored response
+      description: Must not cancel a running task — deletion and cancellation are different intentions.
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  deleted: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/responses/{response_id}/input_items:
+    parameters:
+      - $ref: '#/components/parameters/ResponseId'
+    get:
+      tags: [Tasks]
+      operationId: getResponseInputItems
+      summary: The input the task was created with
+      responses:
+        '200':
+          description: Input items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object: { type: string, const: list }
+                  data: { type: array, items: { type: object, additionalProperties: true } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/responses/{response_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ResponseId'
+    post:
+      tags: [Sessions]
+      operationId: cancelResponse
+      summary: Cancel a running task
+      description: |
+        Idempotent. Cancelling an already-terminal task succeeds and changes nothing — a client
+        retrying a cancel after a dropped connection must not be punished for having succeeded.
+      responses:
+        '200':
+          description: The Response, now cancelling or terminal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Response' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List sessions
+      description: Conformance class Extended.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: harness, in: query, schema: { type: string }, description: Filter by harness id }
+      responses:
+        '200':
+          description: A page of sessions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: Get one session
+      responses:
+        '200':
+          description: The session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/turns:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Sessions]
+      operationId: getSessionTurns
+      summary: The ordered task history of a session
+      responses:
+        '200':
+          description: Turns, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  turns: { type: array, items: { type: object, additionalProperties: true } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [Sessions]
+      operationId: cancelSession
+      summary: Cancel whatever is running in a session
+      responses:
+        '200':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/files:
+    post:
+      tags: [Files]
+      operationId: uploadFile
+      summary: Upload a file for use as task input
+      description: Conformance class Extended.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                purpose: { type: string, default: user_data }
+      responses:
+        '200':
+          description: The stored file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /v1/sessions/{session_id}/files:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Files]
+      operationId: listSessionFiles
+      summary: Every artifact of a session
+      description: Must include artifacts from earlier tasks, not only the most recent.
+      responses:
+        '200':
+          description: Artifacts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files]
+                properties:
+                  files: { type: array, items: { $ref: '#/components/schemas/File' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/files/archive:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Files]
+      operationId: downloadSessionArchive
+      summary: Every artifact as one archive
+      responses:
+        '200':
+          description: An archive of the session's artifacts
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/containers/{container_id}/files/{file_id}/content:
+    parameters:
+      - $ref: '#/components/parameters/ContainerId'
+      - $ref: '#/components/parameters/FileId'
+    get:
+      tags: [Files]
+      operationId: downloadFile
+      summary: Download an artifact
+      description: |
+        Returns raw bytes with the file's own media type — never JSON-wrapped. Servers must send
+        `X-Content-Type-Options: nosniff`: artifacts are attacker-influenceable content, and serving
+        them without it turns an artifact into stored XSS against the client's origin.
+      responses:
+        '200':
+          description: The bytes
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            X-Content-Type-Options:
+              required: true
+              schema: { type: string, const: nosniff }
+          content:
+            '*/*':
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/containers/{container_id}/files/{file_id}/pdf:
+    parameters:
+      - $ref: '#/components/parameters/ContainerId'
+      - $ref: '#/components/parameters/FileId'
+    get:
+      tags: [Files]
+      operationId: previewFile
+      summary: A rendered PDF preview of a document artifact
+      responses:
+        '200':
+          description: The rendered PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501':
+          description: This server does not implement preview conversion
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '502':
+          description: Conversion of this file failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: How tokens are issued is out of scope for this protocol.
+
+  headers:
+    UHPVersion:
+      description: The protocol version actually used to serve this response.
+      required: true
+      schema: { type: string, examples: ['2026-08-11'] }
+
+  parameters:
+    HarnessId:
+      name: harness_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^chrn_' }
+    ResponseId:
+      name: response_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^resp_' }
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: string }
+    ContainerId:
+      name: container_id
+      in: path
+      required: true
+      schema: { type: string }
+    FileId:
+      name: file_id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing, malformed or unknown credential
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: |
+        No such object in the caller's scope. Servers return 404 rather than 403 for objects outside
+        the caller's scope, so that an id's existence is not disclosed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: '`session_busy` or `harness_mismatch`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    UnprocessableEntity:
+      description: '`model_unavailable` or `unsupported_base`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    PayloadTooLarge:
+      description: '`file_too_large`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RateLimited:
+      description: '`rate_limited` or `quota_exhausted`'
+      headers:
+        Retry-After:
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+    Discovery:
+      type: object
+      required: [object, protocol, versions, default_version, conformance_class, capabilities]
+      properties:
+        object: { type: string, const: uhp.discovery }
+        protocol: { type: string, const: uhp }
+        versions:
+          type: array
+          minItems: 1
+          items: { type: string }
+        default_version: { type: string }
+        conformance_class: { type: string, enum: [core, extended, full] }
+        capabilities: { $ref: '#/components/schemas/Capabilities' }
+        implementation:
+          type: object
+          properties:
+            name: { type: string }
+            version: { type: string }
+          additionalProperties: true
+      additionalProperties: true
+
+    Capabilities:
+      type: object
+      description: |
+        Named booleans. A server reports `false` for a capability it does not implement rather than
+        omitting it, so a client can distinguish "not supported" from "server predates this field".
+        A client treats an absent key as `false`.
+      properties:
+        streaming: { type: boolean }
+        sessions: { type: boolean }
+        cancellation: { type: boolean }
+        files_input: { type: boolean }
+        files_output: { type: boolean }
+        session_listing: { type: boolean }
+        harness_management: { type: boolean }
+        session_sharing: { type: boolean }
+        idempotency: { type: boolean }
+      additionalProperties: { type: boolean }
+
+    Harness:
+      type: object
+      required: [id, name, base]
+      properties:
+        id: { type: string, pattern: '^chrn_' }
+        object: { type: string, const: harness }
+        name: { type: string }
+        base:
+          type: string
+          description: |
+            Opaque. Not enumerated by this specification — a client must treat it as a string, or the
+            protocol would need revising every time a harness is released.
+          examples: [codex, claude-code, hermes]
+        baseLabel: { type: string }
+        defaultModel: { type: string }
+        systemPrompt: { type: string }
+        mcpServers: { type: array, items: { type: object, additionalProperties: true } }
+        skills: { type: array, items: { type: object, additionalProperties: true } }
+        disabledTools: { type: array, items: { type: string } }
+        maxStep: { type: [integer, 'null'] }
+        timeoutSeconds: { type: [integer, 'null'] }
+        createdAt: { type: integer, description: Unix milliseconds }
+      additionalProperties: true
+
+    HarnessCreate:
+      type: object
+      required: [base]
+      properties:
+        name: { type: string }
+        base: { type: string }
+        default_model: { type: string }
+        system_prompt: { type: string }
+        disabled_tools: { type: array, items: { type: string } }
+        max_step: { type: [integer, 'null'] }
+        timeout_seconds: { type: [integer, 'null'] }
+      additionalProperties: true
+
+    ModelCatalog:
+      type: object
+      required: [backends]
+      properties:
+        backends:
+          type: object
+          additionalProperties:
+            type: object
+            required: [default, models]
+            properties:
+              default: { type: string }
+              models: { type: array, items: { $ref: '#/components/schemas/Model' } }
+
+    HarnessModels:
+      type: object
+      required: [models]
+      properties:
+        harness_id: { type: string }
+        backend: { type: string }
+        default: { type: string }
+        fallback: { type: string }
+        models: { type: array, items: { $ref: '#/components/schemas/Model' } }
+
+    Model:
+      type: object
+      required: [id, available]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        backend: { type: string }
+        available:
+          type: boolean
+          description: |
+            Computed, not asserted: true means the server can serve this model for this harness right
+            now. Listing a model as available and then failing the task is the worst outcome for a
+            client, because a user has already chosen it.
+        default: { type: boolean }
+      additionalProperties: true
+
+    CreateResponseRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object, additionalProperties: true }
+          description: A bare string is shorthand for one user message.
+        model: { type: string, description: Canonical model id. Omitted means the harness default. }
+        metadata:
+          type: object
+          description: Client metadata. `harness_id` selects the configured harness.
+          properties:
+            harness_id: { type: string }
+          additionalProperties: true
+        stream: { type: boolean, default: false }
+        previous_response_id: { type: [string, 'null'] }
+        instructions: { type: string }
+        store: { type: boolean, default: true }
+        max_output_tokens: { type: [integer, 'null'] }
+        max_step: { type: [integer, 'null'], description: Agent step (tool-call round) budget }
+        timeout_seconds: { type: [integer, 'null'], description: Wall-clock budget }
+        tools: { type: array, items: { type: object, additionalProperties: true } }
+        include: { type: array, items: { type: string } }
+        background: { type: boolean, default: false }
+      additionalProperties: true
+
+    Response:
+      type: object
+      required: [id, object, created_at, status, output, model]
+      properties:
+        id: { type: string, pattern: '^resp_' }
+        object: { type: string, const: response }
+        created_at: { type: integer, description: Unix seconds }
+        status: { $ref: '#/components/schemas/ResponseStatus' }
+        error:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Error'
+          description: Non-null only when status is `failed`.
+        incomplete_details: { type: [object, 'null'], additionalProperties: true }
+        previous_response_id: { type: [string, 'null'] }
+        model: { type: string, description: The model that actually ran. }
+        output:
+          type: array
+          items: { $ref: '#/components/schemas/OutputItem' }
+        store: { type: boolean }
+        usage:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Usage'
+          description: |
+            null when the server cannot account for usage. A fabricated zero would be worse than an
+            honest absence, because a client cannot tell it from a free task.
+        metadata:
+          type: object
+          properties:
+            session_id: { type: string }
+            requested_model:
+              type: string
+              description: Present when the server ran a different model than was requested.
+            model_fallback: { type: boolean }
+            model_fallback_reason: { type: string }
+          additionalProperties: true
+      additionalProperties: true
+
+    ResponseStatus:
+      type: string
+      enum: [in_progress, completed, failed, incomplete, cancelled]
+      description: |
+        `incomplete` means a budget stopped the work and is usually worth continuing.
+        `failed` means it could not be done. `cancelled` means the client asked for a stop, and must
+        never be reported as `failed`.
+
+    OutputItem:
+      type: object
+      required: [type]
+      description: |
+        A client must tolerate item types it does not recognise. A client that renders only `message`
+        items and ignores the rest is a valid client.
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          examples: [message, reasoning, function_call, function_call_output]
+        status: { type: string }
+        role: { type: string }
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/ContentPart' }
+        summary:
+          type: array
+          items: { type: object, additionalProperties: true }
+        call_id: { type: string }
+        name: { type: string }
+        arguments: { type: string, description: JSON, as a string }
+        output: { type: string }
+      additionalProperties: true
+
+    ContentPart:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, examples: [output_text] }
+        text: { type: string }
+        annotations:
+          type: array
+          items: { $ref: '#/components/schemas/Annotation' }
+      additionalProperties: true
+
+    Annotation:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: container_file_citation }
+        container_id: { type: string }
+        file_id: { type: string }
+        filename: { type: string }
+        download_url: { type: string, format: uri }
+        start_index: { type: integer }
+        end_index: { type: integer }
+      additionalProperties: true
+
+    Usage:
+      type: object
+      properties:
+        input_tokens: { type: integer, minimum: 0 }
+        output_tokens: { type: integer, minimum: 0 }
+        total_tokens: { type: integer, minimum: 0 }
+        cache_read_tokens: { type: integer, minimum: 0 }
+        cache_write_tokens: { type: integer, minimum: 0 }
+      additionalProperties: true
+
+    Session:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        object: { type: string, const: session }
+        harness_id: { type: string }
+        title: { type: string }
+        status: { type: string }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+      additionalProperties: true
+
+    SessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions: { type: array, items: { $ref: '#/components/schemas/Session' } }
+        next_cursor:
+          type: [string, 'null']
+          description: |
+            null on the last page. A client must not be required to detect the end by receiving fewer
+            items than requested — that heuristic is wrong whenever a page is exactly full.
+      additionalProperties: true
+
+    File:
+      type: object
+      required: [id, filename]
+      properties:
+        id: { type: string }
+        object: { type: string, const: file }
+        container_id: { type: string }
+        filename: { type: string }
+        bytes: { type: integer, minimum: 0 }
+        created_at: { type: integer }
+      additionalProperties: true
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: '#/components/schemas/Error' }
+        detail:
+          type: string
+          deprecated: true
+          description: |
+            A human-readable alias of `error.message`, retained for clients written against
+            implementations that predate this envelope. Carries no information not in `error`.
+      additionalProperties: true
+
+    Error:
+      type: object
+      required: [type, code, message]
+      properties:
+        type:
+          type: string
+          enum:
+            - invalid_request_error
+            - authentication_error
+            - permission_error
+            - rate_limit_error
+            - harness_error
+            - server_error
+        code:
+          type: string
+          description: |
+            Specific and machine-readable. Servers may define additional codes for conditions this
+            specification does not cover, and must namespace them with a vendor prefix so a future
+            version cannot collide with them.
+          examples:
+            - unsupported_protocol_version
+            - invalid_input
+            - harness_not_found
+            - response_not_found
+            - session_not_found
+            - file_not_found
+            - session_expired
+            - harness_mismatch
+            - session_busy
+            - file_too_large
+            - model_unavailable
+            - unsupported_base
+            - missing_credential
+            - invalid_credential
+            - insufficient_scope
+            - rate_limited
+            - quota_exhausted
+            - harness_error
+            - harness_unavailable
+            - provider_error
+            - timeout
+            - cancelled
+            - preview_unavailable
+            - preview_failed
+        message:
+          type: string
+          description: |
+            One sentence, safe to show a user. Must not contain credentials, internal hostnames, file
+            paths, or stack traces.
+        param: { type: [string, 'null'], description: Dotted path to the offending field. }
+        detail: { type: [object, 'null'], additionalProperties: true }
+      additionalProperties: true
+
+    Event:
+      type: object
+      required: [type, sequence_number]
+      description: |
+        One streamed event. `sequence_number` starts at 0 and increases by exactly 1 per event, so a
+        client can detect a dropped event rather than silently rendering a gap.
+      properties:
+        type:
+          type: string
+          examples:
+            - response.created
+            - response.in_progress
+            - response.output_item.added
+            - response.output_item.done
+            - response.content_part.added
+            - response.content_part.done
+            - response.output_text.delta
+            - response.output_text.done
+            - response.output_text.annotation.added
+            - response.reasoning_summary_part.added
+            - response.reasoning_summary_text.delta
+            - response.reasoning_summary_part.done
+            - response.function_call_arguments.delta
+            - response.function_call_arguments.done
+            - response.completed
+            - response.incomplete
+            - response.failed
+            - error
+        sequence_number: { type: integer, minimum: 0 }
+        response: { $ref: '#/components/schemas/Response' }
+        item: { $ref: '#/components/schemas/OutputItem' }
+        part: { $ref: '#/components/schemas/ContentPart' }
+        annotation: { $ref: '#/components/schemas/Annotation' }
+        delta: { type: string }
+        text: { type: string }
+        arguments: { type: string }
+        item_id: { type: string }
+        output_index: { type: integer, minimum: 0 }
+        content_index: { type: integer, minimum: 0 }
+        summary_index: { type: integer, minimum: 0 }
+        annotation_index: { type: integer, minimum: 0 }
+        code: { type: string }
+        message: { type: string }
+        param: { type: [string, 'null'] }
+      additionalProperties: true

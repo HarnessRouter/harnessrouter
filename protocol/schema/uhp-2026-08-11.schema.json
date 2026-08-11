@@ -1,0 +1,891 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unifiedharnessprotocol.io/schema/uhp-2026-08-11.schema.json",
+  "title": "Unified Harness Protocol",
+  "description": "Object definitions for UHP 2026-08-11. Generated from uhp-2026-08-11.openapi.yaml by build.py — do not edit by hand.",
+  "$defs": {
+    "Discovery": {
+      "type": "object",
+      "required": [
+        "object",
+        "protocol",
+        "versions",
+        "default_version",
+        "conformance_class",
+        "capabilities"
+      ],
+      "properties": {
+        "object": {
+          "type": "string",
+          "const": "uhp.discovery"
+        },
+        "protocol": {
+          "type": "string",
+          "const": "uhp"
+        },
+        "versions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_version": {
+          "type": "string"
+        },
+        "conformance_class": {
+          "type": "string",
+          "enum": [
+            "core",
+            "extended",
+            "full"
+          ]
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "implementation": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "Capabilities": {
+      "type": "object",
+      "description": "Named booleans. A server reports `false` for a capability it does not implement rather than\nomitting it, so a client can distinguish \"not supported\" from \"server predates this field\".\nA client treats an absent key as `false`.\n",
+      "properties": {
+        "streaming": {
+          "type": "boolean"
+        },
+        "sessions": {
+          "type": "boolean"
+        },
+        "cancellation": {
+          "type": "boolean"
+        },
+        "files_input": {
+          "type": "boolean"
+        },
+        "files_output": {
+          "type": "boolean"
+        },
+        "session_listing": {
+          "type": "boolean"
+        },
+        "harness_management": {
+          "type": "boolean"
+        },
+        "session_sharing": {
+          "type": "boolean"
+        },
+        "idempotency": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "Harness": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "base"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^chrn_"
+        },
+        "object": {
+          "type": "string",
+          "const": "harness"
+        },
+        "name": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string",
+          "description": "Opaque. Not enumerated by this specification — a client must treat it as a string, or the\nprotocol would need revising every time a harness is released.\n",
+          "examples": [
+            "codex",
+            "claude-code",
+            "hermes"
+          ]
+        },
+        "baseLabel": {
+          "type": "string"
+        },
+        "defaultModel": {
+          "type": "string"
+        },
+        "systemPrompt": {
+          "type": "string"
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "disabledTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maxStep": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeoutSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Unix milliseconds"
+        }
+      },
+      "additionalProperties": true
+    },
+    "HarnessCreate": {
+      "type": "object",
+      "required": [
+        "base"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "default_model": {
+          "type": "string"
+        },
+        "system_prompt": {
+          "type": "string"
+        },
+        "disabled_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_step": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "ModelCatalog": {
+      "type": "object",
+      "required": [
+        "backends"
+      ],
+      "properties": {
+        "backends": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "default",
+              "models"
+            ],
+            "properties": {
+              "default": {
+                "type": "string"
+              },
+              "models": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Model"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "HarnessModels": {
+      "type": "object",
+      "required": [
+        "models"
+      ],
+      "properties": {
+        "harness_id": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "default": {
+          "type": "string"
+        },
+        "fallback": {
+          "type": "string"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Model"
+          }
+        }
+      }
+    },
+    "Model": {
+      "type": "object",
+      "required": [
+        "id",
+        "available"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Computed, not asserted: true means the server can serve this model for this harness right\nnow. Listing a model as available and then failing the task is the worst outcome for a\nclient, because a user has already chosen it.\n"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CreateResponseRequest": {
+      "type": "object",
+      "required": [
+        "input"
+      ],
+      "properties": {
+        "input": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          ],
+          "description": "A bare string is shorthand for one user message."
+        },
+        "model": {
+          "type": "string",
+          "description": "Canonical model id. Omitted means the harness default."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Client metadata. `harness_id` selects the configured harness.",
+          "properties": {
+            "harness_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        },
+        "stream": {
+          "type": "boolean",
+          "default": false
+        },
+        "previous_response_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "store": {
+          "type": "boolean",
+          "default": true
+        },
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Agent step (tool-call round) budget"
+        },
+        "timeout_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Wall-clock budget"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "background": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "Response": {
+      "type": "object",
+      "required": [
+        "id",
+        "object",
+        "created_at",
+        "status",
+        "output",
+        "model"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^resp_"
+        },
+        "object": {
+          "type": "string",
+          "const": "response"
+        },
+        "created_at": {
+          "type": "integer",
+          "description": "Unix seconds"
+        },
+        "status": {
+          "$ref": "#/$defs/ResponseStatus"
+        },
+        "error": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Error"
+            }
+          ],
+          "description": "Non-null only when status is `failed`."
+        },
+        "incomplete_details": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "previous_response_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "description": "The model that actually ran."
+        },
+        "output": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OutputItem"
+          }
+        },
+        "store": {
+          "type": "boolean"
+        },
+        "usage": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Usage"
+            }
+          ],
+          "description": "null when the server cannot account for usage. A fabricated zero would be worse than an\nhonest absence, because a client cannot tell it from a free task.\n"
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "requested_model": {
+              "type": "string",
+              "description": "Present when the server ran a different model than was requested."
+            },
+            "model_fallback": {
+              "type": "boolean"
+            },
+            "model_fallback_reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "ResponseStatus": {
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed",
+        "incomplete",
+        "cancelled"
+      ],
+      "description": "`incomplete` means a budget stopped the work and is usually worth continuing.\n`failed` means it could not be done. `cancelled` means the client asked for a stop, and must\nnever be reported as `failed`.\n"
+    },
+    "OutputItem": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "description": "A client must tolerate item types it does not recognise. A client that renders only `message`\nitems and ignores the rest is a valid client.\n",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "examples": [
+            "message",
+            "reasoning",
+            "function_call",
+            "function_call_output"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
+        },
+        "summary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string",
+          "description": "JSON",
+          "as a string": null
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ContentPart": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "examples": [
+            "output_text"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Annotation"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Annotation": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "container_file_citation"
+        },
+        "container_id": {
+          "type": "string"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "download_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "start_index": {
+          "type": "integer"
+        },
+        "end_index": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "Session": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "type": "string",
+          "const": "session"
+        },
+        "harness_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "updated_at": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "SessionList": {
+      "type": "object",
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Session"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "null on the last page. A client must not be required to detect the end by receiving fewer\nitems than requested — that heuristic is wrong whenever a page is exactly full.\n"
+        }
+      },
+      "additionalProperties": true
+    },
+    "File": {
+      "type": "object",
+      "required": [
+        "id",
+        "filename"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "type": "string",
+          "const": "file"
+        },
+        "container_id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ErrorEnvelope": {
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/Error"
+        },
+        "detail": {
+          "type": "string",
+          "deprecated": true,
+          "description": "A human-readable alias of `error.message`, retained for clients written against\nimplementations that predate this envelope. Carries no information not in `error`.\n"
+        }
+      },
+      "additionalProperties": true
+    },
+    "Error": {
+      "type": "object",
+      "required": [
+        "type",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "invalid_request_error",
+            "authentication_error",
+            "permission_error",
+            "rate_limit_error",
+            "harness_error",
+            "server_error"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "description": "Specific and machine-readable. Servers may define additional codes for conditions this\nspecification does not cover, and must namespace them with a vendor prefix so a future\nversion cannot collide with them.\n",
+          "examples": [
+            "unsupported_protocol_version",
+            "invalid_input",
+            "harness_not_found",
+            "response_not_found",
+            "session_not_found",
+            "file_not_found",
+            "session_expired",
+            "harness_mismatch",
+            "session_busy",
+            "file_too_large",
+            "model_unavailable",
+            "unsupported_base",
+            "missing_credential",
+            "invalid_credential",
+            "insufficient_scope",
+            "rate_limited",
+            "quota_exhausted",
+            "harness_error",
+            "harness_unavailable",
+            "provider_error",
+            "timeout",
+            "cancelled",
+            "preview_unavailable",
+            "preview_failed"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "One sentence, safe to show a user. Must not contain credentials, internal hostnames, file\npaths, or stack traces.\n"
+        },
+        "param": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Dotted path to the offending field."
+        },
+        "detail": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "Event": {
+      "type": "object",
+      "required": [
+        "type",
+        "sequence_number"
+      ],
+      "description": "One streamed event. `sequence_number` starts at 0 and increases by exactly 1 per event, so a\nclient can detect a dropped event rather than silently rendering a gap.\n",
+      "properties": {
+        "type": {
+          "type": "string",
+          "examples": [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.output_item.done",
+            "response.content_part.added",
+            "response.content_part.done",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.output_text.annotation.added",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_part.done",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+            "error"
+          ]
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "response": {
+          "$ref": "#/$defs/Response"
+        },
+        "item": {
+          "$ref": "#/$defs/OutputItem"
+        },
+        "part": {
+          "$ref": "#/$defs/ContentPart"
+        },
+        "annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "delta": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "summary_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "annotation_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "param": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

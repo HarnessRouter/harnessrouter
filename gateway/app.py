@@ -2394,6 +2394,118 @@ async def llm_broker(path: str, request: Request):
                              media_type=up.headers.get("content-type"))
 
 
+# ── Unified Harness Protocol: version, discovery, and the error envelope ────────────────
+# The protocol this server implements is specified in protocol/ — this section is the part of the
+# implementation the specification names directly. Writing the specification exposed three things
+# this server did not do, and all three were client-visible defects rather than cosmetic gaps:
+#
+#   1. Nothing told a client which contract a response was written to. Added UHP-Version on every
+#      response, and honoured on the way in.
+#   2. A client had no way to ask what this server supports; it had to guess, or learn from a 404.
+#      Added GET /v1/uhp.
+#   3. Failures returned a bare human string, so a client had to match on prose to decide whether to
+#      retry. Added the structured error envelope. The old `detail` string is still emitted beside
+#      it, because clients in the wild read it — it is documented as deprecated, not removed under
+#      them.
+UHP_VERSION = "2026-08-11"
+UHP_VERSIONS = [UHP_VERSION]
+
+# Capabilities are declared, not inferred, and the conformance suite checks each one against the
+# behaviour it promises. Reporting false is a supported answer; omitting a key is not, because a
+# client cannot tell an omission from an older server.
+UHP_CAPABILITIES = {
+    "streaming": True,
+    "sessions": True,
+    "cancellation": True,
+    "files_input": True,
+    "files_output": True,
+    "session_listing": True,
+    "harness_management": True,
+    "session_sharing": True,
+    "idempotency": True,
+}
+UHP_CONFORMANCE_CLASS = "full"
+
+# status -> (error type, fallback code) for raises that predate uhp_error() and carry only a string.
+# The type is always right because it follows from the status; the code is generic, which is honest:
+# a made-up specific code would be worse than one that says only as much as the status does.
+_UHP_STATUS_TYPE = {
+    400: ("invalid_request_error", "invalid_input"),
+    401: ("authentication_error", "invalid_credential"),
+    403: ("permission_error", "insufficient_scope"),
+    404: ("invalid_request_error", "not_found"),
+    409: ("invalid_request_error", "conflict"),
+    413: ("invalid_request_error", "file_too_large"),
+    422: ("invalid_request_error", "unprocessable"),
+    429: ("rate_limit_error", "rate_limited"),
+    500: ("server_error", "internal_error"),
+    501: ("server_error", "not_implemented"),
+    502: ("server_error", "upstream_error"),
+    503: ("server_error", "unavailable"),
+    504: ("server_error", "timeout"),
+}
+
+
+def uhp_error(status: int, code: str, message: str, param: str | None = None,
+              detail: dict | None = None) -> HTTPException:
+    """Raise a failure the protocol names. `raise uhp_error(404, "harness_not_found", ...)`.
+
+    Carries the structured fields through FastAPI's HTTPException.detail so the handler below can
+    emit them verbatim instead of guessing from the status.
+    """
+    etype = _UHP_STATUS_TYPE.get(status, ("server_error", "internal_error"))[0]
+    return HTTPException(status, {"__uhp__": True, "type": etype, "code": code,
+                                  "message": message, "param": param, "detail": detail})
+
+
+@app.exception_handler(HTTPException)
+async def _uhp_http_exception(request: Request, exc: HTTPException):
+    d = exc.detail
+    if isinstance(d, dict) and d.get("__uhp__"):
+        err = {k: d.get(k) for k in ("type", "code", "message", "param", "detail")}
+    else:
+        etype, code = _UHP_STATUS_TYPE.get(exc.status_code, ("server_error", "internal_error"))
+        err = {"type": etype, "code": code, "message": str(d) if d else "request failed",
+               "param": None, "detail": None}
+    body = {"error": err, "detail": err["message"]}   # `detail`: deprecated alias, see above
+    return JSONResponse(body, status_code=exc.status_code,
+                        headers={**(exc.headers or {}), "UHP-Version": UHP_VERSION})
+
+
+@app.middleware("http")
+async def _uhp_version(request: Request, call_next):
+    """Negotiate the protocol version, and state on every response which one was served.
+
+    A client that asks for a version this server cannot serve is refused. Serving it a different
+    version quietly would be worse: it would receive a body it may not be able to parse, with
+    nothing indicating why.
+    """
+    want = (request.headers.get("uhp-version") or "").strip()
+    if want and want not in UHP_VERSIONS:
+        return JSONResponse(
+            {"error": {"type": "invalid_request_error", "code": "unsupported_protocol_version",
+                       "message": f"This server does not implement UHP version '{want}'.",
+                       "param": "UHP-Version", "detail": {"supported": UHP_VERSIONS}},
+             "detail": f"This server does not implement UHP version '{want}'."},
+            status_code=400, headers={"UHP-Version": UHP_VERSION})
+    resp = await call_next(request)
+    resp.headers["UHP-Version"] = UHP_VERSION
+    return resp
+
+
+@app.get("/v1/uhp")
+def uhp_discovery() -> dict:
+    """Protocol discovery. Deliberately unauthenticated: a client has to be able to find out whether
+    this is a UHP server, and which versions it speaks, BEFORE it decides what credential to present.
+    Nothing here is principal-specific."""
+    return {"object": "uhp.discovery", "protocol": "uhp",
+            "versions": UHP_VERSIONS, "default_version": UHP_VERSION,
+            "conformance_class": UHP_CONFORMANCE_CLASS,
+            "capabilities": dict(UHP_CAPABILITIES),
+            "implementation": {"name": "HarnessRouter Community Edition",
+                               "version": os.environ.get("HR_VERSION", "0.3.0")}}
+
+
 @app.get("/healthz")
 def healthz(bus: int = 0) -> dict:
     if bus:
@@ -2554,7 +2666,7 @@ async def _owned_session(request: Request, sid: str) -> tuple[str, dict]:
     org = p.get("org", "")
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != org or str(v.get("status")) == "deleted":
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return org, v
 
 
@@ -4566,7 +4678,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # the marketplace model is exactly "callers run it, the owner pays infra". Until entitlements
     # land, the unguessable harness id is the run capability.
     if hv and str(hv.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -5120,11 +5232,11 @@ async def get_response(response_id: str, request: Request):
     principal = await _principal(request)
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Object-level ownership (LIVE-B): one org must not read another's response. 404 (not 403)
     # so a cross-org id probe can't confirm existence. Legacy records with no _org stay readable.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
@@ -5227,11 +5339,11 @@ async def delete_response(response_id: str, request: Request):
     principal = await _principal(request)
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # V1C02-004: object-level ownership — one org must not delete another's response. 404 (not
     # 403) so a cross-org id probe can't confirm existence. Legacy records with no _org stay owned.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     rec["_deleted"] = True
     try:
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
@@ -5322,7 +5434,7 @@ async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
     p = await _principal(request)
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return await _serve_workspace_path(sid, path)
 
 
@@ -5335,7 +5447,7 @@ async def set_session_share(sid: str, body: ShareBody, request: Request) -> dict
     p = await _principal(request)
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     if body.enabled:
         token = str(v.get("share_token") or "") or ("shr" + uuid.uuid4().hex)
         await _vertex_upsert(sid, {"share_token": token, "shared": "1",
@@ -5354,7 +5466,7 @@ async def get_session_share(sid: str, request: Request) -> dict:
     p = await _principal(request)
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return {"enabled": str(v.get("shared") or "") == "1", "token": str(v.get("share_token") or "")}
 
 
@@ -5432,9 +5544,9 @@ async def list_input_items(response_id: str, request: Request, limit: int = 20, 
     principal = await _principal(request)
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
-        raise HTTPException(404, "response not found")   # LIVE-B: object-level ownership
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # LIVE-B: object-level ownership
     data = list(rec.get("_input") or [])
     if order == "desc":
         data.reverse()
@@ -5452,11 +5564,11 @@ async def cancel_response(response_id: str, request: Request):
     org = principal.get("org", "")
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Ownership (LIVE-B): the resolved principal must own this response. 404 (not 403)
     # so a cross-org probe can't even confirm the id exists.
     if str(rec.get("_org") or "") != org:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     sid = str(rec.get("_session_id") or "")
     # PRIMARY (safe, cross-replica): a durable per-RESPONSE monotonic terminal latch. The turn's
     # own loop checks resp_is_cancelled(its resp_id) at every stage and self-terminates within
@@ -5750,7 +5862,9 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
                 items = (json.loads(blob) or {}).get("files") or []
             except Exception:  # noqa: BLE001
                 items = []
-        files = [{"path": it["path"], "bytes": it.get("bytes"),
+        files = [{"object": "file", "id": it["file_id"], "container_id": sid,
+                  "filename": it["path"].rsplit("/", 1)[-1],
+                  "path": it["path"], "bytes": it.get("bytes"),
                   "media_type": mimetypes.guess_type(it["path"])[0] or "application/octet-stream",
                   "file_id": it["file_id"], "download_url": _file_url(sid, it["file_id"])}
                  for it in items if it.get("path") and it.get("file_id")]
@@ -5783,7 +5897,9 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
             if not _ws_visible(path):
                 continue
             fid = cfile_by_name.get(path) or _wf_id(path)
-            files.append({"path": path, "bytes": m.size,
+            files.append({"object": "file", "id": fid, "container_id": sid,
+                          "filename": path.rsplit("/", 1)[-1],
+                          "path": path, "bytes": m.size,
                           "media_type": mimetypes.guess_type(path)[0] or "application/octet-stream",
                           "file_id": fid,
                           "download_url": _file_url(sid, fid)})
@@ -6184,6 +6300,21 @@ async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
 
 
 # ── custom harnesses (per-org, server-persisted; replaces the client localStorage seam) ───────
+# Bases this server can execute. Derived from the same mapping the turn loop uses
+# (_backend_of_harness), so the two cannot disagree: anything not listed here has no backend and
+# could only fail at task time.
+_SUPPORTED_BASES = ("codex", "claude-code", "claude", "hermes")
+
+
+def _require_supported_base(base: str) -> str:
+    b = (base or "").strip().lower()
+    if b not in _SUPPORTED_BASES:
+        raise uhp_error(422, "unsupported_base",
+                        f"This server cannot run the harness base '{base}'.", "base",
+                        {"supported": list(_SUPPORTED_BASES)})
+    return b
+
+
 class HarnessBody(BaseModel):
     name: str
     base: str
@@ -6226,7 +6357,8 @@ async def _vg_list_by_org(label: str, org: str) -> list[dict]:
 
 
 def _harness_props(body: HarnessBody) -> dict:
-    return {"name": body.name, "base": body.base, "base_label": body.base_label or body.base,
+    base = _require_supported_base(body.base)   # refuse at create, not at the first task
+    return {"name": body.name, "base": base, "base_label": body.base_label or base,
             "default_model": body.default_model or "", "system_prompt": body.system_prompt or "",
             "mcp_servers": json.dumps(body.mcp_servers or []), "skills": json.dumps(body.skills or []),
             "disabled_tools": json.dumps(body.disabled_tools or []),
@@ -6343,7 +6475,7 @@ async def get_harness(org: str, hid: str, request: Request) -> dict:
     await _owned_org(request, org)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     return _harness_out(v)
 
 
@@ -6354,7 +6486,7 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     await _owned_org(request, org)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
@@ -6367,7 +6499,7 @@ async def get_harness_skill_files(org: str, hid: str, skill_id: str, request: Re
     await _owned_org(request, org)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -6386,7 +6518,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     # V1C02-005: bind the mutation to the caller's org — a foreign harness id must not be editable.
     cur = await _vertex_get(hid)
     if not cur or str(cur.get("org") or "") != org or str(cur.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
     body.skills = await _skills_prepare(body.skills)
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
@@ -6400,7 +6532,7 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     # V1C02-005: only delete a harness that belongs to the caller's org.
     cur = await _vertex_get(hid)
     if not cur or str(cur.get("org") or "") != org:
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     await _vg_upsert("Harness", hid, {"deleted": "1"})
     return {"id": hid, "deleted": True}
 
@@ -6411,7 +6543,7 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
     p = await _principal(request)
     org = p.get("org", "")
     if not org:
-        raise HTTPException(401, "invalid or missing HarnessRouter API key")
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     return org, p.get("member", "")
 
 
@@ -6420,7 +6552,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     p = await _principal(request)
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
-        raise HTTPException(401, "invalid or missing HarnessRouter API key")
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     body.skills = await _skills_prepare(body.skills)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -6436,7 +6568,7 @@ async def list_harnesses_public(request: Request) -> dict:
     p = await _principal(request)
     org = p.get("org", "")
     if not org:
-        raise HTTPException(401, "invalid or missing HarnessRouter API key")
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     # Org-scoped, member-agnostic (see list_harnesses): an API key sees every harness in its
     # org — narrowed to its workspace when the key is workspace-scoped — exactly like the
     # console, so both surfaces always agree.
@@ -6455,7 +6587,7 @@ async def get_harness_public(hid: str, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     return _harness_out(v)
 
 
@@ -6483,7 +6615,7 @@ async def get_harness_models_public(hid: str, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
@@ -6497,7 +6629,7 @@ async def get_harness_skill_files_public(hid: str, skill_id: str, request: Reque
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -6515,7 +6647,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     body.skills = await _skills_prepare(body.skills)
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     return _harness_out(await _vertex_get(hid) or {"id": hid})
@@ -6526,6 +6658,6 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org:
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     await _vg_upsert("Harness", hid, {"deleted": "1"})
     return {"id": hid, "deleted": True}
