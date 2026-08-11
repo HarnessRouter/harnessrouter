@@ -93,7 +93,9 @@ export default function HarnessSettingsPage() {
   const readOnly = Boolean(oob);
   const skills = draft?.skills || [];
   const ownSkills = skills.map((s, idx) => ({ s, idx })).filter(({ s }) => isOwnSkill(s));
-  const baseSkillNames = (srvBase?.builtinSkills || []).filter((n) => !ownSkills.some(({ s }) => s.name === n));
+  // Built-ins the harness has not replaced with one of its own. A built-in is implicit: the
+  // harness stores an entry only when its answer differs from the image's default.
+  const baseSkills = (srvBase?.builtinSkills || []).filter((b) => !ownSkills.some(({ s }) => s.name === b.name));
   const disabledTools = new Set(draft?.disabledTools || []);
 
   const stats = statsFor(cards);
@@ -224,7 +226,7 @@ export default function HarnessSettingsPage() {
           <section className="form-section">
             <div><h3>Skills</h3><p>Add Harness-specific workflows, replace inherited Skills, or disable capabilities this agent should not use.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{ownSkills.length + baseSkillNames.length} configured Skills</strong>
+              <div className="section-actions"><strong>{ownSkills.length + baseSkills.length} configured Skills</strong>
                 {!readOnly && <button className="button small" type="button" onClick={() => setNewSkill({ name: '' })}>
                   <iconify-icon icon="tabler:plus"></iconify-icon>Add Skill</button>}</div>
               <div className="capability-list">
@@ -241,12 +243,16 @@ export default function HarnessSettingsPage() {
                     </div>
                   </div>
                 ))}
-                {baseSkillNames.map((n) => {
-                  const off = skills.some((s) => s.name === n && s.enabled === false && !isOwnSkill(s));
+                {baseSkills.map((b) => {
+                  const n = b.name;
+                  const stored = skills.find((s) => s.name === n && !isOwnSkill(s));
+                  // No stored entry means the image's default applies.
+                  const off = stored ? stored.enabled === false : !b.defaultEnabled;
                   return (
                     <div key={'inh-' + n} className="capability-row">
                       <span className="capability-icon"><iconify-icon icon="tabler:bulb"></iconify-icon></span>
-                      <div className="capability-copy"><strong>{n}</strong><span>Inherited from {base?.name}</span></div>
+                      <div className="capability-copy"><strong>{b.title || n}</strong>
+                        <span>{b.description || 'Built in'}</span></div>
                       <div className="capability-actions">
                         {!readOnly && <button className="button quiet small" type="button" onClick={() => {
                           if (!draft) return;
@@ -257,13 +263,21 @@ export default function HarnessSettingsPage() {
                           setEditSkillIdx(rest.length);
                         }}>Replace</button>}
                         <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={!off}
-                          onClick={() => upd({ skills: off ? skills.filter((s) => !(s.name === n && s.enabled === false)) : [...skills, { id: 'skl_' + crypto.randomUUID().replace(/-/g, ''), name: n, enabled: false }] })}>
+                          onClick={() => {
+                            const rest = skills.filter((s) => !(s.name === n && !isOwnSkill(s)));
+                            // Store an entry only when the harness disagrees with the image's
+                            // default; agreeing with it stores nothing, so the harness keeps
+                            // following the image as the bundled set changes.
+                            const want = off;   // clicking flips it to this
+                            upd({ skills: want === b.defaultEnabled ? rest
+                              : [...rest, { id: 'skl_' + crypto.randomUUID().replace(/-/g, ''), name: n, enabled: want }] });
+                          }}>
                           {off ? 'Disabled' : 'Enabled'}</button>
                       </div>
                     </div>
                   );
                 })}
-                {ownSkills.length === 0 && baseSkillNames.length === 0 && (
+                {ownSkills.length === 0 && baseSkills.length === 0 && (
                   <div className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:bulb"></iconify-icon></span>
                     <div className="capability-copy"><strong>No Skills added yet</strong>

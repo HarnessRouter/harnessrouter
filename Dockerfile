@@ -60,9 +60,9 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
         curl ca-certificates git bash tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Document preview. The built-in harnesses ship docx/pptx/xlsx skills, so agents produce those
-# files routinely — and a presentation you can only download is a worse answer than one you can
-# look at. Browsers render none of them, so the console asks the gateway for a PDF rendition and
+# Document preview. The built-in skills create .docx/.pptx/.xlsx routinely, and LibreOffice is
+# also how those become a PDF — the officecli skill's own PDF export needs a plugin that is not
+# installed. A presentation you can only download is a worse answer than one you can look at. Browsers render none of them, so the console asks the gateway for a PDF rendition and
 # LibreOffice headless is what makes it. Impress/Writer/Calc only, no recommends: the full
 # libreoffice metapackage drags in Java and a desktop stack for no benefit here.
 ARG WITH_DOC_PREVIEW=1
@@ -95,6 +95,19 @@ RUN grep -viE "^(azure-|azure_)" /app/gateway/requirements.txt > /app/gateway/re
     && pip install --no-cache-dir -r /app/gateway/req.local.txt \
     && pip install --no-cache-dir -r /app/runner/requirements.txt
 
+# Built-in skills, from their own repository. Pinned by ref so two builds of the same image tag
+# ship the same catalogue; HR_SKILLS_REF=<sha> for an exact pin, WITH_BUILTIN_SKILLS=0 for none.
+ARG WITH_BUILTIN_SKILLS=1
+ARG HR_SKILLS_REPO=https://github.com/HarnessRouter/skills.git
+ARG HR_SKILLS_REF=main
+ENV HR_BUILTIN_SKILLS_DIR=/opt/harnessrouter/skills
+COPY docker/install-skills.sh /tmp/install-skills.sh
+RUN chmod +x /tmp/install-skills.sh \
+    && WITH_BUILTIN_SKILLS="$WITH_BUILTIN_SKILLS" HR_SKILLS_REPO="$HR_SKILLS_REPO" \
+       HR_SKILLS_REF="$HR_SKILLS_REF" HR_SKILLS_DIR=/opt/harnessrouter/skills \
+       /tmp/install-skills.sh \
+    && rm -f /tmp/install-skills.sh
+
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/
 COPY docker/entrypoint.sh /app/entrypoint.sh
@@ -109,7 +122,8 @@ COPY --from=ui /ui/public           /app/ui/public
 # runtime user is unprivileged and owns the workspace and data volume.
 RUN useradd -m -u 10001 agent \
     && mkdir -p /data \
-    && chown -R agent:agent /data /app
+    && chown -R agent:agent /data /app \
+    && chmod -R a+rX /opt/harnessrouter/skills
 USER agent
 
 EXPOSE 3000

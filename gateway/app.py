@@ -23,8 +23,10 @@ import uuid
 import zipfile
 
 import base64
+import functools
 import hashlib
 import mimetypes
+import pathlib
 import shutil
 import subprocess
 import tarfile
@@ -2204,14 +2206,22 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
 
     skills_out: list[dict] = []
     suppressed: list[str] = []   # built-in skill names this harness disabled (runner skips mounting them)
+    builtins = _builtin_skills()
+    seen: set[str] = set()
     for sk in own + inherited:
         name = sk.get("name") or sk.get("id")
         if not name:
             continue
+        seen.add(name)
         if str(sk.get("enabled")) in ("False", "false", "0"):
             suppressed.append(name)   # present-and-disabled → suppress the inherited built-in of this name
             continue
         files = sk.get("files")
+        # An entry naming a built-in and carrying no files of its own is the harness switching that
+        # built-in ON (it is stored only when the answer differs from the image's default). Its
+        # content comes from the image, so a Harness never holds a stale copy of a bundled skill.
+        if not files and not sk.get("content") and not sk.get("blob") and name in builtins:
+            files = builtins[name]["files"]
         # Large skill bundles (the Agent Skills folders exceed the 64k vertex-prop cap) live in a
         # blob; the vertex prop carries only {name, enabled, blob}. Resolve the full files here.
         if not files and sk.get("blob"):
@@ -2224,6 +2234,13 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         if not (files or sk.get("content")):
             continue
         skills_out.append({"name": name, "files": files, "content": sk.get("content")})
+
+    # Built-ins the harness never mentions: on when the image says so. Implicit, so the set follows
+    # the image rather than whatever was true when the Harness was created.
+    for name, meta in sorted(builtins.items()):
+        if name not in seen and meta["default_enabled"]:
+            skills_out.append({"name": name, "files": meta["files"], "content": None})
+
     disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
     return mcp_out, skills_out, suppressed, disabled_tools
 
@@ -6332,6 +6349,64 @@ async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
     return await _mcp_list_tools(body.url, token)
 
 
+# ── Built-in skills ───────────────────────────────────────────────────────────────────────────
+# Baked into the image from HarnessRouter/skills (see docker/install-skills.sh). Read from disk,
+# never hard-coded: the console used to carry its own list of four "built-in skills" that existed
+# nowhere, with Replace and Disable buttons beside them acting on nothing.
+#
+# A built-in is implicit — a Harness stores nothing to use one. It stores an entry only to turn a
+# default-off skill ON, or a default-on skill OFF. So changing what the image ships changes every
+# Harness at once, and no Harness carries a stale copy of a skill's files.
+_BUILTIN_SKILLS_DIR = os.environ.get("HR_BUILTIN_SKILLS_DIR", "/opt/harnessrouter/skills")
+_SKILL_FILE_MAX = 2 * 1024 * 1024   # per file; a skill is instructions, not a data set
+
+
+@functools.lru_cache(maxsize=1)
+def _builtin_skills() -> dict:
+    """{name: {"title","description","default_enabled","origin","files":[{path,content|content_b64}]}}
+
+    Empty when the image was built without them (WITH_BUILTIN_SKILLS=0), which is a supported
+    build, not an error — callers must render that honestly rather than as "none configured"."""
+    root = pathlib.Path(_BUILTIN_SKILLS_DIR)
+    manifest = root / "manifest.json"
+    if not manifest.is_file():
+        return {}
+    try:
+        entries = json.loads(manifest.read_text()).get("skills", [])
+    except Exception:  # noqa: BLE001 — a corrupt manifest must not take the gateway down
+        print(f"[skills] unreadable manifest at {manifest}", flush=True)
+        return {}
+
+    out: dict = {}
+    for e in entries:
+        name = (e.get("name") or "").strip()
+        folder = root / name
+        if not name or not (folder / "SKILL.md").is_file():
+            print(f"[skills] {name or '(unnamed)'} in manifest but not on disk — skipped", flush=True)
+            continue
+        files: list[dict] = []
+        for f in sorted(folder.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(folder).as_posix()
+            raw = f.read_bytes()
+            if len(raw) > _SKILL_FILE_MAX:
+                print(f"[skills] {name}/{rel} exceeds {_SKILL_FILE_MAX} bytes — skipped", flush=True)
+                continue
+            try:                      # text where possible, so the stored form stays readable
+                files.append({"path": rel, "content": raw.decode()})
+            except UnicodeDecodeError:
+                files.append({"path": rel, "content_b64": base64.b64encode(raw).decode()})
+        if not files:
+            continue
+        out[name] = {"title": e.get("title") or name, "description": e.get("description") or "",
+                     "default_enabled": bool(e.get("default_enabled")),
+                     "origin": e.get("origin") or "", "files": files}
+    if out:
+        print(f"[skills] {len(out)} built-in: {', '.join(sorted(out))}", flush=True)
+    return out
+
+
 # ── custom harnesses (per-org, server-persisted; replaces the client localStorage seam) ───────
 # ── base harness catalog ─────────────────────────────────────────────────────────────────
 # What each base IS. The console used to carry its own copy of this — models, tools, skills and
@@ -6696,9 +6771,13 @@ async def list_bases(request: Request) -> dict:
                        for m in cat.get("models", [])],
             "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
                       for n, lbl in b["tools"]],
-            # Honest emptiness: see the docstring. `builtinSkillsEnumerable` lets the console say
-            # "this base brings its own" instead of implying the base has none at all.
-            "builtinSkills": [],
+            # Skills bundled into the image, which every base can use. A base ALSO discovers
+            # skills of its own at run time that nothing outside a turn can enumerate, so
+            # `builtinSkillsEnumerable` stays False: the console must say "and it brings its own"
+            # rather than presenting this list as everything the agent has.
+            "builtinSkills": [{"name": n, "title": b2["title"], "description": b2["description"],
+                               "defaultEnabled": b2["default_enabled"], "origin": b2["origin"]}
+                              for n, b2 in sorted(_builtin_skills().items())],
             "builtinSkillsEnumerable": False,
         })
     return {"bases": out}

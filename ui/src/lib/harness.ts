@@ -139,13 +139,15 @@ export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
 };
 
 export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
+export interface BuiltinSkill { name: string; title: string; description: string; defaultEnabled: boolean; origin: string }
 export interface BaseInfo {
   id: string; label: string; backend: string; status: string; systemPrompt: string;
   defaultModel: string;
   models: { id: string; available: boolean; default: boolean }[];
   tools: BaseTool[];
-  /** Built-in skills the SERVER can enumerate. Empty when it cannot — see builtinSkillsEnumerable. */
-  builtinSkills: string[];
+  /** Skills bundled into the image, which any harness can use. `defaultEnabled` is what a NEW
+   *  harness starts with; a harness that stored its own answer overrides it. */
+  builtinSkills: BuiltinSkill[];
   /** false means the base brings its own skills but nothing outside a turn can list them. The UI
    *  must say that rather than render an empty list as "this base has no skills". */
   builtinSkillsEnumerable: boolean;
