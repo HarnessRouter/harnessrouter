@@ -201,6 +201,13 @@ Storage sits behind a small adapter interface (graph / blob / secret). This repo
 implementations; the hosted deployment overlays its own against the same interface. That seam is
 why this is genuinely the same codebase rather than a fork that drifts.
 
+## Contributing
+
+Unified Harness Protocol (UHP) is the open standard for how products work with agent harnesses.
+HarnessRouter Community Edition is a working implementation of that standard. Contributions to the
+protocol, conformance tests, harness support, implementation, and documentation are welcome. Start
+with [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE). Third-party notices are in [NOTICE](NOTICE).
