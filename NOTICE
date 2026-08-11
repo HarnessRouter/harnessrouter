@@ -1,7 +1,11 @@
 HarnessRouter
 Copyright (c) 2026 HarnessRouter
 
-This product is licensed under the MIT License (see LICENSE).
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Apache-2.0 requires that this NOTICE file be included in redistributions; the third-party
+entries below are here for the same reason, and state the licenses of OTHER projects — they
+are unaffected by ours.
 
 THIRD-PARTY DEPENDENCIES
 ------------------------

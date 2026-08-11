@@ -200,7 +200,7 @@ why this is genuinely the same codebase rather than a fork that drifts.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Third-party notices are in [NOTICE](NOTICE).
+Apache-2.0 — see [LICENSE](LICENSE). Third-party notices are in [NOTICE](NOTICE).
 
 The agent CLIs are **not** redistributed here; they are installed on first run under their own
 licenses. Review them before enabling a backend.
