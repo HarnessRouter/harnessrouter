@@ -1968,12 +1968,16 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # The model's system prompt stays the CLI default; persistent instructions live in this file.
     #
     # Disabled tools, by what each CLI can actually enforce:
-    #   claude — `--disallowedTools`, a hard block (applied in _build_claude below).
+    #   claude — a `permissions.deny` list in settings.json, a hard block (see _build_claude). The
+    #     agent reports having no such tool. NOT `--disallowedTools`: that belongs to the permission
+    #     prompt system, which --dangerously-skip-permissions turns off.
     #   codex, hermes — no per-tool switch exists. Codex has none at all; hermes only disables whole
     #     TOOLSETS, which is a different granularity from the per-tool names a harness configures.
     #     Both read the agent doc, so both get the same instruction. It is a request to the model,
-    #     not a guarantee, and is written here once rather than as two divergent branches — hermes
-    #     previously had neither, and silently ignored every disabled tool.
+    #     not a guarantee — verified reaching the agent on both, and verified as a request: hermes
+    #     complied, codex used the tool anyway. That is why the console calls it a request rather
+    #     than a block. Written here once rather than as two divergent branches — hermes previously
+    #     had neither, and silently ignored every disabled tool.
     agent_doc = req.agent_doc or ""
     if backend in ("codex", "hermes") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
