@@ -931,10 +931,9 @@ async def _effective_model_map() -> dict[str, str]:
     stored document, so adding a key or upgrading the image changes what runs without anyone
     re-saving a form.
 
-    "Can serve" is decided by the vendor tables and nothing else. When a model went to the wrong
-    integration the fix belongs there — gpt-5.2-codex was claimed by an aggregator that answers
-    "no available channel" for it, and the answer is to stop listing it under that aggregator,
-    not to teach this function a preference order it would then apply to everything.
+    "Can serve" is decided by the vendor tables and nothing else. When a model goes to the wrong
+    integration, the fix belongs in that vendor's table — stop listing it there — rather than in
+    a preference order here, which would then apply to every other model too.
 
     A stored route to a model its integration cannot serve is dropped, not honoured — that is a
     dead route left behind by an edit, and following it would fail at the point of no return.
@@ -3508,7 +3507,6 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.4-mini":  "gpt-5.4-mini",
         "gpt-5.2":       "gpt-5.2",
         "gpt-5.3-codex": "gpt-5.3-codex",
-        "gpt-5.2-codex": "gpt-5.2-codex",
     },
     "azure-foundry": {
         "gpt-5.6-sol":   "gpt-5.6-sol",
@@ -3519,7 +3517,6 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.4-mini":  "gpt-5.4-mini",
         "gpt-5.2":       "gpt-5.2",
         "gpt-5.3-codex": "gpt-5.3-codex",
-        "gpt-5.2-codex": "gpt-5.2-codex",
     },
     "openrouter": {
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
@@ -3530,7 +3527,6 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.4-mini":       "openai/gpt-5.4-mini",
         "gpt-5.2":            "openai/gpt-5.2",
         "gpt-5.3-codex":      "openai/gpt-5.3-codex",
-        "gpt-5.2-codex":      "openai/gpt-5.2-codex",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
         "claude-opus-4.8":    "anthropic/claude-opus-4.8",
@@ -3542,7 +3538,6 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshotai/kimi-k3",
-        "glm-5.2":            "z-ai/glm-5.2",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
@@ -3568,9 +3563,12 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 # Verified by calling each one on a TokenRouter connection (2026-08-10). Re-check before adding
 # back: channels come and go on an aggregator, which is exactly why this lives next to the table
 # and not in someone's memory.
+# glm-5.2 is NOT here and is not in the catalog: the provider serves it correctly (a direct call
+# returns "ok" in 2.2s, streams cleanly, and honours function tools), but hermes 0.19.0 hangs
+# after receiving the response — no output, no error, until the turn is stopped. That is a CLI
+# defect, not an availability one, so it is recorded here rather than as a missing channel.
+# Re-test with a newer hermes before adding it back.
 _TOKENROUTER_NO_CHANNEL = {
-    "gpt-5.2-codex",      # OpenAI publishes it; TokenRouter has no channel. Routed here, it 503s
-                          # and reads as a fake model — it is not, it is a misrouted one.
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
 }
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
@@ -3657,7 +3655,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
                           # OpenAI's most capable agentic coding model, there is no 5.6-codex).
-                          "gpt-5.3-codex", "gpt-5.2-codex"]},
+                          "gpt-5.3-codex"]},
     # claude-opus-5 is now wired in both _ANTHROPIC_CLAUDE and _BEDROCK_CLAUDE (ids read off
     # Anthropic's models overview and AWS's own model card), so it routes directly instead of
     # falling through to the unmapped default it used at launch.
@@ -3672,14 +3670,14 @@ _MODEL_CATALOG: dict[str, dict] = {
     "hermes": {"default": "gpt-5.4",
                "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
-                          "gpt-5.3-codex", "gpt-5.2-codex",
+                          "gpt-5.3-codex",
                           "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
                           "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                          "glm-5.2", "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
+                          "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash"]},

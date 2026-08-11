@@ -738,6 +738,39 @@ def _status_from_result(result_ev: dict | None, exit_code: int) -> str:
 # ── per-backend turn builders (env + argv) ───────────────────────────────────────
 CLAUDE_PROVIDERS = {"anthropic", "bedrock", "vertex", "tokenrouter"}
 
+# Claude Code decides its own thinking/effort fields per model, and gets two of them wrong against
+# the current API. Both were verified by calling /v1/messages directly: the same request succeeds
+# plain and fails with these fields attached.
+#
+#   thinking:{type:"enabled"}   -> 400 on the opus-4.7/4.8 line
+#                                  '"..enabled" is not supported for this model. Use "..adaptive"'
+#   output_config.effort        -> 400 on haiku-4.5
+#                                  'This model does not support the effort parameter.'
+#
+# The broker strips both centrally (_strip_unsupported in harness_gateway) — but only for traffic
+# that goes THROUGH the broker. A self-hosted instance is bring-your-own-key: the CLI holds the
+# credential and calls the provider directly, so nothing on that path ever sees the body. The CLI
+# therefore has to be told not to send them.
+_CLAUDE_NO_THINKING = re.compile(r"opus-4[._-]?[78]", re.I)
+
+
+def _claude_thinking_env(model: str) -> dict:
+    """Env that stops Claude Code sending fields the target model rejects.
+
+    EFFORT_LEVEL=auto is unconditional: it hands the choice back to the CLI's own per-model
+    table, which is right for every model tested (it fixes haiku-4.5 and changes nothing for
+    opus-5, sonnet-4.6 or the rest).
+
+    MAX_THINKING_TOKENS=0 is NOT unconditional, because it disables extended thinking — a real
+    capability. Only the models whose API rejects the field get it; a blanket setting would trade
+    every model's reasoning away to fix two.
+    """
+    env = {"CLAUDE_CODE_EFFORT_LEVEL": "auto"}
+    if _CLAUDE_NO_THINKING.search(model or ""):
+        env["MAX_THINKING_TOKENS"] = "0"
+    return env
+
+
 
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
                   cwd: str, env: dict, resume_session_id: str | None = None,
@@ -753,11 +786,10 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".claude"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     env["CLAUDE_CONFIG_DIR"] = str(cfg_dir)
-    # Extended thinking is stripped centrally by the broker (_strip_unsupported in
-    # harness_gateway), not here. MAX_THINKING_TOKENS=0 used to live at this line; it covered
-    # only Claude Code and only the `thinking` field, so when the CLI moved to
-    # `output_config.effort` it silently stopped working and haiku-4.5 began failing. One
-    # mechanism, at the single point every harness's traffic already passes through.
+    # Stop the CLI emitting thinking/effort fields the target model rejects. The broker strips
+    # these for brokered traffic; bring-your-own-key traffic never reaches the broker, so this is
+    # the only thing standing between a self-hosted user and a 400 (see _claude_thinking_env).
+    env.update(_claude_thinking_env(model))
     if p == "anthropic":
         if auth.api_key:
             env["ANTHROPIC_API_KEY"] = auth.api_key
@@ -962,6 +994,33 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
 # stream-json events every other backend produces.
 HERMES_PROVIDERS = {"anthropic", "bedrock", "azure-foundry", "openrouter", "openai-api"}
 
+# OpenAI's GPT-5.x line will not serve an agent turn over /v1/chat/completions: a request carrying
+# both function tools and a reasoning effort is rejected with
+#   HTTP 400 Function tools with reasoning_effort are not supported ... use /v1/responses
+# and the codex-tuned ids reject that endpoint outright with
+#   HTTP 404 This model is not supported in the v1/chat/completions endpoint.
+# hermes picks its transport per config and auto-detects only api.openai.com and api.x.ai, so a
+# relay sitting in front of OpenAI — an aggregator, a company gateway — is transported as generic
+# chat-completions and every one of these models fails on send. The endpoint is a property of the
+# MODEL, not of the host in front of it, so it is decided from the model id here.
+#
+# Matched against the provider-native id, which may be bare (gpt-5.6-sol) or vendor-qualified
+# (openai/gpt-5.6-sol) depending on the integration.
+_HERMES_RESPONSES_API_MODEL = re.compile(r"(?:^|/)(?:gpt-5|o[1-4])|codex", re.I)
+
+
+def _hermes_api_mode(provider: str, model: str) -> str | None:
+    """`model.api_mode` for config.yaml, or None to leave hermes' own detection alone.
+
+    Only for the generic OpenAI-compatible provider: that is the one whose transport hermes infers
+    from the URL. bedrock/anthropic/azure-foundry/openrouter each have their own resolution in the
+    CLI, and overriding those would replace working logic with a guess.
+    """
+    if provider != "openai-api" or not model:
+        return None
+    return "codex_responses" if _HERMES_RESPONSES_API_MODEL.search(model) else None
+
+
 
 def _hermes_mcp_section(servers: list[dict] | None) -> dict:
     """config.yaml `mcp_servers:` entries for the enabled remote MCP servers (hermes supports
@@ -1007,6 +1066,9 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     # hosted image does the same): everything the shipped features need is baked into the image.
     env["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
     cfg: dict = {"model": {"provider": p, "default": model}}
+    api_mode = _hermes_api_mode(p, model)
+    if api_mode:
+        cfg["model"]["api_mode"] = api_mode
     if p == "bedrock":
         cfg["bedrock"] = {"region": auth.aws_region or "us-east-1"}
     if max_turns:
@@ -1342,6 +1404,16 @@ _HERMES_POLL_S = 0.8
 # the turn shows zero events with no error, indistinguishable from "still working," for as long as
 # MAX_TURN_SECONDS / the caller's timeout_seconds allows (hours by default). This is a SEPARATE,
 # much shorter bound on just that startup window, independent of the overall per-turn cap.
+#
+# "Started" means THE MODEL PRODUCED SOMETHING, not merely that a session row appeared. Those are
+# different moments: hermes writes the session and echoes the user's prompt before it calls the
+# provider, so keying the guard on the session row disarmed it a fraction of a second in, and a
+# CLI that then produced nothing at all was left to run against the six-hour cap — the console
+# showing "Working…" the whole time. Observed with z-ai/glm-5.2 on hermes 0.19.0, which returns a
+# clean stream when called directly (2.2s, content "ok") and hangs inside the CLI after it.
+#
+# A tool call that legitimately runs for minutes is NOT affected: hermes writes the assistant
+# message carrying the tool call before executing it, so output exists and the guard is disarmed.
 _HERMES_STARTUP_TIMEOUT_S = float(os.environ.get("HERMES_STARTUP_TIMEOUT_S", "90"))
 
 
@@ -1490,6 +1562,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
 
     sid = resume
     cursor = 0
+    produced = False        # has the model emitted ANY message yet (see _HERMES_STARTUP_TIMEOUT_S)
     if resume:
         db = _hermes_db_ro(db_path)
         if db is not None:
@@ -1503,7 +1576,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
         append({"type": "system", "subtype": "init", "session_id": resume, "model": model})
 
     def _sweep() -> None:
-        nonlocal sid, cursor
+        nonlocal sid, cursor, produced
         db = _hermes_db_ro(db_path)
         if db is None:
             return
@@ -1521,6 +1594,9 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
             for row in db.execute(
                     "SELECT * FROM messages WHERE session_id=? AND id>? ORDER BY id", (sid, cursor)):
                 cursor = row["id"]
+                # The prompt hermes echoes back is not the model producing anything.
+                if str(row["role"] or "").lower() != "user":
+                    produced = True
                 for ev in _hermes_msg_events(row, state):
                     append(ev)
         except Exception:  # noqa: BLE001 — mid-write reads can transiently fail; next poll catches up
@@ -1531,9 +1607,10 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     try:
         while proc.poll() is None:
             _sweep()
-            # A RESUME turn starts with sid already set (line above), so this only ever fires for a
-            # fresh session — exactly the cold-start-provider-call window this guards.
-            if sid is None and (time.time() - t0) > _HERMES_STARTUP_TIMEOUT_S:
+            # Fires whether the session row never appeared or appeared and then produced nothing;
+            # both mean the provider call hung before any output, and both used to be survivable
+            # only by the six-hour cap.
+            if not produced and (time.time() - t0) > _HERMES_STARTUP_TIMEOUT_S:
                 rec["capped"] = True
                 rec["startup_timeout"] = True
                 _kill_proc_tree(proc)
@@ -1586,8 +1663,9 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     if rec.get("startup_timeout"):
         # The generic exit_code/stderr text is useless here (the process was killed by US, not a
         # normal failure) — say what actually happened instead of leaving a cryptic "exit_code=-9".
-        err_txt = (f"Hermes did not start a session within {_HERMES_STARTUP_TIMEOUT_S:.0f}s — the "
-                   f"model provider call likely hung before producing any output.\n{err_txt}")[:2000]
+        err_txt = (f"This model produced no output within {_HERMES_STARTUP_TIMEOUT_S:.0f}s and the "
+                   f"turn was stopped. The provider call hung before returning anything.\n{err_txt}"
+                   )[:2000]
     res_txt = final if ok else ("\n\n".join(x for x in (final.strip(), err_txt) if x)[:4000] or err_txt)
     append({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
             "result": res_txt, "usage": usage})
