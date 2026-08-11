@@ -101,6 +101,14 @@ ARG WITH_BUILTIN_SKILLS=1
 ARG HR_SKILLS_REPO=https://github.com/HarnessRouter/skills.git
 ARG HR_SKILLS_REF=main
 ENV HR_BUILTIN_SKILLS_DIR=/opt/harnessrouter/skills
+# officecli keeps an edited document open in a resident process and flushes it to disk some seconds
+# after that process goes idle. A task that writes a document and then ENDS races that timer: the
+# last file it touched is collected before the flush, and the user downloads a workbook whose
+# content silently is not there — `validate` still passes, because the in-memory document is fine.
+# Observed exactly that way: a spreadsheet whose every cell went into a sheet the saved file did
+# not contain. Flushing on every command costs some speed and removes the race entirely, which is
+# the right trade for a document a person is going to open.
+ENV OFFICECLI_RESIDENT_FLUSH=each
 COPY docker/install-skills.sh /tmp/install-skills.sh
 RUN chmod +x /tmp/install-skills.sh \
     && WITH_BUILTIN_SKILLS="$WITH_BUILTIN_SKILLS" HR_SKILLS_REPO="$HR_SKILLS_REPO" \
