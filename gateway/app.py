@@ -2181,7 +2181,12 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         return [], [], [], []
     v = hv
     if not v:
-        return [], [], [], []
+        # An out-of-box harness has no stored record — there is nothing to read, and that is
+        # normal, not a failure. It still gets the image's built-in skills: those are a property
+        # of the deployment rather than of a saved configuration. Returning nothing here is why
+        # the default harnesses, which is what most people actually use, had no image generation
+        # and no document skills while custom ones did.
+        return [], _builtin_default_skills(), [], []
 
     def _arr(prop):
         try:
@@ -2269,9 +2274,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
 
     # Built-ins the harness never mentions: on when the image says so. Implicit, so the set follows
     # the image rather than whatever was true when the Harness was created.
-    for name, meta in sorted(builtins.items()):
-        if name not in seen and meta["default_enabled"]:
-            skills_out.append({"name": name, "files": meta["files"], "content": None})
+    skills_out += _builtin_default_skills(seen)
 
     disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
     return mcp_out, skills_out, suppressed, disabled_tools
@@ -6466,6 +6469,17 @@ def _builtin_skills() -> dict:
     if out:
         print(f"[skills] {len(out)} built-in: {', '.join(sorted(out))}", flush=True)
     return out
+
+
+def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
+    """Built-ins that are on by default, minus any the harness has its own entry for.
+
+    `seen` is what a stored harness has an opinion about — an override, or an explicit disable.
+    An out-of-box harness has no stored record at all, so it passes nothing and gets the lot."""
+    skip = seen or set()
+    return [{"name": n, "files": m["files"], "content": None}
+            for n, m in sorted(_builtin_skills().items())
+            if n not in skip and m["default_enabled"]]
 
 
 # ── custom harnesses (per-org, server-persisted; replaces the client localStorage seam) ───────
