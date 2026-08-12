@@ -6477,6 +6477,69 @@ async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
     return await _mcp_list_tools(body.url, token)
 
 
+# ── Starter Kits ──────────────────────────────────────────────────────────────────────────────
+# A kit is a whole product in a folder: the Harness it needs, and a UI that talks to that Harness
+# as its backend. Both are baked into the image from HarnessRouter/starter-kit (see
+# docker/install-kits.sh), so launching one provisions a Harness and opens an app that is already
+# here — there is no service to deploy and no database to configure.
+#
+# Read from disk for the same reason skills are: a catalog compiled into source goes stale the
+# moment the kit repo moves, and nothing says so.
+_KITS_DIR = os.environ.get("HR_KITS_DIR", "/opt/harnessrouter/kits")
+
+
+@functools.lru_cache(maxsize=1)
+def _kits() -> dict:
+    """{id: kit.json}, empty when the image was built without kits (a supported build)."""
+    root = pathlib.Path(_KITS_DIR)
+    manifest = root / "manifest.json"
+    if not manifest.is_file():
+        return {}
+    try:
+        ids = json.loads(manifest.read_text()).get("kits", [])
+    except Exception:  # noqa: BLE001
+        print(f"[kits] unreadable manifest at {manifest}", flush=True)
+        return {}
+    out: dict = {}
+    for kid in ids:
+        f = root / str(kid) / "kit.json"
+        if not f.is_file():
+            print(f"[kits] {kid} in manifest but not on disk — skipped", flush=True)
+            continue
+        try:
+            out[str(kid)] = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            print(f"[kits] {kid}/kit.json is not valid JSON — skipped", flush=True)
+    if out:
+        print(f"[kits] {len(out)} available: {', '.join(sorted(out))}", flush=True)
+    return out
+
+
+def _kit_skills(kit: dict) -> list[dict]:
+    """A kit's own skills, read from its folder. Self-contained by design: a kit carries the
+    skills its Harness needs rather than depending on what the image happens to bundle."""
+    root = pathlib.Path(_KITS_DIR) / str(kit.get("id") or "")
+    out: list[dict] = []
+    for name in (kit.get("harness") or {}).get("skills") or []:
+        folder = root / "skills" / str(name)
+        if not (folder / "SKILL.md").is_file():
+            print(f"[kits] {kit.get('id')}: skill {name} is declared but not on disk", flush=True)
+            continue
+        files = []
+        for f in sorted(folder.rglob("*")):
+            if not f.is_file() or f.stat().st_size > _SKILL_FILE_MAX:
+                continue
+            rel = f.relative_to(folder).as_posix()
+            raw = f.read_bytes()
+            try:
+                files.append({"path": rel, "content": raw.decode()})
+            except UnicodeDecodeError:
+                files.append({"path": rel, "content_b64": base64.b64encode(raw).decode()})
+        if files:
+            out.append({"name": str(name), "enabled": True, "files": files})
+    return out
+
+
 # ── Built-in skills ───────────────────────────────────────────────────────────────────────────
 # Baked into the image from HarnessRouter/skills (see docker/install-skills.sh). Read from disk,
 # never hard-coded: the console used to carry its own list of four "built-in skills" that existed
@@ -6634,6 +6697,9 @@ def _harness_out(v: dict) -> dict:
     except Exception:  # noqa: BLE001
         created = 0
     return {"id": v.get("id"), "name": v.get("name"), "base": v.get("base"),
+            # The starter kit that provisioned this Harness, when one did. The kit's app uses it
+            # to find its own Harness instead of asking the user to choose from a list.
+            "kit": v.get("kit") or None,
             "baseLabel": v.get("base_label") or v.get("base"),
             "defaultModel": v.get("default_model") or "",
             "systemPrompt": v.get("system_prompt") or "",
@@ -6854,6 +6920,76 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
     return _harness_out({"id": hid, **props})
+
+
+@app.get("/v1/kits")
+async def list_kits(request: Request) -> dict:
+    """The kit catalog, with each kit's launched Harness when it has one.
+
+    `launched` is what makes the tab honest: a kit is either something you can start or something
+    you already run, and the card should not offer to "Launch" a thing that is already there."""
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    rows = await _vg_list_by_org("Harness", org)
+    by_kit = {str(r.get("kit") or ""): r for r in rows if str(r.get("deleted") or "0") != "1"}
+    out = []
+    for kid, kit in sorted(_kits().items()):
+        h = by_kit.get(kid)
+        out.append({"id": kid, "object": "kit",
+                    "title": kit.get("title") or kid,
+                    "tagline": kit.get("tagline") or "",
+                    "description": kit.get("description") or "",
+                    "icon": kit.get("icon") or "", "accent": kit.get("accent") or "",
+                    "route": (kit.get("app") or {}).get("route") or "",
+                    "base": (kit.get("harness") or {}).get("base") or "",
+                    "launched": bool(h),
+                    "harnessId": (h or {}).get("id") or None})
+    return {"kits": out}
+
+
+@app.post("/v1/kits/{kit_id}/launch")
+async def launch_kit(kit_id: str, request: Request) -> dict:
+    """Provision this kit's Harness, or hand back the one that already exists.
+
+    Idempotent on purpose. Launch is a button someone presses twice — because the first press
+    seemed slow, or because they came back a week later — and the second press must not leave
+    them with two Harnesses and their decks split across both."""
+    p = await _principal(request)
+    org, member = p.get("org", ""), p.get("member", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    kit = _kits().get(kit_id)
+    if not kit:
+        raise uhp_error(404, "kit_not_found", f"No starter kit '{kit_id}' in this build.")
+
+    for r in await _vg_list_by_org("Harness", org):
+        if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1":
+            return {"kit": kit_id, "harnessId": r.get("id"),
+                    "route": (kit.get("app") or {}).get("route") or "", "created": False}
+
+    spec = kit.get("harness") or {}
+    body = HarnessBody(name=spec.get("name") or kit.get("title") or kit_id,
+                       base=spec.get("base") or "claude-code",
+                       default_model=spec.get("default_model") or "",
+                       system_prompt=spec.get("system_prompt") or "",
+                       skills=_kit_skills(kit),
+                       mcp_servers=spec.get("mcp_servers") or [],
+                       disabled_tools=spec.get("disabled_tools") or [])
+    body.skills = await _skills_prepare(body.skills)
+    hid = _rid("chrn")
+    now = str(int(time.time() * 1000))
+    props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
+             **_harness_props(body),
+             # The kit that made it. This is what keeps launch idempotent and what lets the app
+             # find its own Harness without the user picking one from a list.
+             "kit": kit_id,
+             "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
+    await _vg_upsert("Harness", hid, props)
+    print(f"[kits] launched {kit_id} -> {hid}", flush=True)
+    return {"kit": kit_id, "harnessId": hid,
+            "route": (kit.get("app") or {}).get("route") or "", "created": True}
 
 
 @app.get("/v1/harnesses")

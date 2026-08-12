@@ -121,6 +121,21 @@ RUN chmod +x /tmp/install-skills.sh \
        /tmp/install-skills.sh \
     && rm -f /tmp/install-skills.sh /tmp/skills-head.json
 
+# Starter Kits: a Harness plus an app, both baked in. Same pull-and-pin shape as the skills
+# bundle above, including the cache-bust — without it a build on `main` keeps whatever catalogue
+# the first build fetched and new kits silently never ship.
+ARG WITH_STARTER_KITS=1
+ARG HR_KITS_REPO=https://github.com/HarnessRouter/starter-kit.git
+ARG HR_KITS_REF=main
+ENV HR_KITS_DIR=/opt/harnessrouter/kits
+ADD https://api.github.com/repos/HarnessRouter/starter-kit/commits/${HR_KITS_REF} /tmp/kits-head.json
+COPY docker/install-kits.sh /tmp/install-kits.sh
+RUN chmod +x /tmp/install-kits.sh \
+    && WITH_STARTER_KITS="$WITH_STARTER_KITS" HR_KITS_REPO="$HR_KITS_REPO" \
+       HR_KITS_REF="$HR_KITS_REF" HR_KITS_DIR=/opt/harnessrouter/kits \
+       /tmp/install-kits.sh \
+    && rm -f /tmp/install-kits.sh /tmp/kits-head.json
+
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/
 COPY docker/entrypoint.sh /app/entrypoint.sh
@@ -136,7 +151,7 @@ COPY --from=ui /ui/public           /app/ui/public
 RUN useradd -m -u 10001 agent \
     && mkdir -p /data \
     && chown -R agent:agent /data /app \
-    && chmod -R a+rX /opt/harnessrouter/skills
+    && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits
 USER agent
 
 EXPOSE 3000
