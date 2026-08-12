@@ -573,6 +573,10 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fp-sheet-tab.on { color: var(--brand); background: var(--surface); border-color: var(--line); border-bottom-color: var(--surface); }
 .fp-sheet-tab:hover:not(.on) { color: var(--ink); }
+.fp-sheet-empty { display: flex; align-items: center; justify-content: center; color: var(--mute);
+  font-size: 13px; }
+.fp-sheet-tab.empty { opacity: .55; font-weight: 500; }
+
 .fp-fallback { text-align: center; padding: 20px; display: flex; flex-direction: column; align-items: center; }
 
 /* inline (flex-item) vertical resize handle — between recents|chat and chat|preview */

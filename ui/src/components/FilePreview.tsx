@@ -46,7 +46,7 @@ const pdfUrlFor = (url: string) => url.replace(/\/content(\?|$)/, '/pdf$1');
 
 export function FilePreview({ file, onClose }: { file: { url: string; name: string }; onClose: () => void }) {
   const { url, name } = file;
-  const [st, setSt] = useState<{ kind: string; objUrl?: string; text?: string; html?: string; error?: string; sheets?: { name: string; html: string }[] }>({ kind: 'loading' });
+  const [st, setSt] = useState<{ kind: string; objUrl?: string; text?: string; html?: string; error?: string; sheets?: { name: string; html: string; filled: boolean }[] }>({ kind: 'loading' });
   const [activeSheet, setActiveSheet] = useState(0);
   useEffect(() => {
     let alive = true; let obj: string | undefined;
@@ -78,11 +78,39 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
         try {
           const buf = await r.arrayBuffer();
           const XLSX = await import('xlsx');
-          const wb = XLSX.read(buf, { type: 'array' });
-          const sheets = wb.SheetNames.map((n) => ({ name: n, html: XLSX.utils.sheet_to_html(wb.Sheets[n], { id: '' }) }));
-          if (alive) setSt({ kind: 'sheet', sheets: sheets.length ? sheets : [{ name: 'Sheet1', html: '<table></table>' }] });
-        } catch {
-          if (alive) setSt({ kind: 'office' });   // fall back to server PDF if parsing fails
+          // cellStyles carries fills and column widths through; sheet_to_html already turns
+          // merged ranges into colspan/rowspan.
+          const wb = XLSX.read(buf, { type: 'array', cellStyles: true });
+          const sheets = wb.SheetNames.map((n) => {
+            const ws = wb.Sheets[n] || {};
+            // sheet_to_html THROWS on a sheet with no '!ref' — i.e. an empty one — and that threw
+            // away the whole workbook, not just that tab: the catch below dropped every sheet and
+            // the pane rendered nothing at all. Tools routinely leave an empty default Sheet1 in
+            // front of the real data, so this was most spreadsheets.
+            const filled = Boolean(ws['!ref']);
+            return { name: n, filled, html: filled ? XLSX.utils.sheet_to_html(ws, { id: '' }) : '' };
+          });
+          // Open on the first sheet that HAS something. Tools routinely leave an empty default
+          // Sheet1 in front of the real one, and opening on it rendered an empty pane that reads
+          // as a broken preview rather than as an empty tab.
+          const first = sheets.findIndex((s) => s.filled);
+          if (alive) {
+            setActiveSheet(first < 0 ? 0 : first);
+            setSt({ kind: 'sheet', sheets: sheets.length ? sheets : [{ name: 'Sheet1', html: '', filled: false }] });
+          }
+        } catch (e) {
+          console.error('[preview] spreadsheet parse failed:', e);
+          // Fall back to the server's PDF rendition. This used to set kind:'office' and NOTHING
+          // else — and 'office' renders only when objUrl is set, so a workbook the parser choked
+          // on produced a preview pane that stayed blank forever, with no error and no download
+          // prompt. Fetch the rendition for real, and if that fails too, say so.
+          try {
+            const b = await fetchFileBlob(pdfUrlFor(url)); obj = URL.createObjectURL(b);
+            if (alive) setSt({ kind: 'office', objUrl: obj });
+          } catch {
+            if (alive) setSt({ kind: 'binary',
+              error: `This spreadsheet couldn\u2019t be read (${String((e as Error)?.message || 'parse failed').slice(0, 90)}). Download it to open it.` });
+          }
         }
         return;
       }
@@ -128,15 +156,18 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
         {st.kind === 'csv' && <div className="fp-sheet" dangerouslySetInnerHTML={{ __html: st.html || '' }} />}
         {st.kind === 'sheet' && st.sheets && (
           <div className="fp-xlsx">
-            <div className="fp-sheet" dangerouslySetInnerHTML={{ __html: st.sheets[activeSheet]?.html || '' }} />
-            {st.sheets.length > 1 && (
-              <div className="fp-sheet-tabs">
-                {st.sheets.map((s, i) => (
-                  <button key={i} className={'fp-sheet-tab' + (i === activeSheet ? ' on' : '')}
-                    onClick={() => setActiveSheet(i)} title={s.name}>{s.name}</button>
-                ))}
-              </div>
-            )}
+            {st.sheets[activeSheet]?.filled
+              ? <div className="fp-sheet" dangerouslySetInnerHTML={{ __html: st.sheets[activeSheet]?.html || '' }} />
+              : <div className="fp-sheet fp-sheet-empty">This sheet is empty.</div>}
+            {/* Always shown, even for a single sheet: the tab bar is what tells someone they are
+                looking at a spreadsheet with other sheets in it, and hiding it on the one-sheet
+                case is what made an empty first sheet look like a failed preview. */}
+            <div className="fp-sheet-tabs">
+              {st.sheets.map((s, i) => (
+                <button key={i} className={'fp-sheet-tab' + (i === activeSheet ? ' on' : '') + (s.filled ? '' : ' empty')}
+                  onClick={() => setActiveSheet(i)} title={s.filled ? s.name : `${s.name} (empty)`}>{s.name}</button>
+              ))}
+            </div>
           </div>
         )}
         {st.kind === 'binary' && (
