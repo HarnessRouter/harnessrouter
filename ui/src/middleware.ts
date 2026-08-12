@@ -30,8 +30,10 @@ function isPublic(path: string): boolean {
     || path === '/api/selfhost/login'
     || path === '/api/selfhost/logout'
     || path.startsWith('/_next/')
-    // An /api path is never a static asset, whatever it ends with.
-    || (!path.startsWith('/api/') && STATIC_ASSET.test(path));
+    // An /api path is never a static asset, whatever it ends with. Neither is /data — those are
+    // files a TASK produced, and agents write .png, .svg, .css and .js routinely. Matching those
+    // by extension would hand a user's own artifacts to anyone who could guess the path.
+    || (!path.startsWith('/api/') && !path.startsWith('/data/') && STATIC_ASSET.test(path));
 }
 
 export async function middleware(req: NextRequest) {
