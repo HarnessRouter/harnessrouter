@@ -2304,11 +2304,14 @@ HR_BROKER_PATHS = os.environ.get("HR_BROKER_PATHS", "enforce").strip().lower()
 # Image generation rides the same broker as chat, so a task never holds a provider key. It is a
 # SEPARATE switch because the money works differently: this relay does not meter, and image APIs
 # bill per image rather than per token, so a deployment spending its OWN key must count images
-# before opening this. Self-hosted is bring-your-own-key — the operator is spending their own
-# money and there is nothing to meter — so it defaults ON there and a hosted deployment sets
-# HR_BROKER_IMAGES=0 until its metering lands.
+# before opening this.
+#
+# Default OFF, and the self-hosted entrypoint turns it on. The other way round — on by default,
+# hosted sets 0 — fails OPEN: forget the variable in one environment and it quietly serves images
+# on our key with nothing metered. Bring-your-own-key is the case where nothing needs metering,
+# and that is exactly the case that opts in.
 _BROKER_IMAGE_PATHS = {"images/generations", "images/edits", "images/variations"}
-HR_BROKER_IMAGES = os.environ.get("HR_BROKER_IMAGES", "1").strip().lower() not in ("0", "off", "false")
+HR_BROKER_IMAGES = os.environ.get("HR_BROKER_IMAGES", "0").strip().lower() in ("1", "on", "true")
 
 
 def _broker_path_allowed(suffix: str) -> bool:

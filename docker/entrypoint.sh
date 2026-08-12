@@ -40,6 +40,10 @@ export HR_POOL_AUTH="${HR_POOL_AUTH:-none}"
 # to the runner directly instead of being brokered. See _auth_from_conn in gateway/app.py for
 # why this is an explicit mode and never a fallback.
 export HR_SANDBOX_TRUST="${HR_SANDBOX_TRUST:-owner}"
+# Image generation through the broker. Safe to default on HERE and nowhere else: self-hosted is
+# bring-your-own-key, so the images an agent makes are billed to the operator's own provider
+# account and there is nothing for us to meter.
+export HR_BROKER_IMAGES="${HR_BROKER_IMAGES:-1}"
 
 # The gateway signs its own internal calls. Generated per container if not supplied, so a
 # default install has no shared secret and nothing to leak; it never leaves this process tree.
