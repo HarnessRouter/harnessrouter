@@ -20,7 +20,13 @@ import { authHeaders } from '@/lib/chat';
 import { PLATFORM_ADMIN_ORGS, SELF_HOSTED } from '@/lib/edition';
 
 interface ModelRow { canonical: string; provider_id: string }
-interface Integration { name: string; provider: string; config: Record<string, string>; models: ModelRow[] }
+interface Integration {
+  name: string; provider: string; config: Record<string, string>;
+  models: ModelRow[];
+  /** Image models this integration can serve. Separate from `models`: an image model offered in
+   *  a chat picker is a choice that cannot work. */
+  image_models?: ModelRow[];
+}
 interface ProviderField { key: string; label: string; placeholder?: string }
 interface ProviderMeta {
   id: string;
@@ -37,6 +43,9 @@ interface ProviderMeta {
 interface Doc {
   integrations: Integration[];
   model_map: Record<string, string>;
+  /** Images route separately from chat: the integration serving your chat models is usually not
+   *  the one serving images, and an image model in a chat picker is a broken choice. */
+  image_model_map?: Record<string, string>;
   providers: string[];
   catalog: ProviderMeta[];
 }
@@ -67,11 +76,15 @@ export default function IntegrationsPage() {
   }, []);
   useEffect(() => { if (allowed) reload(); }, [allowed, reload]);
 
-  async function persist(next: { integrations: Integration[]; model_map: Record<string, string> }) {
+  async function persist(next: { integrations: Integration[]; model_map: Record<string, string>;
+                                 image_model_map?: Record<string, string> }) {
+    // Always send both maps. The write replaces the whole document, so posting one of them alone
+    // would silently clear the other.
+    const body = { image_model_map: doc?.image_model_map || {}, ...next };
     setBusy(true); setErr('');
     try {
       const r = await harnessFetch('/api/harness/v1/admin/integrations', {
-        method: 'PUT', headers: authHeaders(), body: JSON.stringify(next),
+        method: 'PUT', headers: authHeaders(), body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
       setDoc({ ...(doc as Doc), ...(await r.json()) });
@@ -94,6 +107,11 @@ export default function IntegrationsPage() {
   const allCanonicals = useMemo(() => {
     const s = new Set<string>();
     (doc?.integrations || []).forEach((i) => i.models.forEach((m) => s.add(m.canonical)));
+    return [...s].sort();
+  }, [doc]);
+  const allImageCanonicals = useMemo(() => {
+    const s = new Set<string>();
+    (doc?.integrations || []).forEach((i) => (i.image_models || []).forEach((m) => s.add(m.canonical)));
     return [...s].sort();
   }, [doc]);
 
@@ -148,64 +166,32 @@ export default function IntegrationsPage() {
               </table>
             </div>
 
-            <div className="itg-section-head">
-              <div><h2>Model, Integration Mapping</h2>
-                <p>When a Harness runs a model, this decides which integration serves it.{' '}
-                  {SELF_HOSTED
-                    ? 'A model with no integration has no provider, so it can\u2019t be selected.'
-                    : 'Unmapped models use the built-in provider routing.'}</p></div>
-            </div>
-            <div className="table-wrap">
-              <table className="itg-table itg-map-table">
-                <thead><tr><th>Model</th><th>Integration</th><th aria-label="Actions"></th></tr></thead>
-                <tbody>
-                  {Object.entries(doc.model_map).map(([model, iname]) => (
-                    <tr key={model}>
-                      <td>
-                        <select className="select" value={model} disabled={busy}
-                          onChange={(e) => {
-                            const next = { ...doc.model_map };
-                            delete next[model];
-                            next[e.target.value] = iname;
-                            void persist({ integrations: doc.integrations, model_map: next });
-                          }}>
-                          {[model, ...allCanonicals.filter((c) => c !== model && !(c in doc.model_map))].map((c) => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <select className="select" value={iname} disabled={busy}
-                          onChange={(e) => void persist({
-                            integrations: doc.integrations,
-                            model_map: { ...doc.model_map, [model]: e.target.value },
-                          })}>
-                          {doc.integrations.filter((i) => i.models.some((m) => m.canonical === model)).map((i) => (
-                            <option key={i.name} value={i.name}>{i.name}</option>
-                          ))}
-                          {!doc.integrations.some((i) => i.name === iname) && <option value={iname}>{iname}</option>}
-                        </select>
-                      </td>
-                      <td className="itg-row-actions">
-                        <button className="button danger-ghost" type="button" disabled={busy}
-                          onClick={() => {
-                            const next = { ...doc.model_map };
-                            delete next[model];
-                            void persist({ integrations: doc.integrations, model_map: next });
-                          }}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                  <tr><td colSpan={3}>
-                    <AddMappingRow doc={doc} allCanonicals={allCanonicals} busy={busy}
-                      onAdd={(model, iname) => void persist({
-                        integrations: doc.integrations,
-                        model_map: { ...doc.model_map, [model]: iname },
-                      })} />
-                  </td></tr>
-                </tbody>
-              </table>
-            </div>
+            <MappingTable
+              title="Model, Integration Mapping"
+              blurb={<>When a Harness runs a model, this decides which integration serves it.{' '}
+                {SELF_HOSTED
+                  ? 'A model with no integration has no provider, so it can\u2019t be selected.'
+                  : 'Unmapped models use the built-in provider routing.'}</>}
+              map={doc.model_map}
+              allCanonicals={allCanonicals}
+              servedBy={(i, model) => i.models.some((m) => m.canonical === model)}
+              busy={busy} integrations={doc.integrations}
+              onChange={(next) => void persist({ integrations: doc.integrations, model_map: next })}
+              emptyHint="" />
+
+            <MappingTable
+              title="Image Model, Integration Mapping"
+              blurb={<>Which integration generates images. Routed separately from chat because it is
+                usually a different provider \u2014 an Anthropic connection has no image API at all.{' '}
+                An image model with no integration means a Harness cannot generate images.</>}
+              map={doc.image_model_map || {}}
+              allCanonicals={allImageCanonicals}
+              servedBy={(i, model) => (i.image_models || []).some((m) => m.canonical === model)}
+              busy={busy} integrations={doc.integrations}
+              onChange={(next) => void persist({ integrations: doc.integrations,
+                                                 model_map: doc.model_map, image_model_map: next })}
+              emptyHint="None of your integrations serve an image model." />
+
           </>
         )}
       </div>
@@ -328,13 +314,74 @@ export default function IntegrationsPage() {
   );
 }
 
-function AddMappingRow({ doc, allCanonicals, busy, onAdd }: {
-  doc: Doc; allCanonicals: string[]; busy: boolean; onAdd: (model: string, iname: string) => void;
+/** One mapping table. Chat models and image models route independently but the mechanics are
+ *  identical, and two copies of this would drift the moment either changed. */
+function MappingTable({ title, blurb, map, allCanonicals, servedBy, integrations, busy, onChange, emptyHint }: {
+  title: string; blurb: React.ReactNode; map: Record<string, string>; allCanonicals: string[];
+  servedBy: (i: Integration, model: string) => boolean; integrations: Integration[]; busy: boolean;
+  onChange: (next: Record<string, string>) => void; emptyHint: string;
 }) {
-  const unmapped = allCanonicals.filter((c) => !(c in doc.model_map));
+  return (
+    <>
+      <div className="itg-section-head"><div><h2>{title}</h2><p>{blurb}</p></div></div>
+      <div className="table-wrap">
+        <table className="itg-table itg-map-table">
+          <thead><tr><th>Model</th><th>Integration</th><th aria-label="Actions"></th></tr></thead>
+          <tbody>
+            {Object.entries(map).map(([model, iname]) => (
+              <tr key={model}>
+                <td>
+                  <select className="select" value={model} disabled={busy}
+                    onChange={(e) => {
+                      const next = { ...map };
+                      delete next[model];
+                      next[e.target.value] = iname;
+                      onChange(next);
+                    }}>
+                    {[model, ...allCanonicals.filter((c) => c !== model && !(c in map))].map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </td>
+                <td>
+                  <select className="select" value={iname} disabled={busy}
+                    onChange={(e) => onChange({ ...map, [model]: e.target.value })}>
+                    {integrations.filter((i) => servedBy(i, model)).map((i) => (
+                      <option key={i.name} value={i.name}>{i.name}</option>
+                    ))}
+                    {!integrations.some((i) => i.name === iname) && <option value={iname}>{iname}</option>}
+                  </select>
+                </td>
+                <td className="itg-row-actions">
+                  <button className="button danger-ghost" type="button" disabled={busy}
+                    onClick={() => { const next = { ...map }; delete next[model]; onChange(next); }}>Delete</button>
+                </td>
+              </tr>
+            ))}
+            {Object.keys(map).length === 0 && allCanonicals.length === 0 && emptyHint && (
+              <tr><td colSpan={3}><span className="hr-meta">{emptyHint}</span></td></tr>
+            )}
+            <tr><td colSpan={3}>
+              <AddMappingRow map={map} allCanonicals={allCanonicals} integrations={integrations}
+                servedBy={servedBy} busy={busy}
+                onAdd={(model, iname) => onChange({ ...map, [model]: iname })} />
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function AddMappingRow({ map, allCanonicals, integrations, servedBy, busy, onAdd }: {
+  map: Record<string, string>; allCanonicals: string[]; integrations: Integration[];
+  servedBy: (i: Integration, model: string) => boolean; busy: boolean;
+  onAdd: (model: string, iname: string) => void;
+}) {
+  const unmapped = allCanonicals.filter((c) => !(c in map));
   const [model, setModel] = useState('');
   const [iname, setIname] = useState('');
-  const eligible = doc.integrations.filter((i) => i.models.some((m) => m.canonical === model));
+  const eligible = integrations.filter((i) => servedBy(i, model));
   return (
     <div className="itg-addmap">
       <select className="select" value={model} disabled={busy} aria-label="Model to map"

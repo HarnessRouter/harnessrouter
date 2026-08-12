@@ -865,6 +865,11 @@ _MODEL_MAP_KEY = "harness-model-map"
 # The document as it was before the most recent write. See admin_integrations_put.
 _INTEGRATIONS_PREV_KEY = "harness-integrations.prev"
 _MODEL_MAP_PREV_KEY = "harness-model-map.prev"
+# Images get their OWN map. Sharing the chat map would put image models in the chat pickers,
+# where picking one is a broken choice; and the two route independently — the integration that
+# serves your chat models is often not the one that serves images.
+_IMAGE_MODEL_MAP_KEY = "harness-image-model-map"
+_IMAGE_MODEL_MAP_PREV_KEY = "harness-image-model-map.prev"
 _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token")
 # integration provider type × runner backend -> the runner-side provider that carries it.
 # Absent pair = that backend can't use the integration (mapping falls through to the chain).
@@ -895,6 +900,44 @@ async def _model_map_doc() -> dict:
         return doc if isinstance(doc, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+async def _image_model_map_doc() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+        return doc if isinstance(doc, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _integration_image_models(integ: dict) -> dict[str, str]:
+    """Canonical → provider-native id for one integration's IMAGE models.
+
+    Same contract as _integration_models: the vendor table in source is the authority on what a
+    vendor can reach, and a stored entry may only CHANGE an id, never add a model. Deriving on
+    read is what keeps a shipped catalog change visible on instances that saved a form months ago.
+    """
+    models = dict(_IMAGE_VENDOR_MODELS.get(str(integ.get("provider") or "").lower(), {}))
+    for m in (integ.get("image_models") or []):
+        canonical = str(m.get("canonical") or "").strip()
+        pid = str(m.get("provider_id") or "").strip()
+        if canonical in models and pid:
+            models[canonical] = pid
+    return models
+
+
+async def _effective_image_model_map() -> dict[str, str]:
+    """Canonical image model → integration name. Explicit routes win; anything else is claimed by
+    the first integration that can serve it. A stored route to a model its integration cannot
+    serve is dropped, not honoured — same rule as chat, for the same reason."""
+    integrations = await _integrations_doc()
+    servable = {str(i.get("name") or ""): _integration_image_models(i) for i in integrations}
+    mm = {k: v for k, v in (await _image_model_map_doc()).items() if k in servable.get(v, {})}
+    for name, models in servable.items():
+        for canonical in models:
+            mm.setdefault(canonical, name)
+    return mm
 
 
 def _integration_models(integ: dict) -> dict[str, str]:
@@ -950,34 +993,37 @@ async def _effective_model_map() -> dict[str, str]:
 
 
 async def _image_auth(sid: str, backend: str) -> dict | None:
-    """Broker credentials for image generation, or None when no integration can serve an image
-    model. Same shape as the chat auth: a per-turn credential and the broker's base_url, never a
-    provider key — the sandbox calls us and we hold the secret.
+    """Broker credentials for image generation, or None when nothing can serve an image model.
 
-    Resolved independently of the turn's chat connection because they are usually different
-    providers: a Claude Code harness runs on Anthropic, which has no image API, so reusing the
-    turn's credential would relay /images/generations to Anthropic and 404.
+    Same shape as the chat auth: a per-turn credential and a base_url, never a provider key
+    (self-hosted owner mode is the declared exception, where the operator's own key is the point).
+
+    Resolved from the IMAGE model map, independently of the turn's chat connection, because they
+    are usually different providers: a Claude Code harness runs on Anthropic, which has no image
+    API, so reusing the turn's credential would relay /images/generations there and 404.
     """
-    # PUBLIC_BASE_URL is deliberately NOT required: that is a precondition of the BROKER hop, and
-    # self-hosted owner mode has no hop — _auth_from_conn hands back the operator's own key for
-    # their own box. Requiring it here made image generation report "not configured" on exactly
-    # the deployment where it needs no configuration at all. Let _auth_from_conn decide what is
-    # safe to hand over; it returns None when the answer is nothing.
     if not sid or (SANDBOX_TRUST != "owner" and not HR_BROKER_IMAGES):
         return None
-    for integ in await _integrations_doc():
-        vendor = (integ.get("provider") or "").strip().lower()
-        table = _IMAGE_VENDOR_MODELS.get(vendor)
-        if not table:
+    mm = await _effective_image_model_map()
+    if not mm:
+        return None
+    by_name = {str(i.get("name") or ""): i for i in await _integrations_doc()}
+    # Deterministic: sorted, so which model serves a turn never depends on dict insertion order.
+    # An operator who wants a specific one routes it in Integrations.
+    for canonical in sorted(mm):
+        integ = by_name.get(mm[canonical])
+        if not integ:
             continue
+        vendor = (integ.get("provider") or "").strip().lower()
         provider = _INTEGRATION_WIRING.get((vendor, backend)) or vendor
         conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend,
                 "provider": provider,
                 **{k: v for k, v in (integ.get("config") or {}).items() if v not in (None, "")}}
         auth = _auth_from_conn(conn, sid)
         if auth and auth.get("base_url") and auth.get("api_key"):
-            model = next(iter(table))
-            return {"base_url": auth["base_url"], "api_key": auth["api_key"], "model": model}
+            pid = _integration_image_models(integ).get(canonical) or canonical
+            return {"base_url": auth["base_url"], "api_key": auth["api_key"], "model": pid,
+                    "models": sorted(m for m in mm if mm[m] == mm[canonical])}
     return None
 
 
@@ -3179,7 +3225,9 @@ def _integration_public(integ: dict) -> dict:
             cfg[k] = _SECRET_SENTINEL
     return {**integ, "config": cfg,
             "models": [{"canonical": c, "provider_id": v}
-                       for c, v in _integration_models(integ).items()]}
+                       for c, v in _integration_models(integ).items()],
+            "image_models": [{"canonical": c, "provider_id": v}
+                             for c, v in _integration_image_models(integ).items()]}
 
 
 @app.get("/v1/admin/integrations")
@@ -3187,6 +3235,7 @@ async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
     return {"integrations": [_integration_public(i) for i in await _integrations_doc()],
             "model_map": await _effective_model_map(),
+            "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
             "catalog": _provider_catalog_public()}
 
@@ -3194,6 +3243,9 @@ async def admin_integrations_get(request: Request) -> dict:
 class IntegrationsBody(BaseModel):
     integrations: list[dict]
     model_map: dict
+    # Optional: a console that predates image routing still saves without wiping the image map.
+    # Absent means "leave it alone", which is not the same as an empty dict meaning "clear it".
+    image_model_map: dict | None = None
 
 
 @app.put("/v1/admin/integrations")
@@ -3240,6 +3292,13 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     for model, iname in mm.items():
         if iname not in names:
             raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
+    imm = None
+    if body.image_model_map is not None:
+        imm = {str(k).strip(): str(v).strip() for k, v in body.image_model_map.items()
+               if str(k).strip() and str(v).strip()}
+        for model, iname in imm.items():
+            if iname not in names:
+                raise HTTPException(400, f"image model '{model}' maps to unknown integration '{iname}'")
     # Only EXPLICIT routes are stored. Claiming every servable model here is what froze the map:
     # a model added to the source table afterwards had no entry and read as "no provider", while
     # the console showed a full list and no way to tell anything was missing. _effective_model_map
@@ -3255,12 +3314,17 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, prior)
         prior_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY)
         await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, prior_mm or "{}")
+        prior_imm = await _vault_get(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY)
+        await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_PREV_KEY, prior_imm or "{}")
     await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
+    if imm is not None:
+        await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY, json.dumps(imm))
     # Answer with what will actually route, not with what was just filed away — the two differ by
     # every model claimed on read, and the console renders this straight into the picker.
     return {"ok": True, "integrations": [_integration_public(i) for i in out],
-            "model_map": await _effective_model_map()}
+            "model_map": await _effective_model_map(),
+            "image_model_map": await _effective_image_model_map()}
 
 
 @app.post("/v1/admin/integrations/restore")
