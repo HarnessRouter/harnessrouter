@@ -110,11 +110,16 @@ ENV HR_BUILTIN_SKILLS_DIR=/opt/harnessrouter/skills
 # the right trade for a document a person is going to open.
 ENV OFFICECLI_RESIDENT_FLUSH=each
 COPY docker/install-skills.sh /tmp/install-skills.sh
+# Cache-bust the clone below. Without this the RUN layer is keyed only on the script, so a build
+# that pulls `main` keeps whatever catalogue the first build happened to fetch — new skills never
+# ship, and nothing says so. This ADD fetches the branch head, so the layer's inputs change
+# exactly when the skills repo does.
+ADD https://api.github.com/repos/HarnessRouter/skills/commits/${HR_SKILLS_REF} /tmp/skills-head.json
 RUN chmod +x /tmp/install-skills.sh \
     && WITH_BUILTIN_SKILLS="$WITH_BUILTIN_SKILLS" HR_SKILLS_REPO="$HR_SKILLS_REPO" \
        HR_SKILLS_REF="$HR_SKILLS_REF" HR_SKILLS_DIR=/opt/harnessrouter/skills \
        /tmp/install-skills.sh \
-    && rm -f /tmp/install-skills.sh
+    && rm -f /tmp/install-skills.sh /tmp/skills-head.json
 
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/

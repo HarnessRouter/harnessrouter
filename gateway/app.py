@@ -949,6 +949,38 @@ async def _effective_model_map() -> dict[str, str]:
     return mm
 
 
+async def _image_auth(sid: str, backend: str) -> dict | None:
+    """Broker credentials for image generation, or None when no integration can serve an image
+    model. Same shape as the chat auth: a per-turn credential and the broker's base_url, never a
+    provider key — the sandbox calls us and we hold the secret.
+
+    Resolved independently of the turn's chat connection because they are usually different
+    providers: a Claude Code harness runs on Anthropic, which has no image API, so reusing the
+    turn's credential would relay /images/generations to Anthropic and 404.
+    """
+    # PUBLIC_BASE_URL is deliberately NOT required: that is a precondition of the BROKER hop, and
+    # self-hosted owner mode has no hop — _auth_from_conn hands back the operator's own key for
+    # their own box. Requiring it here made image generation report "not configured" on exactly
+    # the deployment where it needs no configuration at all. Let _auth_from_conn decide what is
+    # safe to hand over; it returns None when the answer is nothing.
+    if not sid or (SANDBOX_TRUST != "owner" and not HR_BROKER_IMAGES):
+        return None
+    for integ in await _integrations_doc():
+        vendor = (integ.get("provider") or "").strip().lower()
+        table = _IMAGE_VENDOR_MODELS.get(vendor)
+        if not table:
+            continue
+        provider = _INTEGRATION_WIRING.get((vendor, backend)) or vendor
+        conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend,
+                "provider": provider,
+                **{k: v for k, v in (integ.get("config") or {}).items() if v not in (None, "")}}
+        auth = _auth_from_conn(conn, sid)
+        if auth and auth.get("base_url") and auth.get("api_key"):
+            model = next(iter(table))
+            return {"base_url": auth["base_url"], "api_key": auth["api_key"], "model": model}
+    return None
+
+
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     """The synthetic connection for a model→integration mapping, or None when unmapped /
     unusable by this backend. Shaped exactly like a vault connection so the turn loop treats
@@ -2269,12 +2301,23 @@ _BROKER_ALLOWED_EXACT = {"messages", "messages/count_tokens", "responses", "chat
 _BROKER_ALLOWED_PREFIX = ("responses/", "models/", "messages/batches")
 HR_BROKER_PATHS = os.environ.get("HR_BROKER_PATHS", "enforce").strip().lower()
 
+# Image generation rides the same broker as chat, so a task never holds a provider key. It is a
+# SEPARATE switch because the money works differently: this relay does not meter, and image APIs
+# bill per image rather than per token, so a deployment spending its OWN key must count images
+# before opening this. Self-hosted is bring-your-own-key — the operator is spending their own
+# money and there is nothing to meter — so it defaults ON there and a hosted deployment sets
+# HR_BROKER_IMAGES=0 until its metering lands.
+_BROKER_IMAGE_PATHS = {"images/generations", "images/edits", "images/variations"}
+HR_BROKER_IMAGES = os.environ.get("HR_BROKER_IMAGES", "1").strip().lower() not in ("0", "off", "false")
+
 
 def _broker_path_allowed(suffix: str) -> bool:
     """True if this upstream path is part of the inference surface."""
     s = (suffix or "").strip("/").lower()
     if not s or ".." in s:      # empty or traversal — never forward our credential
         return False
+    if s in _BROKER_IMAGE_PATHS:
+        return HR_BROKER_IMAGES
     return s in _BROKER_ALLOWED_EXACT or s.startswith(_BROKER_ALLOWED_PREFIX)
 
 
@@ -3709,6 +3752,16 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
 }
+# Image models, kept OUT of _VENDOR_MODELS on purpose: those tables feed the chat model pickers
+# and the per-backend catalogs, and an image model offered as a chat model is a broken choice a
+# user can make. Canonical → provider id, same shape, resolved by _image_auth only.
+_IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
+    "openai": {"gpt-image-1": "gpt-image-1", "gpt-image-1-mini": "gpt-image-1-mini"},
+    "azure":  {"gpt-image-1": "gpt-image-1"},
+    "azure-foundry": {"gpt-image-1": "gpt-image-1"},
+}
+
+
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
                                  if c not in _TOKENROUTER_NO_CHANNEL}
 
@@ -4148,6 +4201,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     mapped_conn = await _mapped_integration_conn(backend, model_req)
     candidates: list[tuple[str, dict | None]] = ([(mapped_conn["name"], mapped_conn)] if mapped_conn else [])
     candidates += [(n, None) for n in chain]
+    # Independent of which chat connection wins below: images are usually a different provider.
+    image_auth = await _image_auth(sid, backend)
     for name, pre in candidates:
         conn, src = (pre, "integration") if pre is not None else await _get_connection(org, name)
         if not conn:
@@ -4177,6 +4232,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "agent_doc": agent_doc,
                 "skills_suppressed": skills_suppressed, "tools_disabled": tools_disabled,
+                # Image generation, when an integration can serve it. A per-turn credential for
+                # the broker, never a provider key — see _image_auth.
+                "image_auth": image_auth,
                 # idempotency: all _sandbox_json retries of THIS turn share the response id, so a
                 # lost/slow first reply that gets retried dedups to the same runner turn (no re-exec).
                 "idempotency_key": f"{translator.resp_id}:{name}",

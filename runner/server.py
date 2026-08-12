@@ -1927,6 +1927,7 @@ class TurnReq(BaseModel):
     agent_doc: str | None = None           # harness instruction doc → AGENTS.md (codex) / CLAUDE.md (claude)
     skills_suppressed: list[str] | None = None  # built-in skill names to NOT mount (harness disabled them)
     tools_disabled: list[str] | None = None     # built-in tool names to disable (claude: --disallowedTools)
+    image_auth: dict | None = None         # {base_url, api_key, model} for image generation via the broker
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
@@ -1986,6 +1987,17 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                 f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
     _write_agent_doc(cwd, backend, agent_doc, installed_skills)
     env = os.environ.copy()
+    # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
+    # point at the CHAT connection, which is often a different provider, and one env pair can
+    # only carry one credential. The imagegen skill's wrapper reads these and passes them to the
+    # SDK explicitly, so images work the same on every base. The value is a per-turn broker
+    # credential, never a provider key.
+    if req.image_auth:
+        for k, v in (("HR_IMAGE_BASE_URL", req.image_auth.get("base_url")),
+                     ("HR_IMAGE_KEY", req.image_auth.get("api_key")),
+                     ("HR_IMAGE_MODEL", req.image_auth.get("model"))):
+            if v:
+                env[k] = str(v)
     # CRITICAL for resume: both CLIs write their conversation transcripts under $HOME
     # (~/.claude/projects/*.jsonl, ~/.codex/sessions/*) — NOT under CLAUDE_CONFIG_DIR. The default
     # $HOME is outside /workspace, so transcripts were never checkpointed and `--resume` found nothing
