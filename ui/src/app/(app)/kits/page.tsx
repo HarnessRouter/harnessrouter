@@ -26,14 +26,26 @@ interface Kit {
   icon: string; accent: string; route: string;
   launched: boolean; harnessId: string | null;
   skills: string[];
+  runningOn: { base: string; model: string } | null;
   choices: Choice[];
 }
 interface BaseModel { id: string; available: boolean }
 interface Base { id: string; label: string; models: BaseModel[] }
 
-/** The pairing this kit will actually run on, or null when nothing here can serve it. */
-function runtimeOf(kit: Kit): Choice | null {
-  return kit.choices?.find((c) => c.recommended) || null;
+/** What the card should say about the runtime.
+ *
+ *  A LAUNCHED kit reports what its Harness is really running — the person may have chosen
+ *  something other than the recommendation at launch, or changed it since, and showing the
+ *  recommendation instead would state something about their setup that is not true. Only a kit
+ *  that has never been launched shows a recommendation, and says so.
+ */
+function runtimeOf(kit: Kit): { label: string; model: string; suggested: boolean } | null {
+  if (kit.launched && kit.runningOn?.base) {
+    const c = kit.choices?.find((x) => x.base === kit.runningOn!.base);
+    return { label: c?.baseLabel || kit.runningOn.base, model: kit.runningOn.model, suggested: false };
+  }
+  const rec = kit.choices?.find((c) => c.recommended);
+  return rec ? { label: rec.baseLabel, model: rec.model, suggested: true } : null;
 }
 
 export default function KitsPage() {
@@ -145,7 +157,8 @@ export default function KitsPage() {
                   {run && (
                     <li>
                       <iconify-icon icon="tabler:cpu"></iconify-icon>
-                      Runs on {run.baseLabel}<span className="kit-fact-dim"> · {run.model}</span>
+                      {run.suggested ? 'Will run on ' : 'Running on '}{run.label}
+                      <span className="kit-fact-dim"> · {run.model}</span>
                     </li>
                   )}
                   {!run && (

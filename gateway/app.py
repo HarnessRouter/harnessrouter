@@ -7109,6 +7109,12 @@ async def list_kits(request: Request) -> dict:
                     # What the kit actually installs, from its own config — so the card can say
                     # what you get instead of asking you to take it on trust.
                     "skills": [str(n) for n in ((kit.get("harness") or {}).get("skills") or [])],
+                    # What a LAUNCHED kit is really running on. Not the same thing as the
+                    # recommendation: the person may have chosen differently at launch, or changed
+                    # it since. Showing the recommendation for a running kit would state something
+                    # about their setup that is not true.
+                    "runningOn": ({"base": str(h.get("base") or ""),
+                                   "model": str(h.get("default_model") or "")} if h else None),
                     # What to run it on: this kit's own recommended pairings, each marked with
                     # whether the caller's integrations can serve it. The launch dialog renders
                     # these directly and preselects the one flagged `recommended`.
