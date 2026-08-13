@@ -1277,6 +1277,18 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     await asyncio.gather(*[_trace_put(k, data) for k in keys])
 
 
+async def _prior_manifest(prefix: str) -> dict:
+    """The session's current manifest, or {}. Session CARDS are built from this blob, not from the
+    session vertex, so anything that must change what a list shows has to change this."""
+    if not prefix:
+        return {}
+    try:
+        pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
+        return json.loads(pm) if pm else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
     """The session's credits/usage totals as of the CURRENT manifest — the one durable source both
     the turn-accept placeholder write and _trace_finalize must agree on. Whichever one omits these
@@ -1305,6 +1317,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     them: an omitted field here is exactly what _trace_finalize's own accumulate would read back as
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
     prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "")
+    _pm = await _prior_manifest(tr.get("prefix") or "")
+    prior_title = str(_pm.get("title") or "") if str(_pm.get("title_custom") or "") == "1" else ""
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
         "member_id": tr.get("member") or member or "",
@@ -1312,7 +1326,12 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
         "workspace": tr.get("workspace") or "",
         "harness_name": tr.get("harness_name") or "",
         "backend": backend, "model": model,
-        "title": (user_text.strip().splitlines()[0][:120] if user_text.strip() else sid[:16]),
+        # A title the person set survives every later turn. Without this the card is renamed to
+        # the first line of whatever you last said — which is why decks ended up called
+        # "Change primary color to brown".
+        "title": (prior_title if prior_title
+                  else (user_text.strip().splitlines()[0][:120] if user_text.strip() else sid[:16])),
+        **({"title_custom": "1"} if prior_title else {}),
         "user_prompt": user_text[:1500], "status": "running",
         "trace_blob": tr.get("prefix"), "chunks": [],
         "finished_at": time.time(), "schema_version": 1,
@@ -2853,7 +2872,17 @@ async def patch_session(sid: str, body: SessionPatch, request: Request) -> dict:
     if not title:
         raise uhp_error(400, "invalid_title", "A title is required.", "title")
     title = title[:120]
+    # The vertex for anything reading the session directly, AND the trace manifest, because that
+    # blob is what every LIST renders. Writing only the vertex looks like it worked and reverts on
+    # the next load. `title_custom` is what stops the next turn regenerating it from your message.
     await _vg_upsert("HarnessSession", sid, {"title": title})
+    base = await _trace_base(sid)
+    if base:
+        m = await _prior_manifest(base)
+        if m:
+            m["title"] = title
+            m["title_custom"] = "1"
+            await _index_manifest(base, m)
     return {"id": sid, "object": "session", "title": title}
 
 
