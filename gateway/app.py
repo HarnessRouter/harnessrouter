@@ -7106,6 +7106,9 @@ async def list_kits(request: Request) -> dict:
                     "route": (kit.get("app") or {}).get("route") or "",
                     "launched": bool(h),
                     "harnessId": (h or {}).get("id") or None,
+                    # What the kit actually installs, from its own config — so the card can say
+                    # what you get instead of asking you to take it on trust.
+                    "skills": [str(n) for n in ((kit.get("harness") or {}).get("skills") or [])],
                     # What to run it on: this kit's own recommended pairings, each marked with
                     # whether the caller's integrations can serve it. The launch dialog renders
                     # these directly and preselects the one flagged `recommended`.

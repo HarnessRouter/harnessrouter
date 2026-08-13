@@ -25,10 +25,16 @@ interface Kit {
   id: string; title: string; tagline: string; description: string;
   icon: string; accent: string; route: string;
   launched: boolean; harnessId: string | null;
+  skills: string[];
   choices: Choice[];
 }
 interface BaseModel { id: string; available: boolean }
 interface Base { id: string; label: string; models: BaseModel[] }
+
+/** The pairing this kit will actually run on, or null when nothing here can serve it. */
+function runtimeOf(kit: Kit): Choice | null {
+  return kit.choices?.find((c) => c.recommended) || null;
+}
 
 export default function KitsPage() {
   const [kits, setKits] = useState<Kit[] | null>(null);
@@ -55,7 +61,16 @@ export default function KitsPage() {
       .catch(() => {});
   }, []);
 
+  /** A kit app runs outside this Next app, so it gets its own tab. */
+  function openApp(route: string) {
+    window.open(route, '_blank', 'noopener,noreferrer');
+  }
+
   async function launch(kit: Kit, base?: string, model?: string) {
+    // Open the tab NOW, on the click, and navigate it when the launch returns. Opening it after
+    // the await is a popup the browser is entitled to block, because by then it is no longer a
+    // user gesture.
+    const tab = window.open('', '_blank', 'noopener,noreferrer');
     setBusy(kit.id); setErr('');
     try {
       const r = await harnessFetch(`/api/harness/v1/kits/${kit.id}/launch`, {
@@ -65,28 +80,34 @@ export default function KitsPage() {
       });
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
       const { route } = await r.json();
-      // Hard navigation: the kit app is served outside this Next app, from the image.
-      window.location.href = route || `/kits/${kit.id}`;
+      const url = route || `/kits/${kit.id}`;
+      if (tab) tab.location.href = url; else openApp(url);
+      setPicking(null); setBusy('');
+      reload();
     } catch (e) {
+      tab?.close();
       setErr(e instanceof Error ? e.message : 'launch failed');
       setBusy(''); setPicking(null);
     }
   }
 
   return (
-    <section className="view is-active"><div className="page">
-      <header className="page-head">
+    // Same chrome as every other collection page (Harnesses, Integrations, Keys…). This page
+    // used `page-head`, which is styled nowhere — that is why its heading and spacing did not
+    // match the rest of the console.
+    <section className="view is-active collection-view" id="view-kits"><div className="page">
+      <div className="page-header">
         <div>
           <h1>Starter Kits</h1>
           <p>A working product in one click: each kit provisions the Harness it needs and opens
             its own app, with everything it uses included.</p>
         </div>
-      </header>
+      </div>
 
       {err && <div className="hr-error" role="alert">{err}</div>}
 
       {kits === null && !err && <div className="kit-grid">
-        {[0, 1].map((i) => <div key={i} className="kit-card"><span className="sk" style={{ height: 132 }} /></div>)}
+        {[0, 1].map((i) => <div key={i} className="kit-card"><span className="sk" style={{ height: 236 }} /></div>)}
       </div>}
 
       {kits !== null && kits.length === 0 && (
@@ -98,24 +119,63 @@ export default function KitsPage() {
 
       {kits !== null && kits.length > 0 && (
         <div className="kit-grid">
-          {kits.map((k) => (
-            <article key={k.id} className="kit-card">
-              <span className="kit-icon" style={k.accent ? { background: k.accent } : undefined}>
-                <iconify-icon icon={k.icon || 'tabler:box'}></iconify-icon>
-              </span>
-              <div className="kit-copy">
-                <h2>{k.title}</h2>
-                <p className="kit-tagline">{k.tagline}</p>
+          {kits.map((k) => {
+            const run = runtimeOf(k);
+            return (
+              <article key={k.id} className="kit-card">
+                {/* A wash of the kit's own accent, so a card reads as the product it opens. */}
+                <span className="kit-wash" style={k.accent ? { background: k.accent } : undefined} />
+
+                <header className="kit-head">
+                  <span className="kit-icon" style={k.accent ? { background: k.accent } : undefined}>
+                    <iconify-icon icon={k.icon || 'tabler:box'}></iconify-icon>
+                  </span>
+                  <div className="kit-titles">
+                    <h2>{k.title}</h2>
+                    <p className="kit-tagline">{k.tagline}</p>
+                  </div>
+                  {k.launched && <span className="kit-live" title="This kit is already running">Running</span>}
+                </header>
+
                 <p className="kit-desc">{k.description}</p>
-              </div>
-              <div className="kit-actions">
-                <button className="button primary" type="button" disabled={busy === k.id}
-                  onClick={() => (k.launched ? void launch(k) : setPicking(k))}>
-                  {busy === k.id ? 'Opening…' : k.launched ? 'Open' : 'Launch'}
-                </button>
-              </div>
-            </article>
-          ))}
+
+                {/* Everything here is a fact from the kit's own config or the server's view of
+                    this org's integrations — never a guess about what the kit might do. */}
+                <ul className="kit-facts">
+                  {run && (
+                    <li>
+                      <iconify-icon icon="tabler:cpu"></iconify-icon>
+                      Runs on {run.baseLabel}<span className="kit-fact-dim"> · {run.model}</span>
+                    </li>
+                  )}
+                  {!run && (
+                    <li className="kit-fact-warn">
+                      <iconify-icon icon="tabler:plug-connected-x"></iconify-icon>
+                      No connected provider can run this yet
+                    </li>
+                  )}
+                  {k.skills.length > 0 && (
+                    <li>
+                      <iconify-icon icon="tabler:sparkles"></iconify-icon>
+                      Installs {k.skills.join(', ')}
+                    </li>
+                  )}
+                </ul>
+
+                <footer className="kit-actions">
+                  {k.launched && k.harnessId && (
+                    <a className="kit-link" href={`/harnesses/${k.harnessId}`}>Harness settings</a>
+                  )}
+                  <span className="kit-actions-spacer" />
+                  <button className="button primary" type="button" disabled={busy === k.id}
+                    onClick={() => (k.launched ? openApp(k.route || `/kits/${k.id}`) : setPicking(k))}>
+                    {busy === k.id ? 'Launching…' : k.launched ? 'Open' : 'Launch'}
+                    <iconify-icon icon={k.launched ? 'tabler:external-link' : 'tabler:arrow-right'}></iconify-icon>
+                  </button>
+                </footer>
+              </article>
+            );
+          })}
         </div>
       )}
 
