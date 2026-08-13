@@ -2833,6 +2833,30 @@ async def _turn_cancelled(sid: str, org: str, resp_id: str, *, check_store: bool
     return False
 
 
+class SessionPatch(BaseModel):
+    """The parts of a session a person may edit. Only the title, for now."""
+    title: str | None = None
+
+
+@app.patch("/v1/sessions/{sid}")
+async def patch_session(sid: str, body: SessionPatch, request: Request) -> dict:
+    """Rename a session.
+
+    A conversation's title is auto-derived from its first message (see _TRACE_CARD_FIELDS), which
+    is a reasonable default and a poor permanent name — "A 4-slide deck: why onboarding drops off
+    at step 3, and the three fixes…" is not what anyone wants their deck called. An app built on a
+    Harness needs to be able to fix that, and until now there was no route to do it with: the
+    obvious PATCH did not exist, so a rename silently did nothing and reverted on the next load.
+    """
+    _org, _v = await _owned_session(request, sid)
+    title = (body.title or "").strip()
+    if not title:
+        raise uhp_error(400, "invalid_title", "A title is required.", "title")
+    title = title[:120]
+    await _vg_upsert("HarnessSession", sid, {"title": title})
+    return {"id": sid, "object": "session", "title": title}
+
+
 @app.post("/v1/sessions/{sid}/cancel")
 async def cancel_session(sid: str, request: Request) -> dict:
     """Stop a running turn: kill the CLI process in the sandbox (via the persisted
