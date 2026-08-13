@@ -6064,6 +6064,62 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
 _ARCHIVE_MAX_BYTES = 512 * 1024 * 1024   # in-memory zip cap; beyond this, download files singly
 
 
+class WorkspaceWrite(BaseModel):
+    content: str | None = None        # text
+    content_b64: str | None = None    # bytes
+
+
+@app.put("/v1/sessions/{sid}/files/{path:path}")
+async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request: Request) -> dict:
+    """Write or replace one file in a session's workspace.
+
+    This is what lets an app built on a Harness own state the agent also edits — the slides kit
+    keeps deck.json here, so the canvas and the agent read and write the same file rather than two
+    copies that drift.
+
+    Where that file physically lives differs completely by deployment, which is why it goes
+    through BACKING.workspace: a live directory on the data volume self-hosted, the checkpoint
+    tarball in blob storage hosted, where between turns that archive IS the workspace.
+
+    REFUSED WHILE A TURN IS RUNNING, and that is the whole conflict story. Hosted, the live
+    sandbox would overwrite this at its next checkpoint, so the write would appear to succeed and
+    then vanish. Self-hosted, the agent may be editing the same file. Blocking is honest; both
+    sides silently racing is not.
+    """
+    # The SAME ownership check every other session route uses. Hand-rolling a second one is how
+    # this shipped broken: it compared v["org"], but a session vertex carries the owner in
+    # `tenant`, so every write 404'd on a session the caller could plainly read.
+    _org, v = await _owned_session(request, sid)
+
+    live = {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}
+    if live:
+        raise uhp_error(409, "session_busy",
+                        "The agent is working on this session. Wait for the turn to finish "
+                        "before writing to its workspace.")
+
+    if body.content_b64 is not None:
+        try:
+            data = base64.b64decode(body.content_b64)
+        except Exception:  # noqa: BLE001
+            raise uhp_error(400, "invalid_request", "content_b64 is not valid base64.") from None
+    elif body.content is not None:
+        data = body.content.encode()
+    else:
+        raise uhp_error(400, "invalid_request", "Provide content or content_b64.")
+
+    if len(data) > _WS_WRITE_MAX:
+        raise uhp_error(413, "payload_too_large",
+                        f"A workspace file written this way is limited to {_WS_WRITE_MAX} bytes.")
+
+    ok = await BACKING.workspace.write(sid, path, data)
+    if not ok:
+        # The only ways to get here are a path that tried to leave the workspace and a storage
+        # failure. Both are the caller's problem to see, not something to swallow.
+        raise uhp_error(400, "write_failed",
+                        "Could not write that path. It must be inside the session workspace.")
+    return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
+
+
 @app.get("/v1/sessions/{sid}/files/archive")
 async def session_files_archive(sid: str, request: Request, changed: bool = False, files: str = ""):
     """Every artifact of a session (or one turn) as a single zip, preserving the workspace's
@@ -6540,6 +6596,87 @@ def _kit_skills(kit: dict) -> list[dict]:
     return out
 
 
+# What to run a kit's Harness on, in preference order. A kit declares its own list in kit.json
+# (`harness.recommended`), because the right pairing is a property of the work: a deck designer and
+# a log analyser do not want the same agent or the same model.
+#
+# This is only the fallback for a kit that declares none. Note it is a preference ORDER, not a
+# pin — which one is used depends on what the person actually connected, since pinning one base
+# strands the common case: someone who wired only DeepSeek launching a kit that says "claude-code"
+# would get a Harness that cannot run a single turn.
+_KIT_BASE_PREFERENCE: tuple[tuple[str, str], ...] = (
+    ("hermes", "deepseek-v4-pro"),
+    ("codex", "gpt-5.6-sol"),
+    ("claude-code", "claude-opus-5"),
+)
+
+
+def _kit_preference(kit: dict) -> list[tuple[str, str]]:
+    """A kit's recommended pairings, or the default order when it names none."""
+    out: list[tuple[str, str]] = []
+    for r in (kit.get("harness") or {}).get("recommended") or []:
+        base, model = str(r.get("base") or ""), str(r.get("model") or "")
+        if base in _BASE_CATALOG:
+            out.append((base, model))
+        else:
+            print(f"[kits] {kit.get('id')}: recommended base {base!r} is not a base — ignored",
+                  flush=True)
+    return out or list(_KIT_BASE_PREFERENCE)
+
+
+async def _base_serves(org: str, base: str, model: str) -> bool:
+    """Can this org actually run `model` on `base` right now?
+
+    `_servable_models` returning None means a policy chain is in play, which is provider-level
+    rather than per-model — the backend may attempt its whole catalog, so anything in that
+    catalog counts as available.
+    """
+    b = _BASE_CATALOG.get(base)
+    if not b:
+        return False
+    if model and model not in (_MODEL_CATALOG.get(b["backend"], {}).get("models") or []):
+        return False
+    servable = await _servable_models(org, b["backend"])
+    return servable is None or not model or model in servable
+
+
+async def _kit_choices(org: str, kit: dict) -> list[dict]:
+    """This kit's recommended pairings, each with whether this org can run it.
+
+    Unavailable options are returned rather than filtered out: "Claude Code — connect Anthropic to
+    use this" tells someone what to do next, where a short list just looks like the product only
+    supports two agents.
+    """
+    out: list[dict] = []
+    picked = False
+    for base, model in _kit_preference(kit):
+        b = _BASE_CATALOG.get(base) or {}
+        available = await _base_serves(org, base, model)
+        recommended = available and not picked
+        picked = picked or available
+        out.append({"base": base, "model": model,
+                    "baseLabel": b.get("label") or base,
+                    "available": available, "recommended": recommended})
+    return out
+
+
+async def _kit_base(org: str, kit: dict) -> tuple[str, str]:
+    """What a launch runs on when the caller expressed no preference: the recommended pairing.
+
+    Falling through every option means nothing is wired up yet. The kit's own base is the last
+    word then, so a launch still produces something coherent to look at rather than failing.
+    """
+    for c in await _kit_choices(org, kit):
+        if c["recommended"]:
+            print(f"[kits] {kit.get('id')}: base {c['base']} ({c['model']})", flush=True)
+            return c["base"], c["model"]
+    spec = kit.get("harness") or {}
+    fallback = str(spec.get("base") or "claude-code")
+    print(f"[kits] {kit.get('id')}: no connected provider serves a preferred model — "
+          f"falling back to {fallback}", flush=True)
+    return fallback, str(spec.get("default_model") or "")
+
+
 # ── Built-in skills ───────────────────────────────────────────────────────────────────────────
 # Baked into the image from HarnessRouter/skills (see docker/install-skills.sh). Read from disk,
 # never hard-coded: the console used to carry its own list of four "built-in skills" that existed
@@ -6727,6 +6864,7 @@ def _harness_props(body: HarnessBody) -> dict:
             "timeout_seconds": str(body.timeout_seconds) if body.timeout_seconds else ""}
 
 
+_WS_WRITE_MAX = 4 * 1024 * 1024   # an app writing its own state, not an upload path
 _SKILL_INLINE_MAX = 48_000   # keep the vertex `skills` prop safely under the 64k value cap
 
 
@@ -6943,14 +7081,23 @@ async def list_kits(request: Request) -> dict:
                     "description": kit.get("description") or "",
                     "icon": kit.get("icon") or "", "accent": kit.get("accent") or "",
                     "route": (kit.get("app") or {}).get("route") or "",
-                    "base": (kit.get("harness") or {}).get("base") or "",
                     "launched": bool(h),
-                    "harnessId": (h or {}).get("id") or None})
+                    "harnessId": (h or {}).get("id") or None,
+                    # What to run it on: this kit's own recommended pairings, each marked with
+                    # whether the caller's integrations can serve it. The launch dialog renders
+                    # these directly and preselects the one flagged `recommended`.
+                    "choices": await _kit_choices(org, kit)})
     return {"kits": out}
 
 
+class KitLaunchBody(BaseModel):
+    """What to run the kit on. Both optional: no body at all means "use the recommendation"."""
+    base: str = ""
+    model: str = ""
+
+
 @app.post("/v1/kits/{kit_id}/launch")
-async def launch_kit(kit_id: str, request: Request) -> dict:
+async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | None = None) -> dict:
     """Provision this kit's Harness, or hand back the one that already exists.
 
     Idempotent on purpose. Launch is a button someone presses twice — because the first press
@@ -6970,9 +7117,24 @@ async def launch_kit(kit_id: str, request: Request) -> dict:
                     "route": (kit.get("app") or {}).get("route") or "", "created": False}
 
     spec = kit.get("harness") or {}
+    # An explicit choice from the launch dialog wins; no choice means take the recommendation.
+    # It is validated rather than trusted: a pairing nothing can serve produces a Harness whose
+    # every turn fails, and the failure would surface far from the launch that caused it.
+    want_base = (body_in.base if body_in else "").strip()
+    want_model = (body_in.model if body_in else "").strip()
+    if want_base:
+        if want_base not in _BASE_CATALOG:
+            raise uhp_error(400, "invalid_base", f"No base harness '{want_base}'.", "base")
+        if not await _base_serves(org, want_base, want_model):
+            raise uhp_error(400, "model_unavailable",
+                            f"Nothing you have connected can run {want_model or 'that model'} "
+                            f"on {want_base}.", "model")
+        base, model = want_base, want_model
+    else:
+        base, model = await _kit_base(org, kit)
     body = HarnessBody(name=spec.get("name") or kit.get("title") or kit_id,
-                       base=spec.get("base") or "claude-code",
-                       default_model=spec.get("default_model") or "",
+                       base=base,
+                       default_model=model,
                        system_prompt=spec.get("system_prompt") or "",
                        skills=_kit_skills(kit),
                        mcp_servers=spec.get("mcp_servers") or [],
