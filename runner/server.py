@@ -933,45 +933,101 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     return cfg_dir
 
 
-def _strip_codex_encrypted_reasoning(rollouts: list[str]) -> int:
-    """Drop reasoning items from the codex rollout(s) before `resume`, and return how many were removed.
+def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
+    """Make a codex rollout safe to replay, without destroying any of it.
 
-    A Responses reasoning item carries `encrypted_content` (the `gAAA…` chain-of-thought blob) that is
-    bound to the exact upstream account/key that minted it — only that account can decrypt it. Codex
-    replays the whole rollout as the next turn's `input` (with include=reasoning.encrypted_content), so
-    a follow-up served by a DIFFERENT account (chain fallback, key rotation, or a load-balanced proxy)
-    400s with `invalid_encrypted_content`. Worse, the orphaned item stays in the rollout, so EVERY later
-    resume replays it and fails identically — a permanently wedged session.
+    Two hazards live in the same file, and the fix for one used to create the other.
 
-    Removing reasoning items makes resume account-independent: each turn re-reasons from the visible
-    transcript (messages + tool calls/outputs are untouched, so history is preserved). This mirrors the
-    AI Hub chat path, which already drops reasoning. Reasoning generated during the turn is re-stripped
-    before the next resume, so a session can never re-poison."""
-    stripped = 0
+    1. ACCOUNT BINDING. A reasoning item carries `encrypted_content` (the `gAAA…` chain-of-thought
+       blob) that only the account which minted it can decrypt. A follow-up served by a DIFFERENT
+       account (chain fallback, key rotation, a load-balanced proxy) 400s with
+       `invalid_encrypted_content`, and because the item stays in the rollout, EVERY later resume
+       fails identically — a permanently wedged session.
+
+    2. REFERENTIAL INTEGRITY. Against a provider that stores responses (codex sends `store: true`
+       to Azure Responses endpoints), an item `id` replayed in `input` is a REFERENCE into
+       server-side state. The server looks up the response that minted it and requires its
+       siblings. Delete the reasoning item but keep the `msg_…` that was minted beside it and the
+       reference dangles:
+           Item 'msg_…' of type 'message' was provided without its required 'reasoning' item: 'rs_…'
+       Deterministic, not flaky: every follow-up replays at least one such item, so the first turn
+       succeeds and every one after it fails.
+
+    This function previously deleted whole reasoning lines to solve (1), which is precisely what
+    caused (2). It no longer deletes anything. The two concerns turn out to be separable: the
+    `encrypted_content` is what the ACCOUNT owns, the `id` is what the SERVER checks, so keeping
+    the item while dropping the blob satisfies both.
+
+    So:
+      - reasoning items are KEPT, with their `id`, minus `encrypted_content`;
+      - a rollout already damaged by the old behaviour (id-bearing items, no reasoning left to
+        anchor them) is repaired by removing `id` from every provider-minted item, which turns the
+        replay into ordinary content the server does not try to resolve. `call_id`, `phase`,
+        `role`, `content`, `name` and `arguments` are preserved, so tool pairing and transcript
+        survive. Half-measures do not work here: leaving an id on any one item type just moves the
+        error to that type.
+
+    Never deletes a line and never changes the line count, so it is idempotent and cannot shift a
+    byte offset that a future codex version might project history from.
+
+    Returns counts for logging: {"reasoning": n_blobs_dropped, "deref": n_ids_removed,
+                                 "damaged": n_files_repaired}.
+    """
+    # Item id prefixes the provider mints and will therefore try to resolve. `fcr_` is the
+    # function_call_output form; `ctc_` the custom_tool_call form.
+    MINTED = ("msg_", "rs_", "fc_", "fcr_", "ctc_")
+    counts = {"reasoning": 0, "deref": 0, "damaged": 0}
+
     for path in rollouts:
         try:
-            lines = pathlib.Path(path).read_text().splitlines()
+            raw = pathlib.Path(path).read_text()
         except OSError:
             continue
-        out: list[str] = []
-        changed = False
+        lines = raw.splitlines()
+
+        parsed: list[tuple[str, dict | None]] = []
         for line in lines:
-            # Cheap prefilter before JSON parse; a reasoning response_item always carries both tokens.
-            if '"reasoning"' in line and '"encrypted_content"' in line:
-                try:
-                    o = json.loads(line)
-                except ValueError:
-                    out.append(line)
-                    continue
-                pay = o.get("payload") if isinstance(o.get("payload"), dict) else None
-                if o.get("type") == "response_item" and pay and pay.get("type") == "reasoning":
-                    stripped += 1
-                    changed = True
-                    continue  # drop the whole reasoning item
-            out.append(line)
-        if changed:
+            if '"response_item"' not in line:
+                parsed.append((line, None))
+                continue
+            try:
+                parsed.append((line, json.loads(line)))
+            except ValueError:
+                parsed.append((line, None))   # unparseable: preserve verbatim
+
+        # Pass 1 — drop the account-bound blob, keep the item and its id.
+        has_reasoning = False
+        for i, (line, o) in enumerate(parsed):
+            if not o or o.get("type") != "response_item":
+                continue
+            pay = o.get("payload")
+            if not isinstance(pay, dict) or pay.get("type") != "reasoning":
+                continue
+            has_reasoning = True
+            if pay.pop("encrypted_content", None) is not None:
+                counts["reasoning"] += 1
+                parsed[i] = (json.dumps(o), o)
+
+        # Pass 2 — repair a rollout the old delete-based strip already damaged. Only when there is
+        # no reasoning item left to anchor the ids: with reasoning present the references resolve
+        # and stripping ids would needlessly discard continuity.
+        minted = [
+            (i, o) for i, (line, o) in enumerate(parsed)
+            if o and o.get("type") == "response_item" and isinstance(o.get("payload"), dict)
+            and str((o["payload"] or {}).get("id") or "").startswith(MINTED)
+        ]
+        if minted and not has_reasoning:
+            counts["damaged"] += 1
+            for i, o in minted:
+                o["payload"].pop("id", None)
+                counts["deref"] += 1
+                parsed[i] = (json.dumps(o), o)
+
+        out = [line for line, _ in parsed]
+        if out != lines:
             pathlib.Path(path).write_text("\n".join(out) + ("\n" if out else ""))
-    return stripped
+
+    return counts
 
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
@@ -987,11 +1043,12 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
         import glob as _glob
         rollouts = _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True)
         if rollouts:
-            # Strip account-bound encrypted reasoning before replay so a follow-up served by a
-            # different upstream account can't 400 with invalid_encrypted_content (see the helper).
-            n = _strip_codex_encrypted_reasoning(rollouts)
-            if n:
-                print(f"[resume] codex: stripped {n} encrypted reasoning item(s) before resume", flush=True)
+            # Make the rollout safe to replay: drop account-bound reasoning blobs, and repair a
+            # rollout an older build already damaged (see the helper). Logged unconditionally —
+            # staying silent at zero is what hid this step during the investigation.
+            c = _sanitize_codex_rollout(rollouts)
+            print(f"[resume] codex: sanitised rollout — dropped {c['reasoning']} reasoning blob(s), "
+                  f"de-referenced {c['deref']} id(s) across {c['damaged']} damaged file(s)", flush=True)
             # CODEX_HOME is PER-SESSION (hydrate wipes + restores only THIS session's workspace), so
             # the most-recent rollout here IS this conversation. Resume by --last instead of matching
             # the thread UUID to the rollout filename (that match is codex-version-fragile and missed
