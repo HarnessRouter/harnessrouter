@@ -6069,6 +6069,29 @@ class WorkspaceWrite(BaseModel):
     content_b64: str | None = None    # bytes
 
 
+@app.get("/v1/sessions/{sid}/files/{path:path}")
+async def read_session_file(sid: str, path: str, request: Request) -> Response:
+    """Read ONE file from a session's workspace, by path — the mirror of the PUT below.
+
+    This goes through BACKING.workspace, which is the whole point: self-hosted, that is the live
+    directory the agent is writing into RIGHT NOW, so an app sees a file the moment a tool call
+    creates it. The listing route next door reads the checkpoint tarball instead, which only
+    exists once a turn ENDS — and an app polling it for a file the agent had already written
+    minutes ago sits there showing a spinner for something that is on disk.
+
+    Unlike writing, reading during a turn is safe and is exactly what a live app wants: a
+    half-written deck is better than no deck, and the next read gets the rest.
+    """
+    await _owned_session(request, sid)
+    data = await BACKING.workspace.read(sid, path)
+    if data is None:
+        raise uhp_error(404, "file_not_found",
+                        f"No file '{path}' in this session's workspace.", "path")
+    media = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return Response(content=data, media_type=media,
+                    headers={"cache-control": "no-store"})
+
+
 @app.put("/v1/sessions/{sid}/files/{path:path}")
 async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request: Request) -> dict:
     """Write or replace one file in a session's workspace.
