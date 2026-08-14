@@ -24,6 +24,10 @@ relational table, or anything else that can look up records by label + property 
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
+import hashlib
+import secrets as secrets_mod
 import io
 import json
 import os
@@ -247,13 +251,64 @@ class FileBlobStore:
 
 
 # ── local: env/file secrets ("bring your own provider keys") ──────────────────────
+class SecretsNotConfigured(RuntimeError):
+    """Raised when a secret must be written but there is nowhere safe to write it.
+
+    Deliberately an error rather than a fallback. A provider key injected read-only through the
+    environment is one risk; a customer's production database connection string written to a file
+    in plaintext is another entirely, and the difference is not something to decide silently on
+    the operator's behalf."""
+
+
 class FileSecretStore:
     """Reads HR_SECRET_{TENANT}_{NAME} from the environment first (read-only injection — the
-    open-repo way to supply provider credentials without any vault), then falls back to plain
-    files under {root}/{tenant}/{name}. Writes (e.g. per-org MCP tokens) always go to files."""
+    open-repo way to supply provider credentials without any vault), then falls back to files
+    under {root}/{tenant}/{name}.
+
+    Files are ENCRYPTED when HR_SECRET_KEY is set: AES-256-GCM under a key derived from it, with
+    a random nonce per write, stored as `hrenc1:<b64 nonce||ciphertext>`. Reads accept both forms,
+    so a store written before this existed keeps working and re-encrypts on its next write.
+
+    Without HR_SECRET_KEY, `put(..., require_encryption=True)` REFUSES. That is the whole point:
+    the caller that stores a database credential says so, and on an instance with no key it gets
+    an error telling the operator what to set, instead of a plaintext file nobody knew about."""
+
+    _MAGIC = "hrenc1:"
 
     def __init__(self, root: str):
         self._root = Path(root)
+        self._key = self._derive(os.environ.get("HR_SECRET_KEY", ""))
+
+    @property
+    def encrypts(self) -> bool:
+        return self._key is not None
+
+    @staticmethod
+    def _derive(passphrase: str) -> bytes | None:
+        """A 32-byte key from the operator's passphrase. Scrypt with a fixed salt: the salt's job
+        is to stop cross-deployment rainbow tables, and there is nowhere to keep a random one that
+        would not sit beside the ciphertext anyway."""
+        if not passphrase:
+            return None
+        return hashlib.scrypt(passphrase.encode(), salt=b"harnessrouter.secret.v1",
+                              n=2 ** 14, r=8, p=1, dklen=32)
+
+    def _seal(self, value: str) -> str:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        nonce = secrets_mod.token_bytes(12)
+        blob = nonce + AESGCM(self._key).encrypt(nonce, value.encode(), None)
+        return self._MAGIC + base64.b64encode(blob).decode()
+
+    def _open(self, raw: str) -> str:
+        if not raw.startswith(self._MAGIC):
+            return raw                      # written before encryption existed
+        if self._key is None:
+            raise SecretsNotConfigured(
+                "This secret is encrypted but HR_SECRET_KEY is not set. Set it to the passphrase "
+                "used when the secret was stored.")
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        blob = base64.b64decode(raw[len(self._MAGIC):])
+        return AESGCM(self._key).decrypt(blob[:12], blob[12:], None).decode()
 
     @staticmethod
     def _env_key(tenant: str, name: str) -> str:
@@ -273,13 +328,22 @@ class FileSecretStore:
                 return self._p(tenant, name).read_text()
             except OSError:
                 return None
-        return await asyncio.to_thread(_do)
+        raw = await asyncio.to_thread(_do)
+        return self._open(raw) if raw is not None else None
 
-    async def put(self, tenant: str, name: str, value: str) -> None:
+    async def put(self, tenant: str, name: str, value: str, *, require_encryption: bool = False) -> None:
+        if require_encryption and self._key is None:
+            raise SecretsNotConfigured(
+                "Refusing to store this credential: HR_SECRET_KEY is not set, so it could only be "
+                "written to disk in plaintext. Set HR_SECRET_KEY to a passphrase and restart.")
+        body = self._seal(value) if self._key is not None else value
+
         def _do():
             p = self._p(tenant, name)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(value)
+            p.write_text(body)
+            with contextlib.suppress(OSError):
+                p.chmod(0o600)              # belt to the encryption's braces
         await asyncio.to_thread(_do)
 
 
