@@ -64,7 +64,15 @@ class BlobStore(Protocol):
 
 class SecretStore(Protocol):
     async def get(self, tenant: str, name: str) -> str | None: ...
-    async def put(self, tenant: str, name: str, value: str) -> None: ...
+
+    async def put(self, tenant: str, name: str, value: str, *,
+                  require_encryption: bool = False) -> None:
+        """`require_encryption=True` is the caller saying "this is a customer credential, not a
+        provider key injected by the operator" — a database connection string, for instance. A
+        store that cannot encrypt must raise SecretsNotConfigured rather than write it in the
+        clear. Part of the interface, not of one implementation: a datasource must be refused
+        the same way whichever backing is configured."""
+        ...
 
 
 class WorkspaceFiles(Protocol):

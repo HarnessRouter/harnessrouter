@@ -65,6 +65,43 @@ uses. Any OpenAI-compatible endpoint works — aggregators, local models, or you
 server — by setting `provider: "openai-api"` and a `base_url`.
 
 <details>
+<summary>Connecting a database</summary>
+
+An agent can be given a PostgreSQL or MySQL database to read — that is how the dashboard kit
+works. Two things to know before you connect one.
+
+**Set `HR_SECRET_KEY`.** Connection strings are encrypted at rest under a key derived from it,
+and without it the server refuses to store one rather than writing your production credential to
+disk in plaintext:
+
+```bash
+HR_SECRET_KEY=a-long-random-passphrase
+```
+
+Keep it. Change it and the stored connections can no longer be decrypted, and you reconnect them.
+
+**Use a read-only database account.** Every statement is checked and only `SELECT` is allowed —
+non-`SELECT`, multiple statements and data-modifying CTEs are refused, and on PostgreSQL the
+query additionally runs in a `READ ONLY` transaction. That check is a parser, and a parser is a
+thing that can be wrong. An account that has been granted `SELECT` and nothing else is a second
+defence that does not depend on ours being right:
+
+```sql
+CREATE USER dashboards WITH PASSWORD '…';
+GRANT CONNECT ON DATABASE shop TO dashboards;
+GRANT USAGE ON SCHEMA public TO dashboards;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dashboards;
+```
+
+The connection string is resolved inside the gateway at the moment a query runs. The agent's
+sandbox never receives it — it gets a tool that runs `SELECT`s — and neither does the browser.
+
+**Sample rows** are a per-connection switch, on by default: the agent sees a few real rows per
+table so it can tell a status column from a category one. Turn it off and it sees table and
+column names and types and no values at all.
+</details>
+
+<details>
 <summary>Choosing backends, and building with a browser</summary>
 
 Backends are chosen at run time, because they are installed into your data volume rather than
