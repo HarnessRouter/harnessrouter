@@ -165,6 +165,19 @@ def test_disconnecting_removes_the_record(api, harness):
     assert q.status_code == 404 and q.json()["error"]["code"] == "datasource_not_connected"
 
 
+def test_deleting_the_harness_does_not_leave_the_credential_behind(api, harness):
+    """The most decisive thing the UI offers must not leave a production password on disk."""
+    api.put(f"/v1/harnesses/{harness}/datasource",
+            json={"engine": "postgres", "connection_string": PG_DSN})
+    stored = next(iter(Path(_DATA, "secrets").rglob(app._ds_secret_key(harness))))
+    assert PG_DSN == asyncio.run(app.BACKING.secrets.get(app._tenants_for(ORG)[0], app._ds_secret_key(harness)))
+
+    assert api.delete(f"/v1/harnesses/{harness}").json()["deleted"] is True
+    # The file may remain (the store has no delete); what it holds must not.
+    assert not asyncio.run(app.BACKING.secrets.get(app._tenants_for(ORG)[0], app._ds_secret_key(harness)))
+    assert PASSWORD not in stored.read_text()
+
+
 def test_another_org_cannot_see_or_use_a_datasource(client, harness, api):
     api.put(f"/v1/harnesses/{harness}/datasource",
             json={"engine": "postgres", "connection_string": PG_DSN})
