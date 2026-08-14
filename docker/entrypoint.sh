@@ -129,6 +129,23 @@ backend_bin() {
   esac
 }
 
+# Run an install and, if it fails, SAY WHY.
+#
+# This was `>/dev/null 2>&1 || true`, and the silence cost a day of someone's life: a root-owned
+# npm cache baked into the image made every `npm install` fail with EACCES, and the only trace was
+# the "requested but not installed" line further down — which reads like a configuration choice,
+# not a broken install. An optional step may fail without stopping start-up; it may not fail
+# without leaving the reason where the person looking will find it.
+try_install() {
+  label="$1"; shift
+  log="$(mktemp)"
+  if "$@" >"$log" 2>&1; then rm -f "$log"; return 0; fi
+  echo "[harnessrouter] WARN: could not install $label — it will not be available:"
+  tail -n 12 "$log" | sed 's/^/[harnessrouter]   /'
+  rm -f "$log"
+  return 1
+}
+
 install_backends() {
   mkdir -p "$TOOLS"
 
@@ -136,20 +153,19 @@ install_backends() {
   # entry point, which npm reports as success.
   if wanted claude && [ ! -x "$(backend_bin claude)" ]; then
     echo "[harnessrouter] installing Claude Code (Anthropic's terms apply)…"
-    npm install -g --prefix "$TOOLS" --no-audit --no-fund @anthropic-ai/claude-code >/dev/null 2>&1 || true
+    try_install "Claude Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund @anthropic-ai/claude-code || true
   fi
 
   if wanted codex && [ ! -x "$(backend_bin codex)" ]; then
     echo "[harnessrouter] installing Codex (Apache-2.0)…"
-    npm install -g --prefix "$TOOLS" --no-audit --no-fund @openai/codex >/dev/null 2>&1 || true
+    try_install "Codex" npm install -g --prefix "$TOOLS" --no-audit --no-fund @openai/codex || true
   fi
 
   if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
-    { "$PY" -m venv "$TOOLS/venv" \
-        && "$TOOLS/venv/bin/pip" install --no-cache-dir -q \
-             "hermes-agent==0.19.0" anthropic "$HERMES_MCP_PIN"; } \
-      >/dev/null 2>&1 || true
+    try_install "Hermes" sh -c "\"$PY\" -m venv \"$TOOLS/venv\" \
+        && \"$TOOLS/venv/bin/pip\" install --no-cache-dir -q \
+             'hermes-agent==0.19.0' anthropic '$HERMES_MCP_PIN'" || true
   fi
 
   [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"

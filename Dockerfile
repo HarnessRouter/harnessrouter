@@ -148,9 +148,22 @@ COPY --from=ui /ui/public           /app/ui/public
 
 # The agent CLIs refuse to run as root (they gate their own permission bypass on it), so the
 # runtime user is unprivileged and owns the workspace and data volume.
+#
+# The `rm -rf /home/agent/.npm` is not tidying. HOME is already /home/agent while the kit apps are
+# built above, and those builds run as root — so npm leaves ~1600 root-owned files in the cache
+# the RUNTIME user then cannot write to. First start-up installs the agent CLIs into the data
+# volume as `agent`, npm hits EACCES on its own cache, and the install fails. Its output is
+# discarded (entrypoint.sh: `|| true`), so the only symptom is one WARN line and then every turn
+# on Claude Code or Codex failing. Hermes survives because it installs through pip, into a venv.
+#
+# That made two of the three backends unusable on any fresh volume — which is EVERY new install of
+# this image. It was invisible here because a long-lived volume keeps CLIs installed before the
+# fault existed. The cache is build-time garbage with no runtime value, so it is deleted rather
+# than chowned: nothing can inherit ownership of something that is not there.
 RUN useradd -m -u 10001 agent \
+    && rm -rf /home/agent/.npm /root/.npm \
     && mkdir -p /data \
-    && chown -R agent:agent /data /app \
+    && chown -R agent:agent /data /app /home/agent \
     && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits
 USER agent
 
