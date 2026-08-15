@@ -26,6 +26,13 @@ export interface OobHarness {
   skills: string[];        // built-in skills (read-only)
 }
 
+/** One entry in a Harness's tool list. Every entry, with no exceptions and no kinds: a database
+ *  a kit connected is one of these and reads back exactly like a server somewhere else. */
+export interface McpServer {
+  id: string; name: string; enabled: boolean;
+  url?: string; auth?: string; transport?: string;
+}
+
 export interface CustomHarness {
   id: string;
   name: string;
@@ -33,7 +40,7 @@ export interface CustomHarness {
   baseLabel: string;
   defaultModel: string;
   systemPrompt: string;
-  mcpServers: { id: string; name: string; enabled: boolean; url?: string; auth?: string; transport?: string }[];
+  mcpServers: McpServer[];
   // A skill carries its bundle inline as `files`; bundles over the gateway's inline cap are
   // offloaded server-side and round-trip as {name, enabled, blob}, `blob` is an opaque pointer,
   // resolved back to files via getSkillFiles() when editing. Either shape is a REAL own skill.
@@ -42,12 +49,6 @@ export interface CustomHarness {
   maxStep?: number | null;        // default agent step budget per turn (blank = 40)
   timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = server default)
   additionalHeaders?: string[]; // declared header NAMES callers pass per request (app-level auth)
-  // The database this Harness reads, if one is connected. Read-only here: it is attached and
-  // detached through /harnesses/{id}/datasource, never by saving this form, because the value
-  // behind it is a credential this UI is never given. Present so the tools list can SHOW the
-  // database tool — the gateway adds that tool per turn rather than storing it, and a capability
-  // nobody can see on the page that lists capabilities is a capability nobody can audit.
-  dataSource?: { engine: string; host: string; database: string; sampleRows: boolean; updatedAt: number } | null;
   createdAt: number;
 }
 
@@ -284,17 +285,6 @@ export async function getCustom(id: string): Promise<CustomHarness | null> {
   catch { return null; }
 }
 
-/** Detach the database a Harness reads, and overwrite the stored credential.
- *
- *  Its own route rather than a field on the harness save: the connection is written once, at
- *  launch, and this UI is never given the value — so there is nothing here to edit, only
- *  something to remove. Removing it is also the only off switch the database tool has, and that
- *  is deliberate: the tool exists for exactly as long as a database is connected, so a second
- *  enable/disable flag beside it would be a second thing that can disagree with the first. */
-export async function disconnectDatasource(id: string): Promise<void> {
-  await gw('DELETE', `/v1/harnesses/${encodeURIComponent(id)}/datasource`);
-}
-
 export async function createCustom(input: Partial<CustomHarness> & { name: string; base: string }): Promise<CustomHarness> {
   return gw<CustomHarness>('POST', '/v1/harnesses', harnessBody(input));
 }
@@ -338,6 +328,22 @@ export async function testMcp(url: string, auth?: string): Promise<{ ok: boolean
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
     body: JSON.stringify({ url, auth: auth || '' }),
+    cache: 'no-store',
+  });
+  if (!r.ok) return { ok: false, error: `test failed: ${r.status}` };
+  return r.json();
+}
+
+/** Probe a database before connecting it: the server opens it, lists what the account can see,
+ *  and holds on to nothing. Same 200-either-way contract as testMcp — a refused password is an
+ *  answer, not a failed request — and the same degrade when the request itself does not land. */
+export async function testDatabase(engine: string, connectionString: string):
+  Promise<{ ok: boolean; error?: string; host?: string; database?: string; tableCount?: number; tables?: string[] }> {
+  const p = principal();
+  const r = await harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(p.orgId)}/mcp-test/database`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
+    body: JSON.stringify({ engine, connection_string: connectionString }),
     cache: 'no-store',
   });
   if (!r.ok) return { ok: false, error: `test failed: ${r.status}` };

@@ -2225,17 +2225,98 @@ async def _harness_vertex(harness_id: str) -> dict | None:
     return await BACKING.graph.get(harness_id, label="Harness")
 
 
+# ── servers this gateway hosts itself, recognised by ADDRESS ──────────────────────────────────
+# A server is ours if its url is one of our own addresses. That is the one thing true of every
+# server we host and of no server we do not, so recognising them costs no field on the entry, no
+# kind registry and no client-visible flag — and a second first-party server later needs nothing
+# but a path under /v1/mcp/.
+_HOSTED_MCP_PREFIX = "/v1/mcp/"
+# What may follow that prefix: the server's name and nothing else — no second segment, no query,
+# no dot-dot. See _hosted_mcp_path.
+_HOSTED_MCP_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# Where a hosted server's own state lives. A namespace inside the secret store rather than a field
+# anywhere: PUT /v1/mcp-secrets/{ref} prefixes every key it writes with `harness-mcp-`, so no
+# caller can write into this one.
+_HOSTED_SECRET_PREFIX = "harness-hosted-"
+
+
+def _own_origins() -> list[str]:
+    """Every address a client could legitimately have stored for a server WE host.
+
+    Hosted, that is the public base URL a sandbox reaches us on. Self-hosted, the runner is a
+    process beside us and loopback is both correct and the only thing that resolves. Both are
+    listed, in preference order, because an instance that gains a public URL later must keep
+    serving the entries it wrote before it had one.
+    """
+    out = []
+    if PUBLIC_BASE_URL:
+        out.append(PUBLIC_BASE_URL)
+    local = os.environ.get("HARNESS_GATEWAY_URL", "").rstrip("/")
+    if local and _pool_is_local():
+        out.append(local)
+    return out
+
+
+def _hosted_mcp_path(url: str) -> str | None:
+    """The path of a server THIS GATEWAY HOSTS, or None for a server somewhere else."""
+    for origin in _own_origins():
+        if not url.startswith(origin + _HOSTED_MCP_PREFIX):
+            continue
+        name = url[len(origin) + len(_HOSTED_MCP_PREFIX):]
+        # A NAME under the prefix, not an arbitrary path. `/v1/mcp/../../v1/admin` starts with our
+        # prefix and is a different endpoint once any client normalises it — hosted is what earns
+        # a minted credential and a pass on _ssrf_check, and neither is owed to a string that only
+        # looks like one of our servers. Not ours → the ordinary remote path, which hands it no
+        # credential at all because _resolve_mcp_auth refuses this namespace.
+        return _HOSTED_MCP_PREFIX + name if _HOSTED_MCP_NAME.match(name) else None
+    return None
+
+
+def _vault_key(auth) -> str:
+    """The secret-store key an entry's auth references, or "" when it references none."""
+    return auth[len("vault:"):] if isinstance(auth, str) and auth.startswith("vault:") else ""
+
+
 async def _resolve_mcp_auth(org: str, auth: str) -> str:
     """Resolve an MCP server auth value. 'vault:<key>' → the secret from the org/global vault
     (token never sits in the graph). Anything else is treated as a literal bearer token."""
     if isinstance(auth, str) and auth.startswith("vault:"):
         key = auth[len("vault:"):]
+        if key.startswith(_HOSTED_SECRET_PREFIX):
+            # A record we hold for a server we host. It is not a bearer token for anybody, and
+            # this is the one place a stored secret becomes a literal on an outbound request — so
+            # refusing HERE is what makes "the connection string never leaves this process" true
+            # for callers that do not exist yet, including an entry that names this ref and points
+            # somewhere else on purpose.
+            print(f"[mcp] refusing to resolve {key} as a bearer token", flush=True)
+            return ""
         for tenant in _tenants_for(org):
             v = await _vault_get(tenant, key)
             if v:
                 return v
         return ""
     return auth or ""
+
+
+def _mcp_list(v: dict | None) -> list[dict]:
+    """Every MCP server on a harness vertex. THE ONE READER: _harness_plugins, _harness_out and
+    the $headers pre-scan all come through here, so a harness's tool list cannot mean one thing on
+    the page that lists capabilities and another in the turn."""
+    try:
+        a = json.loads((v or {}).get("mcp_servers") or "[]")
+    except Exception:  # noqa: BLE001
+        a = []
+    return [s for s in a if isinstance(s, dict)] if isinstance(a, list) else []
+
+
+_MCP_NAME_RE = re.compile(r"[^a-zA-Z0-9_]+")
+
+
+def _mcp_name(s: str) -> str:
+    """The identifier the agent's CLI will see for a server. The runner's _mcp_name, duplicated:
+    the gateway has to ask the same question the runner will answer, and asking it over HTTP is
+    not an option at config time."""
+    return _MCP_NAME_RE.sub("_", (s or "").strip()).strip("_") or "mcp"
 
 
 _HDR_REF = re.compile(r"\$headers\.([A-Za-z0-9_-]+)")
@@ -2269,6 +2350,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         # the default harnesses, which is what most people actually use, had no image generation
         # and no document skills while custom ones did.
         return [], _builtin_default_skills(), [], []
+    v = await _mcp_migrate(org, harness_id, v)
 
     def _arr(prop):
         try:
@@ -2278,13 +2360,40 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             return []
 
     mcp_out: list[dict] = []
-    for s in _arr("mcp_servers"):
-        if not isinstance(s, dict) or str(s.get("enabled")) in ("False", "false", "0"):
+    for s in _mcp_list(v):
+        if str(s.get("enabled")) in ("False", "false", "0"):
             continue
         if not s.get("url"):
             continue
         _hvals = hdr_vals or {}   # (renamed from hv — that name is now the harness-vertex param)
         _url = _sub_headers(s["url"], _hvals)
+        hosted = _hosted_mcp_path(_url)
+
+        if hosted:
+            # A SERVER WE HOST. Two things follow, and neither is about what kind of server it is.
+            #
+            # The address is re-derived from the origin we serve on NOW, not the one stored: an
+            # operator who moves the gateway must not strand every entry written before the move.
+            # No _ssrf_check, because that rule's subject is a target a customer named, and a url
+            # that already equals one of our own origins is not one however it got typed.
+            #
+            # The credential is MINTED, not resolved. _resolve_mcp_auth returns a literal that the
+            # runner writes into .harness/mcp.json inside a container with bash — right for a
+            # third-party bearer token, and never right for a credential to one of our own
+            # services. That is the lesson of 2026-07-25, and it is a property of first-party
+            # servers rather than of databases. What the sandbox holds is a capability scoped to
+            # this harness, this session and the record this entry's auth names, and it expires.
+            key = _vault_key(s.get("auth"))
+            if not key.startswith(_HOSTED_SECRET_PREFIX):
+                print(f"[mcp] '{s.get('name')}' on {harness_id} points here but names no record "
+                      f"this server holds — not offered this turn.", flush=True)
+                continue
+            mcp_out.append({"name": s.get("name") or s.get("id") or "mcp",
+                            "url": _own_origins()[0] + hosted,
+                            "transport": s.get("transport") or "http",
+                            "auth": _mint_hosted_cred(harness_id, sid, key)})
+            continue
+
         # Same rule the console's Test connection applies. Enforced here too, because this is the
         # call that actually reaches the network: a URL the policy rejects must never be handed to
         # a sandbox, whatever is stored on the harness.
@@ -2305,15 +2414,6 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         if isinstance(s.get("headers"), dict):
             entry["headers"] = {k: _sub_headers(str(vv), _hvals) for k, vv in s["headers"].items()}
         mcp_out.append(entry)
-
-    # The database this harness is connected to, as a tool the agent can call. Added here rather
-    # than stored on the config so it cannot go stale: connect a database and the next turn has
-    # the tool, disconnect it and the next turn does not. What the sandbox receives is a URL and
-    # a token scoped to this harness and this session — never the connection string.
-    if _ds_record(v):
-        sql_mcp = _sql_mcp_server(harness_id, sid)
-        if sql_mcp:
-            mcp_out.append(sql_mcp)
 
     # Skill manifest = the harness's own skills MERGED with its base builtin's defaults (a custom
     # harness inherits the doc skills installed on its base; an own entry overrides by name, and an
@@ -5004,8 +5104,9 @@ async def create_response(body: CreateResponseBody, request: Request):
     # request didn't supply that header, the tool call would fail opaquely (bad auth at the MCP).
     # Reject up-front instead, naming exactly what's missing and where it's needed.
     missing: list[str] = []
-    for _s in _hv_arr("mcp_servers"):
-        if not isinstance(_s, dict) or str(_s.get("enabled")) in ("False", "false", "0"):
+    # Through the one reader, so this scan sees exactly the servers the turn will get.
+    for _s in _mcp_list(hv):
+        if str(_s.get("enabled")) in ("False", "false", "0"):
             continue
         _blob = " ".join([str(_s.get("url") or ""), str(_s.get("auth") or ""),
                           " ".join(str(x) for x in (_s.get("headers") or {}).values())])
@@ -6648,51 +6749,61 @@ async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
     return await _mcp_list_tools(body.url, token)
 
 
-# ── SQL datasources ───────────────────────────────────────────────────────────────────────────
-# A customer's own database, attached to one Harness: the agent explores it to decide what a
+# ── The database, an ordinary MCP server ──────────────────────────────────────────────────────
+# A customer's own database, connected to one Harness: the agent explores it to decide what a
 # dashboard should show, and the dashboard re-runs its queries when someone opens it.
 #
-# THE RECORD AND THE CREDENTIAL LIVE IN DIFFERENT PLACES, on purpose:
-#   * The RECORD — engine, which secret holds the connection string, whether sample rows may be
-#     read — is one property on the Harness vertex, beside mcp_servers and skills. It is harness
-#     configuration, and it rides the vertex read that every turn already does.
-#   * The CONNECTION STRING is a secret. It goes through BACKING.secrets with
-#     require_encryption=True, exactly as MCP bearer tokens do, and the record keeps only a
-#     `vault:<key>` reference. It is resolved here, inside the gateway, at the moment of use:
+# Its entry in `mcp_servers` is INDISTINGUISHABLE from a third-party one — {id, name, url,
+# transport, auth, enabled} and not one field more. Nothing stored says "this one is ours",
+# because nothing has to: a server is ours if its url is one of our own addresses
+# (_hosted_mcp_path), and that answer is already knowable.
+#
+# THE ENTRY AND THE CONNECTION LIVE IN DIFFERENT PLACES, on purpose:
+#   * The ENTRY is configuration. It rides the vertex read every turn already does, is listed,
+#     renamed, switched off and removed exactly as any other server, and holds nothing about
+#     which database it reads.
+#   * THE CONNECTION — engine, host, database, the DSN, how many sample rows may be read — is one
+#     encrypted record at the key the entry's `auth` references, owned BY THE SERVER. It goes
+#     through BACKING.secrets with require_encryption=True, so host and database are encrypted at
+#     rest alongside the credential. It is read here, inside the gateway, at the moment of use:
 #     the runner never receives it, the browser never receives it, and neither does the agent —
 #     an agent is given a tool that runs SELECTs, not a credential.
 #
+# The record names the server it is for and the harness it belongs to, and each endpoint refuses a
+# record not addressed to it (see _hosted_resolve). `auth` is a client-writable field on an
+# ordinary entry and harness ids are public, so that binding — not the shape of a key — is what
+# stops one harness pointing at another's connection.
+#
 # Everything a statement passes through — the read-only gate, the row cap, the timeout — is in
 # sql_plane.py, so the app's refresh and the agent's tool cannot diverge.
-_DS_PROP = "datasource"
 
 # Both spellings of each engine, resolved once here so nothing downstream has to know that
 # "postgresql" and "postgres" are the same thing.
-_DS_ENGINE_ALIASES = {"postgres": "postgres", "postgresql": "postgres", "pg": "postgres",
+_DB_ENGINE_ALIASES = {"postgres": "postgres", "postgresql": "postgres", "pg": "postgres",
                       "mysql": "mysql", "mariadb": "mysql"}
-# The URL schemes each engine will accept. A MySQL string pasted into a Postgres datasource is
+# The URL schemes each engine will accept. A MySQL string pasted into a Postgres connection is
 # caught here, with a sentence, rather than by a driver timing out twenty seconds later.
-_DS_SCHEMES = {"postgres": ("postgres", "postgresql"), "mysql": ("mysql", "mariadb")}
+_DB_SCHEMES = {"postgres": ("postgres", "postgresql"), "mysql": ("mysql", "mariadb")}
 # Rows per table the agent sees when sampling is ON. Enough to tell an id from a status string
 # and a cents column from a dollars one; not enough to be an export of anyone's customer list.
-_DS_SAMPLE_ROWS = 5
+_DB_SAMPLE_ROWS = 5
 # The cap on an agent's own SELECT. Far below the app's, because an agent is checking that a
 # query works before it writes it into a panel — 5000 rows of that is tokens, not information.
-_DS_AGENT_MAX_ROWS = 200
+_DB_AGENT_MAX_ROWS = 200
 
 
-def _ds_engine(engine: str) -> str:
-    e = _DS_ENGINE_ALIASES.get((engine or "").strip().lower())
+def _db_engine(engine: str) -> str:
+    e = _DB_ENGINE_ALIASES.get((engine or "").strip().lower())
     if not e:
         raise uhp_error(400, "unsupported_engine",
                         "This connects to PostgreSQL and MySQL databases.", "engine")
     return e
 
 
-def _ds_parse(engine: str, conn: str) -> tuple[str, str]:
+def _db_parse(engine: str, conn: str) -> tuple[str, str]:
     """(host, database) from a connection string, with the string itself validated.
 
-    Parsed at save time so a person can later confirm WHICH database is attached without the
+    Parsed at attach time so a person can later confirm WHICH database is attached without the
     credential ever being read back out of the secret store."""
     from urllib.parse import urlparse
     try:
@@ -6700,7 +6811,7 @@ def _ds_parse(engine: str, conn: str) -> tuple[str, str]:
     except Exception as e:  # noqa: BLE001
         raise uhp_error(400, "invalid_connection_string",
                         "That does not parse as a connection string.", "connection_string") from e
-    if (u.scheme or "").lower() not in _DS_SCHEMES[engine]:
+    if (u.scheme or "").lower() not in _DB_SCHEMES[engine]:
         want = "postgresql://user:password@host:5432/database" if engine == "postgres" \
             else "mysql://user:password@host:3306/database"
         raise uhp_error(400, "invalid_connection_string",
@@ -6718,82 +6829,241 @@ def _ds_parse(engine: str, conn: str) -> tuple[str, str]:
     return host, db
 
 
-def _ds_secret_key(hid: str) -> str:
-    """One secret per harness, named after it. Same charset rule as harness-mcp-<ref>."""
-    return "harness-ds-" + (re.sub(r"[^a-z0-9]+", "-", (hid or "").lower()).strip("-") or "harness")
+def _hosted_secret_key(hid: str, entry_id: str) -> str:
+    """Where the record for one hosted server on one harness lives. Same charset rule as
+    harness-mcp-<ref>.
+
+    The harness id is in it so an operator reading the secret store can tell what a record belongs
+    to; the entry id is what allows MORE THAN ONE hosted server per harness — the "at most one
+    database" rule only ever existed because a key derived from the harness id alone made two of
+    them collide. The key is not a security boundary: the record names its own harness, and that
+    is (see _hosted_resolve).
+    """
+    def safe(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+    return f"{_HOSTED_SECRET_PREFIX}{safe(hid) or 'harness'}-{safe(entry_id) or 'server'}"
 
 
-async def _ds_store_secret(org: str, hid: str, conn: str) -> str:
-    """Put the connection string in the secret store; return the reference the record keeps."""
+async def _hosted_put_record(org: str, key: str, record: dict) -> None:
+    """Write a hosted server's record. ALWAYS encrypted: the connection string is in it, and so
+    are the host and the database name, which is strictly more than the vertex ever protected."""
     tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
-    key = _ds_secret_key(hid)
     try:
-        await BACKING.secrets.put(tenant, key, conn, require_encryption=True)
+        await BACKING.secrets.put(tenant, key, json.dumps(record), require_encryption=True)
     except backing.SecretsNotConfigured as e:
         # 501 rather than 500: nothing is broken. This instance has not been given a key to
         # encrypt with, and refusing is the correct behaviour — the message names the variable
         # that fixes it, because a stack trace would not.
         raise uhp_error(501, "secrets_not_configured", str(e), "connection_string") from e
-    return f"vault:{key}"
 
 
-def _ds_record(v: dict | None) -> dict | None:
-    """The datasource on a harness vertex, or None.
+async def _hosted_record(org: str, key: str) -> dict | None:
+    """A hosted server's record, or None when there is nothing readable to serve from.
 
-    Never raises: a record we cannot read has to mean "not connected", because the alternative is
-    a harness nobody can open."""
-    try:
-        rec = json.loads((v or {}).get(_DS_PROP) or "null")
-    except Exception:  # noqa: BLE001
-        return None
-    if not isinstance(rec, dict) or rec.get("engine") not in sql_plane.ENGINES:
-        return None
-    return rec if str(rec.get("secret") or "").startswith("vault:") else None
-
-
-def _ds_public(rec: dict | None) -> dict | None:
-    """What a browser may see. Everything except the credential and where it is kept."""
-    if not rec:
-        return None
-    try:
-        updated = int(rec.get("updated_at") or 0)
-    except Exception:  # noqa: BLE001
-        updated = 0
-    return {"engine": rec.get("engine"), "host": rec.get("host") or "",
-            "database": rec.get("database") or "",
-            "sampleRows": bool(rec.get("sample_rows")), "updatedAt": updated}
-
-
-async def _ds_dsn(org: str, rec: dict) -> str:
-    """The live connection string for a record, resolved from the secret store.
-
-    Deliberately NOT _resolve_mcp_auth: that helper falls back to treating the value as a literal
-    token, which for a datasource would mean a connection string sitting in the harness config in
-    plaintext. Here a non-reference is not a fallback, it is a record we refuse to use.
+    Deliberately NOT _resolve_mcp_auth: that helper falls back to treating a value as a literal
+    bearer token, and refuses this namespace outright for exactly that reason.
     """
-    ref = str(rec.get("secret") or "")
-    if not ref.startswith("vault:"):
-        raise uhp_error(500, "datasource_unreadable",
-                        "This connection is stored in a form this server will not use.")
-    key = ref[len("vault:"):]
+    if not key:
+        return None
     for tenant in _tenants_for(org):
-        v = await _vault_get(tenant, key)
-        if v:
-            return v
-    raise uhp_error(502, "datasource_unreadable",
-                    "The stored credential for this database could not be read. Connect it again.")
+        raw = await _vault_get(tenant, key)
+        if raw:
+            try:
+                rec = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                return None
+            return rec if isinstance(rec, dict) else None
+    return None
 
 
-async def _ds_for_harness(hid: str, org: str) -> tuple[dict, str]:
-    """(record, connection string) for a harness's datasource, or a 404 that says what to do."""
+def _hosted_keys(servers: list[dict]) -> set[str]:
+    """The records a list of entries references. Read off the entries, because with a per-entry
+    key the entry is the only thing that knows where its record is."""
+    return {k for k in (_vault_key(s.get("auth")) for s in servers)
+            if k.startswith(_HOSTED_SECRET_PREFIX)}
+
+
+async def _hosted_scrub_removed(org: str, hid: str, before: list[dict], after: list[dict]) -> None:
+    """Overwrite the record behind every hosted entry this write removed.
+
+    Dropping the entry and leaving its connection string encrypted on disk would be a surprise of
+    the worst kind: removing the tool, or deleting the agent, is the most decisive thing the
+    surface offers. Shared by every write that can drop an entry, so they cannot promise
+    differently.
+
+    THE RECORD MUST BE THIS HARNESS'S — the same binding _hosted_resolve refuses a read on. `auth`
+    is a client-writable field and harness ids are public, so anyone may name another agent's ref
+    on an entry of their own; removing it would otherwise destroy a connection they were never
+    given. Losing a database is the louder of the two surprises, so the check belongs on both.
+    Positive evidence of foreign ownership is what skips the scrub: a record we cannot read is one
+    we overwrite, because leaving a connection string behind is the failure this function exists
+    to prevent.
+    """
+    gone = _hosted_keys(before) - _hosted_keys(after)
+    if not gone:
+        return
+    tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
+    scrubbed = 0
+    for key in sorted(gone):
+        rec = await _hosted_record(org, key)
+        if rec and str(rec.get("harness") or "") != hid:
+            print(f"[mcp] {hid}: not scrubbing {key} — that record belongs to another agent",
+                  flush=True)
+            continue
+        with contextlib.suppress(Exception):   # an unwritable store must not block the write
+            await BACKING.secrets.put(tenant, key, "", require_encryption=True)
+        scrubbed += 1
+    if scrubbed:
+        print(f"[sql] {hid}: disconnected ({scrubbed} record(s) scrubbed)", flush=True)
+
+
+async def _mcp_write(hid: str, servers: list[dict]) -> None:
+    """Write mcp_servers outside the config PUT — kit launch provisioning the server it needs."""
+    await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(servers),
+                                      "updated_at": str(int(time.time() * 1000))})
+
+
+def _connection_out(rec: dict) -> dict:
+    """What a caller may see of a connection: which database, and how much of it the agent reads.
+    Everything except the credential."""
+    return {"engine": str(rec.get("engine") or ""), "host": str(rec.get("host") or ""),
+            "database": str(rec.get("database") or ""),
+            "sampleRows": bool(rec.get("sample_rows"))}
+
+
+# What every refusal below says. One sentence, because from the caller's side "there is no such
+# entry", "its record is gone" and "that record is not yours" are the same fact: nothing here is
+# connected to read.
+_NOT_CONNECTED = "No database is connected to this agent yet."
+
+
+async def _hosted_resolve(server: str, hid: str, org: str, servers: list[dict], *,
+                          key: str = "", entry_id: str = "",
+                          check_enabled: bool = False) -> tuple[dict, dict]:
+    """(entry, record) for one server this gateway hosts — the resolution EVERY hosted endpoint
+    shares, so the agent's tool and the app's data plane cannot answer differently.
+
+    THE ENTRY IS FOUND BY WHAT ADDRESSED IT: the record key a turn credential carries, or the
+    entry's own id from a route. Never by name, position or a flag — which is what makes renaming,
+    reordering and several hosted servers on one harness free.
+
+    THEN THE RECORD MUST BE ADDRESSED TO THIS SERVER AND THIS HARNESS. `auth` is a client-writable
+    field on an ordinary entry and harness ids are public, so without the second check a caller
+    could write another harness's ref onto their own entry and read a database they were never
+    given. One structural check, behind the credential, that survives any write path added later —
+    where a write-time validation would only cover the writes that exist today.
+
+    `check_enabled` is for a turn and not for the app: switching a server off is a statement about
+    what an AGENT is handed, and a dashboard refresh is not a turn. A token minted before the
+    switch stays valid for hours, so the refusal has to be here and not only where turns are built.
+    """
+    if key:
+        entry = next((e for e in servers if _vault_key(e.get("auth")) == key), None)
+    elif entry_id:
+        entry = next((e for e in servers if str(e.get("id") or "") == entry_id), None)
+    else:
+        entry = None
+    if not entry:
+        raise uhp_error(404, "database_not_connected", _NOT_CONNECTED, "harness_id")
+    if check_enabled and str(entry.get("enabled")) in ("False", "false", "0"):
+        raise uhp_error(404, "database_not_connected", _NOT_CONNECTED, "harness_id")
+    rec = await _hosted_record(org, _vault_key(entry.get("auth")))
+    if not rec or rec.get("server") != server or rec.get("harness") != hid:
+        raise uhp_error(404, "database_not_connected", _NOT_CONNECTED, "harness_id")
+    return entry, rec
+
+
+async def _harness_for_route(hid: str, org: str) -> dict:
+    """The harness a /servers/{sid} route is addressed to: owned by this org, not deleted, and
+    converted off any earlier shape first — which is the reason this is a helper rather than the
+    three inline lines every other route carries."""
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    rec = _ds_record(v)
-    if not rec:
-        raise uhp_error(404, "datasource_not_connected",
-                        "No database is connected to this agent yet.", "harness_id")
-    return rec, await _ds_dsn(org, rec)
+    return await _mcp_migrate(org, hid, v)
+
+
+# ── migration: two earlier shapes of "the harness's database" ─────────────────────────────────
+# Shape 0, everything deployed: a `datasource` prop on the vertex. Shape 1, the refactor this
+# replaces: an mcp_servers entry with `managed` and `config`. Both hold {engine, secret, host,
+# database, sample_rows, updated_at} beside a BARE DSN at harness-ds-<hid-safe>.
+#
+# The payload genuinely changes — bare string to a JSON record, at a new key — so this is a
+# CONVERTER and not a wrapper. A read-repair projection would force _hosted_record to understand
+# two secret shapes forever, which is the accretion the house style forbids.
+_DS_PROP_LEGACY = "datasource"
+
+
+def _legacy_db_config(c) -> dict | None:
+    """An earlier configuration block, or None. Fails closed: a block we cannot read has to mean
+    "not connected", and a `secret` that is not a reference is not a fallback to a literal."""
+    if not isinstance(c, dict) or c.get("engine") not in sql_plane.ENGINES:
+        return None
+    return c if str(c.get("secret") or "").startswith("vault:") else None
+
+
+async def _mcp_migrate(org: str, hid: str, v: dict | None) -> dict | None:
+    """Convert a database connected under either earlier shape into an ordinary hosted entry.
+
+    Once, in place, on the first read that needs it — there is no global harness scan, and a
+    customer connected before this change must not have a broken turn while an operator remembers
+    to run something. Prints one [migrate] line per harness, so the condition for deleting this
+    function is a number you can count rather than a guess.
+    """
+    if not v:
+        return v
+    # The HARNESS's org, not the caller's: this writes a record that belongs to the harness, and
+    # only the vertex knows whose tenant that is.
+    org = str(v.get("org") or org)
+    # Parsed ONCE. Two _mcp_list calls return two sets of dicts parsed from the same JSON, so the
+    # replacement below would match nothing and leave both entries on the harness.
+    servers = _mcp_list(v)
+    old_entry = next((e for e in servers if _legacy_db_config(e.get("config"))), None)
+    cfg = _legacy_db_config((old_entry or {}).get("config"))
+    if not cfg:
+        try:
+            cfg = _legacy_db_config(json.loads(v.get(_DS_PROP_LEGACY) or "null"))
+        except Exception:  # noqa: BLE001
+            cfg = None
+    if not cfg:
+        return v
+
+    origins = _own_origins()
+    if not origins:
+        print(f"[migrate] {hid}: no address to serve its database on — set "
+              f"HARNESS_PUBLIC_BASE_URL. Left as it was.", flush=True)
+        return v
+    old_key = cfg["secret"][len("vault:"):]
+    dsn = ""
+    for tenant in _tenants_for(org):
+        dsn = await _vault_get(tenant, old_key) or ""
+        if dsn:
+            break
+    if not dsn:
+        # A harness we cannot migrate must not be a harness we silently disconnect.
+        print(f"[migrate] {hid}: its stored credential could not be read — left as it was.",
+              flush=True)
+        return v
+
+    entry_id = "mcp.database"
+    key = _hosted_secret_key(hid, entry_id)
+    # Every field taken from the old configuration: nothing re-derived, nothing re-parsed.
+    await _hosted_put_record(org, key, {
+        "server": "database", "harness": hid, "engine": cfg["engine"], "dsn": dsn,
+        "host": cfg.get("host") or "", "database": cfg.get("database") or "",
+        "sample_rows": int(cfg.get("sample_rows") or 0),
+        "updated_at": int(cfg.get("updated_at") or 0)})
+    entry = {"id": entry_id, "name": str((old_entry or {}).get("name") or "database"),
+             "url": origins[0] + _HOSTED_MCP_PREFIX + "database", "transport": "http",
+             "auth": f"vault:{key}",
+             "enabled": str((old_entry or {}).get("enabled", True)) not in ("False", "false", "0")}
+    servers = [e for e in servers if e is not old_entry] + [entry]
+    await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(servers), _DS_PROP_LEGACY: ""})
+    with contextlib.suppress(Exception):   # an unwritable store must not strand the conversion
+        tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
+        await BACKING.secrets.put(tenant, old_key, "", require_encryption=True)
+    print(f"[migrate] {hid}: database is now an ordinary MCP server", flush=True)
+    return {**v, "mcp_servers": json.dumps(servers), _DS_PROP_LEGACY: ""}
 
 
 def _sql_http(e: Exception) -> HTTPException:
@@ -6808,47 +7078,22 @@ def _sql_http(e: Exception) -> HTTPException:
     return uhp_error(502, "sql_failed", str(e), "sql")
 
 
-class DatasourceBody(BaseModel):
-    """Connect a database to a harness. `sample_rows` defaults ON — see put_datasource."""
-    engine: str
-    connection_string: str
-    sample_rows: bool = True
-
-
-class DatasourceTestBody(BaseModel):
+class DatabaseTestBody(BaseModel):
     engine: str
     connection_string: str
 
 
-@app.put("/v1/harnesses/{hid}/datasource")
-async def put_datasource(hid: str, body: DatasourceBody, request: Request) -> dict:
-    """Attach (or replace) the database this harness reads.
-
-    `sample_rows` is the one privacy decision in the whole kit, so it is stored per harness and
-    defaults to ON: with it on the agent sees a few real rows per table and can tell a status
-    column from a category one; with it off it sees table and column names and types and not a
-    single row of business data. Nothing else about the record changes either way.
-    """
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    rec = await _ds_write(org, hid, _ds_validate(body.engine, body.connection_string),
-                          body.sample_rows)
-    return {"harnessId": hid, "dataSource": _ds_public(rec)}
-
-
-def _ds_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
+def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
     """(engine, connection string, host, database) — or the 400 that says what is wrong with it.
 
     Pure, so kit launch can check what it was given BEFORE it provisions anything: a typo in a
     connection string should not leave a half-configured Harness behind."""
-    eng = _ds_engine(engine)
+    eng = _db_engine(engine)
     c = (conn or "").strip()
     if not c:
         raise uhp_error(400, "invalid_connection_string",
                         "A connection string is required.", "connection_string")
-    host, db = _ds_parse(eng, c)
+    host, db = _db_parse(eng, c)
     # A connection string is a target this server opens a socket to on a caller's say-so, which is
     # the same thing an MCP URL is — so it passes the same check, for the same reason, with the
     # same exemption: self-hosted, the "internal" network is the operator's own machine and a
@@ -6864,75 +7109,55 @@ def _ds_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
     return eng, c, host, db
 
 
-async def _ds_write(org: str, hid: str, checked: tuple[str, str, str, str],
-                    sample_rows: bool) -> dict:
-    """Store the credential, write the record. The one place a datasource is attached, so a
-    database connected at launch is stored exactly as one connected later."""
+async def _hosted_db_attach(org: str, hid: str, v: dict | None, decl: dict,
+                            checked: tuple[str, str, str, str], sample_rows: bool) -> None:
+    """Provision a database connection: one encrypted record, one ordinary entry.
+
+    THE ONLY THING THAT EVER WRITES A RECORD, and kit launch is its only caller — connecting a
+    database is something the kit that reads one drives, not something the tool list exposes.
+
+    Reconnecting after a password change replaces the record ON THE EXISTING ENTRY, reusing that
+    entry's key, so no record is left orphaned behind. `name` and `enabled` come from the entry
+    being replaced: they belong to whoever configured the harness, and reconnecting is a statement
+    about the credential and about nothing else.
+    """
     engine, conn, host, db = checked
-    ref = await _ds_store_secret(org, hid, conn)
-    rec = {"engine": engine, "secret": ref, "host": host, "database": db,
-           # Stored as the row COUNT introspection will take, not as a boolean, so the one place
-           # that decides how much data leaves the customer's database is this line.
-           "sample_rows": _DS_SAMPLE_ROWS if sample_rows else 0,
-           "updated_at": int(time.time() * 1000)}
-    await _vg_upsert("Harness", hid, {_DS_PROP: json.dumps(rec),
-                                      "updated_at": str(int(time.time() * 1000))})
+    origins = _own_origins()
+    if not origins:
+        # An entry with no url is not an ordinary entry, so refusing beats storing a broken one.
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set "
+                        "HARNESS_PUBLIC_BASE_URL.", "database")
+    cur = _mcp_list(v)
+    prev = next((e for e in cur if str(e.get("id") or "") == decl["id"]), None) or {}
+    prev_key = _vault_key(prev.get("auth"))
+    key = prev_key if prev_key.startswith(_HOSTED_SECRET_PREFIX) else _hosted_secret_key(hid, decl["id"])
+    await _hosted_put_record(org, key, {
+        "server": "database", "harness": hid, "engine": engine, "dsn": conn,
+        "host": host, "database": db,
+        # Stored as the row COUNT introspection will take, not as a boolean, so the one place that
+        # decides how much data leaves the customer's database is this line.
+        "sample_rows": _DB_SAMPLE_ROWS if sample_rows else 0,
+        "updated_at": int(time.time() * 1000)})
+    entry = {"id": decl["id"], "name": str(prev.get("name") or decl["name"]),
+             "url": origins[0] + _HOSTED_MCP_PREFIX + "database", "transport": "http",
+             "auth": f"vault:{key}",
+             "enabled": str(prev.get("enabled", True)) not in ("False", "false", "0")}
+    await _mcp_write(hid, [e for e in cur if str(e.get("id") or "") != decl["id"]] + [entry])
     # host and database only. The credential is not printed, here or anywhere.
     print(f"[sql] {hid}: connected {engine} {host}/{db} "
           f"(sample rows {'on' if sample_rows else 'off'})", flush=True)
-    return rec
 
 
-async def _ds_forget(org: str, hid: str, v: dict | None) -> bool:
-    """Drop the record AND overwrite the stored credential. True if there was one.
-
-    Shared by disconnecting a database and by deleting the harness itself, because they are the
-    same promise: after either, this server is no longer holding that password. Deleting the
-    agent and leaving its production credential encrypted on disk would be a surprise of the
-    worst kind — the person did the most decisive thing the UI offers.
-    """
-    rec = _ds_record(v)
-    if rec:
-        tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
-        with contextlib.suppress(Exception):   # an unwritable store must not block the delete
-            await BACKING.secrets.put(tenant, _ds_secret_key(hid), "", require_encryption=True)
-        print(f"[sql] {hid}: disconnected", flush=True)
-    # Cleared unconditionally: a record we could not parse is exactly the one worth clearing.
-    await _vg_upsert("Harness", hid, {_DS_PROP: "", "updated_at": str(int(time.time() * 1000))})
-    return bool(rec)
-
-
-@app.get("/v1/harnesses/{hid}/datasource")
-async def get_datasource(hid: str, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    return {"harnessId": hid, "dataSource": _ds_public(_ds_record(v))}
-
-
-@app.delete("/v1/harnesses/{hid}/datasource")
-async def delete_datasource(hid: str, request: Request) -> dict:
-    """Disconnect the database. The record goes and so does the stored credential."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    return {"harnessId": hid, "dataSource": None,
-            "disconnected": await _ds_forget(org, hid, v)}
-
-
-@app.post("/v1/datasource-test")
-async def test_datasource(body: DatasourceTestBody, request: Request) -> dict:
-    """Try a connection string before saving it, and say what went wrong if it fails.
+async def _db_probe(engine: str, conn: str) -> dict:
+    """Try a connection string, and say what went wrong if it fails.
 
     Same shape as /v1/mcp-test: {ok:true, …} or {ok:false, error} with HTTP 200, because "your
     password is wrong" is a successful test that reports a failure, not a failed request.
     """
-    await _pub_org_member(request)
-    # Validated exactly as saving would validate it, so a string this button accepts is a string
-    # the save accepts. A test that does not predict what happens next is worse than no test.
-    engine, conn, host, db = _ds_validate(body.engine, body.connection_string)
+    # Validated exactly as attaching would validate it, so a string this button accepts is a
+    # string the save accepts. A test that does not predict what happens next is worse than none.
+    engine, conn, host, db = _db_validate(engine, conn)
     try:
         # Not SELECT 1: reaching the database proves the credential, and reading the catalog
         # proves the account can see tables — which is the failure people actually hit when they
@@ -6945,38 +7170,75 @@ async def test_datasource(body: DatasourceTestBody, request: Request) -> dict:
             "tables": [f"{t['schema']}.{t['name']}" for t in schema["tables"][:12]]}
 
 
+# Two probes rather than one because a DSN is not a URL: /v1/mcp-test takes {url, auth} and this
+# takes {engine, connection_string}, and a union body would be worse than two names. Both come in
+# an org-scoped and a public flavour so a console that tests either kind has one auth shape.
+@app.post("/v1/orgs/{org}/mcp-test/database")
+async def test_database(org: str, body: DatabaseTestBody, request: Request) -> dict:
+    await _owned_org(request, org)
+    return await _db_probe(body.engine, body.connection_string)
+
+
+@app.post("/v1/mcp-test/database")
+async def test_database_public(body: DatabaseTestBody, request: Request) -> dict:
+    await _pub_org_member(request)
+    return await _db_probe(body.engine, body.connection_string)
+
+
 class SqlQueryBody(BaseModel):
     sql: str
     max_rows: int | None = None
 
 
-@app.post("/v1/harnesses/{hid}/sql/query")
-async def run_harness_query(hid: str, body: SqlQueryBody, request: Request) -> dict:
-    """Run one SELECT against this harness's database.
+# ── the app's data plane: one hosted server, addressed by the entry that names it ─────────────
+# A dashboard re-runs every panel's query when someone opens it, and doing that through the agent
+# would cost a turn per panel per page-load. Not a second mechanism for the same thing — a browser
+# is not an MCP client and must never hold a turn credential — and every statement still passes
+# the same read-only gate, row cap and timeout the agent's own tool does.
+#
+# Addressed by entry id rather than by harness, because "the harness's database" is the same
+# assumption that put connection state on the vertex: a harness may have several hosted servers,
+# and the caller has to be able to say which. The harness segment carries authorization; the
+# server segment names the server.
 
-    This is the route a dashboard calls to refresh a panel, which is why it exists at all:
-    opening a dashboard re-runs every panel's query, and doing that through the agent would cost
-    a turn per panel per page-load. The statement still passes the same read-only gate, row cap
-    and timeout the agent's own tool does.
+@app.get("/v1/harnesses/{hid}/servers/{sid}")
+async def get_harness_server(hid: str, sid: str, request: Request) -> dict:
+    """One server this gateway hosts, describing itself — including what it is connected to.
+
+    The server that owns the connection is the one that names it, exactly as tools/list is a
+    third-party server describing itself. Connection state does not ride a harness read.
     """
     org, _ = await _pub_org_member(request)
-    rec, dsn = await _ds_for_harness(hid, org)
+    v = await _harness_for_route(hid, org)
+    entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
+    return {"id": entry.get("id"), "name": entry.get("name"),
+            "enabled": str(entry.get("enabled", True)) not in ("False", "false", "0"),
+            "connection": _connection_out(rec)}
+
+
+@app.post("/v1/harnesses/{hid}/servers/{sid}/query")
+async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Request) -> dict:
+    """Run one SELECT — what refreshing a dashboard panel does."""
+    org, _ = await _pub_org_member(request)
+    v = await _harness_for_route(hid, org)
+    _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
     want = int(body.max_rows or sql_plane.DEFAULT_MAX_ROWS)
     max_rows = max(1, min(want, sql_plane.DEFAULT_MAX_ROWS))
     try:
-        return await sql_plane.run_query(rec["engine"], dsn, body.sql or "", max_rows=max_rows)
+        return await sql_plane.run_query(rec["engine"], rec["dsn"], body.sql or "", max_rows=max_rows)
     except sql_plane.SqlError as e:
         raise _sql_http(e) from e
 
 
-@app.get("/v1/harnesses/{hid}/sql/schema")
-async def get_harness_schema(hid: str, request: Request) -> dict:
-    """The shape of this harness's database: tables, columns, types — and a few rows per table
-    when the person left sample rows on. `sampled` in the response says which they got."""
+@app.get("/v1/harnesses/{hid}/servers/{sid}/schema")
+async def get_server_schema(hid: str, sid: str, request: Request) -> dict:
+    """The shape of the connected database: tables, columns, types — and a few rows per table when
+    the person left sample rows on. `sampled` in the response says which they got."""
     org, _ = await _pub_org_member(request)
-    rec, dsn = await _ds_for_harness(hid, org)
+    v = await _harness_for_route(hid, org)
+    _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
     try:
-        return await sql_plane.introspect(rec["engine"], dsn,
+        return await sql_plane.introspect(rec["engine"], rec["dsn"],
                                           sample_rows=int(rec.get("sample_rows") or 0))
     except sql_plane.SqlError as e:
         raise _sql_http(e) from e
@@ -6993,13 +7255,13 @@ async def get_harness_schema(hid: str, request: Request) -> dict:
 # / _hermes_mcp_section). Hosting the server here rather than as a separate process is what keeps
 # the credential in the gateway: the sandbox is handed a URL and a per-turn token, resolves nothing
 # itself, and a token that leaks buys one session's read access to one database and expires with it.
-_SQL_MCP_TOOLS = [
+_DB_MCP_TOOLS = [
     {"name": "schema",
      "description": ("Tables and columns in the connected database, with types. Call this first: "
                      "it is the only way to learn what can be charted."),
      "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "query",
-     "description": (f"Run one read-only SELECT and see the rows (up to {_DS_AGENT_MAX_ROWS}). "
+     "description": (f"Run one read-only SELECT and see the rows (up to {_DB_AGENT_MAX_ROWS}). "
                      "Use it to check a query works before putting it in a dashboard panel. "
                      "Only SELECT is accepted; anything that would modify data is refused."),
      "inputSchema": {"type": "object", "required": ["sql"],
@@ -7008,60 +7270,34 @@ _SQL_MCP_TOOLS = [
 ]
 
 
-def _sql_mcp_url() -> str:
-    """Where a sandbox reaches this server, or "" when we cannot know.
-
-    Hosted, the sandbox is a remote container and the answer is the public base URL the model
-    broker already uses. Self-hosted, the runner is a process in this container and loopback is
-    both correct and the only thing that resolves.
-    """
-    if PUBLIC_BASE_URL:
-        return f"{PUBLIC_BASE_URL}/v1/mcp/sql"
-    local = os.environ.get("HARNESS_GATEWAY_URL", "").rstrip("/")
-    return f"{local}/v1/mcp/sql" if local and _pool_is_local() else ""
-
-
-def _mint_sql_cred(hid: str, sid: str) -> str:
-    """Per-turn credential for the SQL MCP server: harness.session.exp.hmac.
+def _mint_hosted_cred(hid: str, sid: str, key: str) -> str:
+    """Per-turn credential for a server this gateway hosts: harness.session.record.exp.hmac.
 
     The same HMAC construction as the model broker's turn credential (_mint_turn_cred) and
-    deliberately a different prefix and a different claim: this one authorises reading one
-    harness's database and nothing else, so a token lifted out of a sandbox cannot be replayed
+    deliberately a different prefix and a different claim set: this one authorises reading one
+    record on one harness and nothing else, so a token lifted out of a sandbox cannot be replayed
     at the broker, and one lifted from the broker cannot read a database.
     """
     exp = str(int(time.time()) + _BROKER_TTL_S)
-    body = f"{hid}|{sid}|{exp}"
+    body = f"{hid}|{sid}|{key}|{exp}"
     sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
     return f"hrs_{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
 
 
-def _verify_sql_cred(tok: str) -> tuple[str, str] | None:
-    """(harness_id, session_id) for a valid unexpired token, else None."""
+def _verify_hosted_cred(tok: str) -> tuple[str, str, str] | None:
+    """(harness_id, session_id, record key) for a valid unexpired token, else None."""
     if not tok or not tok.startswith("hrs_"):
         return None
     try:
         b64, sig = tok[4:].rsplit(".", 1)
         body = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode()
-        hid, sid, exp = body.split("|")
+        hid, sid, key, exp = body.split("|")
     except Exception:  # noqa: BLE001 — a malformed token is simply invalid
         return None
     good = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, good) or int(exp) < int(time.time()):
         return None
-    return hid, sid
-
-
-def _sql_mcp_server(hid: str, sid: str) -> dict | None:
-    """The MCP server entry to hand this turn, or None when there is nowhere to point it."""
-    url = _sql_mcp_url()
-    if not url:
-        print(f"[sql] {hid} has a database but no address a sandbox could reach this gateway on "
-              f"— set HARNESS_PUBLIC_BASE_URL. The agent gets no database tools this turn.",
-              flush=True)
-        return None
-    # No _ssrf_check here: that rule exists to stop a CUSTOMER-supplied URL pointing this server at
-    # something internal. This URL is our own, and self-hosted it is loopback by design.
-    return {"name": "database", "url": url, "transport": "http", "auth": _mint_sql_cred(hid, sid)}
+    return hid, sid, key
 
 
 def _jsonrpc_result(rid, result: dict) -> JSONResponse:
@@ -7072,18 +7308,18 @@ def _tool_text(text: str, is_error: bool = False) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
-@app.post("/v1/mcp/sql")
-async def sql_mcp(request: Request):
+@app.post("/v1/mcp/database")
+async def database_mcp(request: Request):
     """The MCP endpoint the agent's CLI talks to. Streamable HTTP, stateless.
 
     Stateless — no mcp-session-id — because there is nothing to keep between calls: every request
-    carries the token that identifies the harness, and the connection is opened and closed per
-    query. That also means any replica can serve any call.
+    carries the token that identifies the harness and the record, and the connection is opened and
+    closed per query. That also means any replica can serve any call.
     """
-    claims = _verify_sql_cred(_broker_token(request))
+    claims = _verify_hosted_cred(_broker_token(request))
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
-    hid, _sid = claims
+    hid, _sid, key = claims
     try:
         req = json.loads(await request.body() or b"{}")
     except Exception:  # noqa: BLE001
@@ -7100,25 +7336,34 @@ async def sql_mcp(request: Request):
     if rid is None:            # a notification (notifications/initialized) — nothing to answer
         return Response(status_code=202)
     if method == "tools/list":
-        return _jsonrpc_result(rid, {"tools": _SQL_MCP_TOOLS})
+        return _jsonrpc_result(rid, {"tools": _DB_MCP_TOOLS})
     if method != "tools/call":
         return JSONResponse({"jsonrpc": "2.0", "id": rid,
                              "error": {"code": -32601, "message": f"method not found: {method}"}})
 
     v = await _harness_vertex(hid)
+    if v and str(v.get("deleted")) in ("1", "true", "True"):
+        v = None                    # a token outlives the agent it was minted for; the agent's
+                                    # database access must not
     org = str((v or {}).get("org") or "")
-    rec = _ds_record(v)
-    if not rec:
+    try:
+        _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v),
+                                            key=key, check_enabled=True)
+    except HTTPException:
+        # Every refusal, in the agent's terms. The last clause is load-bearing: without it a model
+        # spends the rest of the turn looking for a way to connect one itself.
         return _jsonrpc_result(rid, _tool_text(
             "No database is connected to this agent. Ask the person to connect one, then try "
             "again — you cannot connect it yourself.", True))
     name = params.get("name") or ""
     args = params.get("arguments") or {}
     try:
-        dsn = await _ds_dsn(org, rec)
         if name == "schema":
-            out = await sql_plane.introspect(rec["engine"], dsn,
+            out = await sql_plane.introspect(rec["engine"], rec["dsn"],
                                              sample_rows=int(rec.get("sample_rows") or 0))
+            # WHICH database this is, from the record that owns it. The kit's skill tells the agent
+            # to copy this into the dashboard it writes, and the agent has no other way to know.
+            out["connection"] = _connection_out(rec)
             if not out.get("sampled"):
                 # Said plainly, because an agent that does not know sampling is off will read the
                 # absence of rows as an empty database and design a dashboard for one.
@@ -7127,8 +7372,8 @@ async def sql_mcp(request: Request):
                                "check a specific figure.")
             return _jsonrpc_result(rid, _tool_text(json.dumps(out, ensure_ascii=False)))
         if name == "query":
-            out = await sql_plane.run_query(rec["engine"], dsn, str(args.get("sql") or ""),
-                                            max_rows=_DS_AGENT_MAX_ROWS)
+            out = await sql_plane.run_query(rec["engine"], rec["dsn"], str(args.get("sql") or ""),
+                                            max_rows=_DB_AGENT_MAX_ROWS)
             return _jsonrpc_result(rid, _tool_text(json.dumps(out, ensure_ascii=False)))
     except sql_plane.SqlError as e:
         # The database's own sentence, back to the agent as a tool error so it can fix the query
@@ -7222,24 +7467,22 @@ _KIT_BASE_PREFERENCE: tuple[tuple[str, str], ...] = (
 )
 
 
-def _kit_datasource(kit: dict) -> dict | None:
-    """Whether this kit reads a database, from its own kit.json (`harness.datasource`).
+def _kit_launch_database(kit: dict) -> dict | None:
+    """What this kit's LAUNCH DIALOG must collect, from its own kit.json (`harness.launch`).
 
-    Declared per kit rather than assumed, so the launch dialog asks for a connection only where
-    one is used. The shape is deliberately open — `engines` is a list, not a flag — so adding a
-    warehouse later is a change to this server and to a kit's manifest, and to nothing else.
+    A statement about launch, not an mcp_servers entry: a kit that reads a database is asked for
+    one before anything is provisioned, because every panel it builds would otherwise have nothing
+    to read. Declaring it is what makes it required, so there is no `required` field to disagree
+    with. `engines` narrows the picker and is a list rather than a flag, so adding a warehouse
+    later is a change to this server and to a kit's manifest and to nothing else.
     """
-    spec = (kit.get("harness") or {}).get("datasource")
-    if not spec:
+    d = ((kit.get("harness") or {}).get("launch") or {}).get("database")
+    if not isinstance(d, dict):
         return None
-    if spec is True:                      # the short form: "yes, whatever this build supports"
-        spec = {}
-    if not isinstance(spec, dict):
-        print(f"[kits] {kit.get('id')}: harness.datasource is not an object — ignored", flush=True)
-        return None
-    declared = [e for e in (spec.get("engines") or []) if e in sql_plane.ENGINES]
-    return {"required": bool(spec.get("required", True)),
-            "engines": declared or list(sql_plane.ENGINES)}
+    declared = [e for e in (d.get("engines") or []) if e in sql_plane.ENGINES]
+    return {"engines": declared or list(sql_plane.ENGINES),
+            "name": str(d.get("name") or "database"),
+            "id": str(d.get("id") or "mcp.database")}
 
 
 def _kit_preference(kit: dict) -> list[tuple[str, str]]:
@@ -7468,13 +7711,12 @@ def _harness_out(v: dict) -> dict:
             # The starter kit that provisioned this Harness, when one did. The kit's app uses it
             # to find its own Harness instead of asking the user to choose from a list.
             "kit": v.get("kit") or None,
-            # The database this harness reads, if one is connected — engine, host and database
-            # name, never the credential. An app uses it to know whether to offer a connect step.
-            "dataSource": _ds_public(_ds_record(v)),
             "baseLabel": v.get("base_label") or v.get("base"),
             "defaultModel": v.get("default_model") or "",
             "systemPrompt": v.get("system_prompt") or "",
-            "mcpServers": _parse(v.get("mcp_servers")), "skills": _parse(v.get("skills")),
+            # Verbatim: what a client reads is what is stored, for every entry, which is the
+            # ordinary contract and the only one there now is.
+            "mcpServers": _mcp_list(v), "skills": _parse(v.get("skills")),
             "disabledTools": [t for t in _parse(v.get("disabled_tools")) if isinstance(t, str)],
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
@@ -7500,6 +7742,36 @@ def _harness_props(body: HarnessBody) -> dict:
 
 _WS_WRITE_MAX = 4 * 1024 * 1024   # an app writing its own state, not an upload path
 _SKILL_INLINE_MAX = 48_000   # keep the vertex `skills` prop safely under the 64k value cap
+
+
+def _mcp_servers_prepare(incoming: list | None) -> list[dict]:
+    """Normalise mcp_servers at config time (the same bar _skills_prepare holds skills to).
+
+    ONE RULE FOR EVERY ENTRY, including the ones this gateway hosts itself. An entry the caller
+    did not send is gone — there is no keep-if-omitted exemption, because keeping one requires
+    knowing which entries are special, which is the parallel path this replaced. The record behind
+    a removed entry is scrubbed rather than orphaned (see _hosted_scrub_removed); a stale tab's
+    Save can therefore disconnect a database, and the fix for that is optimistic concurrency for
+    ALL entries rather than an exemption for one.
+    """
+    out: list[dict] = []
+    for i, s in enumerate(incoming or []):
+        if not isinstance(s, dict):
+            raise uhp_error(400, "invalid_mcp_server", f"mcp_servers[{i}]: must be an object.", "mcp_servers")
+        if not s.get("url"):
+            raise uhp_error(400, "invalid_mcp_server", f"mcp_servers[{i}]: url required.", "mcp_servers")
+        out.append(s)
+    # Two servers with the same sanitised name are ONE server to every backend — the runner keys
+    # them by name and the last wins, so half the tool list would vanish with no error.
+    names: dict[str, str] = {}
+    for e in out:
+        nm = _mcp_name(str(e.get("name") or "mcp"))
+        if nm in names:
+            raise uhp_error(400, "duplicate_server_name",
+                            f"'{e.get('name')}' and '{names[nm]}' are the same server to an agent "
+                            f"— give one of them a different name.", "mcp_servers")
+        names[nm] = str(e.get("name") or "")
+    return out
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -7573,6 +7845,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     p = await _owned_org(request, org)
     member = p.get("member") or request.headers.get("x-harness-member", "")
     workspace = request.headers.get("x-harness-workspace", "")
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -7593,7 +7866,7 @@ async def list_harnesses(org: str, request: Request,
     workspace (Space id); `workspace_default=1` lets unstamped legacy records through."""
     await _owned_org(request, org)
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(r) for r in rows
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     if workspace:
         items = [i for i in items if _workspace_keep(i.get("workspace") or "", workspace, bool(workspace_default))]
@@ -7607,7 +7880,7 @@ async def get_harness(org: str, hid: str, request: Request) -> dict:
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    return _harness_out(v)
+    return _harness_out(await _mcp_migrate(org, hid, v))
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}/models")
@@ -7650,9 +7923,14 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     cur = await _vertex_get(hid)
     if not cur or str(cur.get("org") or "") != org or str(cur.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    cur = await _mcp_migrate(org, hid, cur)
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write: _harness_props can still refuse this save (an unsupported base), and a
+    # refused save that had already scrubbed a record would disconnect a database nobody removed.
+    await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
     v = await _vertex_get(hid)
     return _harness_out(v or {"id": hid})
 
@@ -7664,8 +7942,10 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     cur = await _vertex_get(hid)
     if not cur or str(cur.get("org") or "") != org:
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    await _ds_forget(org, hid, cur)   # a deleted agent must not still be holding a database password
+    cur = await _mcp_migrate(org, hid, cur)
     await _vg_upsert("Harness", hid, {"deleted": "1"})
+    # a deleted agent must not still be holding a database password
+    await _hosted_scrub_removed(org, hid, _mcp_list(cur), [])
     return {"id": hid, "deleted": True}
 
 
@@ -7685,6 +7965,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -7710,7 +7991,7 @@ async def list_kits(request: Request) -> dict:
     out = []
     for kid, kit in sorted(_kits().items()):
         h = by_kit.get(kid)
-        out.append({"id": kid, "object": "kit",
+        row = {"id": kid, "object": "kit",
                     "title": kit.get("title") or kid,
                     "tagline": kit.get("tagline") or "",
                     "description": kit.get("description") or "",
@@ -7734,32 +8015,40 @@ async def list_kits(request: Request) -> dict:
                     # about their setup that is not true.
                     "runningOn": ({"base": str(h.get("base") or ""),
                                    "model": str(h.get("default_model") or "")} if h else None),
-                    # Whether this kit reads a database, and which engines it accepts — declared
-                    # by the kit itself, so the launch dialog asks for a connection only where one
-                    # is actually used, and a kit added later needs no change here.
-                    "datasource": _kit_datasource(kit),
-                    # And what a launched one is actually connected to (never the credential).
-                    "connected": _ds_public(_ds_record(h)) if h else None,
                     # What to run it on: this kit's own recommended pairings, each marked with
                     # whether the caller's integrations can serve it. The launch dialog renders
                     # these directly and preselects the one flagged `recommended`.
-                    "choices": await _kit_choices(org, kit)})
+                    "choices": await _kit_choices(org, kit)}
+        # Two facts, both about the KIT: that it reads a database, and which engines it takes. What
+        # a launched one is pointed AT is deliberately absent — nobody reads their data on this
+        # page, and the surface where they do names it from the server that owns the connection.
+        decl = _kit_launch_database(kit)
+        if decl:
+            row["database"] = {"engines": decl["engines"]}
+        out.append(row)
     return {"kits": out}
+
+
+class KitDatabaseBody(BaseModel):
+    """The connection a kit that reads a database is launched with. `sample_rows` defaults ON:
+    with it on the agent sees a few real rows per table and can tell a status column from a
+    category one; with it off it sees names and types and not one row of business data."""
+    engine: str
+    connection_string: str
+    sample_rows: bool = True
 
 
 class KitLaunchBody(BaseModel):
     """What to run the kit on, and what it runs against.
 
-    Every field is optional and no body at all means "use the recommendation, connect nothing".
-    A kit that reads a database (kit.json `harness.datasource`) collects the connection at launch
-    so the first thing the person sees is their own data — the fields are the same three the
-    datasource route takes, and they are stored through exactly the same path.
+    A kit that declares `harness.launch.database` collects the connection HERE, at launch, so the
+    first thing the person sees is their own data — and so that connecting a database is something
+    the kit that reads one drives rather than something the tool list exposes. Relaunching with a
+    connection string is how you reconnect after a password change.
     """
     base: str = ""
     model: str = ""
-    engine: str = ""
-    connection_string: str = ""
-    sample_rows: bool = True
+    database: KitDatabaseBody | None = None
 
 
 @app.post("/v1/kits/{kit_id}/launch")
@@ -7777,21 +8066,37 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     if not kit:
         raise uhp_error(404, "kit_not_found", f"No starter kit '{kit_id}' in this build.")
 
+    decl = _kit_launch_database(kit)
+    db_in = body_in.database if body_in else None
+    if db_in and not decl:
+        raise uhp_error(400, "connection_not_used",
+                        f"The '{kit_id}' kit does not read a database.", "database")
     # Checked before anything is provisioned: a typo in a connection string should cost the person
-    # a corrected form, not a half-configured Harness they now have to find and fix.
-    ds = _ds_validate(body_in.engine, body_in.connection_string) \
-        if (body_in and body_in.connection_string.strip()) else None
+    # a corrected form, not a half-configured Harness to find and fix.
+    checked = _db_validate(db_in.engine, db_in.connection_string) if db_in else None
 
-    for r in await _vg_list_by_org("Harness", org):
-        if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1":
-            hid0 = str(r.get("id") or "")
-            # Someone who typed a connection string and pressed Launch means "connect this",
-            # whether or not the Harness already existed — which is also how you reconnect after
-            # a password change. Without a connection string the existing one is left alone.
-            rec0 = await _ds_write(org, hid0, ds, body_in.sample_rows) if ds else _ds_record(r)
-            return {"kit": kit_id, "harnessId": hid0,
-                    "route": (kit.get("app") or {}).get("route") or "", "created": False,
-                    "dataSource": _ds_public(rec0)}
+    existing = next((r for r in await _vg_list_by_org("Harness", org)
+                     if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"),
+                    None)
+    if decl and not db_in and not existing:
+        # Declaring launch.database is what makes it required: every panel this kit builds would
+        # have nothing to read, so a launch without a connection is not a partial success.
+        raise uhp_error(400, "connection_required",
+                        "This kit reads a database. Give it a connection string to launch it.",
+                        "database")
+
+    if existing:
+        hid0 = str(existing.get("id") or "")
+        # Someone who typed a connection string and pressed Launch means "connect this", whether
+        # or not the Harness already existed — which is also how you reconnect after a password
+        # change. Without one the existing connection is left alone.
+        if db_in:
+            existing = await _mcp_migrate(org, hid0, existing) or existing
+            await _hosted_db_attach(org, hid0, existing, decl, checked, db_in.sample_rows)
+            existing = await _vertex_get(hid0) or existing
+        return {"kit": kit_id, "harnessId": hid0,
+                "route": (kit.get("app") or {}).get("route") or "", "created": False,
+                "harness": _harness_out(existing)}
 
     spec = kit.get("harness") or {}
     # An explicit choice from the launch dialog wins; no choice means take the recommendation.
@@ -7816,6 +8121,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        skills=_kit_skills(kit),
                        mcp_servers=spec.get("mcp_servers") or [],
                        disabled_tools=spec.get("disabled_tools") or [])
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -7826,11 +8132,14 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
              "kit": kit_id,
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
-    rec = await _ds_write(org, hid, ds, body_in.sample_rows) if ds else None
+    v = {"id": hid, **props}
+    if db_in:
+        await _hosted_db_attach(org, hid, v, decl, checked, db_in.sample_rows)
+        v = await _vertex_get(hid) or v
     print(f"[kits] launched {kit_id} -> {hid}", flush=True)
     return {"kit": kit_id, "harnessId": hid,
             "route": (kit.get("app") or {}).get("route") or "", "created": True,
-            "dataSource": _ds_public(rec)}
+            "harness": _harness_out(v)}
 
 
 @app.get("/v1/harnesses")
@@ -7843,7 +8152,7 @@ async def list_harnesses_public(request: Request) -> dict:
     # org — narrowed to its workspace when the key is workspace-scoped — exactly like the
     # console, so both surfaces always agree.
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(r) for r in rows
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     ws = str(p.get("workspace") or "")
     if ws:
@@ -7858,7 +8167,7 @@ async def get_harness_public(hid: str, request: Request) -> dict:
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    return _harness_out(v)
+    return _harness_out(await _mcp_migrate(org, hid, v))
 
 
 @app.get("/v1/bases")
@@ -7956,8 +8265,12 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _mcp_migrate(org, hid, v)
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write: see update_harness.
+    await _hosted_scrub_removed(org, hid, _mcp_list(v), body.mcp_servers)
     return _harness_out(await _vertex_get(hid) or {"id": hid})
 
 
@@ -7967,6 +8280,8 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     v = await _vertex_get(hid)
     if not v or v.get("org") != org:
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    await _ds_forget(org, hid, v)     # a deleted agent must not still be holding a database password
+    v = await _mcp_migrate(org, hid, v)
     await _vg_upsert("Harness", hid, {"deleted": "1"})
+    # a deleted agent must not still be holding a database password
+    await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
     return {"id": hid, "deleted": True}

@@ -8,11 +8,11 @@ import { SkelPage } from '@/components/Skel';
 import { useParams, useRouter } from 'next/navigation';
 import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
-  modelAvailable, disconnectDatasource,
-  type CustomHarness, type OobHarness } from '@/lib/harness';
+  modelAvailable,
+  type CustomHarness, type McpServer, type OobHarness } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
-import { SkillEditor, McpModal, type McpServer } from '@/components/HarnessEditors';
+import { SkillEditor, McpModal, McpRow } from '@/components/HarnessEditors';
 import { fetchTraceWindow, statsFor, p95Of, avgCreditsOf, type TraceCard } from '@/lib/revamp-data';
 import { SELF_HOSTED } from '@/lib/edition';
 
@@ -59,22 +59,6 @@ export default function HarnessSettingsPage() {
   const baseTools = srvBase?.tools || [];
   const models = oobModels(base);
   const upd = (p: Partial<CustomHarness>) => setDraft((d) => (d ? { ...d, ...p } : d));
-
-  // Detaching the database is immediate, not part of the form's Save: it is a separate route
-  // (the credential behind it never passes through this page), and leaving it staged would mean
-  // a page showing "no database" while every turn still had one.
-  async function disconnectDb() {
-    if (!draft || busy) return;
-    setBusy(true); setErr(null);
-    try {
-      await disconnectDatasource(draft.id);
-      const fresh = { ...draft, dataSource: null };
-      setDraft(fresh);
-      setSaved((s) => (s ? { ...s, dataSource: null } : s));
-    }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
-  }
 
   async function save() {
     if (!draft || busy) return;
@@ -206,28 +190,9 @@ export default function HarnessSettingsPage() {
           <section className="form-section">
             <div><h3>Tools</h3><p>Control inherited tools and add MCP servers for external capabilities.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0) + (draft?.dataSource ? 1 : 0)} configured tools</strong>
-                {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add MCP</button>}</div>
+              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0)} configured tools</strong>
+                {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add tool</button>}</div>
               <div className="capability-list">
-                {/* The database, when one is connected. The gateway adds this tool per turn rather
-                    than storing it on the config, so that connecting and disconnecting take effect
-                    on the next turn and a stored entry can never point at a database that is gone.
-                    The cost of that is what you are reading this comment because of: it did not
-                    appear on the page that lists what this agent can do, so reviewing the agent
-                    did not reveal that it can read a production database. It appears now, it says
-                    which database, and disconnecting is here rather than somewhere else. */}
-                {draft?.dataSource && (
-                  <div className="capability-row">
-                    <span className="capability-icon"><iconify-icon icon="tabler:database"></iconify-icon></span>
-                    <div className="capability-copy"><strong>Database</strong>
-                      <span>Reads {draft.dataSource.database} · {draft.dataSource.host} · read-only, one SELECT at a time
-                        {draft.dataSource.sampleRows ? ' · sees example rows' : ' · column names only, no values'}</span></div>
-                    <div className="capability-actions">
-                      <button className="button quiet small" type="button" disabled={readOnly || busy}
-                        onClick={() => void disconnectDb()}>Disconnect</button>
-                    </div>
-                  </div>
-                )}
                 {baseTools.map((t) => (
                   <div key={t.name} className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:plug"></iconify-icon></span>
@@ -241,18 +206,15 @@ export default function HarnessSettingsPage() {
                     </div>
                   </div>
                 ))}
+                {/* Every MCP server this Harness has, one row each and no exceptions — a database
+                    a kit connected is one of them. It has to appear here: a capability nobody can
+                    see on the page that lists capabilities is a capability nobody can audit, and
+                    reviewing an agent has to reveal that it can read a production database. */}
                 {(draft?.mcpServers || []).map((m, idx) => (
-                  <div key={m.id || idx} className="capability-row">
-                    <span className="capability-icon"><iconify-icon icon="tabler:world-www"></iconify-icon></span>
-                    <div className="capability-copy"><strong>{m.name}</strong><span>Custom MCP · {m.url || 'endpoint'}</span></div>
-                    <div className="capability-actions">
-                      <button className="button quiet small" type="button" onClick={() => setMcpModal({ idx })}>Edit</button>
-                      <button className="button quiet small" type="button" onClick={() => upd({ mcpServers: (draft?.mcpServers || []).filter((_, k) => k !== idx) })}>Delete</button>
-                      <button className="toggle-button" type="button" aria-pressed={m.enabled !== false}
-                        onClick={() => upd({ mcpServers: (draft?.mcpServers || []).map((x, k) => (k === idx ? { ...x, enabled: !(x.enabled !== false) } : x)) })}>
-                        {m.enabled !== false ? 'Enabled' : 'Disabled'}</button>
-                    </div>
-                  </div>
+                  <McpRow key={m.id || idx} server={m} busy={busy}
+                    onEdit={() => setMcpModal({ idx })}
+                    onDelete={() => upd({ mcpServers: (draft?.mcpServers || []).filter((_, k) => k !== idx) })}
+                    onToggle={() => upd({ mcpServers: (draft?.mcpServers || []).map((x, k) => (k === idx ? { ...x, enabled: !(x.enabled !== false) } : x)) })} />
                 ))}
               </div>
             </div>
@@ -416,11 +378,14 @@ export default function HarnessSettingsPage() {
       {confirmDelete && draft && (
         <div className="modal-backdrop">
           <section className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header"><div><h2>Delete {draft.name}?</h2><p>Removes this Harness configuration. Existing task history stays readable.</p></div></div>
+            <div className="modal-header"><div>
+              <h2>Delete {draft.name}?</h2>
+              <p>Removes this Harness configuration. Existing task history stays readable.</p>
+            </div></div>
             <div className="modal-body">
               <div className="modal-actions">
                 <button className="button" type="button" onClick={() => setConfirmDelete(false)}>Cancel</button>
-                <button className="button primary" type="button" style={{ background: 'var(--red)', borderColor: 'var(--red)' }}
+                <button className="button primary" type="button" disabled={busy} style={{ background: 'var(--red)', borderColor: 'var(--red)' }}
                   onClick={async () => { await deleteCustom(draft.id); router.push('/harnesses'); }}>Delete</button>
               </div>
             </div>

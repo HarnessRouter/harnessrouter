@@ -526,6 +526,12 @@ a { color: inherit; text-decoration: none; }
 .wbx-conv-msgs { padding-top: 50px; }
 
 /* ════════ MCP modal: test connection + tools list ════════ */
+/* Used by the kit dialog and by page-level errors, and styled nowhere until now — a refused
+   connection read as ordinary body text. */
+.hr-error {
+  margin: 12px 0 0; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; color: #b91c1c;
+  background: #fef2f2; border: 1px solid #fecaca; border-radius: 9px;
+}
 .mcp-test-row { display: flex; align-items: center; gap: 12px; margin: 4px 0 2px; }
 /* quiet status: a small colored dot + neutral ink text (not a wall of green) */
 .mcp-test-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
@@ -909,37 +915,24 @@ body.hr-resizing iframe { pointer-events: none; }
 .kit-dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
 .kit-dialog-spacer { flex: 1; }
 
-/* The database step: only kits that read one show it. */
+/* The database step of a launch dialog — the only place a connection string is typed. Its fields
+   borrow the .hr-field vocabulary so this step reads like the rest of the console's forms. */
 .kit-db { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .kit-db-title { margin: 0 0 8px; font-size: 13px; font-weight: 650; color: var(--ink); }
-/* Type beside the string on a wide dialog, stacked when there is no room for both. */
-.kit-db-fields { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-.kit-db-engine { flex: 0 1 170px; }
-.kit-db-conn { flex: 1 1 240px; min-width: 0; }
-.kit-field input[type="text"] {
-  width: 100%; padding: 9px 11px; font: inherit; font-size: 12.5px; color: var(--ink);
+.kit-db .kit-choice-why { margin-bottom: 12px; }
+.kit-db .mcp-test-row { flex-wrap: wrap; }
+/* A connection string is read character by character — monospace, and it may wrap the field. */
+.hr-field input.db-conn { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.hr-field select {
+  width: 100%; padding: 10px 12px; font: inherit; font-size: 14px; color: var(--ink);
   background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.kit-field input[type="text"]:focus { outline: none; border-color: var(--accent); }
-.kit-field input::placeholder { color: var(--muted); opacity: .7; }
-
-.kit-db-test { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
-.kit-test-status {
-  display: inline-flex; align-items: center; gap: 7px; min-width: 0;
-  font-size: 12.5px; font-weight: 500; color: var(--ink-2);
-}
-.kit-test-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--muted); flex: none; }
-.kit-test-status.ok .kit-test-dot { background: #16a34a; }
-.kit-test-status.err { color: #b91c1c; }
-.kit-test-status.err .kit-test-dot { background: #dc2626; }
-
-.kit-db-sample { display: flex; gap: 9px; margin-top: 14px; cursor: pointer; }
-.kit-db-sample input { margin-top: 3px; accent-color: var(--accent); flex: none; }
-.kit-db-sample span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.kit-db-sample strong { font-size: 13px; font-weight: 600; color: var(--ink); }
-.kit-db-sample em { font-style: normal; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
-.kit-db .kit-choice-why { margin-top: 12px; }
+.hr-field select:focus { outline: 2px solid var(--brand-soft); border-color: var(--brand); }
+.db-sample { display: flex; gap: 9px; margin-top: 14px; cursor: pointer; }
+.db-sample input { margin-top: 3px; accent-color: var(--brand); flex: none; }
+.db-sample span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.db-sample strong { font-size: 13px; font-weight: 600; color: var(--ink); }
+.db-sample em { font-style: normal; font-size: 11.5px; line-height: 1.45; color: var(--sidebar-mute); }
 
 @media (max-width: 720px) {
   .kit-grid { grid-template-columns: 1fr; }
@@ -948,8 +941,6 @@ body.hr-resizing iframe { pointer-events: none; }
   .kit-dialog-actions { flex-wrap: wrap; }
   .kit-dialog-spacer { display: none; }
   .kit-dialog-actions .button { flex: 1 1 auto; justify-content: center; }
-  /* One field per line: a connection string needs the whole width to be readable. */
-  .kit-db-engine, .kit-db-conn { flex: 1 1 100%; }
-  .kit-db-test .button { flex: 1 1 auto; justify-content: center; }
+  .kit-db .mcp-test-row .hr-btn { flex: 1 1 auto; justify-content: center; }
 }
 

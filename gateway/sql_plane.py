@@ -2,16 +2,18 @@
 
 Two callers, one engine, one place the credential is resolved:
 
-  * the `sql` MCP tool, so an agent can explore a schema and test a query while it designs a
-    dashboard;
-  * `POST /v1/sql/query`, which a dashboard app calls to refresh its panels when someone opens it.
+  * the `database` MCP server this gateway hosts, so an agent can explore a schema and test a
+    query while it designs a dashboard;
+  * `POST /v1/harnesses/{id}/servers/{sid}/query`, which a dashboard app calls to refresh its
+    panels when someone opens it.
 
-The second is why this is not simply an MCP server. Opening a dashboard must re-run its queries
-without spending an agent turn — a turn per panel per page-load is both slow and billed. Both
-paths land here, so the read-only gate and the row cap cannot be true of one and not the other.
+The second is why the MCP server is not the whole story. Opening a dashboard must re-run its
+queries without spending an agent turn — a turn per panel per page-load is both slow and billed.
+Both paths land here, so the read-only gate and the row cap cannot be true of one and not the
+other.
 
 WHAT NEVER LEAVES THIS PROCESS. The connection string is resolved from the secret store inside
-the gateway. The runner never receives it (an agent gets a `datasource` name, never a DSN), and
+the gateway. The runner never receives it (an agent gets a per-turn capability, never a DSN), and
 neither does the browser. That is the same shape MCP bearer tokens already use: config stores
 `vault:<ref>`, the live value is fetched at the moment of use.
 

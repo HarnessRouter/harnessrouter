@@ -16,12 +16,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { authHeaders } from '@/lib/chat';
 import { harnessFetch } from '@/lib/hfetch';
+import { testDatabase } from '@/lib/harness';
 
 interface Choice {
   base: string; model: string; baseLabel: string;
   available: boolean; recommended: boolean;
 }
-interface Datasource { engine: string; host: string; database: string; sampleRows: boolean }
 interface Kit {
   id: string; title: string; tagline: string; description: string;
   icon: string; accent: string; route: string;
@@ -32,23 +32,13 @@ interface Kit {
   skills: string[];
   runningOn: { base: string; model: string } | null;
   choices: Choice[];
-  /** Set when this kit reads a database, listing the kinds it accepts. Null when it does not. */
-  datasource: { required: boolean; engines: string[] } | null;
-  /** What a launched kit is actually reading. Never carries the credential. */
-  connected: Datasource | null;
+  /** Present when the kit reads a database, absent when it does not — declaring it IS the
+   *  requirement, so there is no separate "required" flag. `engines` narrows the picker to what
+   *  this kit can actually read. Nothing here describes a database already connected: which one a
+   *  launched kit reads is the kit app's business, and it names it in its own title bar. */
+  database?: { engines: string[] };
 }
 
-/** What to call each kind of database in front of a person. */
-const ENGINE_LABEL: Record<string, string> = {
-  postgres: 'PostgreSQL',
-  mysql: 'MySQL / MariaDB',
-};
-
-/** Placeholder for a connection string, per kind — the format is the question people ask. */
-const ENGINE_EXAMPLE: Record<string, string> = {
-  postgres: 'postgresql://user:password@host:5432/database',
-  mysql: 'mysql://user:password@host:3306/database',
-};
 interface BaseModel { id: string; available: boolean }
 interface Base { id: string; label: string; models: BaseModel[] }
 
@@ -98,7 +88,7 @@ export default function KitsPage() {
     window.open(route, '_blank', 'noopener,noreferrer');
   }
 
-  async function launch(kit: Kit, base?: string, model?: string, db?: DbDraft) {
+  async function launch(kit: Kit, base?: string, model?: string, database?: DbDraft) {
     // Open the tab NOW, on the click, and navigate it when the launch returns. Opening it after
     // the await is a popup the browser is entitled to block, because by then it is no longer a
     // user gesture.
@@ -110,11 +100,13 @@ export default function KitsPage() {
         headers: authHeaders(),
         body: JSON.stringify({
           ...(base ? { base, model: model || '' } : {}),
-          // Sent only when the person filled the database step in. The connection string goes
-          // straight to the server and is never held anywhere else.
-          ...(db?.connectionString.trim()
-            ? { engine: db.engine, connection_string: db.connectionString.trim(),
-                sample_rows: db.sampleRows }
+          // Sent only when a connection string was actually typed: launching a kit that already
+          // has one, without touching this field, must leave what it reads alone. The string
+          // goes straight to the server on this one request and is held nowhere else.
+          ...(database?.connectionString.trim()
+            ? { database: { engine: database.engine,
+                            connection_string: database.connectionString.trim(),
+                            sample_rows: database.sampleRows } }
             : {}),
         }),
       });
@@ -212,19 +204,13 @@ export default function KitsPage() {
                       Installs {k.skills.join(', ')}
                     </li>
                   )}
-                  {/* A launched kit reports the database it actually reads; one that has not been
-                      launched reports what it will ask for. Neither is a guess. */}
-                  {k.connected && (
+                  {/* What the kit reads, from its own declaration — not which database a launched
+                      one is pointed at. That belongs to the kit's app, which shows it where the
+                      data is actually being looked at. */}
+                  {k.database && (
                     <li>
                       <iconify-icon icon="tabler:database"></iconify-icon>
-                      Reading {k.connected.database}
-                      <span className="kit-fact-dim"> · {k.connected.host}</span>
-                    </li>
-                  )}
-                  {!k.connected && k.datasource && (
-                    <li>
-                      <iconify-icon icon="tabler:database"></iconify-icon>
-                      Reads your {k.datasource.engines.map((e) => ENGINE_LABEL[e] || e).join(' or ')} database
+                      Reads your {k.database.engines.map((e) => ENGINE_LABEL[e] || e).join(' or ')} database
                     </li>
                   )}
                 </ul>
@@ -250,30 +236,27 @@ export default function KitsPage() {
         <LaunchDialog
           kit={picking} bases={bases} busy={busy === picking.id}
           onClose={() => setPicking(null)}
-          onLaunch={(base, model, db) => void launch(picking, base, model, db)}
+          onLaunch={(base, model, database) => void launch(picking, base, model, database)}
         />
       )}
     </div></section>
   );
 }
 
-interface DbDraft { engine: string; connectionString: string; sampleRows: boolean }
-
 function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
   kit: Kit; bases: Base[]; busy: boolean;
-  onClose: () => void; onLaunch: (base: string, model: string, db?: DbDraft) => void;
+  onClose: () => void; onLaunch: (base: string, model: string, database: DbDraft) => void;
 }) {
   const recommended = kit.choices.find((c) => c.recommended) || null;
   const [sel, setSel] = useState<string>(recommended ? `${recommended.base}/${recommended.model}` : '');
   const [custom, setCustom] = useState(false);
   const [cBase, setCBase] = useState(bases[0]?.id || '');
   const [cModel, setCModel] = useState('');
-  // Sampling defaults on: the agent designs better dashboards when it can see what a column
-  // actually contains. Off is one click away, and it is a real switch — off means the agent
-  // receives table and column names and not one value.
-  const [db, setDb] = useState<DbDraft>({
-    engine: kit.datasource?.engines[0] || 'postgres', connectionString: '', sampleRows: true,
-  });
+  // Sampling defaults on: the agent designs better when it can see what a column actually
+  // contains. Off is one click away, and it is a real switch — off means the agent receives table
+  // and column names and not one value.
+  const [db, setDb] = useState<DbDraft>(() =>
+    ({ engine: kit.database?.engines[0] || 'postgres', connectionString: '', sampleRows: true }));
 
   // Models are per base, so changing the agent has to re-pick the model rather than keep one the
   // new agent cannot run. First available, not first listed — an unavailable default is a trap.
@@ -291,15 +274,16 @@ function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
   }, [onClose]);
 
   const nothingAvailable = !kit.choices.some((c) => c.available);
-  const needsDb = Boolean(kit.datasource?.required) && !kit.connected;
-  const hasDb = db.connectionString.trim().length > 0;
-  const canLaunch = (custom ? Boolean(cBase && cModel) : Boolean(sel)) && (!needsDb || hasDb);
+  // A kit that reads a database cannot be launched the first time without one — every panel it
+  // builds would have nothing to read. Relaunching keeps what it already reads, so a blank field
+  // is fine once it has been launched.
+  const missing = Boolean(kit.database) && !kit.launched && !db.connectionString.trim();
+  const canLaunch = (custom ? Boolean(cBase && cModel) : Boolean(sel)) && !missing;
 
   function go() {
-    const draft = hasDb ? db : undefined;
-    if (custom) { onLaunch(cBase, cModel, draft); return; }
+    if (custom) { onLaunch(cBase, cModel, db); return; }
     const [base, ...rest] = sel.split('/');
-    onLaunch(base, rest.join('/'), draft);
+    onLaunch(base, rest.join('/'), db);
   }
 
   return (
@@ -369,7 +353,20 @@ function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
           </div>
         )}
 
-        {kit.datasource && <DatabaseStep kit={kit} db={db} onChange={setDb} />}
+        {/* The one surface that collects a connection string, and it is here because the KIT says
+            it needs one — nothing about a database is special anywhere else. Relaunching with the
+            field filled in is also how a changed password gets fixed. */}
+        {kit.database && (
+          <div className="kit-db">
+            <h3 className="kit-db-title">
+              {kit.launched ? 'Change the database it reads' : 'Connect your database'}
+            </h3>
+            {kit.launched && (
+              <p className="kit-choice-why">Leave this blank to keep reading what it reads today.</p>
+            )}
+            <DatabaseFields engines={kit.database.engines} value={db} onChange={setDb} />
+          </div>
+        )}
 
         <div className="kit-dialog-actions">
           <button className="button ghost" type="button" onClick={() => setCustom((v) => !v)}>
@@ -386,97 +383,79 @@ function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
   );
 }
 
-/** The database step of the launch dialog.
+// ── Connecting a database ─────────────────────────────────────────────────────────────────────
+// Local to this page, not shared: a kit's launch dialog is the only place a connection string is
+// ever typed. It used to be shared with the Harness tool modal, back when a database was a kind
+// of tool you could add there — it is not, so there is one caller and it lives with it.
+
+/** What to call each kind of database in front of a person. */
+const ENGINE_LABEL: Record<string, string> = {
+  postgres: 'PostgreSQL',
+  mysql: 'MySQL / MariaDB',
+};
+
+/** Placeholder for a connection string, per kind — the format is the question people ask. */
+const ENGINE_EXAMPLE: Record<string, string> = {
+  postgres: 'postgresql://user:password@host:5432/database',
+  mysql: 'mysql://user:password@host:3306/database',
+};
+
+type DbDraft = { engine: string; connectionString: string; sampleRows: boolean };
+
+/** The fields that connect a database.
  *
- *  Shown only for a kit that declares it reads one (kit.json `harness.datasource`), so no other
- *  kit grows a field it has no use for. The connection string is sent to the server and held
- *  nowhere else: it is not stored in this component's URL, not put in local storage, and the
- *  server never sends it back — a saved connection reads back as its host and database only.
+ *  The connection string is held nowhere but this component's state and the request that carries
+ *  it: it is not put in the URL, not put in local storage, and nothing ever sends it back.
  */
-function DatabaseStep({ kit, db, onChange }: {
-  kit: Kit; db: DbDraft; onChange: (d: DbDraft) => void;
+function DatabaseFields({ engines, value, onChange }: {
+  engines: string[]; value: DbDraft; onChange: (d: DbDraft) => void;
 }) {
-  const [test, setTest] = useState<{ state: 'idle' | 'busy' | 'ok' | 'err'; message: string }>(
-    { state: 'idle', message: '' });
-  const engines = kit.datasource?.engines || [];
+  const [test, setTest] = useState<null | { busy?: boolean; ok?: boolean; message?: string }>(null);
+  // Any edit invalidates the last answer: a status line about a string that is no longer in the
+  // box is worse than no status line.
+  const set = (p: Partial<DbDraft>) => { onChange({ ...value, ...p }); setTest(null); };
+  const kinds = engines.length ? engines : Object.keys(ENGINE_LABEL);
 
   async function runTest() {
-    setTest({ state: 'busy', message: '' });
-    try {
-      const r = await harnessFetch('/api/harness/v1/datasource-test', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ engine: db.engine, connection_string: db.connectionString.trim() }),
-      });
-      const body = await r.json().catch(() => null);
-      if (!r.ok) { setTest({ state: 'err', message: body?.detail || `${r.status}` }); return; }
-      if (!body?.ok) { setTest({ state: 'err', message: body?.error || 'could not connect' }); return; }
-      // The table count is the server's answer, not an estimate — and it is the number that tells
-      // someone whether the account they used can actually see their data.
-      setTest({ state: 'ok', message: `${body.database} · ${body.tableCount} tables` });
-    } catch {
-      setTest({ state: 'err', message: 'could not reach the server' });
-    }
+    setTest({ busy: true });
+    const r = await testDatabase(value.engine, value.connectionString.trim());
+    // The table count is the server's own answer, and it is the number that tells someone whether
+    // the account they typed can actually see their data.
+    setTest(r.ok ? { ok: true, message: `${r.database} · ${r.tableCount} tables` }
+                 : { ok: false, message: r.error || 'could not connect' });
   }
 
   return (
-    <div className="kit-db">
-      <h3 className="kit-db-title">
-        {kit.connected ? 'Change the database it reads' : 'Connect your database'}
-      </h3>
-      {kit.connected && (
-        <p className="kit-choice-why">
-          Currently reading {kit.connected.database} on {kit.connected.host}. Leave this blank to
-          keep it.
-        </p>
+    <>
+      {kinds.length > 1 && (
+        <div className="hr-field"><label>Type</label>
+          <select value={value.engine} onChange={(e) => set({ engine: e.target.value })}>
+            {kinds.map((e) => <option key={e} value={e}>{ENGINE_LABEL[e] || e}</option>)}
+          </select></div>
       )}
-
-      <div className="kit-db-fields">
-        {engines.length > 1 && (
-          <label className="kit-field kit-db-engine">
-            <span>Type</span>
-            <select value={db.engine}
-                    onChange={(e) => { onChange({ ...db, engine: e.target.value }); setTest({ state: 'idle', message: '' }); }}>
-              {engines.map((e) => <option key={e} value={e}>{ENGINE_LABEL[e] || e}</option>)}
-            </select>
-          </label>
-        )}
-        <label className="kit-field kit-db-conn">
-          <span>Connection string</span>
-          <input type="text" value={db.connectionString} spellCheck={false} autoComplete="off"
-                 placeholder={ENGINE_EXAMPLE[db.engine] || ''}
-                 onChange={(e) => { onChange({ ...db, connectionString: e.target.value }); setTest({ state: 'idle', message: '' }); }} />
-        </label>
+      <div className="hr-field"><label>Connection string</label>
+        <input type="text" value={value.connectionString} spellCheck={false} autoComplete="off"
+          className="db-conn" placeholder={ENGINE_EXAMPLE[value.engine] || ''}
+          onChange={(e) => set({ connectionString: e.target.value })} />
+        <span className="hr-meta">Use an account that can only read. Your connection is stored securely and is never shown again.</span>
       </div>
-
-      <div className="kit-db-test">
-        <button className="button" type="button"
-                disabled={!db.connectionString.trim() || test.state === 'busy'} onClick={() => void runTest()}>
-          {test.state === 'busy' ? 'Testing…' : 'Test connection'}
-        </button>
-        {test.state === 'ok' && (
-          <span className="kit-test-status ok"><span className="kit-test-dot" />Connected · {test.message}</span>
-        )}
-        {test.state === 'err' && (
-          <span className="kit-test-status err"><span className="kit-test-dot" />{test.message}</span>
-        )}
+      <div className="mcp-test-row">
+        <button className="hr-btn" type="button"
+          disabled={!value.connectionString.trim() || test?.busy} onClick={() => void runTest()}>
+          {test?.busy ? 'Testing…' : 'Test connection'}</button>
+        {test && !test.busy && (test.ok
+          ? <span className="mcp-test-status ok"><span className="mcp-dot" />Connected · {test.message}</span>
+          : <span className="mcp-test-status err"><span className="mcp-dot" />{test.message}</span>)}
       </div>
-
-      <label className="kit-db-sample">
-        <input type="checkbox" checked={db.sampleRows}
-               onChange={(e) => onChange({ ...db, sampleRows: e.target.checked })} />
+      <label className="db-sample">
+        <input type="checkbox" checked={value.sampleRows}
+          onChange={(e) => onChange({ ...value, sampleRows: e.target.checked })} />
         <span>
           <strong>Let it see a few example rows</strong>
-          <em>
-            With this on the agent reads a handful of rows per table, so it can tell what a column
-            holds. With it off it sees table and column names and no values at all.
-          </em>
+          <em>With this on the agent reads a handful of rows per table, so it can tell what a
+            column holds. With it off it sees table and column names and no values at all.</em>
         </span>
       </label>
-
-      <p className="kit-choice-why">
-        Use an account that can only read. Your connection is encrypted and is never shown again.
-      </p>
-    </div>
+    </>
   );
 }
