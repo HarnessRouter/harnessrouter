@@ -1350,9 +1350,31 @@ def test_v41b_the_budget_is_claimed_where_the_socket_is_opened_and_nowhere_else(
         f"the budget is given back in {sorted(owner.get('free') or [])}; claim and free have to "
         f"be the same pair of hands or the money count drifts")
 
-    for name in ("_media_call", "_media_job_resubmit", "_media_job_billable_failure"):
+    for name in ("_media_call", "_media_job_resubmit", "_media_job_billable_failure",
+                 "_media_job_advance", "_media_job_poll"):
         assert "budget" in inspect.signature(getattr(app, name)).parameters, (
             f"{name} takes no budget, so whatever it submits is outside the ceiling")
+
+    # AND IT IS THE REQUEST'S BUDGET, which is the half the signature above cannot say. A caller
+    # writing `_media_job_advance(job, _MediaBudget())` satisfies every assertion up to here and
+    # is the original bug verbatim: a private ceiling per call bounds nothing, and that is exactly
+    # what `_MediaBudget.for_job` used to hand the poll walk — one budget per JOB, `submits` back
+    # at zero, so the number could not refuse a thing. A budget built with NO ARGUMENT starts a
+    # new count, and a new count may only begin where a request does — an agent's turn, a sweep
+    # pass, a browser tick, and nothing finer than one of those.
+    fresh = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                    and n.func.id == "_MediaBudget" and not n.args and not n.keywords:
+                fresh.add(fn.name)
+    assert fresh == {"_media_budget_for", "_media_sweep", "get_media_jobs"}, (
+        f"a fresh submit count is started in {sorted(fresh)}. Every name here claims to be the "
+        f"start of a request — an agent's turn, a sweep pass, a browser tick: one budget per "
+        f"anything smaller — per job, per call, per candidate — is a ceiling that counts only "
+        f"itself, and no number binds it")
 
 
 def test_v41c_a_renamed_provider_field_is_a_tool_result_and_not_an_http_error(client500, client,
@@ -1520,3 +1542,217 @@ def test_v41g_no_test_in_this_suite_asserts_on_a_coroutine_nobody_awaited(client
     assert not dead, (
         "these assertions are about a coroutine object and not about what it does:\n  "
         + "\n  ".join(dead))
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# ROUND 6 — THE CEILING BELONGS TO THE REQUEST, AND A BAD ARGUMENT IS STILL A SENTENCE
+#
+# Round 5 moved the claim to the socket, which made `_MEDIA_MAX_SUBMITS` true of the SUBMIT walk
+# for a caller that had never heard of it. It left the number DECORATIVE on the three POLL
+# entries: each built one budget per JOB out of what that job had already spent, so `submits`
+# started at zero every time and the walk ceiling could not refuse anything. Measured: one
+# check_jobs over six failing jobs made six outbound submits against a ceiling of four, and moving
+# the ceiling did not move the count.
+#
+# NOT AN OVERSPEND, and these tests must not be read as claiming one. Per job the money rule held
+# — `advances` still capped each job at `_MEDIA_MAX_ADVANCES + 1` renders — and the total across
+# all sweeps was unchanged. It is a BURST, not extra money. What was wrong is that the constant
+# says "how many outbound submits ONE REQUEST may make AT ALL" and that sentence was false on all
+# three poll entries. A ceiling that claims more than it counts is how four rounds survived.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+
+def _running_video_jobs(client, hid, sid, n: int) -> list[str]:
+    """`n` jobs that a provider has accepted and is rendering. Every one on the first candidate,
+    so they all fail the same way and the count below is about the ceiling and not about which
+    model happened to answer."""
+    return [_ok(_call(client, _cred(hid, sid), "generate_video",
+                      {"prompt": f"shot {i}", "seconds": 6}))["job_id"] for i in range(n)]
+
+
+@pytest.mark.parametrize("entry", ["check_jobs", "the sweeper", "the app's jobs route"])
+def test_v42_one_poll_pass_makes_no_more_submits_than_the_ceiling_it_names(client, kit, hostile,
+                                                                          entry):
+    """SIX SUBMITS FROM ONE READ. `_MEDIA_MAX_SUBMITS` is four.
+
+    A poll that answers FAILURE advances the chain, and advancing the chain opens a socket with
+    this deployment's key on it. The budget that submit is claimed against was built by
+    `_MediaBudget.for_job`, which seeds only `billed` — so on a poll pass the walk counter was
+    always zero and `claim()` always said yes. What actually bounded the path was the `advances`
+    check one branch over in `_media_job_billable_failure`: a guard beside the socket, which is
+    the exact construction round 5 set out to delete.
+
+    All three poll entries are driven, because a cap on one of them is a cap on one of them: an
+    agent's check_jobs, the background sweep and the browser's own tick each walk the same
+    `_media_job_advance` and each used to walk it with a private ceiling per job.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    jids = _running_video_jobs(client, hid, sid, 6)
+    hostile.poll_answer = httpx.Response(200, json={"code": "success", "data": {
+        "status": "FAILURE", "message": "the render failed upstream"}})
+    for jid in jids:
+        _due(jid)
+    submits = _count_submits(hostile)          # installed AFTER the six starting submits
+
+    if entry == "check_jobs":
+        _call(client, _cred(hid, sid), "check_jobs", {"job_ids": jids})
+    elif entry == "the sweeper":
+        asyncio.run(app._media_sweep())
+    else:
+        r = client.get(f"/v1/harnesses/{hid}/servers/{ENTRY_ID}/sessions/{sid}/jobs",
+                       headers=HEADERS)
+        assert r.status_code == 200, r.text
+
+    assert submits, f"[{entry}] no job was advanced at all — this test proves nothing"
+    assert len(submits) <= app._MEDIA_MAX_SUBMITS, (
+        f"[{entry}] ONE PASS MADE {len(submits)} OUTBOUND SUBMITS against a ceiling of "
+        f"{app._MEDIA_MAX_SUBMITS}: {submits}")
+
+
+def test_v42b_moving_the_ceiling_moves_the_count_on_the_poll_walk_too(client, kit, hostile,
+                                                                     monkeypatch):
+    """THE TEST THAT WOULD HAVE CAUGHT IT. A number that is real answers when you turn it.
+
+    With `_MEDIA_MAX_SUBMITS` set to 1, one check_jobs over six failing jobs made six submits and
+    zero refusals — identical to the count at four. That is what a decorative ceiling looks like
+    from outside, and it is measurable without knowing a thing about which branch does the work.
+    """
+    monkeypatch.setattr(app, "_MEDIA_MAX_SUBMITS", 1)
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    jids = _running_video_jobs(client, hid, sid, 6)
+    hostile.poll_answer = httpx.Response(200, json={"code": "success", "data": {
+        "status": "FAILURE", "message": "the render failed upstream"}})
+    for jid in jids:
+        _due(jid)
+    submits = _count_submits(hostile)
+    _call(client, _cred(hid, sid), "check_jobs", {"job_ids": jids})
+    assert len(submits) <= 1, (
+        f"the ceiling was moved to 1 and the pass still made {len(submits)} submits: {submits} — "
+        f"whatever bounds this path, it is not the number that claims to")
+
+
+@pytest.mark.parametrize("tool,args,what", [
+    ("generate_video", {"prompt": "a cat", "seconds": "six"}, "a number written as a word"),
+    ("generate_video", {"prompt": "a cat", "seconds": {"n": 6}}, "an object where a number goes"),
+    ("generate_video", {"prompt": "a cat", "seconds": 6, "aspect": "square"}, "a value not in the"
+                                                                             " enum"),
+    ("generate_image", {"prompt": ["a", "cat"]}, "a list where the string goes"),
+    ("arrange", {"columns": "four"}, "a count written as a word"),
+    ("check_jobs", {"job_ids": 5}, "a bare number where the list of ids goes"),
+    ("check_jobs", {"job_id": "mjob_1"}, "the singular of the argument's name"),
+    ("place", {"items": "mjob_1"}, "a string where the array goes"),
+    ("set_timeline", {"shots": [{"element_id": "e1", "in_s": "start"}]}, "a word inside an item"),
+])
+def test_v43_an_argument_the_schema_refuses_is_a_tool_result_and_never_an_http_error(
+        client500, client, kit, hostile, tool, args, what):
+    """A MODEL WROTE "six" WHERE THE SCHEMA SAYS {"type": "number"}. That is a Tuesday, not an
+    attack, and it was an HTTP 500.
+
+    Nothing validates arguments against the declared schema before `_media_tool_call` runs, and
+    the tool bodies coerce by hand: `float(args.get("seconds") or 0)` raises ValueError on "six"
+    and TypeError on {"n": 6}; `for j in (args.get("job_ids") or [])` raises TypeError on a bare
+    number. None of those are in the MediaError tree and none are HTTPException, so they went past
+    both handlers at the route and left the agent with a status code it cannot read — the same
+    promise this catalog is built around, broken one level away from where round 5 fixed it.
+
+    No money is at stake on any of these. What is at stake is that the agent gets a sentence and
+    can correct itself, instead of a 500 it will read as "the tool is broken" and route around.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    r = client500.post("/v1/mcp/media",
+                       json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                             "params": {"name": tool, "arguments": args}},
+                       headers={"authorization": f"Bearer {_cred(hid, sid)}"})
+    assert r.status_code == 200, (
+        f"{tool} with {what} answered HTTP {r.status_code} instead of a tool result: "
+        f"{r.text[:400]}")
+    res = r.json()["result"]
+    assert res.get("isError") is True, (
+        f"{tool} with {what} was accepted rather than refused: {res}")
+
+
+@pytest.mark.parametrize("where,mod,name,exc,tool", [
+    ("build_submit", "media_plane", "build_submit", KeyError("shape"), "generate_image"),
+    ("_media_providers", "app", "_media_providers", RuntimeError("blip"), "generate_image"),
+    ("_media_job_save", "app", "_media_job_save", RuntimeError("blip"), "generate_image"),
+    ("_media_job_land", "app", "_media_job_land", ValueError("not a frame"), "generate_image"),
+    ("_media_store", "app", "_media_store", OSError("no space left"), "generate_image"),
+    ("_media_scene_read", "app", "_media_scene_read", RuntimeError("blip"), "describe_canvas"),
+    ("_media_scene_write", "app", "_media_scene_write", RuntimeError("blip"), "arrange"),
+])
+def test_v44_a_failure_nobody_wrote_an_except_for_is_a_tool_result_and_never_an_http_error(
+        client500, client, kit, hostile, monkeypatch, where, mod, name, exc, tool):
+    """THE STRUCTURAL HALF OF THE SAME PROMISE. "Every failure is a tool result and never an HTTP
+    error" is enforced by an EXCEPTION-TYPE LIST — `except MediaError`, `except HTTPException` —
+    so it holds for the failures somebody thought of and for no others.
+
+    Round 5 made this structural INSIDE `_media_call`, which is why a renamed provider field is a
+    sentence now. Everywhere else it is still a list: `build_submit` sits outside that try (the
+    claim is the line after it), and the store, the scene and the file writer are not in it at
+    all. Each row here raises a type no handler names, from a real place, on the ordinary path.
+
+    This test names no branch on purpose. It asserts what the promise says: whatever fails, the
+    agent gets a sentence.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    target = app if mod == "app" else media_plane
+
+    def boom(*_a, **_kw):
+        raise exc
+
+    monkeypatch.setattr(target, name, boom)
+    args = {"prompt": "a cat"} if tool == "generate_image" else {}
+    r = client500.post("/v1/mcp/media",
+                       json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                             "params": {"name": tool, "arguments": args}},
+                       headers={"authorization": f"Bearer {_cred(hid, sid)}"})
+    assert r.status_code == 200, (
+        f"{where} raising {type(exc).__name__} answered HTTP {r.status_code}, not a tool result: "
+        f"{r.text[:400]}")
+    res = r.json()["result"]
+    assert res.get("isError") is True, f"{where} raising {type(exc).__name__} read as success: {res}"
+    assert _text(res).strip(), f"{where} raising {type(exc).__name__} produced an empty sentence"
+
+
+def test_v42c_a_ceiling_that_refuses_an_advance_does_not_let_a_later_pass_buy_it_twice(
+        client, kit, hostile):
+    """THE MONEY RULE, ACROSS THE PASSES THE CEILING NOW SPLITS THE WORK INTO.
+
+    The count is per request, so a pass that hits four refuses the rest — and the obvious way to
+    soften that is to leave the refused jobs running so the next pass picks them up. Done without
+    care that is a re-buy: `_media_job_billable_failure` has already banked the render and stood
+    the model down by the time the submit is refused, so a second visit banks it again and the
+    session's spend climbs for renders nobody bought.
+
+    So this asserts what the finding this all came from was careful to say: the burst is gone and
+    the TOTAL is not larger. Six failing jobs, swept to quiescence — every job terminal, every one
+    of them with at most `_MEDIA_MAX_ADVANCES` advances on it, and no more outbound submits in
+    total than one advance each.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    jids = _running_video_jobs(client, hid, sid, 6)
+    hostile.poll_answer = httpx.Response(200, json={"code": "success", "data": {
+        "status": "FAILURE", "message": "the render failed upstream"}})
+    submits = _count_submits(hostile)
+    for _ in range(6):
+        for jid in jids:
+            job = asyncio.run(app._media_job_get(jid))
+            if job["status"] == "running":
+                _due(jid)
+        asyncio.run(app._media_sweep())
+
+    jobs = [asyncio.run(app._media_job_get(j)) for j in jids]
+    assert not [j for j in jobs if j["status"] == "running"], (
+        f"six sweeps left {len([j for j in jobs if j['status'] == 'running'])} jobs running — the "
+        f"ceiling stranded them instead of refusing them, and they will be re-read for ever")
+    over = [(j["id"], j.get("advances")) for j in jobs
+            if int(j.get("advances") or 0) > app._MEDIA_MAX_ADVANCES]
+    assert not over, f"jobs advanced past the money rule once the passes were split: {over}"
+    assert len(submits) <= len(jids) * app._MEDIA_MAX_ADVANCES, (
+        f"{len(submits)} submits across six passes for {len(jids)} jobs allowed "
+        f"{app._MEDIA_MAX_ADVANCES} advance each: {submits} — the per-request count has become a "
+        f"per-pass allowance, which is the same money spent again")

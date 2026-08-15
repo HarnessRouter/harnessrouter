@@ -970,7 +970,10 @@ def test_one_finished_render_is_downloaded_and_stored_exactly_once(client, harne
         await app._media_job_save(job)
         fresh = await app._media_job_get(jid)
         # Five callers, all holding the same pre-landing snapshot — the real shape of the race.
-        return await asyncio.gather(*[app._media_job_advance(dict(fresh)) for _ in range(5)])
+        # A budget each, because that is what five racers ARE: five requests. Sharing one here
+        # would let the submit ceiling settle the race and the per-job lock would go untested.
+        return await asyncio.gather(*[app._media_job_advance(dict(fresh), app._MediaBudget())
+                                      for _ in range(5)])
 
     out = asyncio.run(race())
     assert all(j["status"] == "succeeded" for j in out), [j["status"] for j in out]
