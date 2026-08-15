@@ -26,9 +26,11 @@ import base64
 import contextlib
 import functools
 import hashlib
+import ipaddress
 import mimetypes
 import pathlib
 import shutil
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -2398,7 +2400,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         # Same rule the console's Test connection applies. Enforced here too, because this is the
         # call that actually reaches the network: a URL the policy rejects must never be handed to
         # a sandbox, whatever is stored on the harness.
-        _blocked = _ssrf_check(_url)
+        _blocked = await _ssrf_check(_url)
         if _blocked:
             print(f"[mcp] refusing '{s.get('name') or 'mcp'}' for harness {harness_id}: {_blocked}",
                   flush=True)
@@ -6611,13 +6613,13 @@ def _parse_jsonrpc(text: str) -> dict:
     return {}
 
 
-def _ssrf_check(url: str) -> str | None:
+async def _ssrf_check(url: str) -> str | None:
     """The ONE rule for whether this server may talk to an MCP endpoint.
 
     V1C02-006: gate a caller-supplied MCP URL before the server fetches it. HTTPS only; resolve
-    EVERY DNS answer and reject loopback / link-local / RFC1918 / IPv6 private / cloud metadata
-    (169.254.169.254 falls under link-local) so a hostname can't rebind to an internal target.
-    Returns an error string to reject, or None to allow.
+    EVERY DNS answer and reject loopback / link-local / CGNAT / RFC1918 / IPv6 private / cloud
+    metadata (169.254.169.254 falls under link-local). Returns an error string to reject, or None
+    to allow.
 
     Applied at BOTH config time (the console's Test connection) and run time (_harness_plugins).
     It used to run only on the test button, so the console refused a URL that a turn then connected
@@ -6649,15 +6651,30 @@ def _ssrf_check(url: str) -> str | None:
         return "only https MCP endpoints are allowed"
     if not u.hostname:
         return "url has no host"
-    return _internal_target(u.hostname, u.port or 443)
+    return await _internal_target(u.hostname, u.port or 443)
 
 
-def _internal_target(host: str, port: int) -> str | None:
+# 100.64.0.0/10 — carrier-grade NAT, and what a managed Kubernetes cluster hands its pods and its
+# nodes. Python's ipaddress does not call it private (it is not RFC1918), so it was the one whole
+# range this classifier let through: a provider naming a pod address had this server fetching from
+# inside its own cluster. Named here rather than folded into `not ip.is_global`, because that would
+# also reject 192.0.0.0/24 and the documentation ranges and nobody would know why.
+_CGNAT = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("::ffff:100.64.0.0/106"))
+
+
+async def _internal_target(host: str, port: int) -> str | None:
     """Does this hostname resolve somewhere a caller must not be able to point this server?
 
-    Every DNS answer is resolved and classified — loopback, link-local (which is where cloud
-    metadata lives), RFC1918, IPv6 private, reserved — so a name cannot rebind to an internal
-    target between the check and the connection.
+    EVERY DNS answer is resolved and classified — loopback, link-local (which is where cloud
+    metadata lives), RFC1918, CGNAT, IPv6 private, reserved — so a name whose second A record is
+    internal is refused on the strength of that second record.
+
+    WHAT IT DOES NOT DO, because a comment claiming otherwise is worse than no comment: it does not
+    survive a DNS rebind. This resolves the name; httpx then resolves it AGAIN when it opens the
+    socket, so a TTL-0 name that answers 93.184.216.34 here can answer 10.0.0.5 a millisecond
+    later and this check will have passed. Closing that means pinning the address we classified
+    into the connection itself, which is a different piece of work and is not what this does. What
+    it buys is the multi-A case and every literal internal address, and that is the whole of it.
 
     Shared by MCP URLs, database hosts and provider-supplied file URLs because it is one question,
     not three: each is a target somebody else names and this server then opens a socket to. A
@@ -6673,11 +6690,15 @@ def _internal_target(host: str, port: int) -> str | None:
 
     The two failures are still told apart, because the operator reading the log needs them apart:
     one of them is a bad URL and the other is a broken resolver.
+
+    ASYNC BECAUSE getaddrinfo BLOCKS. It is a synchronous C call and it can sit for the resolver's
+    whole timeout; run on the event loop it stops the entire process, not one request. Measured: a
+    1.01 s lookup let ZERO other tasks run. Every provider file URL is classified on every poll, so
+    one relay naming a slow-resolving host froze the gateway for everybody, ten seconds apart.
     """
-    import ipaddress
-    import socket
+    loop = asyncio.get_running_loop()
     try:
-        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        infos = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as e:
         no_such = {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
         return "host does not resolve" if e.errno in no_such else "host could not be resolved"
@@ -6686,7 +6707,8 @@ def _internal_target(host: str, port: int) -> str | None:
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
+                or ip.is_multicast or ip.is_unspecified
+                or any(ip in net for net in _CGNAT if ip.version == net.version)):
             return "target resolves to a disallowed (internal) address"
     return None
 
@@ -6695,7 +6717,7 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
     """Probe a remote MCP server: initialize → notifications/initialized → tools/list. Returns
     {ok, server, tools:[{name,description}]} or {ok:false, error}. Used by the config UI's
     'Test connection'. Token may be a literal bearer or a vault:<ref> (resolved by the caller)."""
-    ssrf = _ssrf_check(url)
+    ssrf = await _ssrf_check(url)
     if ssrf:
         return {"ok": False, "error": ssrf}
     headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
@@ -7141,11 +7163,12 @@ class DatabaseTestBody(BaseModel):
     connection_string: str
 
 
-def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
+async def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
     """(engine, connection string, host, database) — or the 400 that says what is wrong with it.
 
-    Pure, so kit launch can check what it was given BEFORE it provisions anything: a typo in a
-    connection string should not leave a half-configured Harness behind."""
+    Provisions nothing, so kit launch can check what it was given BEFORE it provisions anything: a
+    typo in a connection string should not leave a half-configured Harness behind. It is not free,
+    though: classifying the host is a DNS lookup, which is why it is awaited."""
     eng = _db_engine(engine)
     c = (conn or "").strip()
     if not c:
@@ -7158,8 +7181,8 @@ def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
     # database on localhost is the normal case rather than an attack.
     if not _pool_is_local():
         hostname, _, port = host.partition(":")
-        blocked = _internal_target(hostname, int(port) if port.isdigit() else
-                                   (5432 if eng == "postgres" else 3306))
+        blocked = await _internal_target(hostname, int(port) if port.isdigit() else
+                                         (5432 if eng == "postgres" else 3306))
         if blocked:
             raise uhp_error(400, "unreachable_host",
                             f"This server cannot connect to {hostname}: {blocked}.",
@@ -7215,7 +7238,7 @@ async def _db_probe(engine: str, conn: str) -> dict:
     """
     # Validated exactly as attaching would validate it, so a string this button accepts is a
     # string the save accepts. A test that does not predict what happens next is worse than none.
-    engine, conn, host, db = _db_validate(engine, conn)
+    engine, conn, host, db = await _db_validate(engine, conn)
     try:
         # Not SELECT 1: reaching the database proves the credential, and reading the catalog
         # proves the account can see tables — which is the failure people actually hit when they
@@ -7596,9 +7619,9 @@ class _MediaNoModel(Exception):
     because "nothing was charged" is the one sentence an agent must never be told wrongly.
     """
 
-    def __init__(self, text: str, attempts: list[dict]):
+    def __init__(self, text: str, attempts: list[dict], billed_usd: float = 0.0):
         super().__init__(text)
-        self.text, self.attempts = text, attempts
+        self.text, self.attempts, self.billed_usd = text, attempts, billed_usd
 
 
 def _media_json(body: bytes):
@@ -7646,14 +7669,110 @@ async def _media_call(cand: dict, prov: dict, params: dict) -> tuple[str, object
 # Every advance is another full-price render, so a second one is the agent's decision, made with
 # the first one's cost in front of it.
 #
-# ONE BUDGET, TWO WALKS. A request can fall down the chain in two places — here at SUBMIT, when a
+# ONE BUDGET, TWO WALKS. A request can fall down the chain in two places — at SUBMIT, when a
 # candidate answers 200 with nothing in it, and later at POLL, when a render that billed comes
-# back failed — and they are the same event to whoever is paying. The submit walk was uncapped
-# while the poll walk was capped, so one generate_image whose candidates all answered
-# 200-with-no-image bought the entire eleven-model chain inside a single tool call. What the
-# submit walk spent is therefore written onto the job (`advances`), which is the only thing that
-# outlives the tool call and the only place the poll walk can read it from.
+# back failed — and they are the same event to whoever is paying. What the submit walk spent is
+# therefore written onto the job (`advances`), which is the only thing that outlives the tool call
+# and the only place the poll walk can read it from.
 _MEDIA_MAX_ADVANCES = 1
+
+# How many outbound submits ONE SUBMIT WALK may make, whatever the provider answers to any of
+# them. Separate from the budget above because it is a different fact: that one is about money and
+# stops at the second render bought; this one is about the walk itself. A candidate that answers
+# 4xx costs nothing and IS walked past — deliberately, because leaving a broken model in the chain
+# is what let the owner's preferred one start working again on its own — but "costs nothing" is
+# not "free": each submit carries the provider key out of this process, and a chain eleven long
+# meant one tool call could make eleven of them. Four is the measured outage (one broken model at
+# rank 1) with room, and a long way short of any chain in the catalog.
+#
+# WHERE IT DOES NOT HOLD YET, said plainly because a ceiling that claims more than it counts is
+# how the last three rounds of this bug survived: it is claimed at exactly one place, the top of
+# `_media_chain`'s loop, so it bounds the SUBMIT walk and nothing else. `_media_job_resubmit`
+# opens its own socket without asking, and a synchronous shape whose file will not land reaches it
+# inside the same tool call — so a chain with four or more candidates can still make five. Closing
+# that means claiming the budget in `_media_call`, which is the one place every outbound submit
+# actually passes through; it is not what this does.
+#
+# WHAT THIS COSTS, so the next reader does not have to find out the hard way: a free refusal is
+# never quarantined, so every call starts the walk at rank 1 again. If the FIRST FOUR candidates
+# all answer 4xx, no call ever reaches the fifth and the capability is refused until one of the
+# four recovers. That is judged acceptable because the chains interleave providers on purpose —
+# the first four of text_to_image span three of them — so four consecutive refusals means the
+# relay itself is down, and the fifth candidate would not have answered either. If a chain ever
+# stacks one provider's models at the top, this number and that fact have to be looked at
+# together.
+_MEDIA_MAX_SUBMITS = 4
+
+
+class _MediaBudget:
+    """What one generate call may buy and what it may try, and the ONE PLACE that decides it.
+
+    THE COUNT LIVES WHERE THE LOOP IS, NOT WHERE THE EXITS ARE. This same overspend was closed
+    twice and found three times, each time in the branch beside the one that was patched: the
+    poll walk was capped and the submit walk was not; then `except MediaEmpty` was capped and
+    `except MediaError` was not; then `_media_job_resubmit` turned out to be doing the same
+    bookkeeping by hand. Every one of those fixes was a check in an `except`, so every new failure
+    shape arrived through a branch nobody had capped yet. A submit is claimed HERE, before the
+    request goes out, so the ceiling holds for an answer nobody has imagined and for an exception
+    type invented next year.
+
+    A CLAIM IS BILLABLE UNTIL THE ANSWER SAYS OTHERWISE. `claim` counts the submit against the
+    money budget immediately and `free` gives it back only when the provider answers with a status
+    code, which is the only evidence there is that it did not do the work. That ordering is also
+    what makes the ceiling hold when an agent fires four generate calls at once: the claim and the
+    check happen with no await between them, so two concurrent walks cannot both see the last
+    slot.
+    """
+
+    __slots__ = ("submits", "billed", "sharers")
+
+    def __init__(self) -> None:
+        self.submits = 0
+        self.billed = 0
+        self.sharers = 0
+
+    def claim(self) -> str:
+        """"" if another outbound submit is allowed, else the clause saying why it is not."""
+        if self.billed > _MEDIA_MAX_ADVANCES:
+            return "billed"
+        if self.submits >= _MEDIA_MAX_SUBMITS:
+            return "tried"
+        self.submits += 1
+        self.billed += 1
+        return ""
+
+    def free(self) -> None:
+        """The provider said no with a status code: nothing ran, so the claim goes back."""
+        self.billed -= 1
+
+
+# One budget per generate call — SHARED WITH EVERY CALL THAT OVERLAPS IT ON THE SAME SESSION.
+_media_budgets: dict[str, _MediaBudget] = {}
+
+
+@contextlib.asynccontextmanager
+async def _media_budget_for(sid: str):
+    """The budget this generate call spends out of.
+
+    Per request rather than per session, because a session lives for hours and one budget for all
+    of it would refuse an agent that has been working correctly since. But an agent parallelises:
+    four generate_image calls issued in ONE turn each opened a private budget and bought the whole
+    chain between them. The rule this budget exists to enforce is that a second render is the
+    agent's DECISION, made with the first one's cost in front of it — and that is not true of a
+    call which was already in flight when the first one billed. So overlapping calls share one
+    budget, and the first call to arrive after they have all answered opens a fresh one: "the
+    agent has seen an answer" is exactly the boundary, and in-flight is exactly how to spell it.
+    """
+    b = _media_budgets.get(sid)
+    if b is None:
+        b = _media_budgets[sid] = _MediaBudget()
+    b.sharers += 1
+    try:
+        yield b
+    finally:
+        b.sharers -= 1
+        if b.sharers <= 0:
+            _media_budgets.pop(sid, None)
 
 
 def _media_billed_out(err: str, billed: int) -> str:
@@ -7664,45 +7783,66 @@ def _media_billed_out(err: str, billed: int) -> str:
             f"Ask again if you want another attempt.")
 
 
-async def _media_chain(cap: str, params: dict, providers: dict) -> tuple[dict, str, object, dict, dict]:
+def _media_walk_over(cap: str, reasons: list[str], billed: int, stopped: str,
+                     turn_billed: int) -> str:
+    """What the agent is told when a walk ended with no media. One builder for every way it can
+    end, so "nothing was charged" — the one sentence an agent must never be told wrongly —
+    survives on exactly the paths where it is true, and so does the advice that follows it.
+    """
+    if billed:
+        return _media_billed_out("; ".join(reasons), billed)
+    if stopped == "billed":
+        # This call bought nothing and a call issued ALONGSIDE it spent the shared budget. Its own
+        # sentence, because the two others would each be wrong here: `refusal` would tell the agent
+        # to go and ask somebody to connect a provider, and the billed-out sentence would charge
+        # this call for renders it did not make.
+        return (f"Another generation issued in the same turn has already bought the "
+                f"{turn_billed} renders one turn is allowed and none of them delivered. Nothing "
+                f"was generated here and nothing was charged for it. Ask again — one at a time — "
+                f"if you want another attempt.")
+    if stopped == "tried":
+        return (f"{'; '.join(reasons)} — this request has made the {_MEDIA_MAX_SUBMITS} attempts "
+                f"it is allowed and none of them produced anything. Nothing was generated and "
+                f"nothing was charged. Ask again if you want the remaining models tried.")
+    return media_plane.refusal(cap, reasons)
+
+
+async def _media_chain(cap: str, params: dict, providers: dict,
+                       budget: _MediaBudget) -> tuple[dict, str, object, dict, dict]:
     """Walk the capability's chain until one candidate actually runs. Returns the tally of what
     the walk cost along with what it produced, because the job that comes out of it has to carry
     the spend forward.
 
-    A candidate that fails AT SUBMIT is retried on the very next call and never quarantined —
-    retrying is free, and that is precisely what lets `dreamina-seedance-2-5-hc` sit permanently at
-    rank 1 and start working the day the relay's mapping is fixed, with no code change and no cost.
-    A candidate that fails having ALREADY BILLED is `_media_billed` — written down, stood down and
-    counted — and counted against _MEDIA_MAX_ADVANCES, which is the whole request's budget and not
-    this walk's: free failures and paid ones look identical in a list of attempts, and only one of
-    them may end the walk.
+    ONE GATE, ASKED BEFORE THE SOCKET IS OPENED. Whether this walk may make another submit is a
+    fact about the walk, so it is asked once, at the top of the loop, about the budget — never
+    about the last answer and never inside an `except`. What the answer WAS decides only two
+    things, and there is one branch for both: a 200 that gave nothing billed (write it down, stand
+    the model down, keep the claim), and a status code did not (give the claim back, and leave the
+    model in the chain — retrying it is free, and that is precisely what lets
+    `dreamina-seedance-2-5-hc` sit permanently at rank 1 and start working the day the relay's
+    mapping is fixed, with no code change and no cost).
     """
     tally: dict = {"attempts": [], "billed_usd": 0.0}
     tried: set[str] = set()
     while True:
         cand, skipped = media_plane.resolve(cap, params, set(providers), _media_quarantine,
                                             exclude=tried)
-        billed = sum(1 for a in tally["attempts"] if a.get("billed"))
-        if not cand:
+        stopped = budget.claim() if cand else "chain"
+        if stopped:
             reasons = [f"{a['model']} — {a['error']}" for a in tally["attempts"]] + skipped
-            # `refusal` ends with "nothing was charged", which is only true when nothing billed.
-            text = (media_plane.refusal(cap, reasons) if not billed
-                    else _media_billed_out("; ".join(reasons), billed))
-            raise _MediaNoModel(text, tally["attempts"])
+            billed = sum(1 for a in tally["attempts"] if a.get("billed"))
+            raise _MediaNoModel(_media_walk_over(cap, reasons, billed, stopped, budget.billed),
+                                tally["attempts"], float(tally["billed_usd"]))
         model = str(cand.get("model") or "")
         tried.add(model)
         try:
             task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params)
-        except media_plane.MediaEmpty as e:
-            # It answered and it billed. Stand it down so the next request does not pay again —
-            # and stop here if this request has now bought everything it is allowed to buy.
-            _media_billed(tally, model, media_plane.estimated_usd(cand) or 0.0, str(e))
-            if billed + 1 > _MEDIA_MAX_ADVANCES:
-                raise _MediaNoModel(_media_billed_out(str(e), billed + 1),
-                                    tally["attempts"]) from e
-            continue
         except media_plane.MediaError as e:
-            tally["attempts"].append({"model": model, "error": str(e)})
+            if isinstance(e, media_plane.MediaEmpty):
+                _media_billed(tally, model, media_plane.estimated_usd(cand) or 0.0, str(e))
+            else:
+                budget.free()
+                tally["attempts"].append({"model": model, "error": str(e)})
             continue
         return cand, task_id, payload, doc, tally
 
@@ -7833,7 +7973,7 @@ async def _media_meta(sid: str, med: str) -> dict | None:
     return None
 
 
-def _provider_url_check(url: str) -> str | None:
+async def _provider_url_check(url: str) -> str | None:
     """Whether this server may fetch an address THE PROVIDER named. The rule _ssrf_check applies
     to a customer's MCP endpoint, minus its self-hosted exemption.
 
@@ -7854,7 +7994,7 @@ def _provider_url_check(url: str) -> str | None:
         return refused
     if u.scheme not in ("http", "https") or not u.hostname:
         return refused
-    bad = _internal_target(u.hostname, u.port or (443 if u.scheme == "https" else 80))
+    bad = await _internal_target(u.hostname, u.port or (443 if u.scheme == "https" else 80))
     if not bad:
         return None
     # The host, in the log, where an operator can act on it — and only the host: a result_url
@@ -7875,19 +8015,35 @@ async def _media_fetch(url: str) -> bytes:
     storing the answer. No credential rides along and the body is never echoed, but a status and
     a size still leak through `attempts`, and that is a probe of our own network either way.
     """
-    refused = _provider_url_check(url)
+    refused = await _provider_url_check(url)
     if refused:
         raise media_plane.MediaEmpty(refused)
     buf = bytearray()
-    async with _media_client().stream("GET", url, timeout=300) as r:
-        if r.status_code >= 400:
-            raise media_plane.MediaEmpty(f"the finished file could not be fetched "
-                                         f"(HTTP {r.status_code})")
-        async for chunk in r.aiter_bytes():
-            buf.extend(chunk)
-            if len(buf) > media_plane.MAX_BYTES:
-                raise media_plane.MediaEmpty(
-                    f"the provider returned more than {media_plane.MAX_BYTES} bytes")
+    try:
+        async with _media_client().stream("GET", url, timeout=300) as r:
+            if r.status_code >= 400:
+                raise media_plane.MediaEmpty(f"the finished file could not be fetched "
+                                             f"(HTTP {r.status_code})")
+            async for chunk in r.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > media_plane.MAX_BYTES:
+                    raise media_plane.MediaEmpty(
+                        f"the provider returned more than {media_plane.MAX_BYTES} bytes")
+    except media_plane.MediaError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        # EVERY WAY THIS FAILS IS A MediaError, which is this function's contract and not a
+        # courtesy. Its three callers all handle MediaError and none of them handles anything
+        # else, so an httpx.ConnectError — a CDN host that resolves and then refuses, resets or
+        # times out the socket — escaped the poll BEFORE the backoff was bumped and before the age
+        # check, and the blanket `except Exception` in the sweeper, in check_jobs and in the
+        # browser's jobs route each swallowed it in silence. The job stayed `running` for ever:
+        # one provider poll CARRYING THE KEY plus one CDN fetch every ten seconds, presenting to
+        # the person as a placeholder that never resolves and never errors. The same rule
+        # `_media_call` already holds for the submit — a network failure is a failure with a
+        # sentence, not a crash.
+        raise media_plane.MediaEmpty(
+            f"the finished file could not be fetched ({type(e).__name__})") from e
     return bytes(buf)
 
 
@@ -8069,13 +8225,23 @@ async def _media_job_advance(job: dict) -> dict:
             return fresh
         if float(fresh.get("next_poll_at") or 0) > time.time() * 1000:
             return fresh
-        return await _media_job_poll(fresh)
+        try:
+            return await _media_job_poll(fresh)
+        except Exception as e:  # noqa: BLE001
+            # THE INVARIANT OF THIS FUNCTION, and the reason it is stated once here rather than
+            # guarded at each raise inside the poll: a job that was polled comes out of it either
+            # TERMINAL or DUE LATER. `_media_job_poll` bumps the backoff on every path it returns
+            # by; if it raised instead, nobody did — and every caller of this function (the
+            # sweeper, check_jobs, the browser's jobs route) swallows the exception, so the job
+            # was re-polled on the very next sweep, ten seconds later, for ever. Whatever raised,
+            # the backoff still applies and JOB_MAX_S still ends it.
+            print(f"[media] poll of {fresh.get('id')} raised {type(e).__name__}: {e}", flush=True)
+            return await _media_job_stalled(fresh)
 
 
 async def _media_job_poll(job: dict) -> dict:
     """One poll of one job, under its lock. Split out so the locking above reads as one thought."""
     now = time.time()
-    age_s = (now * 1000 - float(job.get("created_at") or 0)) / 1000.0
     cand = _media_candidate(str(job.get("capability") or ""), str(job.get("model") or ""))
     providers = await _media_providers()
     prov = providers.get(str(job.get("provider") or ""))
@@ -8110,14 +8276,27 @@ async def _media_job_poll(job: dict) -> dict:
     # state a job is IN — it is what one answer was — so recording it here lets check_jobs tell the
     # agent "ask again" without a poll that came back empty ever becoming terminal.
     job["last_poll"] = status
-    if status == "unknown":
+    return await _media_job_stalled(job, back_off=status == "unknown")
+
+
+async def _media_job_stalled(job: dict, back_off: bool = True) -> dict:
+    """A poll that told us nothing terminal: back the job off, or end it because it is too old.
+
+    THE ONE PLACE a job that did not finish is put down again, so "a polled job comes out either
+    terminal or due later" is a property of the poll loop and not of each way a poll can end. Its
+    other caller is `_media_job_advance`, for a poll that RAISED — every caller up there swallows
+    exceptions, so without this the job kept its old `next_poll_at`, was due immediately, and was
+    polled again on every sweep for as long as the gateway ran.
+    """
+    if back_off:
         job["poll_backoff_s"] = min(60, int(job.get("poll_backoff_s") or 20) * 2)
+    age_s = (time.time() * 1000 - float(job.get("created_at") or 0)) / 1000.0
     if age_s > media_plane.JOB_MAX_S:
         job.update({"status": "failed", "error": "The provider never finished this render."})
         await _media_job_save(job)
         await _media_element_failed(job)
         return job
-    job["next_poll_at"] = int((now + int(job.get("poll_backoff_s") or 20)) * 1000)
+    job["next_poll_at"] = int((time.time() + int(job.get("poll_backoff_s") or 20)) * 1000)
     await _media_job_save(job)
     return job
 
@@ -8223,17 +8402,16 @@ async def _media_job_resubmit(job: dict) -> bool:
     usd = media_plane.estimated_usd(cand) or 0.0
     try:
         task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params)
-    except media_plane.MediaEmpty as e:
-        # The SECOND render this request bought, and it answered with nothing either. Banked and
-        # stood down exactly as the first one was — the submit walk in _media_chain treats this
-        # case that way, and a candidate that bills for nothing must not stay in the chain because
-        # it happened to be reached from the poll path instead.
-        _media_billed(job, model, usd, str(e))
-        return False
     except media_plane.MediaError as e:
-        # Refused before any billable work started; retrying it is free and it is not stood down.
-        job.setdefault("attempts", []).append({"model": model, "error": str(e)})
-        job["attempts_json"] = json.dumps(job["attempts"])
+        # ONE BRANCH, asking the same question `_media_chain` asks, in the same words. This is the
+        # place round 2 found doing this bookkeeping by hand, and a hand-written copy of a rule is
+        # a copy that gets a different subset of it right: a second render that answered 200 with
+        # nothing was neither banked nor stood down here, so the next request bought it again.
+        if isinstance(e, media_plane.MediaEmpty):
+            _media_billed(job, model, usd, str(e))
+        else:
+            job.setdefault("attempts", []).append({"model": model, "error": str(e)})
+            job["attempts_json"] = json.dumps(job["attempts"])
         return False
     job.update({"model": model, "provider": str(cand.get("provider") or ""), "usd": usd})
     if task_id:
@@ -8250,11 +8428,16 @@ async def _media_job_resubmit(job: dict) -> bool:
 
 
 async def _media_generate(cap: str, params: dict, hid: str, sid: str, org: str,
-                          entry_id: str) -> dict:
-    """Resolve the chain, start the work, and record a job. Nothing is written when nothing ran:
-    a refusal leaves no vertex behind, because nothing happened."""
+                          entry_id: str, budget: _MediaBudget) -> dict:
+    """Resolve the chain, start the work, and record a job. A refusal leaves no vertex behind when
+    nothing ran — but a walk that BOUGHT renders and delivered none of them is not nothing, and
+    what it spent is written down before the refusal goes back."""
     providers = await _media_providers()
-    cand, task_id, payload, doc, tally = await _media_chain(cap, params, providers)
+    try:
+        cand, task_id, payload, doc, tally = await _media_chain(cap, params, providers, budget)
+    except _MediaNoModel as e:
+        await _media_walk_spend(cap, params, hid, sid, org, entry_id, e)
+        raise
     attempts = tally["attempts"]
     now = int(time.time() * 1000)
     job = {"id": "mjob_" + uuid.uuid4().hex[:16], "org": org, "harness": hid, "session": sid,
@@ -8289,6 +8472,36 @@ async def _media_generate(cap: str, params: dict, hid: str, sid: str, org: str,
     if not await _media_land_payload(job, payload):
         await _media_job_billable_failure(job, str(job.get("error") or ""))
     return job
+
+
+async def _media_walk_spend(cap: str, params: dict, hid: str, sid: str, org: str, entry_id: str,
+                            e: _MediaNoModel) -> None:
+    """A submit walk that bought renders and delivered nothing still leaves the money where the
+    session can see it.
+
+    Same rule the job store already states one function up — an untraceable charge is worse than a
+    visible failure — applied to the one path that had no job to write it on. A generate_video
+    whose candidates each answered 200 and handed back nothing bought up to the whole chain, and
+    because the refusal never reached `_media_job_save`, `_media_spend` read $0.00 and the session
+    budget that exists to stop a runaway never saw a cent of it.
+
+    Nothing is written when nothing billed: a refusal for a capability nobody has connected is
+    still not an event, and a failed job for it would be noise on the person's canvas.
+    """
+    billed = [a for a in (e.attempts or []) if a.get("billed")]
+    if not billed:
+        return
+    now = int(time.time() * 1000)
+    await _media_job_save({
+        "id": "mjob_" + uuid.uuid4().hex[:16], "org": org, "harness": hid, "session": sid,
+        "entry": entry_id, "capability": cap, "status": "failed", "error": e.text,
+        "params_json": json.dumps(_media_params_stored(params)), "params": params,
+        "model": str(billed[-1].get("model") or ""), "provider": "", "provider_task_id": "",
+        "attempts_json": json.dumps(e.attempts), "attempts": e.attempts,
+        "next_poll_at": 0, "poll_backoff_s": 20, "media_id": "", "bytes": 0, "width": 0,
+        "height": 0, "seconds": 0.0, "quota": 0.0, "usd": 0.0,
+        "advances": len(billed), "billed_usd": float(e.billed_usd or 0.0),
+        "element_id": "", "created_at": now, "updated_at": now})
 
 
 # ── the sweeper ───────────────────────────────────────────────────────────────────────────────
@@ -8634,7 +8847,10 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
             params.update({"image": b64, "image_mime": mime, "from_media": med})
             cap = "image_to_video" if name == "generate_video" else "image_to_image"
         try:
-            job = await _media_generate(cap, params, hid, sid, org, entry_id)
+            # The budget is opened HERE, around the whole generation, because it belongs to the
+            # call and not to the walk: the synchronous shapes bill inside `_media_generate` too.
+            async with _media_budget_for(sid) as budget:
+                job = await _media_generate(cap, params, hid, sid, org, entry_id, budget)
         except _MediaNoModel as e:
             return _tool_text(e.text, True)
         except media_plane.MediaError as e:
@@ -10098,7 +10314,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                         f"The '{kit_id}' kit does not read a database.", "database")
     # Checked before anything is provisioned: a typo in a connection string should cost the person
     # a corrected form, not a half-configured Harness to find and fix.
-    checked = _db_validate(db_in.engine, db_in.connection_string) if db_in else None
+    checked = await _db_validate(db_in.engine, db_in.connection_string) if db_in else None
 
     existing = next((r for r in await _vg_list_by_org("Harness", org)
                      if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"),

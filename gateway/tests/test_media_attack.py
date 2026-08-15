@@ -699,11 +699,11 @@ def test_v28_the_shared_classifier_still_refuses_what_it_could_not_classify(clie
     """One rule, one answer: a host that does not resolve is refused for the MCP and database
     callers too, and that is their whole contract."""
     bad_name = "this-name-does-not-exist-hr-test.invalid"
-    assert app._internal_target(bad_name, 443) is not None
+    assert asyncio.run(app._internal_target(bad_name, 443)) is not None
     monkeypatch.setattr(app, "_pool_is_local", lambda: False)
-    assert app._ssrf_check(f"https://{bad_name}/x") is not None
-    assert app._ssrf_check("https://169.254.169.254/") is not None
-    assert app._ssrf_check("https://10.0.0.9/mcp") is not None
+    assert asyncio.run(app._ssrf_check(f"https://{bad_name}/x")) is not None
+    assert asyncio.run(app._ssrf_check("https://169.254.169.254/")) is not None
+    assert asyncio.run(app._ssrf_check("https://10.0.0.9/mcp")) is not None
 
 
 def test_v28b_a_transient_dns_failure_does_not_open_the_provider_url_check(client, monkeypatch):
@@ -720,7 +720,7 @@ def test_v28b_a_transient_dns_failure_does_not_open_the_provider_url_check(clien
         return real(host, port, *a, **kw)
 
     monkeypatch.setattr(socket, "getaddrinfo", flaky)
-    assert app._provider_url_check("http://rebind.attacker.example/x.mp4") is not None, (
+    assert asyncio.run(app._provider_url_check("http://rebind.attacker.example/x.mp4")) is not None, (
         "a name whose lookup merely TIMED OUT was accepted as an address to fetch; the same name "
         "resolving to 10.0.0.5 on the next lookup is the whole SSRF")
 
@@ -737,8 +737,8 @@ def test_a_name_that_does_not_exist_and_one_we_could_not_look_up_are_told_apart(
         return real(host, port, *a, **kw)
 
     monkeypatch.setattr(socket, "getaddrinfo", flaky)
-    gone = app._internal_target("this-name-does-not-exist-hr-test.invalid", 443)
-    unknown = app._internal_target("flaky.attacker.example", 443)
+    gone = asyncio.run(app._internal_target("this-name-does-not-exist-hr-test.invalid", 443))
+    unknown = asyncio.run(app._internal_target("flaky.attacker.example", 443))
     assert gone and unknown and gone != unknown, (gone, unknown)
 
 
@@ -785,3 +785,436 @@ def test_an_ordinary_render_still_lands(client, kit, hostile):
     job = asyncio.run(app._media_job_get(jid))
     assert job["status"] == "succeeded", job
     assert job["media_id"], job
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# ROUND 3 — THE CEILING IS ON THE WALK, NOT ON THE EXITS
+#
+# The same finding was closed twice and found three times, each time in a sibling path, because
+# each fix capped the `except` the finding NAMED. `MediaEmpty` was capped and `MediaError` was
+# not; `_media_job_billable_failure` was capped and `_media_chain` was not. So the count moved to
+# where the loop is: one gate, read before the socket is opened, so an exception type invented
+# next year is bounded by it without anyone remembering that it should be.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+
+def test_v38_a_200_with_no_task_id_does_not_walk_the_whole_video_chain(client, kit, hostile):
+    """THE MOST EXPENSIVE CHAIN IN THE CATALOG, bought whole by one tool call.
+
+    Every candidate answers HTTP 200 with a body that carries no task id — which media_plane's own
+    sentence calls "the provider accepted the request but returned no task id". That was raised as
+    `MediaRefused`, whose docstring says "before any billable work started", so the cap that keyed
+    on `MediaEmpty` never saw it: six submits, none of them stood down, and the agent was told
+    "nothing was generated and nothing was charged".
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    real = hostile.handle
+
+    def no_task_id(req):
+        if str(req.url).endswith("/video/generations") and req.method == "POST":
+            return httpx.Response(200, json={"object": "video", "status": "queued"})
+        return real(req)
+
+    hostile.handle = no_task_id
+    submits = _count_submits(hostile)
+    res = _call(client, _cred(hid, sid), "generate_video", {"prompt": "a cat", "seconds": 6})
+    assert res.get("isError") is True, res
+    assert len(submits) <= app._MEDIA_MAX_ADVANCES + 1, (
+        f"ONE generate_video CALL BOUGHT {len(submits)} 200-ANSWERS: {submits}")
+    assert "charged" not in _text(res) or "billed" in _text(res).lower(), (
+        f"models billed and the agent was told nothing was charged: {_text(res)}")
+
+
+def test_v38b_a_200_whose_body_is_not_an_object_does_not_walk_the_image_chain(client, kit,
+                                                                             hostile):
+    """The same event as `data: []`, one JSON container type over. `data: []` was `MediaEmpty` and
+    capped; a bare list was `MediaRefused` and uncapped — eight submits from one call."""
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    real = hostile.handle
+
+    def not_an_object(req):
+        u = str(req.url)
+        if (u.endswith("/images/generations") or ":generateContent" in u
+                or u.endswith("/chat/completions")):
+            return httpx.Response(200, json=[{"b64_json": "not-where-we-look"}])
+        return real(req)
+
+    hostile.handle = not_an_object
+    submits = _count_submits(hostile)
+    res = _call(client, _cred(hid, sid), "generate_image", {"prompt": "a cat"})
+    assert res.get("isError") is True, res
+    assert len(submits) <= app._MEDIA_MAX_ADVANCES + 1, (
+        f"ONE generate_image CALL BOUGHT {len(submits)} 200-ANSWERS: {submits}")
+
+
+def test_v38c_free_failures_interleaved_with_billable_ones_still_cap_the_billable(client, kit,
+                                                                                 hostile):
+    """A 4xx costs nothing and IS walked past — that is the policy that keeps the owner's
+    preferred model at rank 1 through an outage. Interleaving them with billable answers must not
+    launder the billable ones past the cap."""
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    real = hostile.handle
+    seen: list[str] = []
+
+    def mixed(req):
+        u = str(req.url)
+        if (u.endswith("/images/generations") or ":generateContent" in u
+                or u.endswith("/chat/completions")):
+            seen.append(u)
+            if len(seen) % 2 == 1:
+                return httpx.Response(429, json={"error": {"message": "rate limited"}})
+            if u.endswith("/images/generations"):
+                return httpx.Response(200, json={"created": 1, "data": []})
+            if ":generateContent" in u:
+                return httpx.Response(200, json={"candidates": [{"content": {"parts": []}}]})
+            return httpx.Response(200, json={"choices": [{"message": {"content": "sorry"}}]})
+        return real(req)
+
+    hostile.handle = mixed
+    submits = _count_submits(hostile)
+    res = _call(client, _cred(hid, sid), "generate_image", {"prompt": "a cat"})
+    assert res.get("isError") is True, res
+    billable = [s for i, s in enumerate(seen) if i % 2 == 1]
+    assert len(billable) <= app._MEDIA_MAX_ADVANCES + 1, (
+        f"ONE CALL BOUGHT {len(billable)} BILLABLE RENDERS among {len(submits)} submits")
+
+
+def test_v38d_parallel_calls_in_one_turn_share_one_budget(client, kit, hostile, monkeypatch):
+    """THE AGENT PARALLELISES. The whole rule is that a second render is the agent's decision made
+    with the first one's cost in front of it — which is not true of a call that was already in
+    flight when the first one billed. Four generate_image calls in flight at once, every candidate
+    answering 200-with-no-image: four private budgets buy the entire chain in one turn.
+
+    The four are held at the gateway door until all four have arrived, because "were they really
+    concurrent" is thread-scheduling luck and this test is not about luck: it asserts that calls
+    which ARE concurrent share one budget. What bounds the calls that do not overlap is the
+    stand-down, asserted below — no model may be bought twice across the whole turn.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    real = hostile.handle
+
+    def empty200(req):
+        u = str(req.url)
+        if u.endswith("/images/generations"):
+            return httpx.Response(200, json={"created": 1, "data": []})
+        if ":generateContent" in u:
+            return httpx.Response(200, json={"candidates": [{"content": {"parts": []}}]})
+        if u.endswith("/chat/completions"):
+            return httpx.Response(200, json={"choices": [{"message": {"content": "sorry"}}]})
+        return real(req)
+
+    hostile.handle = empty200
+    submits = _count_submits(hostile)
+    tok = _cred(hid, sid)
+
+    real_generate = app._media_generate
+    arrived = {"n": 0}
+
+    async def all_four_first(*a, **kw):
+        """Every call is inside its budget by the time any of them submits — which is exactly the
+        turn the agent issued, and not four turns that happened to be quick."""
+        arrived["n"] += 1
+        deadline = time.time() + 10
+        while arrived["n"] < 4 and time.time() < deadline:
+            await asyncio.sleep(0.005)
+        assert arrived["n"] >= 4, "the four calls never overlapped; this test proved nothing"
+        return await real_generate(*a, **kw)
+
+    monkeypatch.setattr(app, "_media_generate", all_four_first)
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=4) as ex:
+        list(ex.map(lambda _: _call(client, tok, "generate_image", {"prompt": "a cat"}), range(4)))
+    assert len(submits) <= app._MEDIA_MAX_ADVANCES + 1, (
+        f"ONE TURN (4 parallel tool calls) BOUGHT {len(submits)} BILLABLE RENDERS: {submits}")
+
+
+def test_v38e_a_200_that_delivered_nothing_stands_the_model_down_too(client, kit, hostile):
+    """What stops a loop across CALLS is the stand-down, not the per-request cap. A failure mode
+    that bills and does not quarantine buys the same models again on the very next call — three
+    sequential generate_video calls bought eighteen renders."""
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    real = hostile.handle
+
+    def no_task_id(req):
+        if str(req.url).endswith("/video/generations") and req.method == "POST":
+            return httpx.Response(200, json={"object": "video", "status": "queued"})
+        return real(req)
+
+    hostile.handle = no_task_id
+    submits = _count_submits(hostile)
+    tok = _cred(hid, sid)
+    for _ in range(3):
+        _call(client, tok, "generate_video", {"prompt": "a cat", "seconds": 6})
+    assert len(submits) <= 3 * (app._MEDIA_MAX_ADVANCES + 1), (
+        f"THREE generate_video CALLS BOUGHT {len(submits)} 200-ANSWERS: {submits}")
+    assert len(set(submits)) == len(submits), (
+        f"a model that billed for nothing was picked twice: {submits}")
+
+
+def test_v38f_an_exception_type_nobody_wrote_an_except_for_is_bounded_too(client, kit, hostile,
+                                                                         monkeypatch):
+    """THE STRUCTURAL ONE, and the reason this round exists.
+
+    Every previous fix capped the `except` the finding named, so the next failure shape found the
+    next uncapped branch. Here a failure type that did not exist when the cap was written is
+    raised out of the submit. Nobody has written a branch for it and nobody ever will — the walk
+    must still stop, because the count is taken where the loop is and not where the exits are.
+    """
+    class _AFailureNobodyPlannedFor(media_plane.MediaError):
+        pass
+
+    def raising(cand, status, doc):
+        raise _AFailureNobodyPlannedFor("a shape this code has never seen")
+
+    monkeypatch.setattr(media_plane, "read_submit", raising)
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    submits = _count_submits(hostile)
+    res = _call(client, _cred(hid, sid), "generate_image", {"prompt": "a cat"})
+    assert res.get("isError") is True, res
+    assert len(submits) <= app._MEDIA_MAX_SUBMITS, (
+        f"AN UNPLANNED FAILURE TYPE WALKED {len(submits)} SUBMITS OF THE CHAIN: {submits}")
+
+
+def test_v38g_a_walk_that_billed_and_delivered_nothing_is_in_the_session_spend(client, kit,
+                                                                              hostile):
+    """An untraceable charge is worse than a visible failure — the rule the job store already
+    states about a fetch that fails after a synchronous render. A submit walk that bought two
+    renders and delivered none left NO record at all, so the session read $0.00 and the budget
+    that is supposed to stop a runaway session never saw a cent of it."""
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    real = hostile.handle
+
+    def no_task_id(req):
+        if str(req.url).endswith("/video/generations") and req.method == "POST":
+            return httpx.Response(200, json={"object": "video", "status": "queued"})
+        return real(req)
+
+    hostile.handle = no_task_id
+    res = _call(client, _cred(hid, sid), "generate_video", {"prompt": "a cat", "seconds": 6})
+    assert res.get("isError") is True, res
+    # MiniMax-Hailuo-2.3 is the one candidate this walk reaches with a MEASURED price ($0.28).
+    assert asyncio.run(app._media_spend(sid)) >= 0.28, (
+        "two renders billed inside one submit walk and the session reports none of it")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# ROUND 3 — A POLL THAT RAISES MUST STILL LEAVE THE JOB SOMEWHERE
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+
+@needs_ffmpeg
+def test_v39_a_dead_socket_on_a_resolvable_cdn_does_not_poll_for_ever(client, kit, hostile):
+    """THE FETCH, not the resolver. Only the resolver-failure INPUT was closed last round; the
+    mechanism was never touched. `_media_fetch` is wrapped in `except media_plane.MediaError` and
+    httpx raises its own class, so any CDN host that resolves and then refuses the socket escapes
+    the poll BEFORE next_poll_at is bumped and before the age check — and every caller swallows
+    it. Production polls every ten seconds: one provider poll CARRYING THE KEY plus one CDN fetch,
+    for ever, presenting to the person as a placeholder that never resolves and never errors.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    hostile.video_bytes = _mp4()
+    jid = _ok(_call(client, _cred(hid, sid), "generate_video",
+                    {"prompt": "r", "seconds": 6}))["job_id"]
+    real = hostile.handle
+
+    def dead_socket(req):
+        if req.url.host == "cdn.provider.example":
+            raise httpx.ConnectError("connection refused", request=req)
+        return real(req)
+
+    hostile.handle = dead_socket
+    fetches: list[int] = []
+    for _ in range(5):
+        before = len([c for c in hostile.calls if c["host"] == "cdn.provider.example"])
+        _sweep(jid)
+        fetches.append(len([c for c in hostile.calls if c["host"] == "cdn.provider.example"])
+                       - before)
+    job = asyncio.run(app._media_job_get(jid))
+    assert job["status"] != "running", (
+        f"five sweeps and the job is still running; fetches per sweep {fetches}, "
+        f"next_poll_at {job['next_poll_at']}, backoff {job['poll_backoff_s']}")
+    assert job.get("error"), "the job ended with no sentence for the person"
+
+
+@needs_ffmpeg
+def test_v39b_a_poll_that_raises_anything_still_leaves_the_job_due_later(client, kit, hostile,
+                                                                        monkeypatch):
+    """The general shape of the one above. Whatever a poll raises — including a bug of ours — the
+    job it was polling is left either terminal or due later. Otherwise `next_poll_at` stays where
+    it was, the age check never runs, and the sweeper re-polls the same job every ten seconds for
+    ever while every caller's blanket `except` says nothing."""
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    hostile.video_bytes = _mp4()
+    jid = _ok(_call(client, _cred(hid, sid), "generate_video",
+                    {"prompt": "r", "seconds": 6}))["job_id"]
+
+    async def boom(job):
+        raise RuntimeError("a bug nobody has found yet")
+
+    monkeypatch.setattr(app, "_media_job_poll", boom)
+    _sweep(jid)
+    job = asyncio.run(app._media_job_get(jid))
+    assert job["status"] != "running" or job["next_poll_at"] > time.time() * 1000, (
+        f"the poll raised and left the job due immediately for ever: {job}")
+
+
+@needs_ffmpeg
+def test_v39c_a_credential_in_the_exempt_result_url_reaches_no_sink(client, kit, hostile):
+    """`Payload.url` is deliberately not scrubbed, because a signed result_url IS its query
+    string. The claim that makes that safe is that it is fetched once and never persisted or
+    relayed — so put this deployment's own key in it and check every sink."""
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    hostile.result_url = f"https://cdn.provider.example/out.mp4?api_key={PROVIDER_KEY}"
+    hostile.video_bytes = _mp4()
+    jid = _ok(_call(client, _cred(hid, sid), "generate_video",
+                    {"prompt": "r", "seconds": 6}))["job_id"]
+    _sweep(jid)
+    tool = _text(_call(client, _cred(hid, sid), "check_jobs", {"job_ids": [jid]}))
+    vertex = json.dumps(_vertex(jid))
+    browser = client.get(f"/v1/harnesses/{hid}/servers/{ENTRY_ID}/sessions/{sid}/jobs",
+                         headers=HEADERS).text
+    _assert_clean(PROVIDER_KEY, "the exempt result_url", tool, vertex, browser)
+
+
+@needs_ffmpeg
+def test_v39d_the_scrub_removes_our_keys_and_names_the_shape_it_cannot(client, kit, hostile):
+    """THE STATED LIMIT, pinned so the next reader finds it as a fact rather than as a surprise.
+
+    Our own credentials are exact-matched and are removed from anywhere in a provider document.
+    A THIRD PARTY's token, in a field that is not an error, survives unless its shape happens to
+    be in the pattern list — and the list is deliberately not grown to catch every vendor prefix,
+    because the same characters are what a provider's task ids are made of and a redacted task id
+    is a render nobody can poll. This test holds both halves: the guarantee, and its edge.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    hostile.video_bytes = _mp4()
+    jid = _ok(_call(client, _cred(hid, sid), "generate_video",
+                    {"prompt": "r", "seconds": 6}))["job_id"]
+    foreign = "hf_QeRtYuIoPaSdFgHjKlZxCvBnM1234567890"
+    hostile.poll_answer = httpx.Response(200, json={"code": "success", "data": {
+        "status": "IN_PROGRESS",
+        "progress": f"30% for {PROVIDER_KEY} (worker {foreign})"}})
+    _due(jid)
+    tool = _text(_call(client, _cred(hid, sid), "check_jobs", {"job_ids": [jid]}))
+    assert PROVIDER_KEY not in tool and PROVIDER_KEY not in json.dumps(_vertex(jid)), (
+        f"OUR OWN key survived a non-error field: {tool[:300]}")
+    assert media_plane.scrub(foreign) == foreign, (
+        "the pattern list grew to cover third-party prefixes — check it cannot eat a task id, "
+        "then update the note in media_plane.scrub that says it does not")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# ROUND 3 — THE RESOLVER: what it classifies, what it costs, and what it does NOT promise
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("mapped", ["::ffff:127.0.0.1", "::ffff:10.0.0.5",
+                                    "::ffff:169.254.169.254", "64:ff9b::7f00:1", "fd00::1",
+                                    "::ffff:100.64.0.1"])
+def test_v40_ipv6_forms_of_an_internal_address_are_classified(monkeypatch, mapped):
+    real = socket.getaddrinfo
+
+    def fake(host, port, *a, **kw):
+        if host == "v6.attacker.example":
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (mapped, int(port or 443), 0, 0))]
+        return real(host, port, *a, **kw)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    assert asyncio.run(app._internal_target("v6.attacker.example", 443)) is not None, mapped
+    assert asyncio.run(app._provider_url_check("http://v6.attacker.example/x.mp4")) is not None, (
+        mapped)
+
+
+@pytest.mark.parametrize("addr", ["100.64.0.1", "100.127.255.254", "100.64.99.7"])
+def test_v40b_carrier_grade_nat_is_internal(monkeypatch, addr):
+    """100.64.0.0/10 is what a managed Kubernetes cluster hands its pods and nodes. Python's
+    ipaddress does not call it private, so it was the one whole range this classifier allowed —
+    a provider naming a pod address would have had this server fetching from inside the cluster.
+    """
+    real = socket.getaddrinfo
+
+    def fake(host, port, *a, **kw):
+        if host == "cgnat.attacker.example":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, int(port or 443)))]
+        return real(host, port, *a, **kw)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    assert asyncio.run(app._internal_target("cgnat.attacker.example", 443)) is not None, addr
+
+
+def test_v40c_a_slow_lookup_does_not_stall_the_event_loop():
+    """Every provider URL is resolved on every poll. Resolving on the event loop stalls the whole
+    process for the resolver's timeout: measured, a 1.01 s lookup produced ZERO heartbeat ticks,
+    so one relay naming a slow-resolving host froze every other request in the gateway."""
+    real = socket.getaddrinfo
+
+    def slow(host, port, *a, **kw):
+        if host == "slow.attacker.test":
+            time.sleep(1.0)
+            raise socket.gaierror(socket.EAI_NONAME, "nope")
+        return real(host, port, *a, **kw)
+
+    async def drive():
+        ticks = {"n": 0}
+
+        async def heartbeat():
+            while True:
+                ticks["n"] += 1
+                await asyncio.sleep(0.02)
+
+        hb = asyncio.create_task(heartbeat())
+        await asyncio.sleep(0.1)
+        base = ticks["n"]
+        await asyncio.to_thread(lambda: None)          # warm the pool
+        t0 = time.time()
+        await app._provider_url_check("http://slow.attacker.test/x.mp4")
+        wall = time.time() - t0
+        gained = ticks["n"] - base
+        hb.cancel()
+        return wall, gained
+
+    saved = socket.getaddrinfo
+    socket.getaddrinfo = slow
+    try:
+        wall, gained = asyncio.run(drive())
+    finally:
+        socket.getaddrinfo = saved
+    assert gained > wall * 20, (
+        f"the event loop made {gained} ticks while a {wall:.2f}s DNS lookup ran; it was blocked")
+
+
+def test_v40d_the_classifier_does_not_promise_to_stop_a_dns_rebind(monkeypatch):
+    """WHAT IT DOES NOT DO, pinned because a comment claiming otherwise is worse than no comment.
+
+    Resolving every answer defeats a multi-A record whose second address is internal. It does NOT
+    defeat a TTL-0 rebind: httpx opens the socket with its OWN lookup, so a name that answers
+    public here can answer 10.0.0.5 a millisecond later. Two halves are held: the classifier still
+    catches what it claims to catch (a name whose FIRST answer is internal), and the docstring no
+    longer tells the next reader that the connection is pinned to what was checked.
+    """
+    real = socket.getaddrinfo
+    n = {"i": 0}
+
+    def rebinding(host, port, *a, **kw):
+        if host == "rebind.attacker.test":
+            n["i"] += 1
+            ip = "93.184.216.34" if n["i"] == 1 else "10.0.0.5"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, int(port or 443)))]
+        return real(host, port, *a, **kw)
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding)
+    assert asyncio.run(app._provider_url_check("http://rebind.attacker.test/x.mp4")) is None
+    assert asyncio.run(app._internal_target("rebind.attacker.test", 80)) is not None
+    doc = (app._internal_target.__doc__ or "").lower()
+    assert "cannot rebind" not in doc, (
+        "the docstring still promises the check survives a rebind between the check and the "
+        "connection; it does not, and the next reader will build on the promise")
+    assert "rebind" in doc, "the limit is not written down where the next reader will find it"

@@ -57,13 +57,28 @@ class MediaError(Exception):
 
 
 class MediaRefused(MediaError):
-    """The provider refused before any billable work started — an HTTP error at submit, a
-    timeout before a task id existed. Retrying the candidate is free, so it is NOT quarantined."""
+    """The provider SAID NO: an HTTP error status at submit, or no answer at all. Retrying the
+    candidate is free, so it is NOT quarantined — which is what lets the owner's preferred model
+    sit at rank 1 through an outage and start working again the day the relay is fixed.
+
+    A 200 IS NEVER THIS. It used to be, twice: a 200 whose body was not an object, and a 200 with
+    no task id in it — whose own sentence read "the provider accepted the request but returned no
+    task id". Both are the provider ANSWERING, which is the only evidence anyone has that it
+    billed, and both were classified as free. One generate_video where every candidate answered
+    that way walked the whole six-model chain, stood none of them down, and told the agent
+    "nothing was charged". The line is the status code, because the status code is the only thing
+    here that says whether the provider got as far as doing the work.
+    """
 
 
 class MediaEmpty(MediaError):
     """The provider answered 200 and returned no media. Billable, and therefore a failure that
-    quarantines the candidate — this is the gemini-3-pro rule."""
+    quarantines the candidate — this is the gemini-3-pro rule.
+
+    "Returned no media" covers a body that is not the shape at all, not only an empty list in the
+    right shape: `data: []` and a bare JSON array are the same event one container type apart, and
+    charging one of them to the request and not the other is an accounting artefact.
+    """
 
 
 # ── the catalog ───────────────────────────────────────────────────────────────────
@@ -513,21 +528,24 @@ def _read_submit(cand: dict, status: int, doc) -> tuple[str, Payload | None]:
 
     A shape that answers with a task id returns ("task_…", None). A synchronous shape returns
     ("", payload). Anything else raises — and WHICH exception decides whether the candidate is
-    quarantined, so the distinction is the point:
-      MediaRefused  the provider said no before any billable work started; retry is free.
-      MediaEmpty    it answered 200 and returned nothing; it billed, so stand it down.
+    quarantined, so the distinction is the point. ONE QUESTION DECIDES IT, asked once, here:
+    DID THE PROVIDER ANSWER?
+      MediaRefused  a status of 400 or worse: it said no, nothing ran, retry is free.
+      MediaEmpty    a 200 that carried no media: it answered, so it billed — stand it down.
+    Every shape below therefore raises MediaEmpty, whatever is wrong with the body: 200 is the
+    line, and "which particular way the 200 was useless" is a sentence, not a policy.
     """
     if status >= 400:
         raise MediaRefused(provider_message(doc, status))
     if not isinstance(doc, dict):
-        raise MediaRefused("the provider returned a body that is not an object")
+        raise MediaEmpty("the provider answered with a body that is not an object")
     shape = str(cand.get("shape") or "")
 
     if shape == "video-generation":
         tid = str(doc.get("task_id") or doc.get("id") or "")
         if not tid:
-            raise MediaRefused(provider_message(doc, status) or
-                               "the provider accepted the request but returned no task id")
+            raise MediaEmpty(provider_message(doc, status) or
+                             "the provider accepted the request but returned no task id")
         return tid, None
 
     if shape == "image-generation":
@@ -709,6 +727,15 @@ def scrub(text: str) -> str:
     Exact first — the keys this deployment actually sends — then by shape, because a provider also
     says other people's tokens, its own bearer and an org id out loud, and a redaction that only
     knows our own string only ever catches the leak we already found.
+
+    WHAT THIS GUARANTEES, AND WHERE IT STOPS. The exact half is a guarantee: a credential THIS
+    DEPLOYMENT sends is removed from anywhere in a provider document, error field or not. The
+    shape half is a net, not a guarantee — `hf_`, `xai-`, `gsk_`, `r8_`, `nvapi-`, a bare hex
+    string and a JWT are not in the list, so a THIRD PARTY's token quoted in a field nobody treats
+    as an error (a progress string, a transcript) can survive. The list is deliberately not grown
+    to cover every vendor's prefix: a provider's task id is made of the same characters, and this
+    same function cleans the task id we poll with — a redaction that eats one is a render nobody
+    can ever collect. Widening it means proving that first. See the test that pins both halves.
     """
     out = str(text or "")
     for secret in _SECRETS:
