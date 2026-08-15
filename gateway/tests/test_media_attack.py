@@ -22,8 +22,10 @@ same seam tests/test_media_mcp.py uses. Nothing here spends anything.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
+import inspect
 import json
 import os
 import socket
@@ -955,26 +957,36 @@ def test_v38e_a_200_that_delivered_nothing_stands_the_model_down_too(client, kit
         f"a model that billed for nothing was picked twice: {submits}")
 
 
-def test_v38f_an_exception_type_nobody_wrote_an_except_for_is_bounded_too(client, kit, hostile,
-                                                                         monkeypatch):
-    """THE STRUCTURAL ONE, and the reason this round exists.
+@pytest.mark.parametrize("tree", ["inside the MediaError tree", "outside it"])
+def test_v38f_an_exception_type_nobody_wrote_an_except_for_is_bounded_too(client500, client, kit,
+                                                                         hostile, monkeypatch,
+                                                                         tree):
+    """THE STRUCTURAL ONE, and the reason round 3 existed.
 
     Every previous fix capped the `except` the finding named, so the next failure shape found the
     next uncapped branch. Here a failure type that did not exist when the cap was written is
     raised out of the submit. Nobody has written a branch for it and nobody ever will — the walk
-    must still stop, because the count is taken where the loop is and not where the exits are.
+    must still stop, and the agent must still get a sentence.
+
+    ITS OWN BLIND SPOT, closed here: this used to raise a SUBCLASS of MediaError only, which is
+    the one kind of surprise every handler in the media plane already catches. The failure that
+    actually happens is a relay renaming a field, and that arrives as an AttributeError — outside
+    the tree, past every `except MediaError`, out of the route as an HTTP 500. A test that only
+    ever raises inside the tree proves the tree, not the boundary.
     """
     class _AFailureNobodyPlannedFor(media_plane.MediaError):
         pass
 
     def raising(cand, status, doc):
-        raise _AFailureNobodyPlannedFor("a shape this code has never seen")
+        if tree.startswith("inside"):
+            raise _AFailureNobodyPlannedFor("a shape this code has never seen")
+        raise AttributeError("'str' object has no attribute 'get'")
 
     monkeypatch.setattr(media_plane, "read_submit", raising)
     hid = _launch(client, kit)
     sid = _session(hid)
     submits = _count_submits(hostile)
-    res = _call(client, _cred(hid, sid), "generate_image", {"prompt": "a cat"})
+    res = _call(client500, _cred(hid, sid), "generate_image", {"prompt": "a cat"})
     assert res.get("isError") is True, res
     assert len(submits) <= app._MEDIA_MAX_SUBMITS, (
         f"AN UNPLANNED FAILURE TYPE WALKED {len(submits)} SUBMITS OF THE CHAIN: {submits}")
@@ -1118,7 +1130,12 @@ def test_v39d_the_scrub_removes_our_keys_and_names_the_shape_it_cannot(client, k
 
 @pytest.mark.parametrize("mapped", ["::ffff:127.0.0.1", "::ffff:10.0.0.5",
                                     "::ffff:169.254.169.254", "64:ff9b::7f00:1", "fd00::1",
-                                    "::ffff:100.64.0.1"])
+                                    "::ffff:100.64.0.1",
+                                    # fec0::/10, IPv6 site-local. Deprecated by RFC 3879 and
+                                    # therefore neither is_private nor is_reserved in Python —
+                                    # so it was the one whole IPv6 range this let through, on
+                                    # exactly the reasoning that let CGNAT through.
+                                    "fec0::1", "feff:ffff:ffff:ffff::1"])
 def test_v40_ipv6_forms_of_an_internal_address_are_classified(monkeypatch, mapped):
     real = socket.getaddrinfo
 
@@ -1218,3 +1235,288 @@ def test_v40d_the_classifier_does_not_promise_to_stop_a_dns_rebind(monkeypatch):
         "the docstring still promises the check survives a rebind between the check and the "
         "connection; it does not, and the next reader will build on the promise")
     assert "rebind" in doc, "the limit is not written down where the next reader will find it"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# ROUND 5 — THE CHOKE POINT: every outbound submit, and every answer to one
+#
+# Four rounds capped the branch the last finding named and the one beside it made the next submit:
+# the poll path, then one branch of the submit walk, then the walk's loop. What every one of them
+# missed is that a submit is not made by a walk — it is made by `_media_call`, which is the ONE
+# place a socket is opened to a provider with this deployment's key on it. The tests here are
+# written against that fact rather than against any walk, so a caller nobody has written yet is
+# covered by them.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture()
+def client500():
+    """A client that does NOT re-raise a server exception, so a 500 is measurable AS a 500.
+
+    The default TestClient re-raises, which turns "the agent got an HTTP error instead of a tool
+    result" — the thing under test — into a crashed test whose message names a random provider
+    field. The app is already started by the module-scoped client fixture; this one only skips
+    the re-raise.
+    """
+    return TestClient(app.app, raise_server_exceptions=False)
+
+
+def _payload_200(url: str) -> httpx.Response:
+    """A 200 saying, in whatever shape this endpoint speaks, "your render is over there" — where
+    over there is a file that will not land. The provider has billed by now: this is the
+    synchronous shape's hand-off, and it is the step that let one tool call reach the resubmit."""
+    if url.endswith("/images/generations"):
+        return httpx.Response(200, json={"created": 1, "data": [
+            {"url": "https://cdn.provider.example/gone.png"}]})
+    if url.endswith("/chat/completions"):
+        return httpx.Response(200, json={"choices": [{"message": {"content": None, "images": [
+            {"image_url": {"url": "https://cdn.provider.example/gone.png"}}]}}]})
+    return httpx.Response(200, json={"candidates": [{"content": {"parts": [
+        {"inlineData": {"mimeType": "image/png",
+                        "data": base64.b64encode(b"not a picture").decode()}}]}}]})
+
+
+def _is_submit(req: httpx.Request) -> bool:
+    u = str(req.url)
+    return req.method == "POST" and (u.endswith("/video/generations")
+                                     or u.endswith("/images/generations")
+                                     or u.endswith("/chat/completions")
+                                     or ":generateContent" in u)
+
+
+def test_v41_the_ceiling_holds_across_the_hand_off_from_the_walk_to_the_resubmit(client, kit,
+                                                                                 hostile):
+    """FIVE SUBMITS FROM ONE TOOL CALL, all inside the ceiling that says four.
+
+    `_MEDIA_MAX_SUBMITS` says "whatever the provider answers", and it was claimed at the top of
+    `_media_chain`'s loop — so it counted the walk and nothing else. `_media_job_resubmit` opens
+    its own socket without asking, and one generate_image REACHES IT INSIDE THE SAME TOOL CALL:
+    a synchronous shape answers 200, the file will not land, `_media_job_billable_failure` spends
+    the job's one advance and resubmits. Measured: three 4xx then a 200 whose URL 504s bought
+    submits from five different models, each carrying the key out of this process.
+
+    Note what this test does NOT do: it names no branch. Whether the fifth submit comes from the
+    resubmit, from a retry somebody adds next year or from a walk nobody has written, four is
+    four — which is only true if the count is taken where the socket is opened.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    real = hostile.handle
+    n = {"i": 0}
+
+    def three_refusals_then_a_dead_file(req):
+        if _is_submit(req):
+            n["i"] += 1
+            if n["i"] <= 3:
+                return httpx.Response(429, json={"error": {"message": "rate limited"}})
+            return _payload_200(str(req.url))
+        if str(req.url).startswith("https://cdn.provider.example/gone.png"):
+            return httpx.Response(504, content=b"gateway timeout")
+        return real(req)
+
+    hostile.handle = three_refusals_then_a_dead_file
+    submits = _count_submits(hostile)
+    _call(client, _cred(hid, sid), "generate_image", {"prompt": "a cat"})
+    assert len(submits) <= app._MEDIA_MAX_SUBMITS, (
+        f"ONE generate_image MADE {len(submits)} OUTBOUND SUBMITS against a ceiling of "
+        f"{app._MEDIA_MAX_SUBMITS}: {submits}")
+
+
+def test_v41b_the_budget_is_claimed_where_the_socket_is_opened_and_nowhere_else(client, kit,
+                                                                                hostile):
+    """THE STRUCTURAL ONE. Every round so far was closed by a check in the branch that had just
+    been found, and every round after it arrived through the branch beside that one. The property
+    that ends the series is not "these two callers are capped" — it is that a claim cannot be
+    skipped, because there is exactly one place that can open an outbound submit and it claims
+    before it opens.
+
+    So: no function in app.py other than `_media_call` may touch the budget, and `_media_call`
+    may not be reachable without one. A caller written next year by somebody who read none of
+    this is then bounded whether or not they knew there was a budget.
+    """
+    src = Path(app.__file__).read_text()
+    tree = ast.parse(src)
+    owner = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                    and n.func.attr in ("claim", "free"):
+                owner.setdefault(n.func.attr, set()).add(fn.name)
+    assert owner.get("claim") == {"_media_call"}, (
+        f"the budget is claimed in {sorted(owner.get('claim') or [])} — a submit made by any of "
+        f"the others is a submit outside the count, which is how the last four rounds survived")
+    assert owner.get("free") == {"_media_call"}, (
+        f"the budget is given back in {sorted(owner.get('free') or [])}; claim and free have to "
+        f"be the same pair of hands or the money count drifts")
+
+    for name in ("_media_call", "_media_job_resubmit", "_media_job_billable_failure"):
+        assert "budget" in inspect.signature(getattr(app, name)).parameters, (
+            f"{name} takes no budget, so whatever it submits is outside the ceiling")
+
+
+def test_v41c_a_renamed_provider_field_is_a_tool_result_and_not_an_http_error(client500, client,
+                                                                              kit, hostile):
+    """A RELAY CHANGED A FIELD'S SHAPE — the exact event this whole catalog is built around.
+
+    `_read_submit`'s openai branch reads `im["image_url"]["url"]`. Hand it a string where the
+    object was and it raises AttributeError, which is not in the MediaError tree — so
+    `_media_chain`'s handler never sees it, `_media_walk_spend` never runs and the promise that
+    every failure is a tool result and never an HTTP error is broken. Measured: HTTP 500, four
+    submits, one of them billed $0.048, and the session's spend reading $0.0000.
+
+    Two things are asserted, because either alone is half a fix: the agent gets a sentence, and
+    the money that was spent getting it is where the session budget can see it.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    # Leave only the shape whose field was renamed, so this is a test about that field and not
+    # about which candidate happened to be first.
+    for c in media_plane.capability("text_to_image")["candidates"]:
+        if str(c.get("shape")) != "openai":
+            app._media_quarantine[str(c["model"])] = time.time() + 9999
+    real = hostile.handle
+
+    def renamed(req):
+        if str(req.url).endswith("/chat/completions"):
+            return httpx.Response(200, json={"choices": [{"message": {
+                "content": None,
+                "images": [{"image_url": "https://cdn.provider.example/x.png"}]}}]})
+        return real(req)
+
+    hostile.handle = renamed
+    submits = _count_submits(hostile)
+    res = _call(client500, _cred(hid, sid), "generate_image", {"prompt": "a cat"})
+    assert res.get("isError") is True, res
+    assert len(submits) <= app._MEDIA_MAX_SUBMITS, (
+        f"a body-shape bug walked {len(submits)} submits: {submits}")
+    # mai-image-2.5 is the one openai-shape candidate carrying a MEASURED price ($0.048188).
+    assert asyncio.run(app._media_spend(sid)) > 0, (
+        "a 200 billed, the body could not be read, and the session reports having spent nothing")
+
+
+@pytest.mark.parametrize("exit_", ["age-out", "poll says FAILURE"])
+def test_v41d_both_ways_a_render_ends_agree_that_it_was_bought(client, kit, hostile, monkeypatch,
+                                                               exit_):
+    """TWO EXITS, ONE EVENT. A submit that came back with a task id billed — a 200 is the provider
+    answering, which is the only evidence there is either way.
+
+    A poll that answers FAILURE goes through `_media_job_billable_failure`: banked, stood down,
+    counted. A job that simply never finishes goes through the age-out in `_media_job_stalled`,
+    which wrote `status: failed` and nothing else — no `billed_usd`, no quarantine. The same
+    render, the same money, two different answers, and the one the age-out gave is the one that
+    made the session read $0.00 and put the dead model back at rank 1 for the next call.
+    """
+    if exit_ == "age-out":
+        monkeypatch.setattr(media_plane, "JOB_MAX_S", 0)
+        answer = {"status": "IN_PROGRESS"}
+    else:
+        answer = {"status": "FAILURE", "message": "the render failed upstream"}
+    hostile.poll_answer = httpx.Response(200, json={"code": "success", "data": answer})
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    # MiniMax-Hailuo-2.3 is the first video candidate with a measured price ($0.28).
+    app._media_quarantine["dreamina-seedance-2-5-hc"] = time.time() + 9999
+    jid = _ok(_call(client, _cred(hid, sid), "generate_video",
+                    {"prompt": "a cat", "seconds": 6}))["job_id"]
+    assert asyncio.run(app._media_job_get(jid))["model"] == "MiniMax-Hailuo-2.3"
+    _sweep(jid)
+    assert app._media_quarantine.get("MiniMax-Hailuo-2.3", 0) > time.time(), (
+        f"[{exit_}] a render that was paid for and delivered nothing is still first in the chain")
+    assert asyncio.run(app._media_spend(sid)) >= 0.28, (
+        f"[{exit_}] $0.28 of render was bought and the session reports "
+        f"${asyncio.run(app._media_spend(sid)):.2f}")
+
+
+def test_v41e_three_calls_that_all_age_out_do_not_buy_the_same_model_three_times(client, kit,
+                                                                                 hostile,
+                                                                                 monkeypatch):
+    """The symptom the exit above produces in a session: measured, three sequential generate_video
+    calls bought dreamina-seedance-2-5-hc three times, because ageing out stood nothing down."""
+    monkeypatch.setattr(media_plane, "JOB_MAX_S", 0)
+    hostile.poll_answer = httpx.Response(200, json={"code": "success",
+                                                    "data": {"status": "IN_PROGRESS"}})
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    tok = _cred(hid, sid)
+    picked = []
+    for _ in range(3):
+        jid = _ok(_call(client, tok, "generate_video",
+                        {"prompt": "a cat", "seconds": 6}))["job_id"]
+        picked.append(asyncio.run(app._media_job_get(jid))["model"])
+        _sweep(jid)
+        assert asyncio.run(app._media_job_get(jid))["status"] == "failed"
+    assert len(set(picked)) == 3, (
+        f"a model that was paid for and never delivered was bought again: {picked}")
+
+
+def test_v41f_a_backing_store_blip_in_the_liveness_check_leaves_the_job_due_later(client, kit,
+                                                                                  hostile,
+                                                                                  monkeypatch):
+    """The invariant is stated one call too narrowly. `_media_job_live` runs BEFORE the try that
+    carries "a polled job comes out terminal or due later", and it catches only HTTPException —
+    so a backing-store blip escapes, `next_poll_at` is never bumped, and the sweeper re-reads the
+    same job every ten seconds for as long as the gateway runs. No provider call and no key on
+    this path: this is graph churn and a placeholder that never resolves, not spend.
+    """
+    hid = _launch(client, kit)
+    sid = _session(hid)
+    jid = _ok(_call(client, _cred(hid, sid), "generate_video",
+                    {"prompt": "a cat", "seconds": 6}))["job_id"]
+
+    async def blip(_hid):
+        raise RuntimeError("the backing store hiccuped")
+
+    monkeypatch.setattr(app, "_vertex_get", blip)
+    for _ in range(5):
+        _sweep(jid)
+    job = asyncio.run(app._media_job_get(jid))
+    assert job["status"] != "running" or job["next_poll_at"] > time.time() * 1000, (
+        f"five sweeps with a blipping store left the job due immediately for ever: {job}")
+
+
+def test_v41g_no_test_in_this_suite_asserts_on_a_coroutine_nobody_awaited(client500):
+    """A DEAD TEST IS WORSE THAN A MISSING ONE, and this is the way they die here.
+
+    Half of what is under test is `async def`, and a coroutine object is truthy: the moment a
+    checked function goes async, `assert app._provider_url_check(u)` stops calling anything and
+    starts asserting that an object exists. It passes for ever, the warning scrolls past, and the
+    property it was written for is unguarded. Found live: three such assertions, two of which
+    were the only cover a rule had.
+
+    `client500` is here so this file's app is imported the same way as everywhere else.
+    """
+    async_names = {}
+    for mod in (app, media_plane):
+        tree = ast.parse(Path(mod.__file__).read_text())
+        async_names[Path(mod.__file__).stem] = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
+    alias = {"app": "app", "media_plane": "media_plane"}
+
+    dead = []
+    for path in sorted(Path(__file__).parent.glob("test_*.py")):
+        tree = ast.parse(path.read_text())
+        settled = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Await):
+                settled.add(id(n.value))
+            if isinstance(n, ast.Call):
+                fn = n.func
+                nm = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                if nm in ("run", "gather", "create_task", "run_until_complete", "wait_for",
+                          "ensure_future"):
+                    # Everything underneath one of these IS driven — including a comprehension
+                    # inside a gather, which is how the concurrency tests here are written.
+                    for arg in list(n.args) + [k.value for k in n.keywords]:
+                        settled.update(id(x) for x in ast.walk(arg))
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and isinstance(n.func.value, ast.Name)):
+                continue
+            mod, name = alias.get(n.func.value.id), n.func.attr
+            if not mod or name not in async_names.get(mod, ()) or id(n) in settled:
+                continue
+            dead.append(f"{path.name}:{n.lineno}: {mod}.{name}(…) is never awaited")
+    assert not dead, (
+        "these assertions are about a coroutine object and not about what it does:\n  "
+        + "\n  ".join(dead))

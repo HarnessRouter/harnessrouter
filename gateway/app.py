@@ -6654,12 +6654,20 @@ async def _ssrf_check(url: str) -> str | None:
     return await _internal_target(u.hostname, u.port or 443)
 
 
-# 100.64.0.0/10 — carrier-grade NAT, and what a managed Kubernetes cluster hands its pods and its
-# nodes. Python's ipaddress does not call it private (it is not RFC1918), so it was the one whole
-# range this classifier let through: a provider naming a pod address had this server fetching from
-# inside its own cluster. Named here rather than folded into `not ip.is_global`, because that would
-# also reject 192.0.0.0/24 and the documentation ranges and nobody would know why.
-_CGNAT = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("::ffff:100.64.0.0/106"))
+# The internal ranges Python's own classifiers do not call internal. Named here rather than folded
+# into `not ip.is_global`, because that would also reject 192.0.0.0/24 and the documentation ranges
+# and nobody would know why.
+#
+#   100.64.0.0/10  carrier-grade NAT, and what a managed Kubernetes cluster hands its pods and its
+#                  nodes. Not RFC1918, so `is_private` is False: it was the one whole IPv4 range
+#                  this classifier let through, and a provider naming a pod address had this
+#                  server fetching from inside its own cluster.
+#   fec0::/10      IPv6 site-local. Deprecated by RFC 3879, which is exactly why Python answers
+#                  False to both `is_private` and `is_reserved` for it — the same hole as CGNAT,
+#                  for the same reason, on the other address family.
+_INTERNAL_NETS = (ipaddress.ip_network("100.64.0.0/10"),
+                  ipaddress.ip_network("::ffff:100.64.0.0/106"),
+                  ipaddress.ip_network("fec0::/10"))
 
 
 async def _internal_target(host: str, port: int) -> str | None:
@@ -6708,7 +6716,7 @@ async def _internal_target(host: str, port: int) -> str | None:
         ip = ipaddress.ip_address(info[4][0])
         if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
                 or ip.is_multicast or ip.is_unspecified
-                or any(ip in net for net in _CGNAT if ip.version == net.version)):
+                or any(ip in net for net in _INTERNAL_NETS if ip.version == net.version)):
             return "target resolves to a disallowed (internal) address"
     return None
 
@@ -7631,16 +7639,177 @@ def _media_json(body: bytes):
         return None
 
 
-async def _media_call(cand: dict, prov: dict, params: dict) -> tuple[str, object, dict]:
-    """One provider call: (task_id, payload, response doc). The ONLY blocking provider call.
+# How many times ONE REQUEST may fall down its chain after a candidate has already billed. One.
+# Every advance is another full-price render, so a second one is the agent's decision, made with
+# the first one's cost in front of it.
+#
+# ONE BUDGET, TWO WALKS. A request can fall down the chain in two places — at SUBMIT, when a
+# candidate answers 200 with nothing in it, and later at POLL, when a render that billed comes
+# back failed — and they are the same event to whoever is paying. What the submit walk spent is
+# therefore written onto the job (`advances`), which is the only thing that outlives the tool call
+# and the only place the poll walk can read it from.
+_MEDIA_MAX_ADVANCES = 1
+
+# How many outbound submits ONE TOOL CALL's submit walk may make AT ALL, whatever the provider
+# answers to any of them. Separate from the budget above because it is a different fact: that one
+# is about money and stops at the second render bought; this one is about the walk. A candidate
+# that answers 4xx costs nothing and IS walked past — deliberately, because leaving a broken model
+# in the chain
+# is what let the owner's preferred one start working again on its own — but "costs nothing" is
+# not "free": each submit carries the provider key out of this process, and a chain eleven long
+# meant one tool call could make eleven of them. Four is the measured outage (one broken model at
+# rank 1) with room, and a long way short of any chain in the catalog.
+#
+# WHERE IT IS CLAIMED, and why that is the whole of the fix: at `_media_call`, which is the only
+# place in this process that opens a socket to a provider. It used to be claimed at the top of
+# `_media_chain`'s loop, which counted the WALK — so `_media_job_resubmit`, which opens its own
+# submit and which a synchronous render reaches inside the very same tool call, made a fifth one
+# that no ceiling saw. Counting walks is what let four rounds of this bug each be "fixed" in the
+# branch beside the one that overspent. A ceiling written in submits has to be counted in submits.
+#
+# WHAT IT DOES NOT BOUND, said here rather than discovered later. A ceiling that claims more than
+# it counts is how the last rounds of this survived, so: this number bounds a SUBMIT WALK, not a
+# request. A poll pass spends out of `for_job`, which seeds `billed` off the job and leaves
+# `submits` at zero — one budget per job, so a request that polls N jobs may make N submits, one
+# each. That is bounded by `_MEDIA_MAX_ADVANCES` per job and so the money rule holds, but the
+# three poll entries (check_jobs, the sweeper, the session job listing) have no per-request cap on
+# how many jobs they may advance in one pass. Closing that means a budget that lives for the
+# request rather than for the job, and threading it through the sweeper too.
+#
+# WHAT THIS COSTS, so the next reader does not have to find out the hard way: a free refusal is
+# never quarantined, so every call starts the walk at rank 1 again. If the FIRST FOUR candidates
+# all answer 4xx, no call ever reaches the fifth and the capability is refused until one of the
+# four recovers. That is judged acceptable because the chains interleave providers on purpose —
+# the first four of text_to_image span three of them — so four consecutive refusals means the
+# relay itself is down, and the fifth candidate would not have answered either. If a chain ever
+# stacks one provider's models at the top, this number and that fact have to be looked at
+# together.
+_MEDIA_MAX_SUBMITS = 4
+
+
+class _MediaBudget:
+    """What one request may buy and what it may try, and the ONE PLACE that decides it.
+
+    THE COUNT LIVES WHERE THE SOCKET IS, NOT WHERE THE EXITS ARE. This same overspend was closed
+    four times and found four times, each time in the branch beside the one that was patched: the
+    poll walk was capped and the submit walk was not; then `except MediaEmpty` was capped and
+    `except MediaError` was not; then the gate moved to the submit walk's loop and
+    `_media_job_resubmit` went on opening its own socket beside it. Every one of those fixes
+    counted a WALK. What costs money is a SUBMIT, so a submit is what is counted, and it is
+    claimed in `_media_call` — before the request goes out, in the one function that can send one.
+    The ceiling therefore holds for an answer nobody has imagined, for an exception type invented
+    next year, and for a caller that has never heard of this class.
+
+    A CLAIM IS BILLABLE UNTIL THE ANSWER SAYS OTHERWISE. `claim` counts the submit against the
+    money budget immediately and `free` gives it back only when the answer says nothing ran, which
+    is the only evidence there is. That ordering is also what makes the ceiling hold when an agent
+    fires four generate calls at once: the claim and the check happen with no await between them,
+    so two concurrent walks cannot both see the last slot.
+    """
+
+    __slots__ = ("submits", "billed", "sharers")
+
+    def __init__(self) -> None:
+        self.submits = 0
+        self.billed = 0
+        self.sharers = 0
+
+    @classmethod
+    def for_job(cls, job: dict) -> "_MediaBudget":
+        """The budget a POLL pass spends out of.
+
+        A poll happens minutes after the tool call that started the job, in some other request —
+        usually the sweeper's, with no agent anywhere near it — so that call's budget is long
+        gone. What survives is on the job: `advances` is what the submit walk and any earlier poll
+        already bought, and seeding it back here is what keeps the two walks sharing ONE ceiling
+        instead of each keeping a private count of the same money.
+
+        ONLY THE MONEY CEILING CARRIES OVER. `submits` starts at zero because a poll is a new
+        request and nothing on the job records how many sockets an earlier one opened. So on this
+        path it is `billed` that refuses, and `_MEDIA_MAX_SUBMITS` never does — see the note on
+        that constant for what is therefore still uncapped.
+        """
+        b = cls()
+        b.billed = int(job.get("advances") or 0)
+        return b
+
+    def claim(self) -> str:
+        """"" if another outbound submit is allowed, else the clause saying why it is not."""
+        if self.billed > _MEDIA_MAX_ADVANCES:
+            return "billed"
+        if self.submits >= _MEDIA_MAX_SUBMITS:
+            return "tried"
+        self.submits += 1
+        self.billed += 1
+        return ""
+
+    def free(self) -> None:
+        """The answer said nothing ran, so the claim goes back."""
+        self.billed -= 1
+
+
+class _MediaSpent(media_plane.MediaError):
+    """The budget refused another outbound submit. Carries WHICH ceiling said no.
+
+    A MediaError deliberately. The two callers that know about the budget catch this first and say
+    something better; any caller that does not — including one written next year by somebody who
+    read none of this — still turns it into a sentence the agent can read rather than an HTTP 500.
+    """
+
+    def __init__(self, stopped: str):
+        super().__init__(
+            "this request has already bought every render one request may buy"
+            if stopped == "billed" else
+            f"this request has made the {_MEDIA_MAX_SUBMITS} attempts it is allowed")
+        self.stopped = stopped
+
+
+def _media_unusable(r: httpx.Response | None, e: Exception) -> media_plane.MediaError:
+    """Whatever a provider call raised that was not already a MediaError, said in the media
+    plane's own terms.
+
+    ONE QUESTION DECIDES IT, and it is the same one `_read_submit` asks: DID THE PROVIDER ANSWER?
+    No response at all is a refusal and nothing ran. A status of 400 or worse is a refusal too.
+    A 200 whose body this could not read is the expensive one — the provider answered, so it
+    billed — and it gets exactly what a 200 with no media in it gets: banked, and the model stood
+    down. That last case is what a relay renaming a field looks like from in here, which is the
+    single most common thing that happens to this code.
+    """
+    if r is None:
+        return media_plane.MediaRefused(f"the provider did not answer ({type(e).__name__})")
+    if r.status_code >= 400:
+        return media_plane.MediaRefused(media_plane.provider_message(None, r.status_code))
+    return media_plane.MediaEmpty(f"the provider answered 200 with a body this could not read "
+                                  f"({type(e).__name__}) — it billed and returned nothing usable")
+
+
+async def _media_call(cand: dict, prov: dict, params: dict,
+                      budget: _MediaBudget) -> tuple[str, object, dict]:
+    """One provider call: (task_id, payload, response doc). The ONLY blocking provider call, the
+    ONE place an outbound submit is made, and therefore the one place the budget is claimed.
 
     A shape that hands back a task id returns in about a second. A synchronous shape renders
     inside this call, which is why the timeout is the candidate's own measured latency with room
     rather than one number for a four-second model and a ninety-second one.
+
+    THE CLAIM IS HERE BECAUSE THE SOCKET IS HERE. Every earlier cap belonged to a walk, and the
+    submit that overspent came from beside it — from `_media_job_resubmit`, which a synchronous
+    render reaches INSIDE THE SAME TOOL CALL. Anything that submits comes through here, so
+    anything that submits is counted, whether or not whoever wrote it knew there was a count.
+
+    THE ANSWER IS INTERPRETED INSIDE THE `try`, BODY AND ALL. `read_submit` used to be called one
+    line below it: a renamed provider field then raised AttributeError, which is outside the
+    MediaError tree, so it went past every handler above and left the route as an HTTP 500 —
+    nothing banked, nothing stood down, no sentence for the agent, and a render paid for. What
+    each kind of failure MEANS is `_media_unusable`'s job.
     """
     sub = media_plane.build_submit(cand, prov["base_url"], params)
     headers = {"authorization": f"Bearer {prov['api_key']}", "content-type": "application/json"}
     cl = _media_client()
+    stopped = budget.claim()
+    if stopped:
+        raise _MediaSpent(stopped)
+    r = None
     try:
         if sub.stream:
             # gpt-audio refuses without stream:true and then delivers audio in deltas.
@@ -7655,95 +7824,28 @@ async def _media_call(cand: dict, prov: dict, params: dict) -> tuple[str, object
             return "", media_plane.read_stream_audio(cand, chunks), {}
         r = await cl.request(sub.method, sub.url, json=sub.body, headers=headers,
                              timeout=sub.timeout)
-    except (media_plane.MediaError, HTTPException):
+        doc = _media_json(r.content)
+        task_id, payload = media_plane.read_submit(cand, r.status_code, doc)
+    except HTTPException:
         raise
-    except Exception as e:  # noqa: BLE001 — a timeout or a reset is a refusal, not a crash
-        raise media_plane.MediaRefused(
-            f"the provider did not answer ({type(e).__name__})") from e
-    doc = _media_json(r.content)
-    task_id, payload = media_plane.read_submit(cand, r.status_code, doc)
+    except Exception as e:  # noqa: BLE001 — a refusal, a dead socket, or a body we cannot read
+        err = e if isinstance(e, media_plane.MediaError) else _media_unusable(r, e)
+        if not isinstance(err, media_plane.MediaEmpty):
+            # Nothing ran, so the claim goes back and the model stays in the chain — retrying it
+            # is free, and that is precisely what lets a model the relay has broken sit at rank 1
+            # and start working the day the mapping is fixed, with no code change and no cost.
+            budget.free()
+        elif err is not e:
+            # A 200 this code could not interpret is an OPERATIONAL event, not just a failed call:
+            # it is what a relay renaming a field looks like from in here, and it is now costing
+            # money one render at a time. The model is named so the operator can act on it; the
+            # body is not logged, because a provider document is not ours to write down.
+            print(f"[media] {cand.get('model')}: a 200 this could not read "
+                  f"({type(e).__name__})", flush=True)
+        if err is not e:
+            raise err from e
+        raise
     return task_id, payload, doc if isinstance(doc, dict) else {}
-
-
-# How many times ONE REQUEST may fall down its chain after a candidate has already billed. One.
-# Every advance is another full-price render, so a second one is the agent's decision, made with
-# the first one's cost in front of it.
-#
-# ONE BUDGET, TWO WALKS. A request can fall down the chain in two places — at SUBMIT, when a
-# candidate answers 200 with nothing in it, and later at POLL, when a render that billed comes
-# back failed — and they are the same event to whoever is paying. What the submit walk spent is
-# therefore written onto the job (`advances`), which is the only thing that outlives the tool call
-# and the only place the poll walk can read it from.
-_MEDIA_MAX_ADVANCES = 1
-
-# How many outbound submits ONE SUBMIT WALK may make, whatever the provider answers to any of
-# them. Separate from the budget above because it is a different fact: that one is about money and
-# stops at the second render bought; this one is about the walk itself. A candidate that answers
-# 4xx costs nothing and IS walked past — deliberately, because leaving a broken model in the chain
-# is what let the owner's preferred one start working again on its own — but "costs nothing" is
-# not "free": each submit carries the provider key out of this process, and a chain eleven long
-# meant one tool call could make eleven of them. Four is the measured outage (one broken model at
-# rank 1) with room, and a long way short of any chain in the catalog.
-#
-# WHERE IT DOES NOT HOLD YET, said plainly because a ceiling that claims more than it counts is
-# how the last three rounds of this bug survived: it is claimed at exactly one place, the top of
-# `_media_chain`'s loop, so it bounds the SUBMIT walk and nothing else. `_media_job_resubmit`
-# opens its own socket without asking, and a synchronous shape whose file will not land reaches it
-# inside the same tool call — so a chain with four or more candidates can still make five. Closing
-# that means claiming the budget in `_media_call`, which is the one place every outbound submit
-# actually passes through; it is not what this does.
-#
-# WHAT THIS COSTS, so the next reader does not have to find out the hard way: a free refusal is
-# never quarantined, so every call starts the walk at rank 1 again. If the FIRST FOUR candidates
-# all answer 4xx, no call ever reaches the fifth and the capability is refused until one of the
-# four recovers. That is judged acceptable because the chains interleave providers on purpose —
-# the first four of text_to_image span three of them — so four consecutive refusals means the
-# relay itself is down, and the fifth candidate would not have answered either. If a chain ever
-# stacks one provider's models at the top, this number and that fact have to be looked at
-# together.
-_MEDIA_MAX_SUBMITS = 4
-
-
-class _MediaBudget:
-    """What one generate call may buy and what it may try, and the ONE PLACE that decides it.
-
-    THE COUNT LIVES WHERE THE LOOP IS, NOT WHERE THE EXITS ARE. This same overspend was closed
-    twice and found three times, each time in the branch beside the one that was patched: the
-    poll walk was capped and the submit walk was not; then `except MediaEmpty` was capped and
-    `except MediaError` was not; then `_media_job_resubmit` turned out to be doing the same
-    bookkeeping by hand. Every one of those fixes was a check in an `except`, so every new failure
-    shape arrived through a branch nobody had capped yet. A submit is claimed HERE, before the
-    request goes out, so the ceiling holds for an answer nobody has imagined and for an exception
-    type invented next year.
-
-    A CLAIM IS BILLABLE UNTIL THE ANSWER SAYS OTHERWISE. `claim` counts the submit against the
-    money budget immediately and `free` gives it back only when the provider answers with a status
-    code, which is the only evidence there is that it did not do the work. That ordering is also
-    what makes the ceiling hold when an agent fires four generate calls at once: the claim and the
-    check happen with no await between them, so two concurrent walks cannot both see the last
-    slot.
-    """
-
-    __slots__ = ("submits", "billed", "sharers")
-
-    def __init__(self) -> None:
-        self.submits = 0
-        self.billed = 0
-        self.sharers = 0
-
-    def claim(self) -> str:
-        """"" if another outbound submit is allowed, else the clause saying why it is not."""
-        if self.billed > _MEDIA_MAX_ADVANCES:
-            return "billed"
-        if self.submits >= _MEDIA_MAX_SUBMITS:
-            return "tried"
-        self.submits += 1
-        self.billed += 1
-        return ""
-
-    def free(self) -> None:
-        """The provider said no with a status code: nothing ran, so the claim goes back."""
-        self.billed -= 1
 
 
 # One budget per generate call — SHARED WITH EVERY CALL THAT OVERLAPS IT ON THE SAME SESSION.
@@ -7813,38 +7915,46 @@ async def _media_chain(cap: str, params: dict, providers: dict,
     the walk cost along with what it produced, because the job that comes out of it has to carry
     the spend forward.
 
-    ONE GATE, ASKED BEFORE THE SOCKET IS OPENED. Whether this walk may make another submit is a
-    fact about the walk, so it is asked once, at the top of the loop, about the budget — never
-    about the last answer and never inside an `except`. What the answer WAS decides only two
-    things, and there is one branch for both: a 200 that gave nothing billed (write it down, stand
-    the model down, keep the claim), and a status code did not (give the claim back, and leave the
-    model in the chain — retrying it is free, and that is precisely what lets
-    `dreamina-seedance-2-5-hc` sit permanently at rank 1 and start working the day the relay's
-    mapping is fixed, with no code change and no cost).
+    THE WALK DOES NOT COUNT ITSELF. Whether another submit may be made is asked inside
+    `_media_call`, because that is where the socket is — a gate here would bound this loop and
+    nothing else, which is exactly how the last four rounds of this bug each survived their own
+    fix. This loop only says what the walk is TOLD: `_MediaSpent` means the request has spent
+    what a request may spend, and it ends the walk with the same refusal a chain that ran out of
+    candidates gets.
+
+    What the answer WAS decides only one thing here: a 200 that gave nothing billed, so it is
+    written down and the model is stood down. A status code billed nothing, so the model stays in
+    the chain — retrying it is free, and that is precisely what lets `dreamina-seedance-2-5-hc`
+    sit permanently at rank 1 and start working the day the relay's mapping is fixed, with no code
+    change and no cost. The money that goes with either answer is the budget's, in `_media_call`.
     """
     tally: dict = {"attempts": [], "billed_usd": 0.0}
     tried: set[str] = set()
     while True:
         cand, skipped = media_plane.resolve(cap, params, set(providers), _media_quarantine,
                                             exclude=tried)
-        stopped = budget.claim() if cand else "chain"
-        if stopped:
-            reasons = [f"{a['model']} — {a['error']}" for a in tally["attempts"]] + skipped
-            billed = sum(1 for a in tally["attempts"] if a.get("billed"))
-            raise _MediaNoModel(_media_walk_over(cap, reasons, billed, stopped, budget.billed),
-                                tally["attempts"], float(tally["billed_usd"]))
+        if not cand:
+            stopped = "chain"
+            break
         model = str(cand.get("model") or "")
         tried.add(model)
         try:
-            task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params)
+            task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params,
+                                                      budget)
+        except _MediaSpent as e:
+            stopped = e.stopped
+            break
         except media_plane.MediaError as e:
             if isinstance(e, media_plane.MediaEmpty):
                 _media_billed(tally, model, media_plane.estimated_usd(cand) or 0.0, str(e))
             else:
-                budget.free()
                 tally["attempts"].append({"model": model, "error": str(e)})
             continue
         return cand, task_id, payload, doc, tally
+    reasons = [f"{a['model']} — {a['error']}" for a in tally["attempts"]] + skipped
+    billed = sum(1 for a in tally["attempts"] if a.get("billed"))
+    raise _MediaNoModel(_media_walk_over(cap, reasons, billed, stopped, budget.billed),
+                        tally["attempts"], float(tally["billed_usd"]))
 
 
 # ── the job store ─────────────────────────────────────────────────────────────────────────────
@@ -8214,8 +8324,6 @@ async def _media_job_advance(job: dict) -> dict:
         return job
     if float(job.get("next_poll_at") or 0) > time.time() * 1000:
         return job
-    if not await _media_job_live(job):
-        return job
     # Serialise from here: everything below can DOWNLOAD AND STORE, and those callers overlap.
     async with _media_job_lock(str(job.get("id") or "")):
         fresh = await _media_job_get(str(job.get("id") or "")) or job
@@ -8226,15 +8334,23 @@ async def _media_job_advance(job: dict) -> dict:
         if float(fresh.get("next_poll_at") or 0) > time.time() * 1000:
             return fresh
         try:
+            # INSIDE the try, because the liveness check reads the backing store and the store is
+            # a thing that blips. It answered False for "switched off" and let a RuntimeError past
+            # for "could not tell" — and the caller could not tell those apart either, so the job
+            # kept its old `next_poll_at`, was due immediately, and was re-read on every sweep for
+            # as long as the gateway ran. Nothing spends on that path; it is graph churn and a
+            # placeholder that never resolves, which is why it sat there.
+            if not await _media_job_live(fresh):
+                return fresh
             return await _media_job_poll(fresh)
         except Exception as e:  # noqa: BLE001
             # THE INVARIANT OF THIS FUNCTION, and the reason it is stated once here rather than
-            # guarded at each raise inside the poll: a job that was polled comes out of it either
-            # TERMINAL or DUE LATER. `_media_job_poll` bumps the backoff on every path it returns
-            # by; if it raised instead, nobody did — and every caller of this function (the
-            # sweeper, check_jobs, the browser's jobs route) swallows the exception, so the job
-            # was re-polled on the very next sweep, ten seconds later, for ever. Whatever raised,
-            # the backoff still applies and JOB_MAX_S still ends it.
+            # guarded at each raise inside the poll: a job this function looked at comes out of it
+            # either TERMINAL or DUE LATER — or untouched, when the answer was a definite "this
+            # deployment may not spend". `_media_job_poll` bumps the backoff on every path it
+            # returns by; if anything in here raised instead, nobody did — and every caller of
+            # this function (the sweeper, check_jobs, the browser's jobs route) swallows the
+            # exception. Whatever raised, the backoff still applies and JOB_MAX_S still ends it.
             print(f"[media] poll of {fresh.get('id')} raised {type(e).__name__}: {e}", flush=True)
             return await _media_job_stalled(fresh)
 
@@ -8269,7 +8385,7 @@ async def _media_job_poll(job: dict) -> dict:
             status, err = "failed", str(e)
 
     if status == "failed":
-        await _media_job_billable_failure(job, err)
+        await _media_job_billable_failure(job, err, _MediaBudget.for_job(job))
         return job
 
     # WHAT THE LAST POLL SAID, kept beside the status rather than in it. `unknown` is never a
@@ -8292,6 +8408,20 @@ async def _media_job_stalled(job: dict, back_off: bool = True) -> dict:
         job["poll_backoff_s"] = min(60, int(job.get("poll_backoff_s") or 20) * 2)
     age_s = (time.time() * 1000 - float(job.get("created_at") or 0)) / 1000.0
     if age_s > media_plane.JOB_MAX_S:
+        # THE SAME ANSWER THE OTHER EXIT GIVES ABOUT THE SAME EVENT. This job has a provider task
+        # id, which means a submit came back 200 — and a 200 is the provider answering, which is
+        # the only evidence there is that it billed. A poll that answers FAILURE banks that money
+        # and stands the model down (`_media_job_billable_failure`); ageing out wrote `failed` and
+        # nothing else, so the session read $0.00 for a render it paid for and the model that
+        # never delivered was still at rank 1 for the next call — measured, three sequential
+        # generate_video calls bought the same dead model three times.
+        #
+        # It does NOT advance the chain, and that is the one place the two exits differ on
+        # purpose: this job has run out of the time a job gets, so a render started here has none
+        # left to land in. It would be a second full-price render bought at the moment we decided
+        # the first one was too late.
+        _media_billed(job, str(job.get("model") or ""), float(job.get("usd") or 0.0),
+                      "the provider never finished this render")
         job.update({"status": "failed", "error": "The provider never finished this render."})
         await _media_job_save(job)
         await _media_element_failed(job)
@@ -8348,7 +8478,7 @@ def _media_billed(job: dict, model: str, usd: float, err: str) -> None:
     job["billed_usd"] = round(float(job.get("billed_usd") or 0.0) + float(usd or 0.0), 6)
 
 
-async def _media_job_billable_failure(job: dict, err: str) -> bool:
+async def _media_job_billable_failure(job: dict, err: str, budget: _MediaBudget) -> bool:
     """A candidate that had already billed has failed. Record it, stand it down, count what it
     cost, and advance the chain EXACTLY ONCE PER JOB.
 
@@ -8361,11 +8491,17 @@ async def _media_job_billable_failure(job: dict, err: str) -> bool:
     Shared by the poll path and by a synchronous render whose file turned out not to be a file,
     because they are the same event. `advances` may already be non-zero when this is first
     reached: the submit walk spends out of the same budget and writes what it spent onto the job.
+
+    THE BUDGET IS PASSED IN, never made here. A synchronous render reaches this INSIDE the tool
+    call that started it, and the submit it then makes is one of that call's — it is how one
+    generate_image made five. The poll path is a different request and hands in the budget the
+    job carries (`_MediaBudget.for_job`). Either way the submit itself is claimed in
+    `_media_call`; this only decides whether one is worth trying.
     """
     _media_billed(job, str(job.get("model") or ""), float(job.get("usd") or 0.0), err)
     if int(job.get("advances") or 0) < _MEDIA_MAX_ADVANCES:
         job["advances"] = int(job.get("advances") or 0) + 1
-        if await _media_job_resubmit(job):
+        if await _media_job_resubmit(job, budget):
             return True
     else:
         # advances + this one. NOT len(attempts): that also counts candidates that were refused
@@ -8378,8 +8514,13 @@ async def _media_job_billable_failure(job: dict, err: str) -> bool:
     return False
 
 
-async def _media_job_resubmit(job: dict) -> bool:
-    """After a billable failure, try the next candidate — once. True when one took the job."""
+async def _media_job_resubmit(job: dict, budget: _MediaBudget) -> bool:
+    """After a billable failure, try the next candidate — once. True when one took the job.
+
+    The budget is the caller's request's, and the submit below is claimed out of it in
+    `_media_call` like every other. This function opening its own socket without asking anyone is
+    what made one tool call's fifth submit.
+    """
     providers = await _media_providers()
     tried = {str(a.get("model") or "") for a in job.get("attempts") or []}
     tried.add(str(job.get("model") or ""))
@@ -8401,7 +8542,12 @@ async def _media_job_resubmit(job: dict) -> bool:
     model = str(cand.get("model") or "")
     usd = media_plane.estimated_usd(cand) or 0.0
     try:
-        task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params)
+        task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params,
+                                                  budget)
+    except _MediaSpent:
+        # This request has spent what a request may spend. No submit was made, so there is nothing
+        # to write down about a candidate — the job fails with the failure that brought us here.
+        return False
     except media_plane.MediaError as e:
         # ONE BRANCH, asking the same question `_media_chain` asks, in the same words. This is the
         # place round 2 found doing this bookkeeping by hand, and a hand-written copy of a rule is
@@ -8470,7 +8616,7 @@ async def _media_generate(cap: str, params: dict, hid: str, sid: str, org: str,
     # A synchronous shape rendered inside the submit. Reporting it as "running" would be a lie the
     # very next call exposes, so the job carries the truth and the agent's loop is unchanged.
     if not await _media_land_payload(job, payload):
-        await _media_job_billable_failure(job, str(job.get("error") or ""))
+        await _media_job_billable_failure(job, str(job.get("error") or ""), budget)
     return job
 
 
