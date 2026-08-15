@@ -7587,7 +7587,7 @@ def _media_client() -> httpx.AsyncClient:
 
 
 async def _media_providers() -> dict[str, dict]:
-    """{provider: {api_key, base_url}} for every catalog provider this deployment can reach.
+    """{provider: {api_key, base_url, auth}} for every catalog provider this deployment can reach.
 
     Read HERE, at the moment of use, from the integrations document — the same document the model
     broker reads. The key is returned to this process and to nothing else: it is never written into
@@ -7607,7 +7607,10 @@ async def _media_providers() -> dict[str, dict]:
             base = str(cfg.get("base_url") or (pmeta or {}).get("base_url") or "").rstrip("/")
             if not base:
                 continue
-            out[pname] = {"api_key": key, "base_url": base}
+            # `auth` travels with the key, from the same entry that says where to send it. The
+            # call site then has one thing to hold and no reason to ask which provider this is.
+            out[pname] = {"api_key": key, "base_url": base,
+                          "auth": (pmeta or {}).get("auth")}
             # The one place the key is resolved is the one place that can say what must never be
             # relayed back. Every provider sentence this process produces is scrubbed of it —
             # a 401 quotes the key it rejected, and that sentence reaches an agent, a vertex and
@@ -7632,11 +7635,13 @@ class _MediaNoModel(Exception):
         self.text, self.attempts, self.billed_usd = text, attempts, billed_usd
 
 
-def _media_json(body: bytes):
-    try:
-        return json.loads(body or b"{}")
-    except Exception:  # noqa: BLE001
-        return None
+def _media_doc(r: httpx.Response, body: bytes):
+    """One provider response, classified before it is read — the document, or the media itself.
+
+    The classification is `media_plane.response_doc`, beside the readers that consume it, because
+    "what did the provider send" and "what does it mean" are one question asked twice otherwise.
+    """
+    return media_plane.response_doc(r.headers.get("content-type", ""), body)
 
 
 # How many times ONE REQUEST may fall down its chain after a candidate has already billed. One.
@@ -7831,7 +7836,12 @@ async def _media_call(cand: dict, prov: dict, params: dict,
     each kind of failure MEANS is `_media_unusable`'s job.
     """
     sub = media_plane.build_submit(cand, prov["base_url"], params)
-    headers = {"authorization": f"Bearer {prov['api_key']}", "content-type": "application/json"}
+    # SIGNED IN THIS PROVIDER'S OWN STYLE, and the style came off the provider entry beside its
+    # base url — see media_plane.auth_of. There is no branch here on WHICH provider this is, and
+    # that is deliberate: this function is the one place every outbound submit passes through, and
+    # everything it has learnt to special-case has cost a round of the budget bug. It builds one
+    # header out of one dict; a provider with a third auth style is a catalog edit.
+    headers = {**media_plane.auth_headers(prov), "content-type": "application/json"}
     cl = _media_client()
     stopped = budget.claim()
     if stopped:
@@ -7845,13 +7855,14 @@ async def _media_call(cand: dict, prov: dict, params: dict,
                                  timeout=sub.timeout) as r:
                 if r.status_code >= 400:
                     raise media_plane.MediaRefused(
-                        media_plane.provider_message(_media_json(await r.aread()), r.status_code))
+                        media_plane.provider_message(_media_doc(r, await r.aread()),
+                                                     r.status_code))
                 async for line in r.aiter_lines():
                     chunks.append(line)
             return "", media_plane.read_stream_audio(cand, chunks), {}
         r = await cl.request(sub.method, sub.url, json=sub.body, headers=headers,
                              timeout=sub.timeout)
-        doc = _media_json(r.content)
+        doc = _media_doc(r, r.content)
         task_id, payload = media_plane.read_submit(cand, r.status_code, doc)
     except HTTPException:
         raise
@@ -8402,10 +8413,10 @@ async def _media_job_poll(job: dict, budget: _MediaBudget) -> dict:
     method, url = media_plane.build_poll(cand, prov["base_url"], str(job["provider_task_id"]))
     try:
         r = await _media_client().request(
-            method, url, headers={"authorization": f"Bearer {prov['api_key']}"},
+            method, url, headers=media_plane.auth_headers(prov),
             timeout=media_plane.POLL_TIMEOUT_S)
         status, payload, err, progress = media_plane.read_poll(cand, r.status_code,
-                                                               _media_json(r.content))
+                                                               _media_doc(r, r.content))
     except Exception:  # noqa: BLE001 — a poll that did not answer is unknown, never failed
         status, payload, err, progress = "unknown", None, "", ""
 
@@ -8797,11 +8808,17 @@ _MEDIA_MCP_TOOLS = [
                          "shot": {"type": "string", "maxLength": 60}}}},
 
     {"name": "generate_speech",
-     "description": ("Speak a line. The models available here ANSWER a prompt rather than reading "
-                     "it, so check_jobs returns what was actually said."),
+     "description": ("Speak a line. The result names the model and the voice that read it — and "
+                     "if the model that ran answers prompts instead of reading them, it says so "
+                     "and returns what was actually said."),
      "inputSchema": {"type": "object", "required": ["text"], "additionalProperties": False,
                      "properties": {"text": {"type": "string", "maxLength": 4000},
-                                    "voice": {"type": "string", "default": "alloy"},
+                                    "voice": {"type": "string",
+                                              "description": ("A voice name from "
+                                                              "list_capabilities. Leave it out "
+                                                              "and the model that runs uses its "
+                                                              "own default; naming one picks the "
+                                                              "model that has it.")},
                                     "shot": {"type": "string", "maxLength": 60}}}},
 
     {"name": "generate_music",
@@ -9106,10 +9123,18 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 params["seconds"] = float(args["seconds"])
             cap = "text_to_music"
         else:
-            text = str(args.get("text") or "")
-            params = {"prompt": ("Read this aloud exactly as written, and say nothing else: "
-                                 + text),
-                      "voice": str(args.get("voice") or "alloy"), "text": text}
+            # THE LINE, AS ASKED FOR. What each model has to be TOLD to make it read that line is
+            # the model's own business and is applied per candidate in `build_submit` — this used
+            # to wrap it in "Read this aloud exactly as written…" here, before any model had been
+            # chosen, which is an instruction about gpt-audio handed to whatever ran. A real
+            # reader reads it out.
+            params = {"prompt": str(args.get("text") or "")}
+            if args.get("voice"):
+                # ONLY WHEN THE CALLER NAMED ONE. A default written here would be one provider's
+                # voice name applied to every provider — `alloy` was, and it skipped the model
+                # that reads on every call that named no voice, because it has no voice by that
+                # name and `can_serve` correctly said so.
+                params["voice"] = str(args["voice"])
             cap = "text_to_speech"
         if args.get("from_image"):
             try:
@@ -9174,13 +9199,24 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
         if job.get("media_id"):
             out["media_id"] = job["media_id"]
         if name == "generate_speech":
-            out["warning"] = ("This model answers prompts rather than reading them. check_jobs "
-                              "returns spoken_text — compare it with what you asked for before "
-                              "you use the audio.")
+            # THE VOICE THAT WAS ACTUALLY SENT, on the same footing as the model — computed by the
+            # one function the submit is built from, so the two cannot disagree. Absent where the
+            # model has no voices to be told about.
+            told = media_plane.voice_for(cand, params)
+            if told:
+                out["voice"] = told
+            if cand.get("answers_prompts"):
+                # ABOUT THE MODEL THAT RAN, not about the capability. This sentence used to be on
+                # every result, including the ones from a model that reads what it is given —
+                # where it is a warning about a defect the caller does not have, and an
+                # instruction to compare a transcript that does not exist.
+                out["warning"] = ("This model answers prompts rather than reading them. check_jobs "
+                                  "returns spoken_text — compare it with what you asked for before "
+                                  "you use the audio.")
             if job.get("spoken_text"):
                 out["spoken_text"] = job["spoken_text"]
                 out["verbatim"] = media_plane.levenshtein_ratio(
-                    params.get("text") or "", str(job["spoken_text"])) >= 0.9
+                    params.get("prompt") or "", str(job["spoken_text"])) >= 0.9
         if notes:
             out["note"] = " ".join(notes)
         return _media_json_text(out)
@@ -9225,7 +9261,7 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                     if job.get("spoken_text"):
                         row["spoken_text"] = job["spoken_text"]
                         row["verbatim"] = media_plane.levenshtein_ratio(
-                            (job.get("params") or {}).get("text") or "",
+                            (job.get("params") or {}).get("prompt") or "",
                             str(job["spoken_text"])) >= 0.9
                 elif job.get("status") == "failed":
                     row["error"] = job.get("error") or "the render failed"

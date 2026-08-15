@@ -17,13 +17,31 @@ parameters honourable, not watermarked unless asked, not quarantined by a recent
 and the caller reports which one it was. Four video models are listed and two of them are broken;
 that is the whole reason this exists rather than a model id in a tool argument.
 
-FIVE ENDPOINT SHAPES, all measured against the live account on 2026-08-15:
+SEVEN ENDPOINT SHAPES, all measured against the live accounts on 2026-08-15:
 
   video-generation   POST /video/generations -> task id; GET /video/generations/{id} to poll
   image-generation   POST /images/generations -> b64_json OR url (both occur)
   openai             POST /chat/completions -> choices[0].message.images[0].image_url.url
   gemini             POST /v1beta/models/{id}:generateContent -> inlineData parts
   audio-chat         POST /chat/completions with modalities -> message.audio.data (+ transcript)
+  elevenlabs-music   POST /music -> RAW AUDIO BYTES
+  elevenlabs-speech  POST /text-to-speech/{voice_id} -> RAW AUDIO BYTES
+
+THE LAST TWO BREAK WHAT THE FIRST FIVE SHARE, and each break is a place a special case could have
+gone. The auth header is not a bearer, and which header a provider wants is declared BESIDE ITS
+BASE URL in the catalog — see `auth_of` — rather than branched on its name where the socket is.
+The answer is not JSON, and the same endpoint answers audio when it worked and JSON when it did
+not, so a response is CLASSIFIED before it is read — see `response_doc`. And the model is a PATH
+SEGMENT, not a body field, which is why `voice_for` computes the answer in one place: what the URL
+carries and what the tool reports afterwards cannot be allowed to disagree.
+
+They are TWO shapes and not one because a shape IS an endpoint's identity here, and these are two
+endpoints: different path, different body, different tunables. `_SHAPE_TUNABLES` is the whitelist a
+candidate is held to when it declares no `params` of its own, and each of these lists is exactly
+what its builder emits — merge them and the whitelist permits four fields where the endpoint has
+two, which is a whitelist that has stopped describing what it guards. Merging would also need the
+one branch to pick a path from some new catalog field, which is two shapes wearing one name. What
+they genuinely share is shared rather than copied: one auth entry, one raw-response branch.
 
 "200 OK" IS NOT SUCCESS. A candidate has only run once its response carries an actual media
 payload. google/gemini-3-pro-image-preview answers 200 with `parts: []` and bills ~1356 tokens;
@@ -110,7 +128,16 @@ _SHAPE_TUNABLES = {
     "openai": ("prompt", "image"),
     "gemini": ("prompt", "image"),
     "audio-chat": ("messages", "modalities", "audio", "stream"),
+    # Two endpoints, two lists, neither a subset of the other — and each is EXACTLY what its
+    # builder below emits. A permitted field the endpoint has no slot for is dead permission, and
+    # the union of these two is four of them.
+    "elevenlabs-music": ("prompt", "duration"),
+    "elevenlabs-speech": ("prompt", "voice"),
 }
+
+# The shapes whose 200 IS THE MEDIA. Every other shape answers with a document that says where the
+# media is or carries it base64'd inside; these answer with the file. See `response_doc`.
+_RAW_SHAPES = frozenset({"elevenlabs-music", "elevenlabs-speech"})
 
 
 @functools.lru_cache(maxsize=1)
@@ -146,6 +173,41 @@ def provider_meta(provider: str) -> dict:
     return p if isinstance(p, dict) else {}
 
 
+# ── how a provider is signed ──────────────────────────────────────────────────────
+# TWO STYLES SO FAR, and which one a provider uses is that PROVIDER'S OWN FACT — declared in the
+# catalog beside its base_url, because "where to send it" and "how to sign it" are the same kind of
+# fact and are learnt in the same measurement. Five providers wanted `authorization: Bearer <key>`;
+# ElevenLabs wants `xi-api-key: <key>` and answers 401 to a bearer.
+#
+# NOT A BRANCH ON THE PROVIDER'S NAME. `if provider == "elevenlabs"` at the socket would be a
+# second place that has to know this provider exists — after the catalog, which is the place — and
+# the next provider with its own header would make a third. A deployment can add one by editing
+# the file, which is the whole reason the file is read from disk.
+_AUTH_DEFAULT = ("authorization", "Bearer ")
+
+
+def auth_of(pmeta: dict) -> tuple[str, str]:
+    """(header, prefix) this provider signs with.
+
+    The default is the bearer every OpenAI-shaped relay wants, so a provider entry that says
+    nothing about auth keeps working — and a `prefix` of "" is a real answer, not an absent one:
+    ElevenLabs wants the key bare.
+    """
+    a = pmeta.get("auth") if isinstance(pmeta, dict) else None
+    if not isinstance(a, dict):
+        return _AUTH_DEFAULT
+    header = str(a.get("header") or _AUTH_DEFAULT[0]).strip().lower()
+    prefix = _AUTH_DEFAULT[1] if a.get("prefix") is None else str(a.get("prefix"))
+    return header, prefix
+
+
+def auth_headers(prov: dict) -> dict:
+    """The credential header for one outbound call, in this provider's own style. ONE header, so
+    a key can never be sent in two places and only one of them noticed."""
+    header, prefix = auth_of(prov)
+    return {header: f"{prefix}{prov.get('api_key') or ''}"}
+
+
 def declared_params(cand: dict) -> set[str]:
     """The tunables this candidate accepts. Its own list when it names one, the shape's otherwise —
     never "everything the caller sent"."""
@@ -163,15 +225,83 @@ def estimated_usd(cand: dict) -> float | None:
     return float(usd) if isinstance(usd, (int, float)) else None
 
 
+# ── voices ────────────────────────────────────────────────────────────────────────
+# A VOICE HAS A NAME AND AN ID, and they belong to different halves of this. The NAME is what the
+# agent asks for and what `can_serve` filters the chain on; the ID is what the request carries.
+# One candidate holds both, as a {name: id} map, because two fields would be two things to keep in
+# step. A candidate whose provider names its voices (`alloy`) declares a plain list instead, and
+# both answer `in`.
+
+def voice_names(cand: dict) -> list[str]:
+    """The voices this candidate offers, by name, in its own declaration order — never the ids.
+    An id is a routing detail; an agent picks a narrator."""
+    v = cand.get("voices")
+    return [str(k) for k in v] if isinstance(v, (dict, list)) else []
+
+
+def default_voice(cand: dict) -> str:
+    """The voice used when the caller names none: this candidate's declared default, or the first
+    it lists.
+
+    FROM THE CANDIDATE, never from the calling code. `alloy` used to be the tool's default for
+    every model in the capability — one provider's voice name standing in for all of them — which
+    meant every call that named no voice carried a voice only OpenAI has, and skipped anything
+    else in the chain before it could run.
+    """
+    named = str(cand.get("default_voice") or "")
+    return named or next(iter(voice_names(cand)), "")
+
+
+def voice_for(cand: dict, params: dict) -> str:
+    """The voice this candidate will be ASKED for — "" when it has no voices at all.
+
+    THE ONE PLACE that answer is computed, for the same reason `size_for` is: what the submit
+    carries and what the tool reports back afterwards cannot be allowed to disagree.
+    """
+    if not cand.get("voices"):
+        return ""
+    return str(params.get("voice") or default_voice(cand))
+
+
+def voice_id(cand: dict, voice: str) -> str:
+    """The provider's own id for a named voice, or "" when this candidate does not offer it. Only
+    a candidate whose voices are addressed BY ID has a map to answer from."""
+    voices = cand.get("voices")
+    return str((voices or {}).get(voice) or "") if isinstance(voices, dict) else ""
+
+
+# What a model that ANSWERS a prompt has to be told, to make it read one instead. A workaround for
+# the wrong kind of model doing narration — measured: "Say: hello." came back as "Hello! It's great
+# to talk with you." — so it is applied PER CANDIDATE, to the ones that need it.
+#
+# It used to be built by the tool, before any model had been chosen, which is a sentence about
+# gpt-audio applied to whatever ran. A real reader would have READ IT OUT: "Read this aloud exactly
+# as written, and say nothing else: the tide went out."
+_READ_ALOUD = "Read this aloud exactly as written, and say nothing else: "
+
+
+def spoken_prompt(cand: dict, text: str) -> str:
+    """The line as this candidate must be given it."""
+    return (_READ_ALOUD + text) if cand.get("answers_prompts") else text
+
+
 def limits_of(cand: dict) -> dict:
     """What list_capabilities tells the agent about the model it would get. Only keys the
     candidate actually declares — an absent limit is absent, not a default someone invented."""
     out: dict = {}
     for k in ("durations_s", "duration_min_s", "duration_max_s", "durations_rejected_s",
               "duration_ignored", "duration_observed_s", "resolution", "min_pixels",
-              "sizes_verified", "voices", "format", "latency_s", "output_mime"):
+              "sizes_verified", "format", "latency_s", "output_mime"):
         if cand.get(k) is not None:
             out[k] = cand[k]
+    if cand.get("voices"):
+        # NAMES, whichever way this candidate stores them. The agent chooses by name and passes a
+        # name back; an id in this dict would be a second spelling of the same choice.
+        out["voices"] = voice_names(cand)
+    if cand.get("answers_prompts"):
+        # A measured property of the MODEL, and the one an agent planning narration most needs
+        # before it spends: this one will answer the line instead of reading it.
+        out["answers_prompts"] = True
     if "accepts_input_image" in cand:
         out["accepts_input_image"] = bool(cand["accepts_input_image"])
     if cand.get("watermark"):
@@ -487,10 +617,21 @@ def _timeout_for(cand: dict) -> float:
 
 
 def _api_root(base: str) -> str:
-    """The provider's API root, for the one shape whose path is not `/v1` relative.
+    """The provider's API root: the configured base with a trailing `/v1` taken off it.
 
-    The configured base carries the `/v1` every other shape needs, so it is right to keep it there
-    and strip it HERE rather than store a second base_url that could drift out of step with it.
+    Two shapes need this, for opposite reasons, and both reasons are the same fact — a base_url is
+    typed by a person and the version segment is the part they disagree about.
+
+      gemini            posts under `/v1beta`, which hangs off the ROOT. TokenRouter's base carries
+                        `/v1` for the four shapes that need it, so it is stripped here rather than
+                        stored twice where the two copies could drift.
+      the two elevenlabs
+                        shapes build their own `/v1/…` on top of what this returns, so the SAME
+                        url is produced whether the connected integration was saved as
+                        `https://api.elevenlabs.io` or `https://api.elevenlabs.io/v1`. Measured:
+                        the live integration is stored the first way and the catalog's default is
+                        too; a shape that simply concatenated would 404 on the other spelling, and
+                        a 404 here reads as "the provider is down".
     """
     return base[:-3].rstrip("/") if base.endswith("/v1") else base
 
@@ -587,14 +728,15 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
                       timeout=_timeout_for(cand))
 
     if shape == "audio-chat":
-        text = params.get("prompt") or ""
+        # The read-aloud instruction is THIS candidate's, not the tool's — see `spoken_prompt`.
+        text = spoken_prompt(cand, str(params.get("prompt") or ""))
         body = {"model": model,
                 "messages": [{"role": "user", "content": text}]}
         if "modalities" in allow:
             tun["modalities"] = ["text", "audio"]
             body["modalities"] = ["text", "audio"]
         if "audio" in allow:
-            aud = {"voice": params.get("voice") or "alloy",
+            aud = {"voice": voice_for(cand, params) or "alloy",
                    "format": str(cand.get("format") or "wav")}
             tun["audio"] = aud
             body["audio"] = aud
@@ -604,6 +746,39 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
             body["stream"] = True
         tun["messages"] = body["messages"]
         return Submit("POST", f"{base}/chat/completions", body, tun, stream=stream,
+                      timeout=_timeout_for(cand))
+
+    if shape == "elevenlabs-music":
+        body = {}
+        prompt = take("prompt", params.get("prompt"))
+        if prompt is not None:
+            body["prompt"] = prompt
+        secs = take("duration", params.get("seconds"))
+        if secs is not None:
+            # MILLISECONDS, where every other duration in this catalog is seconds. Measured: 10000
+            # returned a 10.031 s track.
+            body["music_length_ms"] = int(round(float(secs) * 1000))
+        # NO MODEL FIELD ANYWHERE: this endpoint takes none. `elevenlabs/music-v1` is our name for
+        # the candidate — what the chain reports, quarantines and prices on — and it stays here.
+        return Submit("POST", f"{_api_root(base)}/v1/music", body, tun,
+                      timeout=_timeout_for(cand))
+
+    if shape == "elevenlabs-speech":
+        # THE MODEL THIS ADDRESSES IS A PATH SEGMENT. A voice id in the body would be accepted,
+        # ignored, and billed as a default voice — the same class of failure as MiniMax ignoring an
+        # input image, one layer up, and just as invisible in a 200.
+        name = take("voice", voice_for(cand, params))
+        vid = voice_id(cand, str(name or ""))
+        if not vid:
+            raise MediaError(f"{model} has no voice called {name!r}.")
+        # Through `spoken_prompt` like the other speech shape, and not around it: "how must this
+        # candidate be given the line" is ONE question, and a shape that answers it by not asking
+        # is a shape that will be given the wrong answer the day a reader is added to the other
+        # branch. This candidate does not declare `answers_prompts`, so the line comes back
+        # untouched — which is the whole point, and is now asserted rather than arranged.
+        line = take("prompt", spoken_prompt(cand, str(params.get("prompt") or "")))
+        body = {"text": line or "", "model_id": model}
+        return Submit("POST", f"{_api_root(base)}/v1/text-to-speech/{vid}", body, tun,
                       timeout=_timeout_for(cand))
 
     raise MediaError(f"No adapter for endpoint shape {shape!r}.")
@@ -616,6 +791,48 @@ def build_poll(cand: dict, base_url: str, task_id: str) -> tuple[str, str]:
 
 
 # ── the five adapters: reading a response ─────────────────────────────────────────
+class Raw:
+    """A response body that IS the media, rather than a document describing where it is."""
+
+    __slots__ = ("data", "mime")
+
+    def __init__(self, data: bytes, mime: str):
+        self.data, self.mime = data, mime
+
+
+# What a provider CLAIMS it sent, when the claim is that it sent media. Used for exactly one
+# decision — parse or do not parse — and for nothing else.
+_MEDIA_CT = re.compile(r"^\s*(?:audio|image|video)/", re.I)
+
+
+def response_doc(content_type: str, body: bytes):
+    """What the readers below are handed for one response: the parsed document, or the BYTES
+    THEMSELVES when the provider answered with media instead of with a description of one.
+
+    THE CONTENT TYPE DECIDES, because nothing else can. ElevenLabs answers the SAME endpoint with
+    audio when it worked and with JSON when it did not, and those two answers mean opposite things
+    about money — a 4xx is free and stays in the chain, a 200 billed. "Parse it and see" reads a
+    402 as a corrupt track and pushes 160 KB of mp3 through `json.loads` on every call that
+    succeeded. A parser is not a classifier.
+
+    THIS IS NOT THE SNIFFING RULE BEING RELAXED. What the provider claims decides only whether to
+    parse. What the bytes ARE still decides whether they are media, in `sniff`/`verify`, which
+    every payload goes through before it is stored — an HTML error page labelled `audio/mpeg` gets
+    this far and is refused there, exactly as it always was. The two questions are different and
+    only one of them is answerable from a header.
+
+    Anything not claimed as media is a document, INCLUDING a body with no content type at all: the
+    five older shapes answer JSON and some relays say so and some do not, and defaulting the other
+    way would break every one of them on a header nobody sends.
+    """
+    if _MEDIA_CT.match(content_type or ""):
+        return Raw(bytes(body or b""), str(content_type).split(";")[0].strip().lower())
+    try:
+        return json.loads(body or b"{}")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class Payload:
     """Media that actually arrived: bytes in hand, or a URL to fetch them from."""
 
@@ -665,9 +882,23 @@ def _read_submit(cand: dict, status: int, doc) -> tuple[str, Payload | None]:
     """
     if status >= 400:
         raise MediaRefused(provider_message(doc, status))
+    shape = str(cand.get("shape") or "")
+
+    if shape in _RAW_SHAPES:
+        # A 200 from these IS the audio. Asked BEFORE the object check below, which would
+        # otherwise read the track itself as "not an object" and stand the model down for
+        # delivering.
+        if isinstance(doc, Raw):
+            if doc.data:
+                return "", Payload(data=doc.data, mime=doc.mime)
+            raise MediaEmpty("the provider answered 200 with an empty audio file")
+        # A DOCUMENT where the audio should be: this provider talking, in a body that parsed. It
+        # answered, so it billed, and it gets what every other 200 with no media in it gets — with
+        # its own sentence, which is the only one that says what actually went wrong.
+        raise MediaEmpty(provider_message(doc, status))
+
     if not isinstance(doc, dict):
         raise MediaEmpty("the provider answered with a body that is not an object")
-    shape = str(cand.get("shape") or "")
 
     if shape == "video-generation":
         tid = str(doc.get("task_id") or doc.get("id") or "")

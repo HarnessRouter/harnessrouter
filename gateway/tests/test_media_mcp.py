@@ -17,6 +17,7 @@ ids rather than resubmitting. No generation is ever looped.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import json
@@ -61,6 +62,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 # The sentinel. Every assertion about "the key never comes out" is about this exact string.
 PROVIDER_KEY = "sk-tr-SENTINEL-do-not-leak-4f7a9b21"
+# The SECOND deployment credential. A separate sentinel on purpose: with one string for both
+# providers, "the ElevenLabs key was not sent to TokenRouter" is unprovable, and that is precisely
+# the mistake a second auth style makes possible.
+ELEVEN_KEY = "sk_el-SENTINEL-do-not-leak-90c3ad12"
 
 ORG = "testorg"
 HEADERS = {"x-harness-internal": "test-internal-key", "x-harness-org": ORG,
@@ -69,6 +74,7 @@ HEADERS = {"x-harness-internal": "test-internal-key", "x-harness-org": ORG,
 MCP_URL = "https://gateway.example/v1/mcp/media"
 ENTRY_ID = "mcp.media"
 TR = "https://api.tokenrouter.com/v1"
+EL = "https://api.elevenlabs.io/v1"
 
 # The kit that provisions the media server. Attaching it is something the kit that uses it drives,
 # so every attach in this file goes through launch — there is no other way in.
@@ -96,6 +102,10 @@ PNG_1PX = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 WAV_SILENCE = (b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00"
                b"\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+# One MPEG-1 Layer III frame header and its payload. ElevenLabs answers with mp3 BYTES and no JSON
+# at all, so what the raw shapes are fed here has to be bytes that `sniff` genuinely identifies —
+# a JSON stub would let the raw path pass a test the product fails on the first real call.
+MP3_SILENCE = b"\xff\xfb\x90\x00" + bytes(414)
 
 
 def _mp4(seconds: float = 1.0, size: str = "128x72") -> bytes:
@@ -113,8 +123,13 @@ def _mp4(seconds: float = 1.0, size: str = "128x72") -> bytes:
 
 # ── the provider, mocked at the transport ────────────────────────────────────────
 class Provider:
-    """A stand-in for TokenRouter that answers per model, records every request, and can be told
-    to fail a specific one. The adapters run for real against it."""
+    """A stand-in for the two connected providers that answers per model, records every request,
+    and can be told to fail a specific one. The adapters run for real against it.
+
+    TokenRouter and ElevenLabs are both here because they are both connected in this deployment,
+    and because the interesting failures are the ones that only exist once there are two: a key
+    sent in the wrong header, or to the wrong host.
+    """
 
     def __init__(self):
         self.fail: dict[str, tuple[int, dict]] = {}   # model -> (status, body)
@@ -125,17 +140,37 @@ class Provider:
         # PROVIDER's to choose, which is the whole reason they are knobs here.
         self.result_url = "https://cdn.provider.example/out.mp4"
         self.cdn_status = 200
+        # What the raw shapes answer with, and how they label it. Both are knobs because the whole
+        # point of those two adapters is that the SAME endpoint answers audio or JSON.
+        self.audio_bytes = MP3_SILENCE
+        self.audio_ctype = "audio/mpeg"
 
     def queue_poll(self, task_id: str, *answers) -> None:
         self.polls.setdefault(task_id, []).extend(answers)
 
     def handle(self, req: httpx.Request) -> httpx.Response:
-        body = json.loads(req.content or b"{}") if req.content else {}
-        call = {"method": req.method, "url": str(req.url), "body": body,
-                "auth": req.headers.get("authorization", "")}
+        url = str(req.url)
+        # A JSON body where there is one. ElevenLabs is asked in JSON like everything else — it is
+        # the ANSWER that is binary — but a request body is never assumed to parse.
+        try:
+            body = json.loads(req.content or b"{}") if req.content else {}
+        except ValueError:
+            body = {}
+        call = {"method": req.method, "url": url, "body": body,
+                "auth": req.headers.get("authorization", ""),
+                "xi": req.headers.get("xi-api-key", "")}
         _calls.append(call)
         _all_calls.append(call)
-        url = str(req.url)
+
+        # ── ElevenLabs: raw audio out, JSON only when it goes wrong ──────────────
+        if url.startswith(EL):
+            model = ("elevenlabs/music-v1" if url.endswith("/music")
+                     else str(body.get("model_id") or ""))
+            if model in self.fail:
+                st, b = self.fail[model]
+                return httpx.Response(st, json=b)
+            return httpx.Response(200, content=self.audio_bytes,
+                                  headers={"content-type": self.audio_ctype})
 
         if url.endswith("/video/generations") and req.method == "POST":
             model = body.get("model") or ""
@@ -287,17 +322,24 @@ def api(client):
     return Rec(client)
 
 
-def _connect_provider(key: str = PROVIDER_KEY) -> None:
-    """One TokenRouter integration holding the key — the deployment's own credential, which is
-    what every media call resolves and what nothing may ever return.
+def _connect_provider(key: str = PROVIDER_KEY, eleven: str = ELEVEN_KEY) -> None:
+    """The deployment's own credentials — one per provider, which is what every media call
+    resolves and what nothing may ever return.
+
+    TWO entries, because this deployment has two connected providers and the difference between
+    them is the point: they are signed in different headers, and an integration document with one
+    provider in it cannot show that the right key went to the right host.
 
     Written straight into the document the media server reads, rather than through the admin
     route: how a key got connected is another surface's business, and going through that route
     would make this file depend on the identity mode whichever test module imported `app` first
     happened to set."""
-    asyncio.run(app._vault_put(app.GLOBAL_TENANT, app._INTEGRATIONS_KEY, json.dumps(
-        [{"name": "tr", "provider": "tokenrouter",
-          "config": {"api_key": key, "base_url": TR}}])))
+    doc = [{"name": "tr", "provider": "tokenrouter",
+            "config": {"api_key": key, "base_url": TR}}]
+    if eleven:
+        doc.append({"name": "el", "provider": "elevenlabs",
+                    "config": {"api_key": eleven, "base_url": EL}})
+    asyncio.run(app._vault_put(app.GLOBAL_TENANT, app._INTEGRATIONS_KEY, json.dumps(doc)))
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -402,6 +444,13 @@ def _ok(res: dict) -> dict:
 def _err(res: dict) -> str:
     assert res.get("isError") is True, res
     return res["content"][0]["text"]
+
+
+def _el(cap: str) -> dict:
+    """The ElevenLabs candidate in a capability's chain, found by PROVIDER — so a test says what it
+    means ("the one that is not TokenRouter's") instead of repeating a model id the catalog owns."""
+    return next(c for c in media_plane.capability(cap)["candidates"]
+                if c.get("provider") == "elevenlabs")
 
 
 def _save_config(api, hid: str, servers: list, name="Videos"):
@@ -810,8 +859,9 @@ def test_every_refusal_ends_with_you_cannot_connect_it_yourself(client, harness,
     """Invariant 25, over every no-model path there is."""
     for m in [c["model"] for c in media_plane.capability("text_to_video")["candidates"]]:
         app._media_quarantine[m] = time.time() + 900
-    for m in [c["model"] for c in media_plane.capability("text_to_speech")["candidates"]]:
-        app._media_quarantine[m] = time.time() + 900
+    for cap in ("text_to_speech", "text_to_music"):
+        for m in [c["model"] for c in media_plane.capability(cap)["candidates"]]:
+            app._media_quarantine[m] = time.time() + 900
     tok = _cred(harness, session)
     for name, args in (("generate_video", {"prompt": "a", "seconds": 6}),
                        ("generate_speech", {"text": "hello"}),
@@ -819,23 +869,25 @@ def test_every_refusal_ends_with_you_cannot_connect_it_yourself(client, harness,
         assert "you cannot connect" in _err(_call(client, tok, name, args)).lower(), name
 
 
-def test_music_never_becomes_speech(client, harness, session, provider):
-    """Invariant 10: with text_to_speech fully available, generate_music still refuses, and no
-    provider call is made.
+def test_music_never_becomes_speech(client, harness, session, provider, monkeypatch):
+    """Invariant 10: when no music model can run, generate_music REFUSES and reaches for no speech
+    model on the way — and the refusal names the fix rather than leaving the reader nowhere.
 
-    And the refusal NAMES THE FIX. One candidate stood down with the reason it is stood down for
-    beats an empty list: "no music model is connected" is true and leaves the reader nowhere,
-    while "needs a paid ElevenLabs plan" is a thing a person can go and do.
+    Driven here by standing the music model down, because the capability is available in this
+    deployment now. The invariant was never about the model being broken; it is about what happens
+    when it is, and a chain that could fall through to `text_to_speech` would be a silent
+    substitution of conversation for a score.
     """
     _calls.clear()
+    app._media_quarantine["elevenlabs/music-v1"] = time.time() + 900
     text = _err(_call(client, _cred(harness, session), "generate_music",
-                      {"prompt": "a warm orchestral score"}))
-    assert "paid ElevenLabs plan" in text, text
-    assert "not music" in text
+                      {"prompt": "a warm orchestral score", "seconds": 10}))
+    assert "not music" in text, text
+    assert "you cannot connect" in text.lower()
     assert _calls == []
     # And speech is genuinely available right now, so this is not passing on an empty deployment.
     assert _ok(_call(client, _cred(harness, session), "generate_speech",
-                     {"text": "hello"}))["model"].startswith("openai/gpt-audio")
+                     {"text": "hello"}))["status"] == "succeeded"
 
 
 def test_list_capabilities_is_free_and_names_what_is_broken(client, harness, session, provider):
@@ -857,8 +909,8 @@ def test_list_capabilities_is_free_and_names_what_is_broken(client, harness, ses
                                              "resolution": "1280x720",
                                              "accepts_input_image": False,
                                              "aspects": ["16:9"]}
-    assert by["text_to_music"]["available"] is False
-    assert "paid ElevenLabs plan" in by["text_to_music"]["reason"]
+    assert by["text_to_music"]["available"] is True
+    assert by["text_to_music"]["model"] == "elevenlabs/music-v1"
     assert by["export"]["available"] is media_plane.have_ffmpeg()
     # A cost is present only where it was measured.
     assert "estimated_usd_per_unit" not in by["text_to_video"]
@@ -1079,7 +1131,12 @@ def test_a_size_below_a_models_floor_skips_it(client, harness, session, provider
 
 def test_speech_reports_what_the_model_actually_said(client, harness, session, provider):
     """These models ANSWER the prompt rather than reading it, and the transcript the provider
-    returns is real data — so `verbatim` is measured, not assumed."""
+    returns is real data — so `verbatim` is measured, not assumed.
+
+    The reader that now outranks them is stood down first, which is the only way to reach them:
+    they are the FALLBACK for this capability, and the warning below is the reason they are.
+    """
+    app._media_quarantine[_el("text_to_speech")["model"]] = time.time() + 900
     out = _ok(_call(client, _cred(harness, session), "generate_speech", {"text": "Say: hello."}))
     assert out["model"] == "openai/gpt-audio-mini"
     assert "answers prompts rather than reading them" in out["warning"]
@@ -1091,6 +1148,7 @@ def test_the_streaming_audio_model_is_driven_the_way_it_demands(client, harness,
                                                                 provider):
     """gpt-audio answers 400 without stream:true and then delivers audio in deltas that have to be
     concatenated."""
+    app._media_quarantine[_el("text_to_speech")["model"]] = time.time() + 900
     app._media_quarantine["openai/gpt-audio-mini"] = time.time() + 900
     out = _ok(_call(client, _cred(harness, session), "generate_speech", {"text": "hello"}))
     assert out["model"] == "openai/gpt-audio" and out["status"] == "succeeded"
@@ -1409,22 +1467,355 @@ def test_a_duration_a_model_measurably_refuses_is_not_offered_to_it(cap):
         assert media_plane.can_serve(cand, {"seconds": 6}) == ""
 
 
-def test_music_is_one_stood_down_candidate_and_not_an_empty_list():
-    """A capability with no candidates can only say "nothing is connected". One candidate carrying
-    the reason it is stood down says what to do instead — and holds no credential to say it."""
+def test_music_is_one_candidate_that_holds_no_credential_to_be_one():
+    """The music chain is ONE candidate — the model the owner chose — and the key that reaches it
+    is not in this file. It never was: when this candidate was stood down for a free-tier plan the
+    same assertion held, and it is the one that must survive the candidate becoming available."""
     cap = media_plane.capability("text_to_music")
-    cand, skipped = media_plane.resolve("text_to_music", {}, {"tokenrouter"}, {})
-    assert cand is None
     assert len(cap["candidates"]) == 1
     only = cap["candidates"][0]
-    assert only["model"] == "elevenlabs/music-v1" and only["status"] == "unavailable"
-    assert only["reason_code"] == "paid_plan_required"
-    # The measured reason is what the agent is told — NOT "nobody has connected that provider",
-    # which is the sentence an unconnected provider would otherwise produce first.
-    assert skipped == [only["reason"]]
-    assert "paid ElevenLabs plan" in media_plane.refusal("text_to_music", skipped)
-    assert not [k for k in json.dumps(cap).lower().split('"') if k.startswith("sk_")], \
+    assert only["model"] == "elevenlabs/music-v1" and only["provider"] == "elevenlabs"
+    assert not only.get("status"), "the music candidate is stood down again"
+    # Nothing that looks like a credential, for EITHER provider's key shape.
+    blob = json.dumps(media_plane.catalog()).lower()
+    assert "sk_" not in blob and "sk-" not in blob, \
         "a key was written into the catalog; it belongs in the integration document"
+    # And with the provider not connected, the refusal is the ordinary one and still names the fix.
+    _, skipped = media_plane.resolve("text_to_music", {}, {"tokenrouter"}, {})
+    assert "you cannot connect one yourself" in media_plane.refusal("text_to_music", skipped)
+
+
+# ══ a sixth provider, shaped like none of the five ═══════════════════════════════
+# ElevenLabs breaks all three assumptions the five TokenRouter shapes share: it is signed in its
+# own header, it answers a submit with RAW AUDIO instead of a document, and its model is a PATH
+# SEGMENT. Each of those is a place a special case could have gone; these pin that none of them
+# did.
+
+def test_the_two_elevenlabs_shapes_are_two_because_their_whitelists_differ():
+    """One shape or two is a real choice, and this is the fact that decides it.
+
+    Music takes a length and no voice; speech takes a voice and no length. A single shape's
+    whitelist would have to be the UNION of those, which would forward `voice` to the music
+    endpoint and `music_length_ms` to the speech one — the exact defect "never forward an
+    unrecognised parameter" exists to stop, reintroduced by tidying two adapters into one.
+
+    What the two DO share — the auth header and the raw-audio answer — is expressed once each and
+    outside the shape branch, so two shapes cost nothing in duplication.
+    """
+    music, speech = _el("text_to_music"), _el("text_to_speech")
+    assert music["shape"] != speech["shape"]
+    assert media_plane.declared_params(music) == {"prompt", "duration"}
+    assert media_plane.declared_params(speech) == {"prompt", "voice"}
+    # Asserted on the SHAPE and not only on these two entries, because the shape's list is what a
+    # candidate added later WITHOUT its own `params` is held to — and because a whitelist is only
+    # a whitelist while it still describes its endpoint. Each of these shapes permits EXACTLY what
+    # its builder emits when it is offered everything: a permitted field the endpoint has no slot
+    # for is dead permission, and the union of the two is four of them.
+    bare = {"model": "x", "provider": "elevenlabs"}
+    loose = {"prompt": "p", "seconds": 10, "voice": "George"}
+    for cand, extra, want in (
+            (music, {}, {"prompt", "duration"}),
+            (speech, {"voices": speech["voices"]}, {"prompt", "voice"})):
+        shape = cand["shape"]
+        sent = media_plane.build_submit({**bare, "shape": shape, **extra}, EL, loose)
+        assert set(sent.tunables) == set(media_plane._SHAPE_TUNABLES[shape]) == want, (
+            shape, sorted(sent.tunables), sorted(media_plane._SHAPE_TUNABLES[shape]))
+    # And nothing crossed over: no voice in a music body, no length in a speech one.
+    assert "George" not in json.dumps(media_plane.build_submit(music, EL, loose).body)
+    assert "10000" not in json.dumps(media_plane.build_submit(speech, EL, loose).body)
+    # The shared halves are shared, not copied.
+    assert media_plane.provider_meta("elevenlabs")["auth"]["header"] == "xi-api-key"
+    for cand in (music, speech):
+        _, payload = media_plane.read_submit(
+            cand, 200, media_plane.response_doc("audio/mpeg", MP3_SILENCE))
+        assert payload.data == MP3_SILENCE and payload.mime == "audio/mpeg"
+
+
+def test_the_music_request_is_the_one_that_was_measured():
+    """POST /v1/music {prompt, music_length_ms} — measured 2026-08-15, and the length is in
+    MILLISECONDS while every other duration in this catalog is in seconds."""
+    sub = media_plane.build_submit(_el("text_to_music"), EL,
+                                   {"prompt": "a warm score", "seconds": 10,
+                                    "voice": "Sarah", "not_a_real_param": "boom"})
+    assert sub.url == f"{EL}/music"
+    assert sub.body == {"prompt": "a warm score", "music_length_ms": 10000}
+    assert set(sub.tunables) <= media_plane.declared_params(_el("text_to_music"))
+    assert "Sarah" not in json.dumps(sub.body) and "boom" not in json.dumps(sub.body)
+
+
+def test_the_voice_is_a_path_segment_and_never_a_body_field():
+    """The third broken assumption: the model this shape addresses is chosen by the URL.
+
+    A voice id in the body would be silently ignored and a default voice would be billed for —
+    the same class of failure as MiniMax ignoring an input image, one layer up.
+    """
+    cand = _el("text_to_speech")
+    sub = media_plane.build_submit(cand, EL, {"prompt": "Hello there.", "voice": "Sarah"})
+    vid = cand["voices"]["Sarah"]
+    assert sub.url == f"{EL}/text-to-speech/{vid}"
+    assert sub.body == {"text": "Hello there.", "model_id": cand["model"]}
+    assert vid not in json.dumps(sub.body)
+
+
+def test_a_model_that_reads_the_line_is_not_told_to_read_it_aloud():
+    """The wrapper is a WORKAROUND for a conversational model doing narration, so it belongs to
+    the models that need it and to nothing else.
+
+    Measured: gpt-audio answers "Say: hello." with "Hello! It's great to talk with you." — so it
+    is sent an instruction. ElevenLabs reads what it is given, so sending it the same instruction
+    would make it SAY "Read this aloud exactly as written" out loud. The tool used to build that
+    sentence itself, before any model was chosen, which is why it reached both.
+    """
+    line = "The tide went out and never came back."
+    speech = media_plane.build_submit(_el("text_to_speech"), EL, {"prompt": line})
+    assert speech.body["text"] == line, "a real reader was handed the workaround"
+
+    chat = next(c for c in media_plane.capability("text_to_speech")["candidates"]
+                if c.get("shape") == "audio-chat")
+    said = media_plane.build_submit(chat, TR, {"prompt": line})
+    assert said.body["messages"][0]["content"].endswith(line)
+    assert said.body["messages"][0]["content"] != line, "the model that answers lost its wrapper"
+    assert chat["answers_prompts"] is True
+
+
+def test_audio_and_an_error_arrive_at_the_same_endpoint_and_are_told_apart_by_content_type():
+    """The second broken assumption. ONE endpoint answers either, so the code cannot decide by
+    hoping — and the two answers mean opposite things about money.
+
+      audio/mpeg + 200  -> the track, and nothing is stood down
+      application/json  -> the provider talking. 4xx is a refusal (free, stays in the chain);
+                           a 200 that carried a document billed and delivered nothing.
+    """
+    cand = _el("text_to_music")
+    doc = media_plane.response_doc("audio/mpeg", MP3_SILENCE)
+    assert media_plane.read_submit(cand, 200, doc)[1].data == MP3_SILENCE
+
+    err = media_plane.response_doc(
+        "application/json", b'{"detail":{"message":"Music API is not available for free users."}}')
+    with pytest.raises(media_plane.MediaRefused) as refused:
+        media_plane.read_submit(cand, 402, err)
+    assert "not available for free users" in str(refused.value)
+    # The same document at 200 is the expensive one: it answered, so it billed.
+    with pytest.raises(media_plane.MediaEmpty):
+        media_plane.read_submit(cand, 200, err)
+    # And an empty body labelled as audio is not a track either.
+    with pytest.raises(media_plane.MediaEmpty):
+        media_plane.read_submit(cand, 200, media_plane.response_doc("audio/mpeg", b""))
+
+
+def test_no_binary_body_is_ever_handed_to_a_json_parser(monkeypatch):
+    """160 KB of mp3 through json.loads is waste on every successful call, and the exception it
+    raises is indistinguishable from a relay renaming a field. The classification happens first."""
+    seen: list[bytes] = []
+    real = json.loads
+
+    def watched(s, *a, **kw):
+        seen.append(s if isinstance(s, bytes) else str(s).encode())
+        return real(s, *a, **kw)
+
+    monkeypatch.setattr(media_plane.json, "loads", watched)
+    doc = media_plane.response_doc("audio/mpeg", MP3_SILENCE)
+    assert isinstance(doc, media_plane.Raw)
+    assert seen == [], f"a binary body reached a JSON parser: {seen}"
+    # A document still parses — this is a classifier, not a blanket refusal to read anything.
+    assert media_plane.response_doc("application/json; charset=utf-8", b'{"a":1}') == {"a": 1}
+    assert seen, "nothing was parsed at all; the classifier swallowed the JSON path too"
+
+
+def test_the_content_type_only_chooses_the_parser_and_never_vouches_for_the_bytes():
+    """`sniff` deliberately never trusts a provider's label. Routing on it here does not soften
+    that: an HTML error page labelled audio/mpeg gets through the reader and is refused by
+    `verify`, exactly as it always was."""
+    lie = b"<!doctype html><html><body>502 Bad Gateway</body></html>"
+    _, payload = media_plane.read_submit(_el("text_to_music"), 200,
+                                         media_plane.response_doc("audio/mpeg", lie))
+    assert payload.data == lie
+    with pytest.raises(media_plane.MediaEmpty):
+        media_plane.verify("audio", payload.data)
+
+
+def test_the_auth_style_is_declared_in_the_catalog_and_not_branched_on_a_provider_name():
+    """Invariant: the catalog is where a provider's facts live, and "how it is signed" is one.
+
+    A `if provider == "elevenlabs"` beside the socket would be a second place that has to know
+    this provider exists, and the next provider would add a third.
+    """
+    assert media_plane.auth_headers({"api_key": "K", **media_plane.provider_meta("elevenlabs")}) \
+        == {"xi-api-key": "K"}
+    assert media_plane.auth_headers({"api_key": "K", **media_plane.provider_meta("tokenrouter")}) \
+        == {"authorization": "Bearer K"}
+    # A provider entry that says nothing about auth still gets the bearer every relay wants.
+    assert media_plane.auth_headers({"api_key": "K"}) == {"authorization": "Bearer K"}
+
+    # And no PROVIDER NAME is compared against anywhere in either module. Read out of the syntax
+    # tree rather than grepped for, so the rule survives being explained in a comment that has to
+    # spell the thing it forbids — and so it catches every spelling instead of the six somebody
+    # thought of.
+    names = set((media_plane.catalog().get("providers") or {}))
+    assert names, "no providers in the catalog; this would pass on an empty file"
+    for mod in (app, media_plane):
+        for node in ast.walk(ast.parse(Path(mod.__file__).read_text())):
+            if not isinstance(node, ast.Compare):
+                continue
+            for side in [node.left, *node.comparators]:
+                assert not (isinstance(side, ast.Constant) and side.value in names), (
+                    f"{Path(mod.__file__).name}:{node.lineno} branches on the provider name "
+                    f"{side.value!r}; that fact belongs in the catalog")
+
+
+def test_each_provider_is_signed_in_its_own_header_and_never_in_the_others(client, harness,
+                                                                          session, provider):
+    """The one that matters once there are two keys: the wrong key in the right header is a
+    credential handed to a third party."""
+    _calls.clear()
+    tok = _cred(harness, session)
+    assert _ok(_call(client, tok, "generate_image", {"prompt": "a"}))["media_id"]
+    assert _ok(_call(client, tok, "generate_music", {"prompt": "a warm score", "seconds": 10}))
+    tr = [c for c in _calls if c["url"].startswith(TR)]
+    el = [c for c in _calls if c["url"].startswith(EL)]
+    assert tr and el, f"one of the two providers was never called: {[c['url'] for c in _calls]}"
+    for c in tr:
+        assert c["auth"] == f"Bearer {PROVIDER_KEY}" and c["xi"] == ""
+    for c in el:
+        assert c["xi"] == ELEVEN_KEY and c["auth"] == ""
+    assert ELEVEN_KEY not in json.dumps(tr) and PROVIDER_KEY not in json.dumps(el)
+
+
+def test_music_is_made_by_a_music_model_and_never_by_a_speech_one(client, harness, session,
+                                                                  provider):
+    """Invariant 10, now that the capability is available rather than refused: generate_music
+    reaches the music endpoint, and no speech model is touched on the way."""
+    _calls.clear()
+    out = _ok(_call(client, _cred(harness, session), "generate_music",
+                    {"prompt": "a warm orchestral score", "seconds": 10}))
+    assert out["model"] == "elevenlabs/music-v1" and out["status"] == "succeeded"
+    assert [c["url"] for c in _calls] == [f"{EL}/music"]
+    assert media_plane.capability("text_to_music")["instead"], \
+        "the substitution warning was deleted with the refusal it used to be attached to"
+
+
+def test_speech_reads_the_line_it_was_given_and_says_so(client, harness, session, provider):
+    """The upgrade, end to end: a real reader outranks the two conversational models, the line
+    reaches it verbatim, and the tool stops warning about a limitation the model that ran does not
+    have."""
+    _calls.clear()
+    line = "Say: hello."
+    out = _ok(_call(client, _cred(harness, session), "generate_speech", {"text": line}))
+    assert out["model"] == _el("text_to_speech")["model"]
+    assert out["status"] == "succeeded"
+    assert "warning" not in out, out.get("warning")
+    assert "spoken_text" not in out, "a reader was asked what it said"
+    assert out["voice"] == _el("text_to_speech")["default_voice"]
+    body = next(c["body"] for c in _calls if "/text-to-speech/" in c["url"])
+    assert body["text"] == line
+
+
+def test_a_voice_a_model_does_not_have_picks_the_model_that_does(client, harness, session,
+                                                                 provider):
+    """A voice is the caller's, and the chain is filtered by it — so naming `alloy` still reaches
+    the model that has one. This is why the tool no longer defaults to `alloy` itself: a default
+    written into the tool is a default written for ONE provider, and it skipped the other on every
+    call that named no voice."""
+    tok = _cred(harness, session)
+    assert _ok(_call(client, tok, "generate_speech",
+                     {"text": "hello", "voice": "alloy"}))["model"] == "openai/gpt-audio-mini"
+    named = _el("text_to_speech")["default_voice"]
+    assert _ok(_call(client, tok, "generate_speech",
+                     {"text": "hello", "voice": named}))["model"] == _el("text_to_speech")["model"]
+    tool = next(t for t in app._MEDIA_MCP_TOOLS if t["name"] == "generate_speech")
+    assert "default" not in tool["inputSchema"]["properties"]["voice"], \
+        "the tool names one provider's voice as the default for every provider"
+
+
+def test_the_elevenlabs_key_never_comes_back_out_of_its_own_401(client, harness, session,
+                                                                provider):
+    """A 401 is the answer guaranteed to quote the key back at you, and this provider's key is a
+    different string in a different header — so the scrub has to have been told about it."""
+    provider.fail[_el("text_to_speech")["model"]] = (
+        401, {"detail": {"message": f"Invalid API key provided: {ELEVEN_KEY}"}})
+    provider.fail["elevenlabs/music-v1"] = (
+        401, {"detail": {"message": f"Invalid API key provided: {ELEVEN_KEY}"}})
+    tok = _cred(harness, session)
+    out = _ok(_call(client, tok, "generate_speech", {"text": "hello"}))
+    assert out["model"].startswith("openai/gpt-audio"), "the chain did not fall through a 401"
+    assert ELEVEN_KEY not in json.dumps(out)
+    assert ELEVEN_KEY not in _err(_call(client, tok, "generate_music", {"prompt": "a"}))
+
+
+def test_a_raw_shape_that_answers_200_with_a_document_is_billed_and_stood_down(client, harness,
+                                                                               session, provider):
+    """The gemini-3-pro rule, on a shape that has no JSON in it when it works. A 200 carrying a
+    document is the provider ANSWERING, which is the only evidence there is that it billed."""
+    provider.audio_ctype, provider.audio_bytes = "application/json", b'{"detail":"nope"}'
+    tok = _cred(harness, session)
+    assert "nothing was charged" not in _err(_call(client, tok, "generate_music",
+                                                   {"prompt": "a", "seconds": 10})).lower()
+    assert app._media_quarantine.get("elevenlabs/music-v1", 0) > time.time()
+
+
+def test_the_submit_ceiling_still_holds_when_the_answer_is_binary(client, harness, session,
+                                                                  provider, monkeypatch):
+    """The auth style and the response mode are new; the ceiling in `_media_call` is not, and
+    adding a second of either must not have moved it off the socket."""
+    monkeypatch.setattr(app, "_MEDIA_MAX_ADVANCES", 0)
+    provider.audio_ctype, provider.audio_bytes = "application/json", b'{"detail":"nope"}'
+    _calls.clear()
+    _call(client, _cred(harness, session), "generate_speech", {"text": "hello"})
+    submits = [c for c in _calls if c["method"] == "POST"]
+    assert len(submits) <= 1, f"one generate_speech bought {len(submits)} renders: {submits}"
+
+
+@pytest.mark.parametrize("base", ["https://api.elevenlabs.io", "https://api.elevenlabs.io/v1"])
+def test_both_spellings_of_the_base_url_reach_the_same_endpoint(base):
+    """MEASURED, and it cost a round: the connected integration stores this base WITHOUT `/v1`,
+    the catalog's default matches it, and both adapters build `/v1/…` on top — so a shape that
+    concatenated onto whatever was stored would 404 on one of the two spellings. A 404 from a
+    provider reads as "it is down", which is the worst kind of wrong answer to have here.
+
+    Pinned both ways round, because the bug is only visible from the spelling nobody used.
+    """
+    assert media_plane.build_submit(_el("text_to_music"), base,
+                                    {"prompt": "p", "seconds": 10}).url == f"{EL}/music"
+    cand = _el("text_to_speech")
+    assert media_plane.build_submit(cand, base, {"prompt": "p"}).url \
+        == f"{EL}/text-to-speech/{cand['voices'][cand['default_voice']]}"
+
+
+def test_a_capability_reports_voice_names_and_not_voice_ids(client, harness, session, provider):
+    """`list_capabilities` is how an agent learns what to pass to `voice`, so it has to report the
+    thing that is passable. An id is a routing detail and a second spelling of the same choice."""
+    by = {c["name"]: c for c in _ok(_call(client, _cred(harness, session),
+                                          "list_capabilities"))["capabilities"]}
+    limits = by["text_to_speech"]["limits"]
+    cand = _el("text_to_speech")
+    assert limits["voices"] == list(cand["voices"]), limits["voices"]
+    assert "answers_prompts" not in limits, "the reader was described as a model that answers"
+    assert not any(vid in json.dumps(limits) for vid in cand["voices"].values())
+    # And the fallback's own row says the thing an agent most needs before it spends.
+    app._media_quarantine[cand["model"]] = time.time() + 900
+    again = {c["name"]: c for c in _ok(_call(client, _cred(harness, session),
+                                             "list_capabilities"))["capabilities"]}
+    assert again["text_to_speech"]["limits"]["answers_prompts"] is True
+    assert again["text_to_speech"]["limits"]["voices"] == ["alloy"]
+
+
+def test_a_model_that_answers_the_prompt_is_never_the_first_choice_for_speech():
+    """Declaration order is the preference, and the preference is a MEASURED one — so it is
+    asserted against the MEASUREMENT rather than against the entry that happens to be first.
+
+    "The top entry is the ElevenLabs one" would be satisfied by any entry with that name on it,
+    including the same conversational model moved up. What actually matters is the property: the
+    model this capability reaches for first must be one that READS the line it is given, and the
+    ones that answer it are a fallback.
+    """
+    cands = media_plane.capability("text_to_speech")["candidates"]
+    assert not cands[0].get("answers_prompts"), \
+        f"{cands[0]['model']} answers prompts and is ranked first for narration"
+    assert any(c.get("answers_prompts") for c in cands[1:]), \
+        "the conversational models were deleted rather than demoted; they are a real fallback"
+    # And the reason they are a fallback and not a substitute is written down where an agent reads
+    # it, not only in a comment here.
+    assert "answers_prompts" in media_plane.limits_of(cands[-1])
 
 
 # ══ the canvas ═══════════════════════════════════════════════════════════════════
@@ -1769,7 +2160,7 @@ def test_the_app_reads_the_scene_and_the_server_describes_itself(api, harness, s
     assert desc["id"] == ENTRY_ID and desc["name"] == "media"
     by = {c["name"]: c for c in desc["capabilities"]}
     assert by["text_to_video"]["available"] is True
-    assert by["text_to_music"]["available"] is False
+    assert by["text_to_music"]["available"] is True
     assert desc["export"]["available"] is media_plane.have_ffmpeg()
     assert "connection" not in desc
 
@@ -2220,17 +2611,26 @@ def test_the_provider_key_appears_in_no_response_this_file_produced():
     """Every body recorded above, in one assertion. A new route that leaks the key fails here even
     if nobody thought to test that route."""
     assert _seen, "nothing was recorded — the recording client stopped being used"
-    leaked = [t for t in _seen if PROVIDER_KEY in t]
-    assert not leaked, f"{len(leaked)} response(s) contained the provider key: {leaked[:1]}"
+    leaked = [t for t in _seen if PROVIDER_KEY in t or ELEVEN_KEY in t]
+    assert not leaked, f"{len(leaked)} response(s) contained a provider key: {leaked[:1]}"
 
 
-def test_the_provider_key_reaches_the_provider_and_nothing_else():
-    """The other half: it DID go out on the wire to the provider, so this is not passing because
-    nothing was ever called."""
+def test_each_provider_key_reaches_its_own_provider_and_nothing_else():
+    """The other half: they DID go out on the wire, so this is not passing because nothing was
+    ever called — and each went to ONE host, in ONE header, over the whole file.
+
+    Two keys is what makes this worth asserting globally. A single sentinel could not tell "signed
+    correctly" from "signed with whatever key was lying around", and a second auth style is
+    exactly the change that makes the second thing possible.
+    """
     assert _all_calls, "no provider call was made — this file would pass on an empty mock"
     outbound = [c for c in _all_calls if "cdn.provider.example" not in c["url"]]
-    assert outbound and all(c["auth"] == f"Bearer {PROVIDER_KEY}" for c in outbound)
-    assert all(c["url"].startswith(TR) for c in outbound), "a call went somewhere unexpected"
+    tr = [c for c in outbound if c["url"].startswith(TR)]
+    el = [c for c in outbound if c["url"].startswith(EL)]
+    assert tr and el, "one of the two providers was never called"
+    assert len(tr) + len(el) == len(outbound), "a call went somewhere unexpected"
+    assert all(c["auth"] == f"Bearer {PROVIDER_KEY}" and not c["xi"] for c in tr)
+    assert all(c["xi"] == ELEVEN_KEY and not c["auth"] for c in el)
 
 
 def test_the_provider_key_appears_in_nothing_the_gateway_printed(api, kit, client, provider,
@@ -2248,7 +2648,8 @@ def test_the_provider_key_appears_in_nothing_the_gateway_printed(api, kit, clien
     asyncio.run(app._media_sweep())
     api.delete(f"/v1/traces/{sid}")
     out = capsys.readouterr()
-    assert PROVIDER_KEY not in out.out and PROVIDER_KEY not in out.err
+    for key in (PROVIDER_KEY, ELEVEN_KEY):
+        assert key not in out.out and key not in out.err
     # And it did log something identifying, so this is not passing on an empty string.
     assert "[media]" in out.out
 
@@ -2259,12 +2660,12 @@ def test_the_provider_key_is_on_no_vertex_and_in_no_scene(api, kit, client, prov
     _ok(_call(client, tok, "generate_image", {"prompt": "a"}))
     dump = json.dumps(_vertex(hid)) + json.dumps(asyncio.run(app._media_jobs_of(session)))
     dump += json.dumps(asyncio.run(app._media_scene_read(session)))
-    assert PROVIDER_KEY not in dump
+    assert PROVIDER_KEY not in dump and ELEVEN_KEY not in dump
     # The secret store holds the integration document, and only the integration document.
     root = Path(app.BACKING.secrets._root)
     hits = [p for p in root.rglob("*")
-            if p.is_file() and PROVIDER_KEY in p.read_text(errors="ignore")
-            and app._INTEGRATIONS_KEY not in p.name]
+            if p.is_file() and app._INTEGRATIONS_KEY not in p.name
+            and any(k in p.read_text(errors="ignore") for k in (PROVIDER_KEY, ELEVEN_KEY))]
     assert hits == [], f"the key was written somewhere it should not be: {hits}"
 
 

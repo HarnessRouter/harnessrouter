@@ -9,9 +9,18 @@
     "run to learn it. A correction and a first measurement are not the same kind of fact, and the",
     "difference has to survive in the file or the next person cannot tell which they are reading."
   ],
+  "$auth": [
+    "`auth` says how a provider is signed, beside the url that says where to send it — the same",
+    "kind of fact, learnt in the same measurement. Absent means `authorization: Bearer <key>`, and",
+    "both entries below state theirs anyway: a provider that omits it should be a provider nobody",
+    "had to think about, not one whose style was never checked. `prefix` of \"\" means the key bare.",
+    "Measured 2026-08-15: api.elevenlabs.io answers 401 to a bearer and 200 to xi-api-key."
+  ],
   "providers": {
-    "tokenrouter": { "integration_provider": "tokenrouter", "base_url": "https://api.tokenrouter.com/v1" },
-    "elevenlabs":  { "integration_provider": "elevenlabs",  "base_url": "https://api.elevenlabs.io/v1" }
+    "tokenrouter": { "integration_provider": "tokenrouter", "base_url": "https://api.tokenrouter.com/v1",
+                     "auth": { "header": "authorization", "prefix": "Bearer " } },
+    "elevenlabs":  { "integration_provider": "elevenlabs",  "base_url": "https://api.elevenlabs.io",
+                     "auth": { "header": "xi-api-key", "prefix": "" } }
   },
 
   "capabilities": {
@@ -180,15 +189,37 @@
 
     "text_to_speech": {
       "unit": "line",
-      "$warning": "These are CONVERSATIONAL models: they ANSWER the prompt rather than reading it. 'Say: hello.' returned 'Hello! It's great to talk with you.' No SSML, no voice cloning, no word timing.",
+      "$order": "A READER FIRST, then the two that answer. The gpt-audio pair are conversational models doing narration: 'Say: hello.' returned 'Hello! It's great to talk with you.' They stay in the chain because they are a real fallback for a line of speech, and they carry `answers_prompts` so the code sends them the read-aloud instruction they need and warns the agent about the one defect they have. Ranking them first was never a preference — it was the only option there was. Neither does SSML, voice cloning or word timing.",
       "candidates": [
+        { "model": "eleven_multilingual_v2", "provider": "elevenlabs", "shape": "elevenlabs-speech",
+          "params": ["prompt", "voice"], "in": ["text"], "out": ["audio"],
+          "format": "mp3", "output_mime": "audio/mpeg", "latency_s": 1.88,
+          "default_voice": "George",
+          "$voices": "The account's own library, read from GET /v1/voices on 2026-08-15 — 22 voices, keyed by the short name a caller would say and mapped to the id the URL carries. The provider's `name` field also carries a descriptor ('George - Warm, Captivating Storyteller'); the descriptor is characterisation, not identity, and a name with a trailing space in it is not something to make an agent type. `default_voice` is George because that descriptor names the job this tool does; it is a choice, written down here so it can be argued with rather than discovered.",
+          "voices": {
+            "Roger": "CwhRBWXzGAHq8TQ4Fs17", "Sarah": "EXAVITQu4vr4xnSDxMaL",
+            "Laura": "FGY2WhTYpPnrIDTdsKH5", "Charlie": "IKne3meq5aSn9XLyUdCD",
+            "George": "JBFqnCBsd6RMkjVDRZzb", "Callum": "N2lVS1w4EtoT3dr4eOWO",
+            "River": "SAz9YHcvj6GT2YYXdXww", "Harry": "SOYHLrjzK2X1ezoPC6cr",
+            "Liam": "TX3LPaxmHKxFdv7VOQHJ", "Alice": "Xb7hH8MSUJpSbSDYk0k2",
+            "Matilda": "XrExE9yKIg1WjnnlVkGX", "Will": "bIHbv24MWmeRgasZH58o",
+            "Jessica": "cgSgspJ2msm6clMCkdW9", "Eric": "cjVigY5qzO86Huf0OWal",
+            "Bella": "hpp4J3VqNfWAUOO0d1Us", "Chris": "iP95p4xoKVk53GoZ742B",
+            "Brian": "nPczCjzI2devNBz1zQrb", "Daniel": "onwK4e9ZLuTAKqWW03F9",
+            "Lily": "pFZP5JQG7iQjIQuC4Bku", "Adam": "pNInz6obpgDQGcFmaJgB",
+            "Bill": "pqHfZKP75CvOlQylNhV4", "Anna Su": "9lHjugDhwqoxA5MhX0az" },
+          "note": "Reads what it is given, verbatim, and returns no transcript — there is nothing to compare, because nothing was paraphrased. `model_id` is this entry's own name; the VOICE is the path segment. It is NOT marked answers_prompts, which is the whole reason it is ranked above the two below.",
+          "measured": "e2e run 2026-08-15 against the live account, through the ordinary chain: POST /v1/text-to-speech/{voice_id} answered 200 with 23449 raw bytes of audio/mpeg — a 1.437 s mp3 in 1.880 s — for the 23-character line 'Hello from the gateway.' in George's voice. It READ the line; nothing was answered. Listed in GET /v1/models. Cost 6 characters of the 64945 budget (provider's own /v1/usage/character-stats), which is LESS than the line is long — so the budget is not one-character-per-character on this tier and nothing here pretends to know the rate. No `usd` for the same reason as the music entry.",
+          "verification": "verified" },
         { "model": "openai/gpt-audio-mini", "provider": "tokenrouter", "shape": "audio-chat",
           "params": ["messages", "modalities", "audio"], "in": ["text"], "out": ["audio", "text"],
           "voices": ["alloy"], "format": "wav", "latency_s": 3.03, "stream_required": false,
+          "answers_prompts": true,
           "verification": "verified" },
         { "model": "openai/gpt-audio", "provider": "tokenrouter", "shape": "audio-chat",
           "params": ["messages", "modalities", "audio", "stream"], "in": ["text"], "out": ["audio", "text"],
           "voices": ["alloy"], "format": "wav", "latency_s": 2.6, "stream_required": true,
+          "answers_prompts": true,
           "note": "400 'Audio output requires stream: true' without it; audio arrives at choices[0].delta.audio and must be concatenated.",
           "verification": "verified" }
       ]
@@ -197,13 +228,13 @@
     "text_to_music": {
       "unit": "track",
       "instead": "Do not use generate_speech instead — it produces conversation, not music.",
-      "$comment": "All 125 TokenRouter entries were searched by name (suno|udio|lyria|musicgen|music|song|melody) and by tag: the only audio-capable models there are the two conversational speech ones. The owner chose ElevenLabs Music direct. ONE candidate, stood down with the reason it is stood down for — an empty list produces 'no music model is connected', which is true and tells nobody what to do. No key is stored here: when the owner supplies a working one it goes in the integrations document as an ordinary provider entry, like every other.",
+      "$comment": "All 125 TokenRouter entries were searched by name (suno|udio|lyria|musicgen|music|song|melody) and by tag: the only audio-capable models there are the two conversational speech ones. The owner chose ElevenLabs Music direct. ONE candidate, and no key is stored here: it lives in the integrations document as an ordinary provider entry, like every other. This candidate spent a day stood down with `paid_plan_required` and no adapter behind it; both facts are gone because both were fixed, and the entry is otherwise the same entry — which is the point of leaving a preferred-but-blocked model ranked in place.",
       "candidates": [
         { "model": "elevenlabs/music-v1", "provider": "elevenlabs", "shape": "elevenlabs-music",
-          "in": ["text"], "out": ["audio"],
-          "status": "unavailable", "reason_code": "paid_plan_required",
-          "reason": "Background music needs a paid ElevenLabs plan — the key measured on this account authenticates, but Music is not included in the free tier",
-          "measured": "e2e run 2026-08-15: POST /v1/music answered 402 Payment Required, NOT 401 — so the key is valid and the account is free-tier. The same key is scoped and cannot do speech either: GET /v1/voices answered 401 'missing the permission'. No adapter is written for this shape (see build_submit), so marking it available without writing one raises rather than silently sending nothing.",
+          "params": ["prompt", "duration"], "in": ["text"], "out": ["audio"],
+          "format": "mp3", "output_mime": "audio/mpeg", "latency_s": 5.59,
+          "note": "The endpoint takes NO model id — `elevenlabs/music-v1` is our name for the candidate, which is what the chain reports, quarantines and prices on. Length is `music_length_ms`, in MILLISECONDS, where every other duration in this file is seconds.",
+          "measured": "e2e run 2026-08-15 against the live account, through the ordinary chain: the earlier 402 paid_plan_required is gone (tier `payg`) and POST /v1/music answered 200 with 160541 raw bytes of audio/mpeg — a 10.031 s mp3 in 5.588 s, for music_length_ms 10000. It HONOURS the length asked for; 10.031 against 10.000 is the encoder's frame alignment, not a model ignoring an argument, so no duration_ignored here. Cost 69 characters of the 64945 budget (provider's own /v1/usage/character-stats, breakdown_type=product_type). Only a 10 s render was measured, so no floor and no ceiling are recorded — a duration nobody asked for is worse than no duration, and this endpoint bills. No `usd`: this account is metered in characters and a dollar figure would be one somebody invented.",
           "verification": "verified" }
       ]
     },
