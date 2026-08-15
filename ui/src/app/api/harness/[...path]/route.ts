@@ -97,10 +97,17 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     // BFF memory stays O(chunk) regardless of payload size. content-length/disposition are
     // preserved when present so downloads still name + size correctly.
     const out: Record<string, string> = { 'content-type': ctType };
-    const cd = res.headers.get('content-disposition');
-    if (cd) out['content-disposition'] = cd;
-    const cl = res.headers.get('content-length');
-    if (cl) out['content-length'] = cl;
+    // content-range is NOT optional on a 206: a partial response without it is malformed, and a
+    // browser given one stops playing rather than seeking. Generated video is served from this
+    // proxy, so dropping these turned a correct ranged route into a file that Safari refuses to
+    // play at all and that no timeline can scrub. accept-ranges is what advertises the capability
+    // in the first place; etag/cache-control let an immutable clip be fetched once instead of on
+    // every scrub.
+    for (const h of ['content-disposition', 'content-length', 'content-range', 'accept-ranges',
+      'etag', 'cache-control', 'last-modified', 'vary']) {
+      const v = res.headers.get(h);
+      if (v) out[h] = v;
+    }
     return new Response(res.body, { status: res.status, headers: out });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
