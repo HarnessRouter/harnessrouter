@@ -1,7 +1,7 @@
 # HarnessRouter
 
-**Run agentic coding harnesses on your own machine.** One container, your own API keys, your
-own data. Configure a harness, give it work, watch it run — no account, no cloud, no telemetry.
+**Run agent harnesses on your own machine.** One container, your own API keys, your
+own data. Configure a harness, give it work, watch it run, with no account, no cloud, and no telemetry. Community Edition implements the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org), the open standard the hosted service implements too.
 
 ```bash
 docker run -d -p 3000:3000 -v harnessrouter:/data \
@@ -19,20 +19,18 @@ That's the whole install. State is SQLite and files on one Docker volume.
 
 ## What it is
 
-A *harness* is a configured agent: a backend runtime, a model, instructions, and limits. A
-*task* is one run of that harness — a real conversation against a real POSIX workspace with
-bash and git, streamed back as it happens.
+An *agent harness* is the runtime layer around a model; Codex, Claude Code, and Hermes are harnesses. In this repo's API you also create *harness* objects: a saved configuration whose `base` is one of those runtimes, plus a model, instructions, and limits. A *task* is one run of that configuration, a real conversation against a real POSIX workspace with bash and git, streamed back as it happens.
 
-HarnessRouter gives you the full protocol for both: an OpenAI **Responses-compatible** API for
+HarnessRouter Community Edition implements UHP for both: an OpenAI **Responses-compatible** API for
 running turns, harness CRUD, sessions, streaming, cancellation, and idempotency. The console is
-a thin client over that API — anything the UI does, you can do from `curl`.
+a thin client over that API; anything the UI does, you can do from `curl`.
 
 **The console is the hosted product's console.** Not a cut-down rebuild: the same pages, the
-same components, the same API client. Surfaces that need a service a single box doesn't have —
-accounts, billing, marketplace — are simply not shown.
+same components, the same API client. Surfaces that need a service a single box doesn't have,
+such as accounts, billing, and marketplace, are simply not shown.
 
-**Backends:** Claude Code, OpenAI Codex, and Hermes. They are installed on first run rather than
-shipped in the image — Claude Code is distributed under Anthropic's own terms and hermes-agent
+**Supported harnesses:** Codex, Claude Code, and Hermes. They are installed on first run rather than
+shipped in the image. Claude Code is distributed under Anthropic's own terms and hermes-agent
 declares no license, so neither can be redistributed. Set `HR_BACKENDS` to choose which you want,
 and review each tool's license before enabling it.
 
@@ -241,14 +239,15 @@ why this is genuinely the same codebase rather than a fork that drifts.
 ## The Unified Harness Protocol
 
 This repository is both an implementation and a standard. The protocol the gateway speaks is
-specified, versioned and testable in [`protocol/`](protocol/):
+specified, versioned and testable in [`protocol/`](protocol/), and documented at
+[unifiedharnessprotocol.org](https://unifiedharnessprotocol.org):
 
 | | |
 |---|---|
 | [Specification](protocol/versions/2026-08-11/) | Ten normative chapters, version `2026-08-11` |
 | [Machine-readable](protocol/schema/) | OpenAPI 3.1 + JSON Schema 2020-12, generated from one source |
-| [Conformance suite](protocol/conformance/) | 47 runnable checks — passing it is what "conformant" means |
-| [Governance](protocol/GOVERNANCE.md) | How the standard changes: prose first, three artifacts together |
+| [Conformance suite](protocol/conformance/) | 47 runnable checks; passing it is what "conformant" means, and what earns the right to the UHP name |
+| [Governance](protocol/GOVERNANCE.md) | How the standard changes, and the naming and conformance policy |
 
 This edition is the reference implementation and
 [passes at class Full](protocol/conformance/reports/harnessrouter-ce-0.3.0.json). **The standard can
