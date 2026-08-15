@@ -1,11 +1,24 @@
-# Publish the all-in-one image to Docker Hub.
+# Publish the all-in-one image to Docker Hub, for both architectures people actually use.
 #
 # This exists because the alternative was a person minting a Docker Hub token by hand for every
 # release, pasting it into a shell on a build VM, and then having to remember to revoke it. That
 # is three chances to leak a credential and one chance to forget, per release.
 #
 # Here the token is a repository secret: it is written once, never read back, and never travels
-# through anyone's terminal or transcript. Publishing becomes `git tag v0.4.2 && git push --tags`.
+# through anyone's terminal or transcript. Publishing becomes `git tag v0.4.3 && git push --tags`.
+#
+# WHY THE BUILD FANS OUT AND THE TAG DOES NOT
+#
+# Each architecture builds on a runner of its own kind — no QEMU, so arm64 is not the slow long
+# pole it becomes under emulation — and each smoke-tests ITSELF on that runner. That second part
+# is the point: the gate that catches "the agent CLIs cannot install on a fresh volume" had only
+# ever run on amd64, so the guarantee was unproven on the architecture most developers have.
+#
+# The version tag is created ONCE, at the end, from both digests, and only if both smoke tests
+# passed. Publishing amd64 under the real tag and adding arm64 later would mean the tag names two
+# different things at two different times: whoever pulled during the window got a different
+# artifact and had no way to know. An arm64 user in that window would silently get the emulated
+# image and never learn a native one existed.
 #
 # ONE-TIME SETUP
 #   1. hub.docker.com → account settings → Personal access tokens → Generate, "Read & Write".
@@ -21,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish, without the v (e.g. 0.4.2)'
+        description: 'Version to publish, without the v (e.g. 0.4.3)'
         required: true
       latest:
         description: 'Also move the :latest tag'
@@ -32,22 +45,20 @@ env:
   IMAGE: harnessrouter/harnessrouter
 
 jobs:
-  publish:
+  # ── what we are about to ship ──────────────────────────────────────────────────────────────
+  # Resolved once, so both architectures bake the SAME skills and kits. Resolving per-arch would
+  # let a commit land between the two builds and produce a manifest whose halves disagree.
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      skills: ${{ steps.refs.outputs.skills }}
+      kits: ${{ steps.refs.outputs.kits }}
     steps:
-      - uses: actions/checkout@v4
-
-      # The image is ~2 GB unpacked and the runner ships with several GB of Android SDK and .NET
-      # nobody here needs. Without this the build dies on "no space left on device" somewhere in
-      # the middle, which reads like a broken Dockerfile.
-      - name: Reclaim runner disk
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
-          df -h / | tail -1
-
       - name: Work out the version
         id: v
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
             V='${{ inputs.version }}'
           else
@@ -59,13 +70,6 @@ jobs:
           esac
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "Publishing $V"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # The skills and the kits are pulled from their own repositories at build time, and a release
       # must never ship the catalogue some earlier build happened to fetch. Resolving both heads to
@@ -94,46 +98,139 @@ jobs:
           resolve skills      skills
           resolve starter-kit kits
 
-      - name: Build and push
+  # ── one runner per architecture ────────────────────────────────────────────────────────────
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false          # a failure on one arch should still show the other's result
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm     # native; QEMU here would take the best part of an hour
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image is ~2 GB unpacked and the runner ships with several GB of Android SDK and .NET
+      # nobody here needs. Without this the build dies on "no space left on device" somewhere in
+      # the middle, which reads like a broken Dockerfile.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          df -h / | tail -1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Pushed BY DIGEST, with no tag. Nothing a user can pull exists until the merge job says so.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
-          push: true
+          platforms: ${{ matrix.platform }}
           build-args: |
-            HR_SKILLS_REF=${{ steps.refs.outputs.skills }}
-            HR_KITS_REF=${{ steps.refs.outputs.kits }}
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.v.outputs.version }}
-            ${{ (github.event_name != 'workflow_dispatch' || inputs.latest) && format('{0}:latest', env.IMAGE) || '' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            HR_SKILLS_REF=${{ needs.plan.outputs.skills }}
+            HR_KITS_REF=${{ needs.plan.outputs.kits }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       # A published image that cannot install its agent CLIs is the failure this project has
       # already shipped once (a root-owned npm cache in /home/agent). It was invisible because
       # every instance that was checked had a data volume from before the fault. So the release
-      # gate runs the image the way a NEW user does: empty volume, and read what it says.
-      - name: Smoke-test the published image on a fresh volume
+      # gate runs the image the way a NEW user does: empty volume, and read what it says — and now
+      # it does that on EACH architecture, on hardware of that architecture.
+      - name: Smoke-test this architecture on a fresh volume
         run: |
+          set -euo pipefail
+          REF="${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
           docker rm -f smoke 2>/dev/null || true
           docker volume rm smoke-data 2>/dev/null || true
-          docker run -d --name smoke -v smoke-data:/data \
-            -e HR_SECRET_KEY=ci-smoke ${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+          docker run -d --name smoke -v smoke-data:/data -e HR_SECRET_KEY=ci-smoke "$REF"
           for i in $(seq 1 60); do
             docker logs smoke 2>&1 | grep -q "backends available" && break
             sleep 5
           done
           docker logs smoke 2>&1 | tail -30
-          LINE=$(docker logs smoke 2>&1 | grep "backends available" | tail -1)
+          LINE=$(docker logs smoke 2>&1 | grep "backends available" | tail -1 || true)
           echo "$LINE"
           for b in claude codex hermes; do
-            echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on a fresh volume"; exit 1; }
+            echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on ${{ matrix.arch }}"; exit 1; }
           done
           docker exec smoke ls /opt/harnessrouter/kits
+          # The architecture is asserted, not assumed: a QEMU fallback would otherwise pass here
+          # silently and ship an emulated image under the native manifest.
+          GOT=$(docker image inspect "$REF" --format '{{.Architecture}}')
+          [ "$GOT" = "${{ matrix.arch }}" ] || { echo "::error::built $GOT, expected ${{ matrix.arch }}"; exit 1; }
+          echo "${{ matrix.arch }} ok"
 
-      - name: Say what shipped
+      - name: Hand the digest to the merge
         run: |
-          echo "### harnessrouter ${{ steps.v.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "docker pull ${{ env.IMAGE }}:${{ steps.v.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  # ── the tag, created once, from both ───────────────────────────────────────────────────────
+  merge:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create the manifest
+        run: |
+          set -euo pipefail
+          V='${{ needs.plan.outputs.version }}'
+          REFS=""
+          for f in /tmp/digests/*; do
+            REFS="$REFS ${{ env.IMAGE }}@$(cat "$f")"
+            echo "$(basename "$f") $(cat "$f")"
+          done
+          [ -n "$REFS" ] || { echo "::error::no digests to merge"; exit 1; }
+          TAGS="-t ${{ env.IMAGE }}:$V"
+          if [ "${{ github.event_name }}" != workflow_dispatch ] || [ "${{ inputs.latest }}" = true ]; then
+            TAGS="$TAGS -t ${{ env.IMAGE }}:latest"
+          fi
+          docker buildx imagetools create $TAGS $REFS
+
+      # Read the published manifest back: the promise of this workflow is that the tag serves both
+      # architectures, and only the registry can confirm it.
+      - name: Prove the tag serves both architectures
+        run: |
+          set -euo pipefail
+          V='${{ needs.plan.outputs.version }}'
+          PLAT=$(docker buildx imagetools inspect "${{ env.IMAGE }}:$V" --raw \
+                 | jq -r '.manifests[]?.platform | select(.os=="linux") | "\(.os)/\(.architecture)"' | sort -u)
+          echo "$PLAT"
+          echo "$PLAT" | grep -qx 'linux/amd64' || { echo "::error::amd64 missing from $V"; exit 1; }
+          echo "$PLAT" | grep -qx 'linux/arm64' || { echo "::error::arm64 missing from $V"; exit 1; }
+          {
+            echo "### harnessrouter $V"
+            echo '```'
+            echo "docker pull ${{ env.IMAGE }}:$V"
+            echo '```'
+            echo "$PLAT" | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"

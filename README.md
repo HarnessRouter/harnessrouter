@@ -37,11 +37,10 @@ own data. Configure a harness, give it work, watch it run, with no account, no c
 ## Install
 
 Six steps, and at the end of them you have a running instance, a signed-in console, and an agent
-that has answered you. Everything here was run against the published 0.4.2 release on a brand-new
-volume, and every block of output is what it actually printed.
+that has answered you.
 
-You need Docker, about 4 GB of disk (2.7 GB of image and around a gigabyte in the data volume once
-the agent CLIs install), and an API key from a model provider. There is no account to create and
+You need Docker, about 4 GB of disk, and an API key from a model provider. There is no account to
+create and
 nothing to sign up for. The provider key is the only credential in the story, and it never leaves
 the box except to call the provider it belongs to.
 
@@ -51,11 +50,11 @@ the box except to call the provider it belongs to.
 docker pull harnessrouter/harnessrouter
 ```
 
-716 MB over the wire, in 25 layers.
+About 700 MB to download.
 
 `latest` is the current release, and pulling it again is how you upgrade. Pin a version only
-when you need two machines to run the same bytes, for instance `harnessrouter/harnessrouter:0.4.2`
-in a compose file you share with a team. `docker image inspect` will tell you which one you have.
+when you need two machines to run the same bytes, by naming a version in a compose file you share
+with a team. Releases are listed on [Docker Hub](https://hub.docker.com/r/harnessrouter/harnessrouter/tags).
 
 **The published image is `linux/amd64` only.** On an Apple Silicon Mac, `docker pull` gets an
 emulated image: a platform warning, and a first start that is already slow made slower.
@@ -105,7 +104,7 @@ an afternoon:
 A pairing that is not on that list does not fail loudly: the turn comes back empty after a long
 wait. So if a turn returns nothing at all, check the pair before you check the key. In particular
 `"provider":"openai-api"`, which `.env.example` still shows for a custom endpoint, is not one a
-backend accepts in 0.4.2; use `"openai"` with a `base_url`, as above.
+backend accepts; use `"openai"` with a `base_url`, as above.
 
 A backend with no policy at all is more forthcoming, and this is what you get if you skip this step
 entirely:
@@ -169,13 +168,12 @@ Installing them on first run means you install them yourself, from upstream, und
 which is also why you should read them before you use those two backends. Codex is Apache-2.0 and
 arrives the same way, so all three land in one place.
 
-On the machine this was measured on the whole sequence took **35 seconds**: Claude Code 4s, Codex
-5s, Hermes 24s, then two more for the services behind the console. A slow connection makes it
-longer. `backends available:` is the line worth reading: it lists what actually installed, so a
-backend that failed is named rather than silently missing, and the others still work.
+Expect about half a minute, longer on a slow connection. `backends available:` is the line worth
+reading: it lists what actually installed, so a backend that failed is named rather than silently
+missing, and the others still work.
 
-The install is once per volume, not once per start. Starting a fresh container against that same
-volume took **3 seconds** and printed no install lines at all.
+This happens once per volume, not once per start. Every start after it takes a few seconds and
+prints no install lines at all.
 
 If you skipped `HR_AUTH_PASSWORD` in step 3, one more line comes first, and comes back on every
 start until you fix it:
@@ -230,7 +228,7 @@ the instance is gone; copy it and you have moved the instance, harnesses, transc
 ## Starter kits
 
 A kit is a working product in one click. It provisions the harness it needs, installs the skill
-that teaches that agent the product's format, and opens its own app. 0.4.2 ships four.
+that teaches that agent the product's format, and opens its own app. There are four.
 
 ![The four starter kits, before any of them has been launched](docs/images/dashboard-1-starter-kits.png)
 
@@ -432,7 +430,7 @@ want is a run-time setting:
 docker run -e HR_BACKENDS=claude,codex,hermes ...   # the default
 ```
 
-**Known issue in 0.4.2: any value that leaves out `hermes` makes the container exit immediately**
+**Known issue: any value that leaves out `hermes` makes the container exit immediately**
 with status 1 and no error message. `claude`, `codex` and `claude,codex` all do it, and the last
 line in the log is the install line for the backend it was working on, so it reads as if the
 install killed it, which it did not. Until that is fixed, leave `HR_BACKENDS` unset.
@@ -479,7 +477,7 @@ Then run a turn. The gateway speaks the Responses API:
 ```bash
 curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
   -H 'content-type: application/json' \
-  -d '{"input":"Reply with exactly this and nothing else: HarnessRouter 0.4.2 verified.",
+  -d '{"input":"Reply with exactly this and nothing else: it works.",
        "metadata":{"harness_id":"codex"},
        "model":"gpt-5.4-mini",
        "stream":false}'
@@ -491,7 +489,7 @@ curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
  "model":"gpt-5.4-mini",
  "output":[{"id":"msg_3d71e018c6584abbb063ee16d9a36e75","type":"message","status":"completed",
             "role":"assistant",
-            "content":[{"type":"output_text","text":"HarnessRouter 0.4.2 verified.","annotations":[]}]}],
+            "content":[{"type":"output_text","text":"it works.","annotations":[]}]}],
  "store":true,
  "usage":{"input_tokens":10878,"output_tokens":34,"total_tokens":10912},
  "metadata":{"session_id":"hsessa79756fab07a4bf58fa072be24d5ce59"}}

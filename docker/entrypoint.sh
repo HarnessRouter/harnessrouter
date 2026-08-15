@@ -171,7 +171,12 @@ install_backends() {
   [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"
   # Hermes otherwise tries to install its own dependencies mid-turn.
   export HERMES_DISABLE_LAZY_INSTALLS=1
-  wanted hermes && verify_hermes_mcp
+  # `wanted hermes && verify_hermes_mcp` looks equivalent and is not: as the LAST command in the
+  # function it becomes the function's exit status, so under `set -e` an instance that did not ask
+  # for hermes aborted the whole entrypoint — exit 1, no message, the log ending on an install line
+  # so it read as if the install had killed it. HR_BACKENDS=claude, =codex and =claude,codex were
+  # all unusable, which is exactly the choice the licence note above asks people to make.
+  if wanted hermes; then verify_hermes_mcp; fi
 }
 
 # hermes 0.19.0 gates HTTP MCP on importing `streamablehttp_client`, the name the mcp SDK
