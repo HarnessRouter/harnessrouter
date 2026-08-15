@@ -73,6 +73,17 @@ RUN set -eux; \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
+# Assembling generated clips into one film. ffmpeg cuts and letterboxes the shots; ffprobe is how
+# the gateway learns a clip's real duration and how the assembled film's length is checked against
+# the timeline it was cut from. Built without it, the media server reports export unavailable and
+# refuses honestly — every clip is still downloadable on its own — rather than degrading silently.
+ARG WITH_MEDIA=1
+RUN set -eux; \
+    if [ "$WITH_MEDIA" = "1" ]; then \
+      apt-get update -y && apt-get install -y --no-install-recommends ffmpeg \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Node is needed for the UI server and for the npm-based agent CLIs.
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \

@@ -173,6 +173,15 @@ def _record(hid: str) -> dict | None:
     return asyncio.run(app._hosted_record(ORG, _key(hid)))
 
 
+def _secrets_root() -> Path:
+    """Where the running process's secret store actually is.
+
+    Read off the store rather than rebuilt from this module's own temp dir: `app` is imported once
+    per process, so whichever test module got there first decided HR_DATA_DIR — and an assertion
+    about "what is on disk" that looks in an empty directory passes for the wrong reason."""
+    return Path(app.BACKING.secrets._root)
+
+
 def _save_config(api, hid: str, servers: list[dict], name="Dashboard"):
     """What the console does when someone presses Save: a whole-config PUT."""
     return api.put(f"/v1/harnesses/{hid}",
@@ -243,7 +252,7 @@ def test_the_entry_carries_a_reference_and_not_a_connection_string(api, kit, har
 
 def test_the_whole_connection_record_is_encrypted_on_disk(api, kit):
     hid = _attach(api, kit)["harnessId"]
-    files = list(Path(_DATA, "secrets").rglob(_key(hid)))
+    files = list(_secrets_root().rglob(_key(hid)))
     assert files, "the record was not written to the secret store"
     raw = files[0].read_text()
     assert raw.startswith("hrenc1:")
@@ -329,7 +338,7 @@ def test_renaming_an_entry_is_not_a_removal(api, connected):
 def test_deleting_the_harness_does_not_leave_the_credential_behind(api, connected):
     """The most decisive thing the UI offers must not leave a production password on disk."""
     key = _key(connected)
-    stored = next(iter(Path(_DATA, "secrets").rglob(key)))
+    stored = next(iter(_secrets_root().rglob(key)))
     assert PG_DSN == (_record(connected) or {})["dsn"]
 
     assert api.delete(f"/v1/harnesses/{connected}").json()["deleted"] is True
