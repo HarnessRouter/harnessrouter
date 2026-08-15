@@ -8,7 +8,7 @@ import { SkelPage } from '@/components/Skel';
 import { useParams, useRouter } from 'next/navigation';
 import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
-  modelAvailable,
+  modelAvailable, disconnectDatasource,
   type CustomHarness, type OobHarness } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
@@ -59,6 +59,22 @@ export default function HarnessSettingsPage() {
   const baseTools = srvBase?.tools || [];
   const models = oobModels(base);
   const upd = (p: Partial<CustomHarness>) => setDraft((d) => (d ? { ...d, ...p } : d));
+
+  // Detaching the database is immediate, not part of the form's Save: it is a separate route
+  // (the credential behind it never passes through this page), and leaving it staged would mean
+  // a page showing "no database" while every turn still had one.
+  async function disconnectDb() {
+    if (!draft || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      await disconnectDatasource(draft.id);
+      const fresh = { ...draft, dataSource: null };
+      setDraft(fresh);
+      setSaved((s) => (s ? { ...s, dataSource: null } : s));
+    }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
 
   async function save() {
     if (!draft || busy) return;
@@ -190,9 +206,28 @@ export default function HarnessSettingsPage() {
           <section className="form-section">
             <div><h3>Tools</h3><p>Control inherited tools and add MCP servers for external capabilities.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0)} configured tools</strong>
+              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0) + (draft?.dataSource ? 1 : 0)} configured tools</strong>
                 {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add MCP</button>}</div>
               <div className="capability-list">
+                {/* The database, when one is connected. The gateway adds this tool per turn rather
+                    than storing it on the config, so that connecting and disconnecting take effect
+                    on the next turn and a stored entry can never point at a database that is gone.
+                    The cost of that is what you are reading this comment because of: it did not
+                    appear on the page that lists what this agent can do, so reviewing the agent
+                    did not reveal that it can read a production database. It appears now, it says
+                    which database, and disconnecting is here rather than somewhere else. */}
+                {draft?.dataSource && (
+                  <div className="capability-row">
+                    <span className="capability-icon"><iconify-icon icon="tabler:database"></iconify-icon></span>
+                    <div className="capability-copy"><strong>Database</strong>
+                      <span>Reads {draft.dataSource.database} · {draft.dataSource.host} · read-only, one SELECT at a time
+                        {draft.dataSource.sampleRows ? ' · sees example rows' : ' · column names only, no values'}</span></div>
+                    <div className="capability-actions">
+                      <button className="button quiet small" type="button" disabled={readOnly || busy}
+                        onClick={() => void disconnectDb()}>Disconnect</button>
+                    </div>
+                  </div>
+                )}
                 {baseTools.map((t) => (
                   <div key={t.name} className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:plug"></iconify-icon></span>

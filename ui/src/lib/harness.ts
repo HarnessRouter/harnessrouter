@@ -42,6 +42,12 @@ export interface CustomHarness {
   maxStep?: number | null;        // default agent step budget per turn (blank = 40)
   timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = server default)
   additionalHeaders?: string[]; // declared header NAMES callers pass per request (app-level auth)
+  // The database this Harness reads, if one is connected. Read-only here: it is attached and
+  // detached through /harnesses/{id}/datasource, never by saving this form, because the value
+  // behind it is a credential this UI is never given. Present so the tools list can SHOW the
+  // database tool — the gateway adds that tool per turn rather than storing it, and a capability
+  // nobody can see on the page that lists capabilities is a capability nobody can audit.
+  dataSource?: { engine: string; host: string; database: string; sampleRows: boolean; updatedAt: number } | null;
   createdAt: number;
 }
 
@@ -276,6 +282,17 @@ export async function listCustom(): Promise<CustomHarness[]> {
 export async function getCustom(id: string): Promise<CustomHarness | null> {
   try { return await gw<CustomHarness>('GET', `/v1/harnesses/${encodeURIComponent(id)}`); }
   catch { return null; }
+}
+
+/** Detach the database a Harness reads, and overwrite the stored credential.
+ *
+ *  Its own route rather than a field on the harness save: the connection is written once, at
+ *  launch, and this UI is never given the value — so there is nothing here to edit, only
+ *  something to remove. Removing it is also the only off switch the database tool has, and that
+ *  is deliberate: the tool exists for exactly as long as a database is connected, so a second
+ *  enable/disable flag beside it would be a second thing that can disagree with the first. */
+export async function disconnectDatasource(id: string): Promise<void> {
+  await gw('DELETE', `/v1/harnesses/${encodeURIComponent(id)}/datasource`);
 }
 
 export async function createCustom(input: Partial<CustomHarness> & { name: string; base: string }): Promise<CustomHarness> {
