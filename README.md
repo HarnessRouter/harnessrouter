@@ -37,7 +37,7 @@ own data. Configure a harness, give it work, watch it run, with no account, no c
 ## Install
 
 Six steps, and at the end of them you have a running instance, a signed-in console, and an agent
-that has answered you. Everything here was run against the published `0.4.2` image on a brand-new
+that has answered you. Everything here was run against the published 0.4.2 release on a brand-new
 volume, and every block of output is what it actually printed.
 
 You need Docker, about 4 GB of disk (2.7 GB of image and around a gigabyte in the data volume once
@@ -48,15 +48,14 @@ the box except to call the provider it belongs to.
 ### 1. Pull the image
 
 ```bash
-docker pull harnessrouter/harnessrouter:0.4.2
+docker pull harnessrouter/harnessrouter
 ```
 
 716 MB over the wire, in 25 layers.
 
-**Pin the version, and pin this one.** `latest` currently resolves to **0.4.1**: one release
-behind, with three starter kits instead of four and no video export. Every command on this page
-names `0.4.2` explicitly, and so should yours: an unpinned `docker run` today gets you a different
-product from the one in these screenshots.
+`latest` is the current release, and pulling it again is how you upgrade. Pin a version only
+when you need two machines to run the same bytes, for instance `harnessrouter/harnessrouter:0.4.2`
+in a compose file you share with a team. `docker image inspect` will tell you which one you have.
 
 **The published image is `linux/amd64` only.** On an Apple Silicon Mac, `docker pull` gets an
 emulated image: a platform warning, and a first start that is already slow made slower.
@@ -124,7 +123,7 @@ docker run -d --name harnessrouter \
   -e HR_AUTH_PASSWORD='something only you know' \
   -e HR_SECRET_GLOBAL_HARNESS_CONN_ANTHROPIC='{"name":"anthropic","provider":"anthropic","api_key":"sk-ant-…"}' \
   -e HR_SECRET_GLOBAL_HARNESS_POLICY_CLAUDE='{"chain":["anthropic"]}' \
-  harnessrouter/harnessrouter:0.4.2
+  harnessrouter/harnessrouter
 ```
 
 Three parts of that line are load-bearing. `-p 127.0.0.1:` keeps the console on loopback, which is
@@ -136,9 +135,9 @@ is the difference between an instance only you can drive and one whose password 
 file.
 
 Compose works too (`cp .env.example .env`, put your key in it, `docker compose up -d`), but read
-`docker-compose.yml` before you do. It still pins `latest`, it publishes `3000:3000` on every
-interface rather than on loopback, and `.env.example` ships with the default password filled in.
-Change all three lines and it behaves like the command above.
+`docker-compose.yml` before you do. It publishes `3000:3000` on every interface rather than on
+loopback, and `.env.example` ships with the default password filled in. Change those two lines and
+it behaves like the command above.
 
 ### 4. Watch the first start
 
@@ -320,7 +319,7 @@ DNS, so on it only the container's IP works, and that IP changes:
 docker network create hr-net
 docker network connect hr-net my-postgres
 docker run -d --name harnessrouter --network hr-net \
-  -p 127.0.0.1:3000:3000 -v harnessrouter:/data … harnessrouter/harnessrouter:0.4.2
+  -p 127.0.0.1:3000:3000 -v harnessrouter:/data … harnessrouter/harnessrouter
 ```
 
 Then `my-postgres:5432` works as a host in the connection string. A database on the host machine
