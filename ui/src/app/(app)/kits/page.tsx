@@ -25,6 +25,9 @@ interface Datasource { engine: string; host: string; database: string; sampleRow
 interface Kit {
   id: string; title: string; tagline: string; description: string;
   icon: string; accent: string; route: string;
+  /** The kit's own mark, served from its directory. Empty when it ships none — then `icon` (an
+   *  iconify name) is what the card draws instead. */
+  iconUrl: string;
   launched: boolean; harnessId: string | null;
   skills: string[];
   runningOn: { base: string; model: string } | null;
@@ -164,9 +167,20 @@ export default function KitsPage() {
                 <span className="kit-wash" style={k.accent ? { background: k.accent } : undefined} />
 
                 <header className="kit-head">
-                  <span className="kit-icon" style={k.accent ? { background: k.accent } : undefined}>
-                    <iconify-icon icon={k.icon || 'tabler:box'}></iconify-icon>
-                  </span>
+                  {/* The kit's own product mark when it ships one — the same drawing its app puts
+                      in its own title bar, so the card and the thing it opens are recognisably one
+                      product. A kit without a mark keeps the icon name from its manifest, tinted
+                      with its accent; the mark supplies its own colour and needs no tile. */}
+                  {k.iconUrl ? (
+                    <span className="kit-icon is-mark">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={k.iconUrl} alt="" width={40} height={40} />
+                    </span>
+                  ) : (
+                    <span className="kit-icon" style={k.accent ? { background: k.accent } : undefined}>
+                      <iconify-icon icon={k.icon || 'tabler:box'}></iconify-icon>
+                    </span>
+                  )}
                   <div className="kit-titles">
                     <h2>{k.title}</h2>
                     <p className="kit-tagline">{k.tagline}</p>

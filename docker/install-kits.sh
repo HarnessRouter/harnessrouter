@@ -63,6 +63,15 @@ for kid in $INCLUDED; do
         rm -rf "$DEST/$kid/$APP_DIR"
         mv "$DEST/$kid/.app-dist" "$DEST/$kid/app"
     fi
+
+    # The kit's product mark, moved to where the console can fetch it (/kits/<id>/icon.svg). Kept
+    # as a file the kit owns rather than an icon name the console picks: a kit that ships its own
+    # UI should not have its identity chosen for it by the page that lists it. Kits without one
+    # fall back to the `icon` field in kit.json, so this is additive.
+    if [ -f "$DEST/$kid/icon.svg" ]; then
+        mkdir -p "$DEST/$kid/app"
+        cp "$DEST/$kid/icon.svg" "$DEST/$kid/app/icon.svg"
+    fi
     BUILT="$BUILT $kid"
 done
 

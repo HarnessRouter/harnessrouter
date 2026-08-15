@@ -788,12 +788,21 @@ body.hr-resizing iframe { pointer-events: none; }
 
 
 /* ── Starter Kits ───────────────────────────────────────────────────────────────────────── */
+/* 300px, not 340: at 340 a three-kit catalogue wraps to 2 + 1 on every laptop, and the third card
+   sits alone beside an empty half-row. The cards are text that reflows, so the narrower floor buys
+   a row that reads as one shelf. `auto-fit` collapses the empty tracks so ONE kit still fills the
+   width rather than hugging the left edge. */
+/* `min(300px, 100%)`, not a bare 300px: a minmax floor is a HARD floor, so in a container narrower
+   than the floor the track keeps its 300px and the cards push out past the page. Capping the floor
+   at the container's own width lets it collapse instead. */
 .kit-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: 16px; align-items: stretch;
 }
 /* A single kit must not stretch to the width of a 27" display and look lost. */
-@media (min-width: 1100px) { .kit-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 420px)); } }
+@media (min-width: 1100px) {
+  .kit-grid { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 460px)); }
+}
 
 .kit-card {
   position: relative; display: flex; flex-direction: column; gap: 12px;
@@ -811,6 +820,11 @@ body.hr-resizing iframe { pointer-events: none; }
   width: 40px; height: 40px; border-radius: 11px; background: var(--accent);
   color: #fff; font-size: 21px; flex: 0 0 auto;
 }
+/* A kit that ships its own mark draws it as itself: no tile behind it, no tint over it. The mark
+   already carries the product's colour — putting it on an accent square would be the console
+   restating something the drawing has said. */
+.kit-icon.is-mark { background: none; border-radius: 0; }
+.kit-icon.is-mark img { display: block; width: 40px; height: 40px; }
 .kit-titles { flex: 1; min-width: 0; }
 .kit-titles h2 { margin: 0; font-size: 16px; font-weight: 650; color: var(--ink); letter-spacing: -.01em; }
 .kit-tagline { margin: 3px 0 0; font-size: 13px; line-height: 1.45; color: var(--muted); }

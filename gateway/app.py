@@ -7715,6 +7715,13 @@ async def list_kits(request: Request) -> dict:
                     "tagline": kit.get("tagline") or "",
                     "description": kit.get("description") or "",
                     "icon": kit.get("icon") or "", "accent": kit.get("accent") or "",
+                    # The kit's own mark, when it ships one (install-kits.sh puts it beside the
+                    # app). Reported as a URL rather than inlined: it is an image, the route that
+                    # serves the kit's app serves it already, and inlining markup from a file into
+                    # a page is a habit worth not having. `icon` remains the fallback.
+                    "iconUrl": (f"/kits/{kid}/icon.svg"
+                                if (pathlib.Path(_KITS_DIR) / kid / "app" / "icon.svg").is_file()
+                                else ""),
                     "route": (kit.get("app") or {}).get("route") or "",
                     "launched": bool(h),
                     "harnessId": (h or {}).get("id") or None,
