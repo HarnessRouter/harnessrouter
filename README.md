@@ -40,8 +40,8 @@ Six steps, and at the end of them you have a running instance, a signed-in conso
 that has answered you. Everything here was run against the published `0.4.2` image on a brand-new
 volume, and every block of output is what it actually printed.
 
-You need Docker, about 4 GB of disk — 2.7 GB of image and around a gigabyte in the data volume once
-the agent CLIs install — and an API key from a model provider. There is no account to create and
+You need Docker, about 4 GB of disk (2.7 GB of image and around a gigabyte in the data volume once
+the agent CLIs install), and an API key from a model provider. There is no account to create and
 nothing to sign up for. The provider key is the only credential in the story, and it never leaves
 the box except to call the provider it belongs to.
 
@@ -53,7 +53,7 @@ docker pull harnessrouter/harnessrouter:0.4.2
 
 716 MB over the wire, in 25 layers.
 
-**Pin the version, and pin this one.** `latest` currently resolves to **0.4.1** — one release
+**Pin the version, and pin this one.** `latest` currently resolves to **0.4.1**: one release
 behind, with three starter kits instead of four and no video export. Every command on this page
 names `0.4.2` explicitly, and so should yours: an unpinned `docker run` today gets you a different
 product from the one in these screenshots.
@@ -66,7 +66,7 @@ nothing but Docker and git.
 ### 2. Point it at a model provider
 
 **Nothing runs until you do this.** There is no bundled model, no trial key, and no free tier
-hiding in the image — a fresh instance with no connection will start, sign you in, and then have
+hiding in the image. A fresh instance with no connection will start, sign you in, and then have
 nothing to run a turn against.
 
 Two environment variables set one up. A **connection** names a provider and its credential; a
@@ -83,8 +83,8 @@ Two environment variables set one up. A **connection** names a provider and its 
 ```
 
 There is one policy variable per backend: `…POLICY_CLAUDE`, `…POLICY_CODEX`, `…POLICY_HERMES`, and
-you set as many as you have keys for. Somebody else's OpenAI-compatible endpoint — an aggregator, a
-local model, your own inference server — is the same two variables with a `base_url` added:
+you set as many as you have keys for. Somebody else's OpenAI-compatible endpoint (an aggregator, a
+local model, your own inference server) is the same two variables with a `base_url` added:
 
 ```bash
 -e HR_SECRET_GLOBAL_HARNESS_CONN_LOCAL='{"name":"local","provider":"openai","api_key":"…","base_url":"https://api.example.com/v1"}'
@@ -103,8 +103,8 @@ an afternoon:
 | `bedrock` | Claude Code, Hermes |
 | `tokenrouter` | Claude Code, Codex, Hermes |
 
-A pairing that is not on that list does not fail loudly — the turn comes back empty after a long
-wait — so if a turn returns nothing at all, check the pair before you check the key. In particular
+A pairing that is not on that list does not fail loudly: the turn comes back empty after a long
+wait. So if a turn returns nothing at all, check the pair before you check the key. In particular
 `"provider":"openai-api"`, which `.env.example` still shows for a custom endpoint, is not one a
 backend accepts in 0.4.2; use `"openai"` with a `base_url`, as above.
 
@@ -112,7 +112,7 @@ A backend with no policy at all is more forthcoming, and this is what you get if
 entirely:
 
 ```json
-{"error":{"type":"invalid_request_error","code":"invalid_input","message":"no provider configured for backend 'codex' — add an integration for a provider that serves 'gpt-5.4-mini', or configure a connection policy"}}
+{"error":{"type":"invalid_request_error","code":"invalid_input","message":"no provider configured for backend 'codex'. Add an integration for a provider that serves 'gpt-5.4-mini', or configure a connection policy"}}
 ```
 
 ### 3. Run it
@@ -128,14 +128,14 @@ docker run -d --name harnessrouter \
 ```
 
 Three parts of that line are load-bearing. `-p 127.0.0.1:` keeps the console on loopback, which is
-what you want until you have changed the password — if port 3000 is already busy, change only the
+what you want until you have changed the password. If port 3000 is already busy, change only the
 left-hand number (`-p 127.0.0.1:3100:3000`), because the container always listens on 3000 inside.
 `-v harnessrouter:/data` is where everything durable lives, including the agent CLIs installed in
 the next step, so keeping that volume is what makes the second start fast. And `HR_AUTH_PASSWORD`
 is the difference between an instance only you can drive and one whose password is printed in this
 file.
 
-Compose works too — `cp .env.example .env`, put your key in it, `docker compose up -d` — but read
+Compose works too (`cp .env.example .env`, put your key in it, `docker compose up -d`), but read
 `docker-compose.yml` before you do. It still pins `latest`, it publishes `3000:3000` on every
 interface rather than on loopback, and `.env.example` ships with the default password filled in.
 Change all three lines and it behaves like the command above.
@@ -166,11 +166,11 @@ This is what it says:
 **The agent CLIs are fetched now rather than shipped in the image, and that is a licensing fact
 rather than a packaging preference.** Claude Code is distributed under Anthropic's own terms and
 hermes-agent declares no license at all, so neither can be redistributed inside a public image.
-Installing them on first run means you install them yourself, from upstream, under those terms —
+Installing them on first run means you install them yourself, from upstream, under those terms,
 which is also why you should read them before you use those two backends. Codex is Apache-2.0 and
 arrives the same way, so all three land in one place.
 
-On the machine this was measured on the whole sequence took **35 seconds** — Claude Code 4s, Codex
+On the machine this was measured on the whole sequence took **35 seconds**: Claude Code 4s, Codex
 5s, Hermes 24s, then two more for the services behind the console. A slow connection makes it
 longer. `backends available:` is the line worth reading: it lists what actually installed, so a
 backend that failed is named rather than silently missing, and the others still work.
@@ -193,11 +193,11 @@ the API alike:
 ![The sign-in screen](docs/images/01-login.png)
 
 The username is `harnessrouter` unless you set `HR_AUTH_USER`; the password is whatever you passed
-as `HR_AUTH_PASSWORD`. If you set neither, both are `harnessrouter` — the defaults are printed
+as `HR_AUTH_PASSWORD`. If you set neither, both are `harnessrouter`, and the defaults are printed
 here, which makes them a placeholder rather than a secret, and the container says so on every start
 until you change them.
 
-You can change both from **Profile**, in the account menu at the top right — which asks for the
+You can change both from **Profile**, in the account menu at the top right, which asks for the
 current password as well as the new one, so an unattended tab cannot be used to take over the
 instance. They are then stored on the data volume (`/data/selfhost-auth.json`: a username, a salt
 and a hash, never the password) and take precedence over the environment from then on. An
@@ -212,7 +212,7 @@ from:
 Saving signs out every other browser and restarts the console, which takes about a second. Yours
 stays signed in.
 
-Forgot it? There is no reset email to send, so delete `/data/selfhost-auth.json` and restart — the
+Forgot it? There is no reset email to send, so delete `/data/selfhost-auth.json` and restart. The
 instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
 
 ### 6. Give it something to do
@@ -223,7 +223,7 @@ file it touches, and the answer at the end.
 
 ![A task: the prompt, the run, and the answer](docs/images/04-task.png)
 
-That is the whole install. State is SQLite and files on one Docker volume — delete the volume and
+That is the whole install. State is SQLite and files on one Docker volume. Delete the volume and
 the instance is gone; copy it and you have moved the instance, harnesses, transcripts and all.
 
 ---
@@ -238,10 +238,10 @@ that teaches that agent the product's format, and opens its own app. 0.4.2 ships
 Each card names the base and the model it will run on before you launch it, so you can see what a
 kit is about to spend before it spends it. What it names depends on the keys you gave it in step 2:
 the screenshot above is an instance with three providers connected, and an instance with one will
-recommend that one on every card. Launching asks a single question — what to run it on — and the
+recommend that one on every card. Launching asks a single question, what to run it on, and the
 runtimes you have no key for are listed but disabled, with the reason on them:
 
-> Hermes · `deepseek-v4-pro` — Not connected — add a provider that serves this model to use it.
+> Hermes · `deepseek-v4-pro` · Not connected. Add a provider that serves this model to use it.
 
 What the dialog recommends is a suggestion you can overrule, not a default you have to accept.
 
@@ -250,14 +250,13 @@ What the dialog recommends is a suggestion you can overrule, not a default you h
 A deck is one conversation. Ask for a presentation and the agent designs it: structure first, then
 a style system, then slide by slide.
 
-The deck below came from one sentence — *"A 5-slide deck explaining what a container image is, for
+The deck below came from one sentence: *"A 5-slide deck explaining what a container image is, for
 new engineers."*
 
 ![The Slides editor mid-run: thumbnails filling in on the left, the agent narrating on the right](docs/images/slides-3-editor-working.png)
 
-It works in the open. It writes a `deck.json`, validates it against the deck contract, fixes what
-the validator flags, and the thumbnails fill in as it goes — so you can see the deck taking shape
-rather than watching a spinner and hoping.
+You watch it build. Slides appear as it works, so when the shape is wrong you can say so while
+there are two slides to change instead of twenty.
 
 ![The finished five-slide deck, conversation hidden](docs/images/slides-4-finished-deck.png)
 
@@ -280,15 +279,15 @@ of a thousand rows is a thing you should be able to change your mind about.
 
 ![The finished sheet: three columns of data and a fourth an agent wrote](docs/images/sheets-4-finished-sheet.png)
 
-**One thing to know on a brand-new instance.** An agent column runs one of your *other* agents — a
-sheet will not run itself — so on an instance where Sheets is the only thing you have launched, the
+**One thing to know on a brand-new instance.** An agent column runs one of your *other* agents, and a
+sheet will not run itself, so on an instance where Sheets is the only thing you have launched, the
 column menu has nothing to offer and says so:
 
-> Choose an agent… — You have no other agents yet. Create one, then choose it here.
+> Choose an agent… · You have no other agents yet. Create one, then choose it here.
 
 **Harnesses → Add Harness** is the fix: a base, a model, a name, and it is ready in seconds. The
 picker then lists it with the model it runs on. If you add one while a sheet is open, reload the
-sheet first — the list is read when the page loads.
+sheet first, because the list is read when the page loads.
 
 ### Dashboards
 
@@ -314,7 +313,7 @@ query that ran when the page opened, which is the property that makes it worth t
 Three things to know before you connect one.
 
 **The container has to be able to reach it.** If your database is another container, put both on
-the same user-defined network so the database's *name* resolves — Docker's default bridge has no
+the same user-defined network so the database's *name* resolves. Docker's default bridge has no
 DNS, so on it only the container's IP works, and that IP changes:
 
 ```bash
@@ -338,7 +337,7 @@ disk in plaintext:
 
 Keep it. Change it and the stored connections can no longer be decrypted, and you reconnect them.
 
-**Use a read-only database account.** Every statement is checked and only `SELECT` is allowed —
+**Use a read-only database account.** Every statement is checked and only `SELECT` is allowed,
 non-`SELECT`, multiple statements and data-modifying CTEs are refused, and on PostgreSQL the
 query additionally runs in a `READ ONLY` transaction. That check is a parser, and a parser is a
 thing that can be wrong. An account that has been granted `SELECT` and nothing else is a second
@@ -352,7 +351,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO dashboards;
 ```
 
 The connection string is resolved at the moment a query runs. The agent's sandbox never receives
-it — it gets a tool that runs `SELECT`s — and neither does the browser.
+it. It gets a tool that runs `SELECT`s, and neither does the browser.
 
 **Sample rows** are a per-connection switch, on by default: the agent sees a few real rows per
 table so it can tell a status column from a category one. Turn it off and it sees table and
@@ -393,7 +392,7 @@ sent anywhere but your provider.
 ## Why self-host
 
 - **Your keys, your bills, your data.** Nothing leaves the box except calls to your model provider.
-- **Real workspaces.** Agents get bash, git, and a filesystem — their native environment, not a
+- **Real workspaces.** Agents get bash, git, and a filesystem, their native environment, not a
   sandbox emulation.
 - **The same API as the hosted product.** Not a reduced fork: the same `/v1` surface, so anything
   you build against it keeps working if you later move to the hosted service.
@@ -414,7 +413,7 @@ specified, versioned and testable in [`protocol/`](protocol/), and documented at
 
 This edition is the reference implementation. The most recent published run
 [passes at class Full](protocol/conformance/reports/harnessrouter-ce-0.3.0.json), against 0.3.0.
-**The standard can be implemented without HarnessRouter Cloud** — it is an HTTP contract, and
+**The standard can be implemented without HarnessRouter Cloud**: it is an HTTP contract, and
 nothing in it requires a hosted service. Run the suite against your own server:
 
 ```bash
@@ -436,7 +435,7 @@ docker run -e HR_BACKENDS=claude,codex,hermes ...   # the default
 
 **Known issue in 0.4.2: any value that leaves out `hermes` makes the container exit immediately**
 with status 1 and no error message. `claude`, `codex` and `claude,codex` all do it, and the last
-line in the log is the install line for the backend it was working on — so it reads as if the
+line in the log is the install line for the backend it was working on, so it reads as if the
 install killed it, which it did not. Until that is fixed, leave `HR_BACKENDS` unset.
 
 Chromium is genuinely an image layer, so it stays a build flag:
@@ -457,7 +456,7 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `POOL_MGMT_ENDPOINT` | `http://127.0.0.1:8081` | The runner is in this container. |
 | `HR_POOL_AUTH` | `none` | No cloud identity to present to a loopback runner. |
 | `HR_SANDBOX_TRUST` | `owner` | You own the box, the agent and the key, so the key is handed over directly rather than brokered. |
-| `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume — so a restart doesn't discard work in flight. |
+| `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume, so a restart doesn't discard work in flight. |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HARNESS_INTERNAL_KEY` | generated | Per-container; never leaves the process tree. |
 
@@ -465,7 +464,7 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 
 ## Using the API
 
-The console is optional — it is a thin client over the same API. On a default install that API is
+The console is optional: it is a thin client over the same API. On a default install that API is
 reached through the console's own port, and **the login gate covers it too**, so a call needs the
 session cookie. Sign in once and keep the cookie:
 
@@ -502,8 +501,8 @@ curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
 That turn is not a side channel: it appears in the console under **Tasks**, against the same
 harness, with its full transcript. The console and the API are the same instance seen twice.
 
-`harness_id` accepts one of the built-in ids the console shows on the Harnesses page — `codex`,
-`claude-code`, `hermes` — or the id of a harness you created. Harness CRUD (`/v1/harnesses`), the model catalog (`/v1/models`), sessions
+`harness_id` accepts one of the built-in ids the console shows on the Harnesses page: `codex`,
+`claude-code`, `hermes`, or the id of a harness you created. Harness CRUD (`/v1/harnesses`), the model catalog (`/v1/models`), sessions
 (`/v1/sessions/{id}/turns`, `/cancel`) and task listing (`/v1/traces`) are all on the same prefix.
 Set `"stream":true` for server-sent events instead of one response at the end.
 
@@ -522,7 +521,7 @@ provider key.
 > only reasonable on a machine nobody else can reach.
 
 Changing it from **Profile** signs out every other browser and restarts the console. That restart
-is what makes "signed out everywhere" true rather than merely displayed — the gate reads its
+is what makes "signed out everywhere" true rather than merely displayed: the gate reads its
 signing key once at start-up and cannot be told about a change in place. A task that is mid-turn
 runs straight through it.
 
@@ -572,20 +571,20 @@ whatever proxy happens to sit in front.
 
 Sessions run concurrently and are isolated: each gets its own workspace directory, its own
 conversation state, and its own checkpoint. Turn concurrency defaults to the machine's core
-count — this box cannot scale sandboxes on demand the way the hosted deployment does, so the
+count. This box cannot scale sandboxes on demand the way the hosted deployment does, so the
 limit is what it can actually run.
 
-Storage sits behind a small adapter interface — records, files, and secrets. This repo ships the
+Storage sits behind a small adapter interface for records, files, and secrets. This repo ships the
 local implementations; the hosted deployment supplies its own against the same interface. That
 seam is why this is genuinely the same codebase rather than a fork that drifts.
 
 ## Resources
 
-- **[Documentation and Cloud](https://harnessrouter.ai)** — hosted service, guides, and pricing.
-- **[Unified Harness Protocol](https://unifiedharnessprotocol.org)** — the open standard this repository implements.
-- **[Starter Kit](https://github.com/HarnessRouter/starter-kit)** — runnable example applications built on Community Edition.
-- **[Discord](https://discord.gg/nPcbwqVPb2)** — community for questions, integrations, and proposals.
-- **[Contributing](CONTRIBUTING.md)** and **[Security](SECURITY.md)** — how to propose changes and report vulnerabilities.
+- **[Documentation and Cloud](https://harnessrouter.ai)**: hosted service, guides, and pricing.
+- **[Unified Harness Protocol](https://unifiedharnessprotocol.org)**: the open standard this repository implements.
+- **[Starter Kit](https://github.com/HarnessRouter/starter-kit)**: runnable example applications built on Community Edition.
+- **[Discord](https://discord.gg/nPcbwqVPb2)**: community for questions, integrations, and proposals.
+- **[Contributing](CONTRIBUTING.md)** and **[Security](SECURITY.md)**: how to propose changes and report vulnerabilities.
 
 ## License
 

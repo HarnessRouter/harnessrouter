@@ -5105,7 +5105,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # had just added their own key was told there was no connection for the backend, which was
     # both wrong and unactionable. Only refuse when NOTHING can serve it.
     if not chain and not await _mapped_integration_conn(backend, model_req):
-        raise HTTPException(400, f"no provider configured for backend '{backend}' — add an "
+        raise HTTPException(400, f"no provider configured for backend '{backend}'. Add an "
                                  f"integration for a provider that serves '{model_req or backend}', "
                                  f"or configure a connection policy")
     # Additional Headers (app-level auth pass-through): the harness config declares header NAMES;
