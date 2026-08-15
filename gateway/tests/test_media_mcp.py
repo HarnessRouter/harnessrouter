@@ -848,10 +848,15 @@ def test_list_capabilities_is_free_and_names_what_is_broken(client, harness, ses
     # Every limit reported is one that was MEASURED on this model, and nothing else is reported.
     # It ignores the duration it is sent — asked 1 s, returned 6.08 s — so the agent is told that
     # rather than left to believe the number it asked for.
+    #
+    # `aspects` is in this dict for the same reason and by the same standard: it is arithmetic on
+    # the 1280x720 frame two lines above, not a new claim about the model. It takes no `size`
+    # parameter, so 16:9 is the only shape it can produce and the only one it can be asked for.
     assert by["text_to_video"]["limits"] == {"duration_ignored": True,
                                              "duration_observed_s": 6.08,
                                              "resolution": "1280x720",
-                                             "accepts_input_image": False}
+                                             "accepts_input_image": False,
+                                             "aspects": ["16:9"]}
     assert by["text_to_music"]["available"] is False
     assert "paid ElevenLabs plan" in by["text_to_music"]["reason"]
     assert by["export"]["available"] is media_plane.have_ffmpeg()
@@ -1044,12 +1049,18 @@ def test_the_provider_url_is_never_persisted(client, harness, session, provider)
 
 def test_an_image_lands_inline_and_says_so(client, harness, session, provider):
     """A synchronous shape renders inside the submit. Reporting it as 'running' would be a lie the
-    very next call exposes."""
+    very next call exposes.
+
+    This test used to end `assert out["size"] == "1024x1024"` and that assertion pinned a lie: the
+    model it names has params ["prompt"], is never sent a size, and the 1024x1024 came straight
+    back out of the request. What is asserted now is that the size key is absent — see
+    test_a_size_the_model_cannot_be_told_is_not_reported_as_though_it_were, which pins the reason.
+    """
     out = _ok(_call(client, _cred(harness, session), "generate_image",
                     {"prompt": "a rainy window", "size": "1024x1024"}))
     assert out["status"] == "succeeded" and out["media_id"].startswith("med_")
     assert out["model"] == "google/gemini-3.1-flash-lite-image"
-    assert out["size"] == "1024x1024"
+    assert "size" not in out
 
 
 def test_a_size_below_a_models_floor_skips_it(client, harness, session, provider):
@@ -1221,6 +1232,156 @@ def test_the_model_that_ignores_a_duration_says_so_rather_than_being_believed(cl
     assert body["duration"] == 1
 
 
+# ══ the aspect ═══════════════════════════════════════════════════════════════════
+# `aspect` was declared on generate_video, described as a thing the tool does, and occurred
+# EXACTLY ONCE in the whole gateway: in the schema. The generate branch built
+# {prompt, seconds, allow_watermark} and the argument fell on the floor — so an agent asked for a
+# vertical film, was ACCEPTED, and got whatever the model defaults to. Round 5 made it worse in
+# one way: enum validation refuses an INVALID aspect while a VALID one is still ignored, which
+# reads to a model as proof the argument works.
+#
+# Nothing here spends anything. What is asserted is OUR OUTBOUND BODY and OUR REFUSAL — whether a
+# model then obeys is the provider's business and is not what was broken.
+
+def test_a_requested_aspect_reaches_the_provider_request_body(client, harness, session, provider):
+    """THE BUG, stated as the assertion that would have caught it: ask for 9:16 and read what left
+    this process.
+
+    happyhorse is the only text_to_video candidate that lists `size` among the params it honours,
+    so it is the only one that can be TOLD a shape — and it watermarks, so this asks for that too.
+    1080*1920 is arithmetic on its own measured 1920*1080 frame, in its own W*H format.
+    """
+    out = _ok(_call(client, _cred(harness, session), "generate_video",
+                    {"prompt": "a lift door closing", "seconds": 6, "aspect": "9:16",
+                     "allow_watermark": True}))
+    assert out["model"] == "happyhorse-1.0-t2v"
+    body = next(c["body"] for c in _calls if c["url"].endswith("/video/generations"))
+    assert body.get("size") == "1080*1920", (
+        f"9:16 was accepted and the submit carried {body.get('size')!r} — the argument is still "
+        f"decorative")
+    assert out["aspect"] == "9:16", "the tool must report the shape it actually secured"
+
+
+def test_an_aspect_nobody_in_the_chain_can_honour_is_refused_and_names_why(client, harness,
+                                                                          session, provider):
+    """Never landscape for a 9:16 request. Without allow_watermark the one model that can be told
+    a shape is stood down, and there is no substitute — so this refuses, and the refusal is built
+    out of each candidate's own reason rather than one flat sentence."""
+    text = _err(_call(client, _cred(harness, session), "generate_video",
+                      {"prompt": "a lift door closing", "seconds": 6, "aspect": "9:16"}))
+    assert "Nothing was generated" in text
+    assert "only renders 16:9" in text, (
+        f"the fixed-shape models must say what they DO render: {text}")
+    assert "1280x720" in text, "and it names the frame that fact comes from"
+    assert "never measured" in text, "kling can be told nothing and nobody measured it — say so"
+    assert "watermarks its output" in text
+    assert not [c for c in _calls if c["url"].endswith("/video/generations")], (
+        "a refusal for a shape nobody can render must not open a socket")
+
+
+def test_a_model_that_is_already_the_requested_shape_is_asked_for_nothing(client, harness,
+                                                                         session, provider):
+    """16:9 is what dreamina renders and it takes no size parameter at all. Honouring the request
+    is therefore selecting it — inventing a `size` field for a model whose params do not list one
+    would be the same silent invention one direction over."""
+    out = _ok(_call(client, _cred(harness, session), "generate_video",
+                    {"prompt": "rain", "seconds": 6, "aspect": "16:9"}))
+    assert out["model"] == "dreamina-seedance-2-5-hc" and out["aspect"] == "16:9"
+    body = next(c["body"] for c in _calls if c["url"].endswith("/video/generations"))
+    assert "size" not in body, f"a size was invented for a model that declares none: {body}"
+
+
+def test_animating_a_frame_at_a_shape_nobody_measured_refuses_rather_than_guessing(
+        client, harness, session, provider):
+    """image_to_video is the capability with NO substitute, and both its candidates take no size
+    and have no measured output frame. So a request to animate a still AT a shape cannot be
+    honoured by anything, and the only two honest answers are a refusal or a landscape clip
+    handed back as though it were vertical. This asserts the refusal, and that nothing was spent
+    finding out."""
+    img = _ok(_call(client, _cred(harness, session), "generate_image", {"prompt": "a face"}))
+    _calls.clear()
+    text = _err(_call(client, _cred(harness, session), "generate_video",
+                      {"prompt": "the face turns", "seconds": 6, "from_image": img["job_id"],
+                       "aspect": "9:16"}))
+    assert "No model is available for image_to_video" in text
+    assert "kling-v3 cannot be told an aspect and what it returns was never measured" in text
+    assert [c for c in _calls if "generations" in c["url"]] == [], "it submitted anyway"
+
+
+def test_an_aspect_survives_the_chain_advancing(client, harness, session, provider):
+    """A walk that falls off its first candidate may not land on one that cannot hold the shape.
+
+    The advance is the path four rounds of this file's bugs lived on, and `resolve` is what makes
+    it safe here: the aspect is in the job's params, so the second candidate is filtered by the
+    same rule as the first — and when nothing else can hold it, this refuses rather than
+    substituting a landscape clip.
+    """
+    provider.fail["happyhorse-1.0-t2v"] = (400, {"message": "unknown model"})
+    text = _err(_call(client, _cred(harness, session), "generate_video",
+                      {"prompt": "a lift door closing", "seconds": 6, "aspect": "9:16",
+                       "allow_watermark": True}))
+    assert "Nothing was generated" in text
+    submitted = [c["body"].get("model") for c in _calls if c["url"].endswith("/video/generations")]
+    assert submitted == ["happyhorse-1.0-t2v"], (
+        f"the walk tried a model that cannot hold 9:16: {submitted}")
+
+
+@pytest.mark.parametrize("model,aspect,want", [
+    # Arithmetic on each model's OWN measured floor, not a table someone typed. 2560x1440 is
+    # exactly seedream's 3,686,400 px minimum, and 1:1 lands on the size the file records as
+    # verified — which is how the formula is checked against a measurement.
+    ("bytedance-seed/seedream-4.5", "16:9", "2560x1440"),
+    ("bytedance-seed/seedream-4.5", "9:16", "1440x2560"),
+    ("bytedance-seed/seedream-4.5", "1:1", "1920x1920"),
+    ("openai/gpt-5.4-image-2", "1:1", "1024x1024"),
+    # Neither shape takes a size parameter, and nothing measured says what frame they return.
+    ("google/gemini-3.1-flash-lite-image", "16:9", ""),
+    ("microsoft/mai-image-2.5", "16:9", ""),
+])
+def test_the_aspect_is_translated_per_model_out_of_that_models_own_numbers(model, aspect, want):
+    cand = next(c for c in media_plane.capability("text_to_image")["candidates"]
+                if c["model"] == model)
+    assert media_plane.aspect_size(cand, aspect) == want
+
+
+def test_a_capability_says_which_shapes_it_can_actually_render(client, harness, session, provider):
+    """list_capabilities is the free pre-flight, and an agent planning a vertical film must be able
+    to learn before it spends that this deployment cannot render one."""
+    by = {c["name"]: c for c in _ok(_call(client, _cred(harness, session),
+                                          "list_capabilities"))["capabilities"]}
+    assert by["text_to_video"]["limits"]["aspects"] == ["16:9"]
+    assert "aspects" not in by["text_to_speech"]["limits"], "a line of speech has no shape"
+
+
+def test_a_size_the_model_cannot_be_told_is_not_reported_as_though_it_were(client, harness,
+                                                                          session, provider):
+    """THE SIBLING, found by auditing the same question one argument over.
+
+    generate_image echoed `size` back beside `model` on every call — including the rank-1 gemini
+    models, whose params list is ["prompt"] and which are never sent a size at all. A number the
+    provider never received, printed next to the model that did not receive it, is the same defect
+    as an aspect that is accepted and ignored.
+    """
+    out = _ok(_call(client, _cred(harness, session), "generate_image",
+                    {"prompt": "a rainy window", "size": "1024x1024"}))
+    assert out["model"] == "google/gemini-3.1-flash-lite-image"
+    assert "size" not in out, f"a size nothing was told was reported anyway: {out}"
+    assert "cannot be told a frame size" in out.get("note", "")
+    body = next(c["body"] for c in _calls if ":generateContent" in c["url"])
+    assert "size" not in json.dumps(body)
+    # And where it IS told one, it says so — the same key, earned.
+    for c in media_plane.capability("text_to_image")["candidates"]:
+        if c["shape"] == "gemini":
+            app._media_quarantine[c["model"]] = time.time() + 900
+    told = _ok(_call(client, _cred(harness, session), "generate_image",
+                     {"prompt": "a", "size": "1920x1920"}))
+    assert told["model"] == "bytedance-seed/seedream-4.5" and told["size"] == "1920x1920"
+    sent = next(c["body"] for c in _calls if c["url"].endswith("/images/generations"))
+    assert sent["size"] == told["size"], (
+        "the size reported and the size submitted are two readings of one fact and must come "
+        "from one place — see media_plane.size_for")
+
+
 def test_the_model_that_rejects_an_input_image_is_not_in_the_image_chain():
     """It rejects an input image url outright. Listing it in image_to_video would spend the rank-1
     slot of a capability with NO substitute on a model that cannot do it at all."""
@@ -1283,6 +1444,48 @@ def test_placing_a_running_job_is_the_intended_path(client, harness, session, pr
     assert seen["free_space"]["x"] > 0
     # And the job knows its element, so the agent can move it without another read.
     assert _ok(_call(client, tok, "check_jobs", {"job_ids": [jid]}))["jobs"][0]["element_id"]
+
+
+def test_a_shot_label_given_at_generate_is_the_one_the_canvas_groups_by(client, harness, session,
+                                                                       provider):
+    """`shot` is declared on all three generate tools and described as "Groups the clip with its
+    caption on the canvas". Nothing recorded it: only place and arrange ever read customData.shot,
+    so the grouping the description promises happened only if the agent typed the same label again
+    by hand — and an agent that believed the description did not.
+
+    Recorded on the JOB, because the job is the only thing that survives between the submit and
+    the place call that puts it on the board.
+    """
+    tok = _cred(harness, session)
+    out = _ok(_call(client, tok, "generate_image", {"prompt": "a lift door", "shot": "Shot 3"}))
+    assert asyncio.run(app._media_job_get(out["job_id"]))["shot"] == "Shot 3"
+    _ok(_call(client, tok, "place",
+              {"items": [{"job_id": out["job_id"], "caption": "the doors close"}]}))
+    seen = _ok(_call(client, tok, "describe_canvas"))
+    assert seen["shots"] == [{"name": "Shot 3",
+                              "element_ids": [e["id"] for e in seen["elements"]]}]
+
+
+def test_a_height_given_for_a_caption_is_the_height_it_gets(client, harness, session, provider):
+    """A third sibling of the same shape, found by the same audit: `h` is declared on every place
+    item and was read only on the media branch — a text item's height went to the caption default
+    however tall the caller said to make it. An unasked-for height still gets that default."""
+    tok = _cred(harness, session)
+    _ok(_call(client, tok, "place", {"items": [{"text": "a long note", "h": 240},
+                                               {"text": "an ordinary caption"}]}))
+    els = _ok(_call(client, tok, "describe_canvas"))["elements"]
+    assert [e["h"] for e in els] == [240, media_plane.CAPTION_H]
+
+
+def test_a_shot_named_at_place_still_wins_over_the_one_on_the_job(client, harness, session,
+                                                                 provider):
+    """The job's label is a default, not an override: an agent that renames a shot while placing
+    it means the rename."""
+    tok = _cred(harness, session)
+    out = _ok(_call(client, tok, "generate_image", {"prompt": "a lift door", "shot": "Shot 3"}))
+    _ok(_call(client, tok, "place", {"items": [{"job_id": out["job_id"], "shot": "Shot 9"}]}))
+    seen = _ok(_call(client, tok, "describe_canvas"))
+    assert [s["name"] for s in seen["shots"]] == ["Shot 9"]
 
 
 def test_packing_is_driven_by_the_tiles_and_not_by_the_captions(client, harness, session,

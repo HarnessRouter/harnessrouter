@@ -8607,10 +8607,15 @@ async def _media_job_resubmit(job: dict, budget: _MediaBudget) -> bool:
 
 
 async def _media_generate(cap: str, params: dict, hid: str, sid: str, org: str,
-                          entry_id: str, budget: _MediaBudget) -> dict:
+                          entry_id: str, budget: _MediaBudget, shot: str = "") -> dict:
     """Resolve the chain, start the work, and record a job. A refusal leaves no vertex behind when
     nothing ran — but a walk that BOUGHT renders and delivered none of them is not nothing, and
-    what it spent is written down before the refusal goes back."""
+    what it spent is written down before the refusal goes back.
+
+    `shot` is the canvas label the agent gave this render, and it is a JOB field rather than a
+    provider parameter: no model is told about it, and the job is the only thing that survives the
+    four minutes between the submit and the `place` call that puts the clip on the board.
+    """
     providers = await _media_providers()
     try:
         cand, task_id, payload, doc, tally = await _media_chain(cap, params, providers, budget)
@@ -8625,7 +8630,7 @@ async def _media_generate(cap: str, params: dict, hid: str, sid: str, org: str,
            # megabytes; the media id is kept instead and the bytes are re-read from our own store
            # if the chain has to advance (see _media_job_resubmit).
            "params_json": json.dumps(_media_params_stored(params)),
-           "params": params, "status": "running",
+           "params": params, "status": "running", "shot": shot,
            "model": str(cand.get("model") or ""), "provider": str(cand.get("provider") or ""),
            "provider_task_id": task_id, "attempts_json": json.dumps(attempts),
            "attempts": attempts, "next_poll_at": now + 20_000, "poll_backoff_s": 20,
@@ -9075,11 +9080,17 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 f"limit for one session. Nothing was generated. Ask the person whether to carry "
                 f"on — you cannot raise the limit yourself.", True)
         params: dict = {}
-        note = ""
+        notes: list[str] = []
         if name == "generate_video":
             params = {"prompt": str(args.get("prompt") or ""),
                       "seconds": float(args.get("seconds") or 0),
                       "allow_watermark": bool(args.get("allow_watermark"))}
+            if args.get("aspect"):
+                # CARRIED, not dropped. It goes into `params` and therefore onto the job, which is
+                # what makes it hold on the poll walk too: a chain that advances re-resolves out
+                # of the same params, so the second candidate is filtered by the same rule as the
+                # first and cannot quietly hand back a landscape clip.
+                params["aspect"] = str(args["aspect"])
             cap = "text_to_video"
         elif name == "generate_image":
             size = str(args.get("size") or "1024x1024")
@@ -9111,7 +9122,8 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
             # The budget is opened HERE, around the whole generation, because it belongs to the
             # call and not to the walk: the synchronous shapes bill inside `_media_generate` too.
             async with _media_budget_for(sid) as budget:
-                job = await _media_generate(cap, params, hid, sid, org, entry_id, budget)
+                job = await _media_generate(cap, params, hid, sid, org, entry_id, budget,
+                                            shot=str(args.get("shot") or ""))
         except _MediaNoModel as e:
             return _tool_text(e.text, True)
         except media_plane.MediaError as e:
@@ -9123,18 +9135,38 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
             out["seconds"] = params["seconds"]
             allowed = cand.get("durations_s")
             if allowed:
-                note = (f"This model renders {' and '.join(str(a) for a in allowed)} s only; "
-                        f"{params['seconds']:g} s was requested and accepted.")
+                notes.append(f"This model renders {' and '.join(str(a) for a in allowed)} s only; "
+                             f"{params['seconds']:g} s was requested and accepted.")
             elif cand.get("duration_ignored"):
                 # Measured: it takes the duration and returns whatever length it likes. Anything
                 # that needs an exact length has to read the one that actually landed.
                 obs = cand.get("duration_observed_s")
-                note = ("This model does not honour a requested duration"
-                        + (f" — the clip measured came back {float(obs):g} s" if obs else "")
-                        + ". check_jobs reports the real length once it lands; cut from that "
-                          "rather than from the seconds you asked for.")
+                notes.append("This model does not honour a requested duration"
+                             + (f" — the clip measured came back {float(obs):g} s" if obs else "")
+                             + ". check_jobs reports the real length once it lands; cut from that "
+                               "rather than from the seconds you asked for.")
+        # THE SHAPE THAT WAS ACTUALLY SECURED, on the same footing as the model that ran. It can
+        # only be the one asked for — a candidate that could not hold it was skipped — so what is
+        # worth saying is HOW, because "it was told" and "it is only ever that" are different
+        # promises and only one of them survives the model being swapped.
+        if params.get("aspect"):
+            out["aspect"] = params["aspect"]
+            told = media_plane.aspect_size(cand, params["aspect"])
+            if told:
+                notes.append(f"{cand['model']} was asked for a {told} frame.")
+            elif cand.get("resolution"):
+                notes.append(f"{cand['model']} renders {cand['resolution']} and nothing else, "
+                             f"which is {params['aspect']}.")
         if name == "generate_image":
-            out["size"] = params["size"]
+            # ONLY WHAT THE PROVIDER WAS ACTUALLY TOLD. This used to echo the requested size on
+            # every call, including the rank-1 gemini models whose params are ["prompt"] and which
+            # are never sent one — a number printed beside the model that never received it.
+            told = media_plane.size_for(cand, params)
+            if told:
+                out["size"] = told
+            else:
+                notes.append("This model cannot be told a frame size, so the one you asked for "
+                             "was not sent. check_jobs reports the size that actually landed.")
         if job.get("usd"):
             out["estimated_usd"] = round(float(job["usd"]), 4)
         if job.get("attempts"):
@@ -9149,8 +9181,8 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 out["spoken_text"] = job["spoken_text"]
                 out["verbatim"] = media_plane.levenshtein_ratio(
                     params.get("text") or "", str(job["spoken_text"])) >= 0.9
-        if note:
-            out["note"] = note
+        if notes:
+            out["note"] = " ".join(notes)
         return _media_json_text(out)
 
     if name == "check_jobs":
@@ -9270,9 +9302,18 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                             if auto else (0.0, 0.0))
                 w = float(it.get("w") or media_plane.TILE_W)
                 h = float(it.get("h") or media_plane.TILE_H)
-                shot = str(it.get("shot") or "")
+                # The job's own label is the default, and a label named here overrides it: an
+                # agent that renames a shot while placing it means the rename. Without the
+                # fallback, the `shot` argument on the generate tools promised a grouping that
+                # only happened if the agent typed the same label a second time.
+                shot = str(it.get("shot") or (job or {}).get("shot") or "")
                 if it.get("text"):
-                    el = media_plane.text_element(str(it["text"]), x=x, y=y, w=w)
+                    # `h` only when it was actually asked for. A caption's height is CAPTION_H and
+                    # not the tile default, so passing the computed `h` unconditionally would make
+                    # every caption a tile tall — but ignoring an `h` the caller DID send is the
+                    # same declared-and-unread defect as the two this commit is about.
+                    el = media_plane.text_element(str(it["text"]), x=x, y=y, w=w,
+                                                  **({"h": float(it["h"])} if it.get("h") else {}))
                 else:
                     kind = (_MEDIA_KIND.get(str((job or {}).get("capability")), "image")
                             if job else str((meta or {}).get("kind") or "image"))

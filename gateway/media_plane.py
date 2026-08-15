@@ -42,6 +42,7 @@ import binascii
 import contextlib
 import functools
 import json
+import math
 import os
 import pathlib
 import re
@@ -175,6 +176,12 @@ def limits_of(cand: dict) -> dict:
         out["accepts_input_image"] = bool(cand["accepts_input_image"])
     if cand.get("watermark"):
         out["watermark"] = True
+    served = aspects_of(cand)
+    if served:
+        # Derived, never declared: the shapes fall out of the frame and the floor this entry
+        # already records. A capability whose media has no shape at all (a line of speech) reports
+        # no key, rather than an empty list that reads as "none of them".
+        out["aspects"] = served
     return out
 
 
@@ -252,6 +259,17 @@ def can_serve(cand: dict, params: dict) -> str:
         if w and h and w * h < int(cand["min_pixels"]):
             return (f"{model} rejects anything under "
                     f"{int(cand['min_pixels']):,} px and {size} is smaller")
+
+    aspect = params.get("aspect")
+    if aspect and not aspect_size(cand, str(aspect)):
+        # A CANDIDATE THAT CANNOT HOLD THE SHAPE IS SKIPPED LIKE ANY OTHER, and never quietly
+        # substituted: returning a landscape clip for a 9:16 ask is the same class of defect as a
+        # dashboard printing a number the database never returned. If the whole chain skips, the
+        # tool refuses — see `refusal`, which is built out of these clauses.
+        fixed = aspect_fixed(cand)
+        if fixed != aspect:
+            return (f"{model} only renders {fixed} ({cand.get('resolution')})" if fixed else
+                    f"{model} cannot be told an aspect and what it returns was never measured")
 
     if cand.get("watermark") and not params.get("allow_watermark"):
         return f"{model} watermarks its output"
@@ -334,6 +352,111 @@ def parse_size(size: str) -> tuple[int, int]:
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
+# ── the aspect ────────────────────────────────────────────────────────────────────
+# AN ASPECT IS A SIZE, everywhere in this catalog. Nothing here honours an `aspect_ratio` field —
+# MiniMax is measured ignoring one and billing anyway — so the only lever any candidate has is the
+# `size` parameter it already declares, and there is no new per-candidate key for aspects at all.
+# Three facts already in the file answer the whole question:
+#
+#   `params` lists `size`   -> it can be TOLD a shape. That list is this file's statement of which
+#                              tunables a model honours; MiniMax's deliberately omits `size` and
+#                              says why in its note, so reading that list IS reading a measurement.
+#   `resolution` and no     -> it IS one shape and cannot be told another. Its aspect is arithmetic
+#   `size` in params           on a frame that was already measured, never a second hand-written
+#                              field that could disagree with the first.
+#   neither                 -> UNKNOWN. Skipped when an aspect is asked for, because "we did not
+#                              measure it" and "it will be fine" are not the same sentence.
+_ASPECTS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1)}
+
+# How far a measured frame may sit from a label and still wear it. 1366x768 — MiniMax's measured
+# output — is 1.7786 against 16:9's 1.7778, the standard near-16:9 panel, 0.05% out. Written as a
+# number rather than left implicit because the alternative is either calling that frame something
+# it is not, or refusing a request every display in the world would answer.
+_ASPECT_TOL = 0.01
+
+# Frame dimensions are built as a multiple of this. Every ratio in `_ASPECTS` then comes out even
+# on both edges, which is what h.264 requires — a computed 1443x2565 would be refused by the
+# encoder at export, one step away from where it was chosen.
+_ASPECT_STEP = 8
+
+
+def aspect_label(w: int, h: int) -> str:
+    """The label a w×h frame wears, or "" when it wears none of them."""
+    if not w or not h:
+        return ""
+    r = float(w) / float(h)
+    for name, (rw, rh) in _ASPECTS.items():
+        want = rw / rh
+        if abs(r - want) <= _ASPECT_TOL * want:
+            return name
+    return ""
+
+
+def aspect_fixed(cand: dict) -> str:
+    """The one shape this candidate always produces, when it cannot be told another — "" if it can
+    be told, or if nothing measured says what it returns.
+
+    A candidate that takes a `size` gets "" even though it has a `resolution`: that number is its
+    default, not a fixture, and reading a default as a limit would skip a model that can do the
+    job.
+    """
+    if "size" in declared_params(cand):
+        return ""
+    return aspect_label(*parse_size(str(cand.get("resolution") or "")))
+
+
+def aspect_size(cand: dict, aspect: str) -> str:
+    """The size to ASK this candidate for so the frame comes back `aspect` — "" when it cannot be
+    told a size at all, or when nothing in its entry says what size to ask for.
+
+    Built out of that model's own numbers: a size it has been verified at when one is the right
+    shape, otherwise the smallest frame of that shape clearing its own floor. The formula
+    reproduces seedream-4.5's verified 1920x1920 at 1:1 and lands exactly on its 3,686,400 px
+    minimum at 16:9 — which is the point. It is arithmetic on measurements, not a table typed by
+    hand, so a model whose limits are corrected in the catalog is corrected here too.
+
+    NOTHING IS INVENTED when there is no basis. A candidate that takes a size and records neither
+    a floor, nor a verified size, nor a resolution gets "" and is skipped — a guessed frame is the
+    same defect as a guessed price.
+    """
+    ratio = _ASPECTS.get(aspect)
+    if not ratio or "size" not in declared_params(cand):
+        return ""
+    rw, rh = ratio
+    target = int(cand.get("min_pixels") or 0)
+    for s in cand.get("sizes_verified") or []:
+        w, h = parse_size(str(s))
+        if aspect_label(w, h) == aspect:
+            return f"{w}x{h}"        # measured at this shape: ask for exactly what was verified
+        target = max(target, w * h)  # wrong shape, but it still says what scale this model works at
+    if not target:
+        w, h = parse_size(str(cand.get("resolution") or ""))
+        target = w * h
+    if not target:
+        return ""
+    k = math.ceil(math.sqrt(target / float(rw * rh)))
+    k = -(-k // _ASPECT_STEP) * _ASPECT_STEP
+    return f"{rw * k}x{rh * k}"
+
+
+def aspects_of(cand: dict) -> list[str]:
+    """Every shape this candidate can actually deliver. What `list_capabilities` reports, so an
+    agent planning a vertical film learns it cannot have one BEFORE it spends four minutes."""
+    return [a for a in _ASPECTS if aspect_size(cand, a) or aspect_fixed(cand) == a]
+
+
+def size_for(cand: dict, params: dict) -> str:
+    """The size this candidate will be ASKED for — "" when it is told none at all.
+
+    THE ONE PLACE that answer is computed, so what the submit carries and what the tool reports
+    back afterwards cannot disagree. A tool that prints `size: 1024x1024` beside a model whose
+    params are ["prompt"] is printing a number the provider never received.
+    """
+    if "size" not in declared_params(cand):
+        return ""
+    return str(params.get("size") or aspect_size(cand, str(params.get("aspect") or "")) or "")
+
+
 # ── the five adapters: building a request ─────────────────────────────────────────
 class Submit:
     """One outbound request, plus exactly which tunables it carried.
@@ -386,6 +509,11 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
         tun[name] = value
         return value
 
+    # The caller's own size, or the one that expresses the aspect it asked for — per candidate,
+    # because the walk may end on a different model than it started at and each one is asked in
+    # its own numbers. `None` where this candidate takes no size, so `take` drops it.
+    asked_size = size_for(cand, params) or None
+
     if shape == "video-generation":
         body: dict = {"model": model, "extra_body": {}}
         prompt = take("prompt", params.get("prompt"))
@@ -402,7 +530,7 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
         mode = take("mode", params.get("mode"))
         if mode is not None:
             body["mode"] = mode
-        size = take("size", params.get("size"))
+        size = take("size", asked_size)
         if size is not None:
             body["size"] = (size.replace("x", "*") if cand.get("size_format") == "W*H"
                             else size)
@@ -416,7 +544,7 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
         if "n" in allow:
             tun["n"] = 1
             body["n"] = 1
-        size = take("size", params.get("size"))
+        size = take("size", asked_size)
         if size is not None:
             body["size"] = size
         img = take("image", params.get("image"))
