@@ -1,0 +1,114 @@
+# Publish the all-in-one image to Docker Hub.
+#
+# This exists because the alternative was a person minting a Docker Hub token by hand for every
+# release, pasting it into a shell on a build VM, and then having to remember to revoke it. That
+# is three chances to leak a credential and one chance to forget, per release.
+#
+# Here the token is a repository secret: it is written once, never read back, and never travels
+# through anyone's terminal or transcript. Publishing becomes `git tag v0.4.2 && git push --tags`.
+#
+# ONE-TIME SETUP
+#   1. hub.docker.com → account settings → Personal access tokens → Generate, "Read & Write".
+#   2. This repo → Settings → Secrets and variables → Actions → New repository secret:
+#        DOCKERHUB_USERNAME = harnessrouter
+#        DOCKERHUB_TOKEN    = the token from step 1
+#   Nothing after that: a tag is a release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, without the v (e.g. 0.4.2)'
+        required: true
+      latest:
+        description: 'Also move the :latest tag'
+        type: boolean
+        default: true
+
+env:
+  IMAGE: harnessrouter/harnessrouter
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image is ~2 GB unpacked and the runner ships with several GB of Android SDK and .NET
+      # nobody here needs. Without this the build dies on "no space left on device" somewhere in
+      # the middle, which reads like a broken Dockerfile.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h / | tail -1
+
+      - name: Work out the version
+        id: v
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            V='${{ inputs.version }}'
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          case "$V" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$V' is not a semver version"; exit 1 ;;
+          esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Publishing $V"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The starter kits are pulled from their own repository at build time, and the Dockerfile
+      # cache-busts on that repo's head commit. `--no-cache-filter kits` makes that unconditional:
+      # a release must never ship the kit catalogue some earlier build happened to fetch.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          no-cache-filters: kits
+          build-args: HR_KITS_REF=main
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+            ${{ (github.event_name != 'workflow_dispatch' || inputs.latest) && format('{0}:latest', env.IMAGE) || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A published image that cannot install its agent CLIs is the failure this project has
+      # already shipped once (a root-owned npm cache in /home/agent). It was invisible because
+      # every instance that was checked had a data volume from before the fault. So the release
+      # gate runs the image the way a NEW user does: empty volume, and read what it says.
+      - name: Smoke-test the published image on a fresh volume
+        run: |
+          docker rm -f smoke 2>/dev/null || true
+          docker volume rm smoke-data 2>/dev/null || true
+          docker run -d --name smoke -v smoke-data:/data \
+            -e HR_SECRET_KEY=ci-smoke ${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+          for i in $(seq 1 60); do
+            docker logs smoke 2>&1 | grep -q "backends available" && break
+            sleep 5
+          done
+          docker logs smoke 2>&1 | tail -30
+          LINE=$(docker logs smoke 2>&1 | grep "backends available" | tail -1)
+          echo "$LINE"
+          for b in claude codex hermes; do
+            echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on a fresh volume"; exit 1; }
+          done
+          docker exec smoke ls /opt/harnessrouter/kits
+
+      - name: Say what shipped
+        run: |
+          echo "### harnessrouter ${{ steps.v.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ${{ env.IMAGE }}:${{ steps.v.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
