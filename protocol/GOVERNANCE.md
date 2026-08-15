@@ -78,7 +78,7 @@ anyone's server.
 
 The canonical name of this standard is the Unified Harness Protocol (UHP). Its site is https://unifiedharnessprotocol.org.
 
-Apache-2.0 grants rights to the code and the specification under its terms. It does not grant rights to the protocol name. "Unified Harness Protocol" and "UHP" are marks of [LEGAL_ENTITY].
+Apache-2.0 grants rights to the code and the specification under its terms. It does not grant rights to the protocol name. "Unified Harness Protocol" and "UHP" are marks of HarnessRouter.
 
 An implementation may describe itself as "UHP-compatible" or say it "implements UHP" only if it passes the conformance suite in [`conformance/`](conformance/). Passing that suite is the definition of conformant for this project. Non-conformant implementations, partial implementations, and modified forks must not use the name in a way that implies compatibility. Stating factually that a product "works with" or "connects to" UHP is fine.
 
