@@ -1,7 +1,36 @@
-# HarnessRouter
+<div align="center">
+  <a href="https://harnessrouter.ai">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset=".github/images/logo-dark.png">
+      <source media="(prefers-color-scheme: light)" srcset=".github/images/logo-light.png">
+      <img alt="HarnessRouter" src=".github/images/logo-light.png" width="55%">
+    </picture>
+  </a>
+</div>
+
+<div align="center">
+  <h3>Run agent harnesses on your own machine.</h3>
+</div>
+
+<div align="center">
+
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?logo=docker&logoColor=white)](https://hub.docker.com/r/harnessrouter/harnessrouter)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/nPcbwqVPb2)
+[![X](https://img.shields.io/badge/Follow-%40HARNESSROUTER-000000?logo=x&logoColor=white)](https://x.com/HARNESSROUTER)
+[![GitHub stars](https://img.shields.io/github/stars/HarnessRouter/harnessrouter?style=social)](https://github.com/HarnessRouter/harnessrouter)
+
+</div>
+
+<br>
 
 **Run agent harnesses on your own machine.** One container, your own API keys, your
 own data. Configure a harness, give it work, watch it run, with no account, no cloud, and no telemetry. Community Edition implements the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org), the open standard the hosted service implements too.
+
+> [!TIP]
+> New here? Start with [What it is](#what-it-is), or read the protocol at [unifiedharnessprotocol.org](https://unifiedharnessprotocol.org).
+
+## Quickstart
 
 ```bash
 docker run -d -p 3000:3000 -v harnessrouter:/data \
@@ -162,10 +191,11 @@ provider key. So it ships with a login, on by default, covering the pages and th
 | `HR_AUTH_USER` | `harnessrouter` |
 | `HR_AUTH_PASSWORD` | `harnessrouter` |
 
-**Change the password before anyone else can reach the instance.** The defaults are printed
-right here, which makes them a placeholder, not a secret — the container warns on every start
-while the default is still in place. `HR_AUTH_DISABLED=1` removes the gate entirely, which is
-only reasonable on a machine nobody else can reach.
+> [!WARNING]
+> **Change the password before anyone else can reach the instance.** The defaults are printed
+> right here, which makes them a placeholder, not a secret; the container warns on every start
+> while the default is still in place. `HR_AUTH_DISABLED=1` removes the gate entirely, which is
+> only reasonable on a machine nobody else can reach.
 
 You can also change the username and password from **Profile**, in the account menu at the top
 right. Those are stored on the data volume (`/data/selfhost-auth.json`, a salted hash — never the
@@ -259,9 +289,17 @@ pip install -e protocol/conformance
 uhp-conformance --base-url https://your-server --api-key "$KEY" --class full
 ```
 
+## Resources
+
+- **[Documentation and Cloud](https://harnessrouter.ai)** — hosted service, guides, and pricing.
+- **[Unified Harness Protocol](https://unifiedharnessprotocol.org)** — the open standard this repository implements.
+- **[Starter Kit](https://github.com/HarnessRouter/starter-kit)** — runnable example applications built on Community Edition.
+- **[Discord](https://discord.gg/nPcbwqVPb2)** — community for questions, integrations, and proposals.
+- **[Contributing](CONTRIBUTING.md)** and **[Security](SECURITY.md)** — how to propose changes and report vulnerabilities.
+
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE). Third-party notices are in [NOTICE](NOTICE).
+Apache-2.0, see [LICENSE](LICENSE). Third-party notices are in [NOTICE](NOTICE).
 
 The agent CLIs are **not** redistributed here; they are installed on first run under their own
 licenses. Review them before enabling a backend.
