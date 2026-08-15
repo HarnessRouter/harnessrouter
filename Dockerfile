@@ -121,31 +121,34 @@ ENV HR_BUILTIN_SKILLS_DIR=/opt/harnessrouter/skills
 # the right trade for a document a person is going to open.
 ENV OFFICECLI_RESIDENT_FLUSH=each
 COPY docker/install-skills.sh /tmp/install-skills.sh
-# Cache-bust the clone below. Without this the RUN layer is keyed only on the script, so a build
-# that pulls `main` keeps whatever catalogue the first build happened to fetch — new skills never
-# ship, and nothing says so. This ADD fetches the branch head, so the layer's inputs change
-# exactly when the skills repo does.
-ADD https://api.github.com/repos/HarnessRouter/skills/commits/${HR_SKILLS_REF} /tmp/skills-head.json
+# The RUN layer is keyed on this ARG, so passing a commit sha is what makes the layer rebuild when
+# the skills repo moves. Leaving HR_SKILLS_REF at `main` keeps whatever catalogue an earlier build
+# fetched — release CI resolves the sha and passes it, which is both the cache-bust and the record
+# of exactly what shipped. A local build that wants the newest skills should pass a sha too.
+#
+# This used to be an `ADD https://api.github.com/...` fetching the branch head. That call is
+# unauthenticated, GitHub allows 60 an hour per IP, and CI runners share a busy pool — so every
+# release build eventually died on "failed to load cache key: invalid response status 403" before
+# it compiled a line.
 RUN chmod +x /tmp/install-skills.sh \
     && WITH_BUILTIN_SKILLS="$WITH_BUILTIN_SKILLS" HR_SKILLS_REPO="$HR_SKILLS_REPO" \
        HR_SKILLS_REF="$HR_SKILLS_REF" HR_SKILLS_DIR=/opt/harnessrouter/skills \
        /tmp/install-skills.sh \
-    && rm -f /tmp/install-skills.sh /tmp/skills-head.json
+    && rm -f /tmp/install-skills.sh
 
 # Starter Kits: a Harness plus an app, both baked in. Same pull-and-pin shape as the skills
-# bundle above, including the cache-bust — without it a build on `main` keeps whatever catalogue
-# the first build fetched and new kits silently never ship.
+# bundle above, and the same rule: pass a commit sha to get the newest catalogue, because that
+# is what changes the layer's inputs.
 ARG WITH_STARTER_KITS=1
 ARG HR_KITS_REPO=https://github.com/HarnessRouter/starter-kit.git
 ARG HR_KITS_REF=main
 ENV HR_KITS_DIR=/opt/harnessrouter/kits
-ADD https://api.github.com/repos/HarnessRouter/starter-kit/commits/${HR_KITS_REF} /tmp/kits-head.json
 COPY docker/install-kits.sh /tmp/install-kits.sh
 RUN chmod +x /tmp/install-kits.sh \
     && WITH_STARTER_KITS="$WITH_STARTER_KITS" HR_KITS_REPO="$HR_KITS_REPO" \
        HR_KITS_REF="$HR_KITS_REF" HR_KITS_DIR=/opt/harnessrouter/kits \
        /tmp/install-kits.sh \
-    && rm -f /tmp/install-kits.sh /tmp/kits-head.json
+    && rm -f /tmp/install-kits.sh
 
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/

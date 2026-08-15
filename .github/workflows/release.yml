@@ -67,17 +67,42 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # The starter kits are pulled from their own repository at build time, and the Dockerfile
-      # cache-busts on that repo's head commit. `--no-cache-filter kits` makes that unconditional:
-      # a release must never ship the kit catalogue some earlier build happened to fetch.
+      # The skills and the kits are pulled from their own repositories at build time, and a release
+      # must never ship the catalogue some earlier build happened to fetch. Resolving both heads to
+      # a sha HERE is what guarantees that: the sha is a build arg, so the layer rebuilds exactly
+      # when the repository moves, and the run log records precisely what shipped.
+      #
+      # The Dockerfile used to do this itself with `ADD https://api.github.com/...`. That call
+      # carries no credentials, GitHub allows 60 an hour per IP, and Actions runners share a busy
+      # pool — so the build died on "failed to load cache key: invalid response status 403". Here
+      # the same request is authenticated by the token every workflow already has.
+      - name: Resolve what we are about to ship
+        id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          resolve() {
+            sha=$(gh api "repos/HarnessRouter/$1/commits/main" --jq .sha)
+            case "$sha" in
+              [0-9a-f][0-9a-f]*) ;;
+              *) echo "::error::could not resolve HarnessRouter/$1 main"; exit 1 ;;
+            esac
+            echo "$2=$sha" >> "$GITHUB_OUTPUT"
+            echo "$1 -> $sha"
+          }
+          resolve skills      skills
+          resolve starter-kit kits
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           push: true
-          no-cache-filters: kits
-          build-args: HR_KITS_REF=main
+          build-args: |
+            HR_SKILLS_REF=${{ steps.refs.outputs.skills }}
+            HR_KITS_REF=${{ steps.refs.outputs.kits }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.v.outputs.version }}
             ${{ (github.event_name != 'workflow_dispatch' || inputs.latest) && format('{0}:latest', env.IMAGE) || '' }}
