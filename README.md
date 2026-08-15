@@ -18,7 +18,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?logo=docker&logoColor=white)](https://hub.docker.com/r/harnessrouter/harnessrouter)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/nPcbwqVPb2)
 [![X](https://img.shields.io/badge/Follow-%40HARNESSROUTER-000000?logo=x&logoColor=white)](https://x.com/HARNESSROUTER)
-[![GitHub stars](https://img.shields.io/github/stars/HarnessRouter/harnessrouter?style=social)](https://github.com/HarnessRouter/harnessrouter)
+[![UHP conformance](https://img.shields.io/badge/UHP-class%20Full-brightgreen)](protocol/conformance/)
 
 </div>
 
@@ -75,6 +75,29 @@ sent anywhere but your provider.
 - **The same API as the hosted product.** Not a reduced fork: the same `/v1` surface, so anything
   you build against it keeps working if you later move to the hosted service.
 - **Actually self-contained.** No control plane to phone home to, no managed database, no vault.
+
+## The Unified Harness Protocol
+
+This repository is both an implementation and a standard. The protocol the gateway speaks is
+specified, versioned and testable in [`protocol/`](protocol/), and documented at
+[unifiedharnessprotocol.org](https://unifiedharnessprotocol.org):
+
+| | |
+|---|---|
+| [Specification](protocol/versions/2026-08-11/) | Ten normative chapters, version `2026-08-11` |
+| [Machine-readable](protocol/schema/) | OpenAPI 3.1 + JSON Schema 2020-12, generated from one source |
+| [Conformance suite](protocol/conformance/) | 47 runnable checks; passing it is what "conformant" means, and what earns the right to the UHP name |
+| [Governance](protocol/GOVERNANCE.md) | How the standard changes, and the naming and conformance policy |
+
+This edition is the reference implementation and
+[passes at class Full](protocol/conformance/reports/harnessrouter-ce-0.3.0.json). **The standard can
+be implemented without HarnessRouter Cloud** — it is an HTTP contract, and nothing in it requires a
+hosted service. Run the suite against your own server:
+
+```bash
+pip install -e protocol/conformance
+uhp-conformance --base-url https://your-server --api-key "$KEY" --class full
+```
 
 ## Configuration
 
@@ -265,29 +288,6 @@ the host is reachable from anywhere you don't control: there is no login to stop
 Storage sits behind a small adapter interface (graph / blob / secret). This repo ships the local
 implementations; the hosted deployment overlays its own against the same interface. That seam is
 why this is genuinely the same codebase rather than a fork that drifts.
-
-## The Unified Harness Protocol
-
-This repository is both an implementation and a standard. The protocol the gateway speaks is
-specified, versioned and testable in [`protocol/`](protocol/), and documented at
-[unifiedharnessprotocol.org](https://unifiedharnessprotocol.org):
-
-| | |
-|---|---|
-| [Specification](protocol/versions/2026-08-11/) | Ten normative chapters, version `2026-08-11` |
-| [Machine-readable](protocol/schema/) | OpenAPI 3.1 + JSON Schema 2020-12, generated from one source |
-| [Conformance suite](protocol/conformance/) | 47 runnable checks; passing it is what "conformant" means, and what earns the right to the UHP name |
-| [Governance](protocol/GOVERNANCE.md) | How the standard changes, and the naming and conformance policy |
-
-This edition is the reference implementation and
-[passes at class Full](protocol/conformance/reports/harnessrouter-ce-0.3.0.json). **The standard can
-be implemented without HarnessRouter Cloud** — it is an HTTP contract, and nothing in it requires a
-hosted service. Run the suite against your own server:
-
-```bash
-pip install -e protocol/conformance
-uhp-conformance --base-url https://your-server --api-key "$KEY" --class full
-```
 
 ## Resources
 
