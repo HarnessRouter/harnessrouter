@@ -56,41 +56,47 @@ About 700 MB to download.
 when you need two machines to run the same bytes, by naming a version in a compose file you share
 with a team. Releases are listed on [Docker Hub](https://hub.docker.com/r/harnessrouter/harnessrouter/tags).
 
-**The published image is `linux/amd64` only.** On an Apple Silicon Mac, `docker pull` gets an
-emulated image: a platform warning, and a first start that is already slow made slower.
-[`scripts/build-local.sh`](scripts/build-local.sh) builds a native image instead, and needs
-nothing but Docker and git.
-
-### 2. Point it at a model provider
+### 2. Connect a model provider
 
 **Nothing runs until you do this.** There is no bundled model, no trial key, and no free tier
 hiding in the image. A fresh instance with no connection will start, sign you in, and then have
 nothing to run a turn against.
 
-Two environment variables set one up. A **connection** names a provider and its credential; a
-**policy** says which connection a backend uses.
+Sign in, open **Integrations**, and press **Add Integration**. It asks three things: a name, the
+provider, and your API key.
+
+![Adding a provider on the Integrations page](docs/images/05-add-integration.png)
+
+Which models that provider serves is not your problem to configure: the product keeps that list
+and adds to it as providers ship models. Pick the provider, paste the key, and the models it
+covers appear on the row.
+
+If you run more than one provider, the mappings underneath decide which one serves a given model.
+With a single integration there is nothing to set.
+
+<details>
+<summary>Setting it from the environment instead, for a scripted deploy</summary>
+
+A connection names a provider and its credential; a policy says which connection a backend uses.
+Useful when the box is built by a script and nobody is going to open a browser:
 
 ```bash
-# an Anthropic key, for the Claude Code backend
 -e HR_SECRET_GLOBAL_HARNESS_CONN_ANTHROPIC='{"name":"anthropic","provider":"anthropic","api_key":"sk-ant-…"}'
 -e HR_SECRET_GLOBAL_HARNESS_POLICY_CLAUDE='{"chain":["anthropic"]}'
-
-# an OpenAI key, for the Codex backend
--e HR_SECRET_GLOBAL_HARNESS_CONN_OPENAI='{"name":"openai","provider":"openai","api_key":"sk-…"}'
--e HR_SECRET_GLOBAL_HARNESS_POLICY_CODEX='{"chain":["openai"]}'
 ```
 
-There is one policy variable per backend: `…POLICY_CLAUDE`, `…POLICY_CODEX`, `…POLICY_HERMES`, and
-you set as many as you have keys for. Somebody else's OpenAI-compatible endpoint (an aggregator, a
-local model, your own inference server) is the same two variables with a `base_url` added:
+There is one policy variable per backend: `…POLICY_CLAUDE`, `…POLICY_CODEX`, `…POLICY_HERMES`. An
+OpenAI-compatible endpoint of your own takes the same pair with a `base_url` added, and
+`"provider":"openai"` rather than the `"openai-api"` that `.env.example` still shows:
 
 ```bash
 -e HR_SECRET_GLOBAL_HARNESS_CONN_LOCAL='{"name":"local","provider":"openai","api_key":"…","base_url":"https://api.example.com/v1"}'
 -e HR_SECRET_GLOBAL_HARNESS_POLICY_CODEX='{"chain":["local"]}'
 ```
 
-**Not every provider type fits every backend**, and this is the one place where guessing costs you
-an afternoon:
+Not every provider fits every backend, and a pairing that does not fit fails quietly: the turn
+comes back empty after a long wait rather than erroring. The Integrations page does not have this
+problem, because it only offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
@@ -101,13 +107,10 @@ an afternoon:
 | `bedrock` | Claude Code, Hermes |
 | `tokenrouter` | Claude Code, Codex, Hermes |
 
-A pairing that is not on that list does not fail loudly: the turn comes back empty after a long
-wait. So if a turn returns nothing at all, check the pair before you check the key. In particular
-`"provider":"openai-api"`, which `.env.example` still shows for a custom endpoint, is not one a
-backend accepts; use `"openai"` with a `base_url`, as above.
+</details>
 
-A backend with no policy at all is more forthcoming, and this is what you get if you skip this step
-entirely:
+A backend with nothing connected is forthcoming about it, which is what you get if you skip this
+step entirely:
 
 ```json
 {"error":{"type":"invalid_request_error","code":"invalid_input","message":"no provider configured for backend 'codex'. Add an integration for a provider that serves 'gpt-5.4-mini', or configure a connection policy"}}
@@ -228,9 +231,10 @@ the instance is gone; copy it and you have moved the instance, harnesses, transc
 ## Starter kits
 
 A kit is a working product in one click. It provisions the harness it needs, installs the skill
-that teaches that agent the product's format, and opens its own app. There are four.
+that teaches that agent the product's format, and opens its own app. More arrive over time; your
+instance lists the ones it has.
 
-![The four starter kits, before any of them has been launched](docs/images/dashboard-1-starter-kits.png)
+![The Starter Kits page, before any kit has been launched](docs/images/dashboard-1-starter-kits.png)
 
 Each card names the base and the model it will run on before you launch it, so you can see what a
 kit is about to spend before it spends it. What it names depends on the keys you gave it in step 2:
@@ -362,7 +366,7 @@ on a canvas you can rearrange, and assembles them into a single video you can do
 render in the background, so you keep working while they arrive.
 
 It is the one kit that spends real money per second of output rather than per turn, because every
-shot is a generation. Try it after the other three, when you already know what the console is
+shot is a generation. Try it once you already know what the console is
 doing.
 
 ---
@@ -405,7 +409,7 @@ specified, versioned and testable in [`protocol/`](protocol/), and documented at
 |---|---|
 | [Specification](protocol/versions/2026-08-11/) | Ten normative chapters, version `2026-08-11` |
 | [Machine-readable](protocol/schema/) | OpenAPI 3.1 + JSON Schema 2020-12, generated from one source |
-| [Conformance suite](protocol/conformance/) | 52 checks; passing it is what "conformant" means, and what earns the right to the UHP name |
+| [Conformance suite](protocol/conformance/) | passing it is what "conformant" means, and what earns the right to the UHP name |
 | [Governance](protocol/GOVERNANCE.md) | How the standard changes, and the naming and conformance policy |
 
 This edition is the reference implementation. The most recent published run
