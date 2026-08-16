@@ -222,7 +222,12 @@ step entirely:
 message box, and type. The turn streams back as it happens: every command the agent runs, every
 file it touches, and the answer at the end.
 
-![A task: the prompt, the run, and the answer](docs/images/04-task.png)
+![A task: the request, the commands, the files it wrote, and the test result](docs/images/task-run.png)
+
+That one asked for a small utility with tests. The agent wrote it, built a fixture tree with
+duplicates planted in it, ran the suite, and came back with `2 tests ran, OK`, which is an answer
+you can check rather than one you have to trust. Everything it produced is on the transcript to
+take away, a file at a time or the lot as a zip.
 
 That is the whole install. State is SQLite and files on one Docker volume. Delete the volume and
 the instance is gone; copy it and you have moved the instance, harnesses, transcripts and all.
