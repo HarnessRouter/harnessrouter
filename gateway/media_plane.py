@@ -627,7 +627,11 @@ def _timeout_for(cand: dict) -> float:
     """A synchronous shape renders inside the submit, so its budget is its measured latency with
     room — not one number for a 4-second model and a 91-second one."""
     lat = cand.get("latency_s")
-    if str(cand.get("shape")) == "video-generation" or not isinstance(lat, (int, float)):
+    # The video shapes SUBMIT a job and return in about a second; their `latency_s` is how long
+    # the render takes afterwards, which is not a budget for this call. Reading it as one gave the
+    # Vercel start a 348 s ceiling for a request that answers immediately.
+    if str(cand.get("shape")) in ("video-generation", "vercel-video") \
+            or not isinstance(lat, (int, float)):
         return min(SUBMIT_TIMEOUT_S, 120.0)
     return min(SUBMIT_TIMEOUT_S, max(60.0, float(lat) * 3.0))
 
@@ -729,7 +733,15 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
             img = take("image", params.get("image"))
             if img is not None:
                 body["image"] = img
-            return Submit("POST", f"{root}/v4/ai/video-model", body, tun,
+            # `/start`, NOT the plain endpoint. The plain one renders inside the request and a
+            # seedance render is ~116 s, which is longer than a tool call will wait: the first run
+            # through the kit reached this model and then timed out at the transport with no job
+            # id, leaving a render that may have been running and could not be polled or claimed.
+            # The start/status pair is what every other video candidate here already does.
+            # `callbackUrl` is deliberately not sent — the SDK's own source says async video jobs
+            # are polling-first, and a webhook would need a public address this instance may not
+            # have.
+            return Submit("POST", f"{root}/v4/ai/video-model/start", body, tun,
                           timeout=_timeout_for(cand), headers=hdr)
 
         body = {}
@@ -853,10 +865,36 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
     raise MediaError(f"No adapter for endpoint shape {shape!r}.")
 
 
-def build_poll(cand: dict, base_url: str, task_id: str) -> tuple[str, str]:
-    if str(cand.get("shape")) != "video-generation":
-        raise MediaError("Only the video shape is polled; every other shape answers inline.")
-    return "GET", f"{(base_url or '').rstrip('/')}/video/generations/{task_id}"
+class Poll:
+    """One status check. A body and headers as well as a url, because not every provider answers
+    a GET: Vercel's video status is a POST carrying back the opaque handle its start returned."""
+
+    __slots__ = ("method", "url", "headers", "body")
+
+    def __init__(self, method: str, url: str, headers: dict | None = None,
+                 body: dict | None = None):
+        self.method, self.url = method, url
+        self.headers, self.body = headers or {}, body
+
+
+def build_poll(cand: dict, base_url: str, task_id: str) -> Poll:
+    shape = str(cand.get("shape"))
+    base = (base_url or "").rstrip("/")
+    if shape == "video-generation":
+        return Poll("GET", f"{base}/video/generations/{task_id}")
+    if shape == "vercel-video":
+        # `task_id` here is the whole `operation` the start returned, carried as text because that
+        # is what a job vertex can hold. It is the provider's handle and nothing is read out of it:
+        # it goes back exactly as it came, which is the contract the SDK's doStatus implements.
+        try:
+            operation = json.loads(task_id)
+        except Exception as e:  # noqa: BLE001
+            raise MediaError("the stored video job handle is not readable") from e
+        return Poll("POST", f"{_api_root(base)}/v4/ai/video-model/status",
+                    headers={"ai-model-id": str(cand.get("model") or ""),
+                             "ai-gateway-protocol-version": _VERCEL_PROTOCOL},
+                    body={"operation": operation})
+    raise MediaError("Only the video shapes are polled; every other shape answers inline.")
 
 
 # ── the five adapters: reading a response ─────────────────────────────────────────
@@ -1025,18 +1063,13 @@ def _read_submit(cand: dict, status: int, doc) -> tuple[str, Payload | None]:
     # carries the finished thing. There is no task id to poll, so `_read_submit` returns the
     # payload and the job never enters the polling walk at all.
     if shape == "vercel-video":
-        vids = doc.get("videos")
-        first = vids[0] if isinstance(vids, list) and vids and isinstance(vids[0], dict) else {}
-        # Measured: a 5 s 480p seedance-2.5 render answered with a presigned url, not bytes, and
-        # the file behind it was 3.6 MB. Both are read because the shape documents `type`.
-        if first.get("url"):
-            return "", Payload(url=str(first["url"]),
-                               mime=str(first.get("mediaType") or "video/mp4"))
-        if first.get("base64") or first.get("data"):
-            return "", Payload(data=_b64(str(first.get("base64") or first.get("data"))),
-                               mime=str(first.get("mediaType") or "video/mp4"))
+        # The start answers with an opaque `operation` and nothing else — no url, no id we could
+        # shorten. It is stored whole, as text, and posted back verbatim on every poll.
+        op = doc.get("operation")
+        if op is not None:
+            return json.dumps(op, separators=(",", ":")), None
         raise MediaEmpty(provider_message(doc, status) or
-                         "the provider answered with no video")
+                         "the provider accepted the request but returned no job handle")
 
     if shape == "vercel-speech":
         if doc.get("audio"):
@@ -1103,6 +1136,32 @@ def _read_poll(cand: dict, status: int, doc) -> tuple[str, Payload | None, str, 
     """
     if status >= 500 or not isinstance(doc, dict) or not doc:
         return "unknown", None, "", ""
+
+    if str(cand.get("shape")) == "vercel-video":
+        # A discriminated union on `status`, per the SDK's own schema: pending | completed, plus
+        # the terminal states a job can end in. The shape is flat — `videos` sits beside `status`,
+        # not under a `data` envelope like the relay's.
+        st = str(doc.get("status") or "").lower()
+        if st == "completed":
+            vids = doc.get("videos")
+            first = (vids[0] if isinstance(vids, list) and vids and isinstance(vids[0], dict)
+                     else {})
+            if first.get("url"):
+                return "succeeded", Payload(url=str(first["url"]),
+                                            mime=str(first.get("mediaType") or "video/mp4")), "", ""
+            if first.get("base64") or first.get("data"):
+                return "succeeded", Payload(
+                    data=_b64(str(first.get("base64") or first.get("data"))),
+                    mime=str(first.get("mediaType") or "video/mp4")), "", ""
+            # Completed with nothing in it billed and delivered nothing. Same rule as everywhere.
+            return "failed", None, "the provider reported completed and returned no video", ""
+        if st in ("failed", "cancelled", "canceled"):
+            return "failed", None, scrub(provider_message(doc, status)
+                                         or f"the render ended as {st}"), ""
+        if st == "pending" or not st:
+            return "running", None, "", ""
+        return "unknown", None, "", ""
+
     data = doc.get("data")
     if not isinstance(data, dict) or not data:
         if status >= 400:

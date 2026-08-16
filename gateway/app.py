@@ -8502,10 +8502,14 @@ async def _media_job_poll(job: dict, budget: _MediaBudget) -> dict:
         await _media_job_save(job)
         return job
 
-    method, url = media_plane.build_poll(cand, prov["base_url"], str(job["provider_task_id"]))
+    poll = media_plane.build_poll(cand, prov["base_url"], str(job["provider_task_id"]))
     try:
+        # Same rule as the submit: the shape's headers go UNDER the credential, so a catalog entry
+        # can name a model and a protocol version but never an `authorization`.
         r = await _media_client().request(
-            method, url, headers=media_plane.auth_headers(prov),
+            poll.method, poll.url,
+            headers={**poll.headers, **media_plane.auth_headers(prov)},
+            json=poll.body if poll.body is not None else None,
             timeout=media_plane.POLL_TIMEOUT_S)
         status, payload, err, progress = media_plane.read_poll(cand, r.status_code,
                                                                _media_doc(r, r.content))

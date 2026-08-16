@@ -2434,8 +2434,16 @@ def test_a_provider_chosen_task_id_cannot_move_the_poll_to_another_host(client, 
                 if c.get("shape") == "video-generation")
     for hostile in ("x@evil.example", "../../../../evil.example/x", "..%2f..%2fevil.example",
                     "x#@evil.example", "x?@evil.example"):
-        _method, url = media_plane.build_poll(cand, TR, hostile)
-        assert httpx.URL(url).host == "api.tokenrouter.com", url
+        poll = media_plane.build_poll(cand, TR, hostile)
+        assert httpx.URL(poll.url).host == "api.tokenrouter.com", poll.url
+
+    # The Vercel shape cannot be steered this way at all: its handle never reaches the url. It is
+    # posted in the BODY, so a hostile handle is data the provider gets back, not an address.
+    vc = next(c for c in media_plane.capability("text_to_video")["candidates"]
+              if c.get("shape") == "vercel-video")
+    poll = media_plane.build_poll(vc, "https://ai-gateway.vercel.sh/v1", '{"id":"x@evil.example"}')
+    assert httpx.URL(poll.url).host == "ai-gateway.vercel.sh", poll.url
+    assert poll.method == "POST" and poll.body == {"operation": {"id": "x@evil.example"}}
 
 
 def test_the_finished_file_is_fetched_without_the_credential(client, harness, session, provider):
