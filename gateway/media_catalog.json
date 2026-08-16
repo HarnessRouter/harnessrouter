@@ -47,6 +47,29 @@
       "unit": "clip",
       "candidates": [
         {
+          "model": "bytedance/seedance-2.5",
+          "provider": "vercel",
+          "shape": "vercel-video",
+          "params": [
+            "prompt",
+            "duration",
+            "size"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "video"
+          ],
+          "resolution": "854x480",
+          "accepts_input_image": false,
+          "duration_observed_s": 5.056,
+          "latency_s": 116.0,
+          "usd": 0.5182759,
+          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: asked for 5 s at 480p and got back a presigned url to a 3,617,186 byte mp4, 854x480, h264 with an aac track it was not asked for. It HONOURS duration (5 asked, 5.056 delivered), unlike the tokenrouter seedance entry. Cost is the gateway's own number from providerMetadata.gateway.cost, not an estimate: $0.5182759 for those 48,437 completion tokens. Took 116 s inside the submit, so it is synchronous and never enters the poll walk.",
+          "verification": "verified"
+        },
+        {
           "model": "dreamina-seedance-2-5-hc",
           "provider": "tokenrouter",
           "shape": "video-generation",
@@ -228,29 +251,6 @@
             "video"
           ],
           "verification": "verified_prior"
-        },
-        {
-          "model": "bytedance/seedance-2.5",
-          "provider": "vercel",
-          "shape": "vercel-video",
-          "params": [
-            "prompt",
-            "duration",
-            "size"
-          ],
-          "in": [
-            "text"
-          ],
-          "out": [
-            "video"
-          ],
-          "resolution": "854x480",
-          "accepts_input_image": false,
-          "duration_observed_s": 5.056,
-          "latency_s": 116.0,
-          "usd": 0.5182759,
-          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: asked for 5 s at 480p and got back a presigned url to a 3,617,186 byte mp4, 854x480, h264 with an aac track it was not asked for. It HONOURS duration (5 asked, 5.056 delivered), unlike the tokenrouter seedance entry. Cost is the gateway's own number from providerMetadata.gateway.cost, not an estimate: $0.5182759 for those 48,437 completion tokens. Took 116 s inside the submit, so it is synchronous and never enters the poll walk.",
-          "verification": "verified"
         }
       ]
     },
@@ -327,6 +327,26 @@
       "unit": "image",
       "$order": "Ordered by latency, not by prestige: an image here is almost always a FRAME on the way to a video, so a 91-second model at the head of the chain turns a four-shot storyboard into six minutes of waiting.",
       "candidates": [
+        {
+          "model": "openai/gpt-image-1-mini",
+          "provider": "vercel",
+          "shape": "image-generation",
+          "params": [
+            "prompt",
+            "n",
+            "size"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "image"
+          ],
+          "resolution": "1024x1024",
+          "latency_s": 20.0,
+          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: the EXISTING image-generation shape works unchanged here, because /v1/images/generations is what it already posts. Returned b64_json which decoded to a 1,286,643 byte PNG, 1024x1024.",
+          "verification": "verified"
+        },
         {
           "model": "google/gemini-3.1-flash-lite-image",
           "provider": "tokenrouter",
@@ -553,26 +573,6 @@
           "excluded_reason": "Fails silently AND bills. Never selectable; kept in the file so nobody re-adds it.",
           "measured": "e2e run 2026-08-15 confirmed it again, and this entry is why availability is asserted on a MEDIA PAYLOAD and never on a 200: a status code would read this model as working, on every call, for as long as it kept billing. read_submit enforces that for all five shapes, so a sibling cannot do the same quietly.",
           "verification": "verified"
-        },
-        {
-          "model": "openai/gpt-image-1-mini",
-          "provider": "vercel",
-          "shape": "image-generation",
-          "params": [
-            "prompt",
-            "n",
-            "size"
-          ],
-          "in": [
-            "text"
-          ],
-          "out": [
-            "image"
-          ],
-          "resolution": "1024x1024",
-          "latency_s": 20.0,
-          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: the EXISTING image-generation shape works unchanged here, because /v1/images/generations is what it already posts. Returned b64_json which decoded to a 1,286,643 byte PNG, 1024x1024.",
-          "verification": "verified"
         }
       ]
     },
@@ -688,6 +688,33 @@
       "$order": "A READER FIRST, then the two that answer. The gpt-audio pair are conversational models doing narration: 'Say: hello.' returned 'Hello! It's great to talk with you.' They stay in the chain because they are a real fallback for a line of speech, and they carry `answers_prompts` so the code sends them the read-aloud instruction they need and warns the agent about the one defect they have. Ranking them first was never a preference \u2014 it was the only option there was. Neither does SSML, voice cloning or word timing.",
       "candidates": [
         {
+          "model": "openai/tts-1",
+          "provider": "vercel",
+          "shape": "vercel-speech",
+          "params": [
+            "prompt",
+            "voice"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "audio"
+          ],
+          "voices": [
+            "alloy",
+            "echo",
+            "fable",
+            "onyx",
+            "nova",
+            "shimmer"
+          ],
+          "format": "mp3",
+          "latency_s": 3.0,
+          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: returned base64 audio in a JSON body (NOT raw bytes like the elevenlabs shapes), which decoded to a 26,880 byte mp3, 1.68 s, 24 kHz mono, warnings empty.",
+          "verification": "verified"
+        },
+        {
           "model": "eleven_multilingual_v2",
           "provider": "elevenlabs",
           "shape": "elevenlabs-speech",
@@ -732,33 +759,6 @@
           },
           "note": "Reads what it is given, verbatim, and returns no transcript \u2014 there is nothing to compare, because nothing was paraphrased. `model_id` is this entry's own name; the VOICE is the path segment. It is NOT marked answers_prompts, which is the whole reason it is ranked above the two below.",
           "measured": "e2e run 2026-08-15 against the live account, through the ordinary chain: POST /v1/text-to-speech/{voice_id} answered 200 with 23449 raw bytes of audio/mpeg \u2014 a 1.437 s mp3 in 1.880 s \u2014 for the 23-character line 'Hello from the gateway.' in George's voice. It READ the line; nothing was answered. Listed in GET /v1/models. Cost 6 characters of the 64945 budget (provider's own /v1/usage/character-stats), which is LESS than the line is long \u2014 so the budget is not one-character-per-character on this tier and nothing here pretends to know the rate. No `usd` for the same reason as the music entry.",
-          "verification": "verified"
-        },
-        {
-          "model": "openai/tts-1",
-          "provider": "vercel",
-          "shape": "vercel-speech",
-          "params": [
-            "prompt",
-            "voice"
-          ],
-          "in": [
-            "text"
-          ],
-          "out": [
-            "audio"
-          ],
-          "voices": [
-            "alloy",
-            "echo",
-            "fable",
-            "onyx",
-            "nova",
-            "shimmer"
-          ],
-          "format": "mp3",
-          "latency_s": 3.0,
-          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: returned base64 audio in a JSON body (NOT raw bytes like the elevenlabs shapes), which decoded to a 26,880 byte mp3, 1.68 s, 24 kHz mono, warnings empty.",
           "verification": "verified"
         },
         {

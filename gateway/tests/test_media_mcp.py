@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import copy
 import json
 import os
 import subprocess
@@ -1235,8 +1236,13 @@ def test_the_catalog_is_read_from_disk_and_not_compiled_in(tmp_path, monkeypatch
     says so. Same rule as kits and skills."""
     assert Path(media_plane._CATALOG_PATH).name == "media_catalog.json"
     doc = json.loads(Path(media_plane._CATALOG_PATH).read_text())
-    assert doc["capabilities"]["text_to_video"]["candidates"][0]["model"] == \
-        "dreamina-seedance-2-5-hc", "the owner's preferred model is no longer rank 1"
+    # The owner's preference moved to the Vercel gateway on 2026-08-16, deliberately: it is the
+    # connection with the credits on it, and its seedance HONOURS a requested duration where the
+    # relay's ignores it. The relay's entry is still in the chain, one rank down, because it
+    # renders well and a second route is the point of a chain.
+    t2v = [c["model"] for c in doc["capabilities"]["text_to_video"]["candidates"]]
+    assert t2v[0] == "bytedance/seedance-2.5", "the owner's preferred model is no longer rank 1"
+    assert "dreamina-seedance-2-5-hc" in t2v, "the previous rank 1 was deleted rather than demoted"
     swapped = tmp_path / "cat.json"
     swapped.write_text(json.dumps({"providers": {}, "capabilities": {}}))
     monkeypatch.setattr(media_plane, "_CATALOG_PATH", str(swapped))
@@ -1272,12 +1278,39 @@ def test_nothing_is_skipped_for_being_marked_broken(client, harness, session, pr
     assert out["model"] == "dreamina-seedance-2-5-hc"
 
 
+def _catalog_with_first(cap_name: str, cand: dict) -> dict:
+    """The real catalog with one candidate lifted to rank 1.
+
+    For a test whose subject is a model that is deliberately NOT the default choice. Reordering
+    here rather than editing the catalog keeps the test about the model's behaviour instead of
+    about which model the owner currently prefers, which is a decision that will move again.
+    """
+    doc = copy.deepcopy(json.loads(Path(media_plane._CATALOG_PATH).read_text()))
+    c = doc["capabilities"][cap_name]["candidates"]
+    doc["capabilities"][cap_name]["candidates"] = (
+        [x for x in c if x["model"] == cand["model"]] +
+        [x for x in c if x["model"] != cand["model"]])
+    return doc
+
+
 def test_the_model_that_ignores_a_duration_says_so_rather_than_being_believed(client, harness,
-                                                                              session, provider):
-    """Measured: 1 s was asked for and a 6.08 s clip came back. It stays rank 1 — it renders, and
-    it renders well — but nothing downstream may assume the length it was asked for."""
-    cand = media_plane.capability("text_to_video")["candidates"][0]
-    assert cand["model"] == "dreamina-seedance-2-5-hc" and cand["duration_ignored"] is True
+                                                                              session, provider,
+                                                                              monkeypatch):
+    """Measured: 1 s was asked for and a 6.08 s clip came back. It is no longer rank 1 — the Vercel
+    seedance took that slot and HONOURS a duration — but it is still in the chain, so the rule it
+    exists for is still live: nothing downstream may assume the length it was asked for.
+
+    Found BY NAME rather than by rank. Asserting a quirk of one model through whatever happens to
+    sit at position 0 is how a re-ranking silently stops testing the quirk.
+    """
+    cands = media_plane.capability("text_to_video")["candidates"]
+    cand = next(c for c in cands if c["model"] == "dreamina-seedance-2-5-hc")
+    assert cand["duration_ignored"] is True
+    # The model that displaced it must NOT claim the same quirk, or the note below is wrong for it.
+    assert not cands[0].get("duration_ignored"), \
+        f"{cands[0]['model']} is rank 1 and ignores duration — the honest-note path needs revisiting"
+    # Drive the chain to THIS candidate for the end-to-end half, since rank 1 is now another model.
+    monkeypatch.setattr(media_plane, "catalog", lambda: _catalog_with_first("text_to_video", cand))
     assert "duration_min_s" not in cand and "durations_s" not in cand, (
         "an ignored duration must not be written down as a limit — that would skip the model")
     out = _ok(_call(client, _cred(harness, session), "generate_video",
@@ -1441,14 +1474,22 @@ def test_a_size_the_model_cannot_be_told_is_not_reported_as_though_it_were(clien
 
 
 def test_the_model_that_rejects_an_input_image_is_not_in_the_image_chain():
-    """It rejects an input image url outright. Listing it in image_to_video would spend the rank-1
-    slot of a capability with NO substitute on a model that cannot do it at all."""
+    """They reject an input image url outright. Listing one in image_to_video would spend the
+    rank-1 slot of a capability with NO substitute on a model that cannot do it at all.
+
+    Both seedance entries are checked, not just the top one: the Vercel model that now leads
+    text_to_video is text-only too, so the rule has two subjects rather than one.
+    """
     assert [c["model"] for c in media_plane.capability("image_to_video")["candidates"]] == [
         "kling-v3", "kling-v2-6"]
-    t2v = media_plane.capability("text_to_video")["candidates"][0]
-    assert t2v["model"] == "dreamina-seedance-2-5-hc"
-    assert t2v["accepts_input_image"] is False
-    assert media_plane.can_serve(t2v, {"image": "…"}), "it would have taken an image job"
+    t2v = media_plane.capability("text_to_video")["candidates"]
+    textonly = [c for c in t2v if c["model"] in ("dreamina-seedance-2-5-hc",
+                                                 "bytedance/seedance-2.5")]
+    assert len(textonly) == 2, "a seedance entry vanished from the text chain"
+    for cand in textonly:
+        assert cand["accepts_input_image"] is False
+        assert media_plane.can_serve(cand, {"image": "…"}), \
+            f"{cand['model']} would have taken an image job"
 
 
 @pytest.mark.parametrize("cap", ["text_to_video", "image_to_video"])
