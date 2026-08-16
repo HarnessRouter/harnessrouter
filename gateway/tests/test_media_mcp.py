@@ -2746,3 +2746,53 @@ def test_the_provider_key_is_in_nothing_this_file_wrote_down():
             continue
     # Nowhere, not even the secret store: the one place it is allowed to live keeps it encrypted.
     assert leaked == [], f"the provider key was written to disk in the clear: {leaked}"
+
+
+# ══ the operator's routing preference ════════════════════════════════════════════
+# The catalog is what each model DID. This is what the operator WANTS. They are separate
+# documents for a reason, and these assert the seam holds in both directions.
+
+def test_the_preference_reorders_the_chain_without_touching_the_catalog():
+    """Promotion is a policy edit, not a catalog edit: the file still says what it measured."""
+    before = [c["model"] for c in media_plane.capability("text_to_video")["candidates"]]
+    assert len(before) > 1
+    last = before[-1]
+    try:
+        media_plane.set_policy({"text_to_video": {"order": [last]}})
+        after = [c["model"] for c in media_plane.capability("text_to_video")["candidates"]]
+        assert after[0] == last, "the promoted model is not first"
+        assert sorted(after) == sorted(before), "the preference added or dropped a candidate"
+        # And the file on disk is untouched — the measurement outlives the opinion.
+        doc = json.loads(Path(media_plane._CATALOG_PATH).read_text())
+        assert [c["model"] for c in doc["capabilities"]["text_to_video"]["candidates"]] == before
+    finally:
+        media_plane.set_policy({})
+
+
+def test_a_switched_off_model_says_so_instead_of_vanishing():
+    """A candidate removed from the list produces a refusal that cannot explain itself. Switched
+    off, it is still in the chain and still has a sentence — which is what an agent relays."""
+    first = media_plane.capability("text_to_video")["candidates"][0]["model"]
+    try:
+        media_plane.set_policy({"text_to_video": {"disabled": [first]}})
+        cands = media_plane.capability("text_to_video")["candidates"]
+        assert first in [c["model"] for c in cands], "it was dropped rather than marked"
+        off = next(c for c in cands if c["model"] == first)
+        assert media_plane.stood_down(off) == f"{first} is switched off on this instance"
+        # resolve skips it and SAYS why, then serves the next one that can.
+        cand, skipped = media_plane.resolve(
+            "text_to_video", {}, connected={"tokenrouter", "vercel", "elevenlabs"})
+        assert any("switched off" in s for s in skipped)
+        assert cand is None or cand["model"] != first
+    finally:
+        media_plane.set_policy({})
+
+
+def test_a_preference_naming_an_unknown_model_orders_nothing():
+    """Dead weight that would take effect the day an upgrade adds that name."""
+    before = [c["model"] for c in media_plane.capability("text_to_video")["candidates"]]
+    try:
+        media_plane.set_policy({"text_to_video": {"order": ["not-a-model-anyone-has"]}})
+        assert [c["model"] for c in media_plane.capability("text_to_video")["candidates"]] == before
+    finally:
+        media_plane.set_policy({})

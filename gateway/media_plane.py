@@ -169,9 +169,58 @@ def catalog() -> dict:
     return doc
 
 
+# ── the operator's preference, as a LAYER over the measured catalog ───────────────────────────
+# THE CATALOG IS FACT AND THIS IS POLICY, and they are kept apart on purpose. The file records
+# what each model DID when it was called — the duration it honoured, the frame it returned, what
+# it cost. An operator saying "prefer this one, switch that one off" is a different kind of
+# statement, and writing it into the catalog would overwrite a measurement with an opinion and
+# lose the reason the ranking was what it was.
+#
+# It is applied in `capability()` — the ONE place candidates are read — so the chain that runs, the
+# chain the console draws and the chain an agent is told about are the same list. Applying it at
+# the two call sites instead is how a console comes to show an order the router does not use.
+_policy: dict = {}
+
+
+def set_policy(doc: dict | None) -> None:
+    """Replace the operator's preference. Called at startup and after every write."""
+    global _policy                                       # noqa: PLW0603 — one module-level cache
+    _policy = doc if isinstance(doc, dict) else {}
+
+
+def policy() -> dict:
+    return _policy
+
+
+def _apply_policy(cap_name: str, cands: list) -> list:
+    """Candidates in the operator's order, with switched-off ones MARKED rather than removed.
+
+    Marked, not filtered: a model that vanishes from the chain produces a refusal that cannot
+    explain itself. `stood_down` turns the mark into a sentence, so an agent that finds nothing
+    available is told "X is switched off on this instance" instead of "no model can do this".
+    """
+    p = (_policy.get(cap_name) or {}) if isinstance(_policy.get(cap_name), dict) else {}
+    order = [str(m) for m in (p.get("order") or [])]
+    off = {str(m) for m in (p.get("disabled") or [])}
+    if not order and not off:
+        return cands
+    marked = [({**c, "policy_off": True} if str(c.get("model")) in off else c) for c in cands]
+    if not order:
+        return marked
+    rank = {m: i for i, m in enumerate(order)}
+    # A candidate the preference does not mention keeps its catalog position, AFTER the ones it
+    # does: a model added by an upgrade must not silently outrank what an operator chose.
+    return sorted(marked, key=lambda c: (rank.get(str(c.get("model")), len(order)),))
+
+
 def capability(name: str) -> dict:
     c = (catalog().get("capabilities") or {}).get(name)
-    return c if isinstance(c, dict) else {}
+    if not isinstance(c, dict):
+        return {}
+    cands = c.get("candidates")
+    if not isinstance(cands, list) or not _policy:
+        return c
+    return {**c, "candidates": _apply_policy(name, cands)}
 
 
 def capability_names() -> list[str]:
@@ -348,6 +397,10 @@ def stood_down(cand: dict) -> str:
     fixed — no code change, no cost, nobody watching. A rule that skipped everything marked broken
     would have made that recovery impossible and nobody would ever have known.
     """
+    model_off = str(cand.get("model") or "?")
+    if cand.get("policy_off"):
+        # The operator's own decision, said in their terms: this is not a fault and not a limit.
+        return f"{model_off} is switched off on this instance"
     status = str(cand.get("status") or "")
     if status not in _STOOD_DOWN:
         return ""

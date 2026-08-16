@@ -48,7 +48,26 @@ interface Doc {
   image_model_map?: Record<string, string>;
   providers: string[];
   catalog: ProviderMeta[];
+  /** Video, speech and music are NOT routed by a model map. They are routed by an ordered chain
+   *  per capability, and the first candidate whose provider is connected wins. */
+  media_chains?: MediaChain[];
+  media_policy?: Record<string, { order?: string[]; disabled?: string[] }>;
 }
+interface MediaCandidate {
+  model: string;
+  provider: string;
+  connected: boolean;
+  off: boolean;
+  resolution?: string;
+  seconds?: number | null;
+  duration_ignored?: boolean;
+  accepts_input_image?: boolean | null;
+  usd?: number | null;
+  verification?: string;
+  /** The clause the chain would use if this one were asked for right now. */
+  unavailable?: string;
+}
+interface MediaChain { capability: string; unit: string; candidates: MediaCandidate[] }
 
 const SECRET = '__secret__';
 
@@ -77,10 +96,12 @@ export default function IntegrationsPage() {
   useEffect(() => { if (allowed) reload(); }, [allowed, reload]);
 
   async function persist(next: { integrations: Integration[]; model_map: Record<string, string>;
-                                 image_model_map?: Record<string, string> }) {
-    // Always send both maps. The write replaces the whole document, so posting one of them alone
-    // would silently clear the other.
-    const body = { image_model_map: doc?.image_model_map || {}, ...next };
+                                 image_model_map?: Record<string, string>;
+                                 media_policy?: Record<string, { order?: string[]; disabled?: string[] }> }) {
+    // Always send every map. The write replaces the whole document, so posting one of them alone
+    // would silently clear the others.
+    const body = { image_model_map: doc?.image_model_map || {},
+                   media_policy: doc?.media_policy || {}, ...next };
     setBusy(true); setErr('');
     try {
       const r = await harnessFetch('/api/harness/v1/admin/integrations', {
@@ -191,6 +212,22 @@ export default function IntegrationsPage() {
               onChange={(next) => void persist({ integrations: doc.integrations,
                                                  model_map: doc.model_map, image_model_map: next })}
               emptyHint="None of your integrations serve an image model." />
+
+            {/* Video, speech and music. NOT a map: a chain, in order, with the measurements that
+                justify the order. Flattening it to one row per model would throw away both the
+                ranking and the facts, which are the two things that make a fallback safe. */}
+            {(doc.media_chains || []).filter((c) => c.candidates.length > 0).map((chain) => (
+              <MediaChainTable
+                key={chain.capability}
+                chain={chain}
+                busy={busy}
+                policy={doc.media_policy || {}}
+                onChange={(next) => void persist({ integrations: doc.integrations,
+                                                   model_map: doc.model_map,
+                                                   image_model_map: doc.image_model_map || {},
+                                                   media_policy: next })}
+              />
+            ))}
 
           </>
         )}
@@ -397,6 +434,101 @@ function AddMappingRow({ map, allCanonicals, integrations, servedBy, busy, onAdd
       <button className="button" type="button" disabled={busy || !model || !iname}
         onClick={() => { onAdd(model, iname); setModel(''); setIname(''); }}>
         <iconify-icon icon="tabler:plus"></iconify-icon>Add Mapping</button>
+    </div>
+  );
+}
+
+/* ── one media capability's chain ────────────────────────────────────────────────────────────
+   Order is the routing rule: the first candidate whose provider is connected and that can serve
+   the request is the one that runs. So the control is Move up / Move down, not a dropdown — the
+   list IS the policy, and showing it any other way would be showing something that is not what
+   happens.
+
+   Every measured fact travels with its row because those facts are the reason to prefer one over
+   another. "Ignores the duration you ask for" is the difference between a 5-second shot and a
+   6-second one, and nobody can weigh that from a model name. */
+const CAP_TITLE: Record<string, string> = {
+  text_to_video: 'Video, from text',
+  image_to_video: 'Video, from an image',
+  text_to_image: 'Images',
+  image_to_image: 'Images, from an image',
+  text_to_speech: 'Speech',
+  text_to_music: 'Music',
+  export: 'Film assembly',
+};
+
+function MediaChainTable({ chain, policy, busy, onChange }: {
+  chain: MediaChain;
+  policy: Record<string, { order?: string[]; disabled?: string[] }>;
+  busy: boolean;
+  onChange: (next: Record<string, { order?: string[]; disabled?: string[] }>) => void;
+}) {
+  const models = chain.candidates.map((c) => c.model);
+  const cur = policy[chain.capability] || {};
+  const off = new Set(cur.disabled || []);
+
+  /** The order as it stands, with one model moved. Written whole: a preference that lists only
+   *  the models somebody touched leaves the rest to the catalog, and the two disagree the moment
+   *  the catalog changes. */
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= models.length) return;
+    const next = [...models];
+    const [row] = next.splice(from, 1);
+    next.splice(to, 0, row);
+    onChange({ ...policy, [chain.capability]: { order: next, disabled: [...off] } });
+  };
+  const toggle = (model: string) => {
+    const d = new Set(off);
+    if (d.has(model)) d.delete(model); else d.add(model);
+    onChange({ ...policy, [chain.capability]: { order: models, disabled: [...d] } });
+  };
+
+  const facts = (c: MediaCandidate) => {
+    const out: string[] = [];
+    if (c.resolution) out.push(c.resolution);
+    if (typeof c.seconds === 'number') out.push(`${c.seconds}s measured`);
+    if (c.duration_ignored) out.push('ignores the duration you ask for');
+    if (c.accepts_input_image === false) out.push('text only');
+    if (typeof c.usd === 'number') out.push(`$${c.usd.toFixed(2)} a ${chain.unit || 'run'}`);
+    return out;
+  };
+
+  return (
+    <div className="itg-section">
+      <div className="itg-section-head">
+        <div>
+          <h2>{CAP_TITLE[chain.capability] || chain.capability}</h2>
+          <p>Tried in this order. The first one whose provider is connected, and that can do what
+            was asked, is the one that runs.</p>
+        </div>
+      </div>
+      <table className="table">
+        <thead><tr><th>Order</th><th>Model</th><th>Provider</th><th>What it does</th><th /></tr></thead>
+        <tbody>
+          {chain.candidates.map((c, i) => (
+            <tr key={c.model} className={c.off || !c.connected ? 'is-dim' : undefined}>
+              <td>{i + 1}</td>
+              <td>
+                <span className="mono">{c.model}</span>
+                {/* Never colour alone: the state is a word. */}
+                {c.off && <span className="chip"> switched off</span>}
+                {!c.off && !c.connected && <span className="chip"> no key</span>}
+                {!c.off && c.connected && c.unavailable && <span className="chip"> unavailable</span>}
+              </td>
+              <td>{c.provider}</td>
+              <td className="muted">{facts(c).join(' · ') || '—'}</td>
+              <td className="right">
+                <button className="button ghost" type="button" disabled={busy || i === 0}
+                  onClick={() => move(i, i - 1)} aria-label={`Move ${c.model} up`}>Up</button>
+                <button className="button ghost" type="button" disabled={busy || i === chain.candidates.length - 1}
+                  onClick={() => move(i, i + 1)} aria-label={`Move ${c.model} down`}>Down</button>
+                <button className="button ghost" type="button" disabled={busy}
+                  onClick={() => toggle(c.model)}>{c.off ? 'Switch on' : 'Switch off'}</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

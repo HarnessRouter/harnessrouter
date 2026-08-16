@@ -888,6 +888,13 @@ _MODEL_MAP_PREV_KEY = "harness-model-map.prev"
 # where picking one is a broken choice; and the two route independently — the integration that
 # serves your chat models is often not the one that serves images.
 _IMAGE_MODEL_MAP_KEY = "harness-image-model-map"
+# Video, speech and music are NOT routed by a model map. They are routed by the media
+# chain: an ordered list of candidates per capability, each carrying what it measurably
+# does, and the first one whose provider is connected wins. This document is the operator's
+# preference over that order — which to try first, which to switch off — and it is kept
+# apart from the catalog for the reason media_plane.set_policy explains: the catalog is
+# measurement, this is policy, and one must not overwrite the other.
+_MEDIA_POLICY_KEY = "harness-media-policy"
 _IMAGE_MODEL_MAP_PREV_KEY = "harness-image-model-map.prev"
 _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token")
 # integration provider type × runner backend -> the runner-side provider that carries it.
@@ -926,6 +933,23 @@ async def _model_map_doc() -> dict:
         return doc if isinstance(doc, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+async def _media_policy_doc() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, _MEDIA_POLICY_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+        return doc if isinstance(doc, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def _media_policy_load() -> dict:
+    """Read it and hand it to the media plane. The plane holds one cached copy because it is read
+    on every resolve; this is the only thing that sets it."""
+    doc = await _media_policy_doc()
+    media_plane.set_policy(doc)
+    return doc
 
 
 async def _image_model_map_doc() -> dict:
@@ -2159,6 +2183,17 @@ async def _reconcile_sweep() -> int:
         except Exception:  # noqa: BLE001
             pass
     return fixed
+
+
+@app.on_event("startup")
+async def _start_media_policy() -> None:
+    """The operator's media preference, published to the plane before the first turn can arrive.
+    Without this the order they chose applies only after something else happens to write it."""
+    try:
+        await _media_policy_load()
+    except Exception as e:  # noqa: BLE001 — a missing preference is not a reason not to start
+        print(f"[media] could not read the routing preference ({e}); using the catalog order",
+              flush=True)
 
 
 @app.on_event("startup")
@@ -3443,6 +3478,45 @@ def _integration_public(integ: dict) -> dict:
                              for c, v in _integration_image_models(integ).items()]}
 
 
+async def _media_chains_public() -> list[dict]:
+    """Every media capability's chain, in the order it will actually be walked.
+
+    Read through media_plane.capability(), which is where the operator's preference is applied —
+    so what the console draws is the list the router uses, not a second reading of the file that
+    could drift from it.
+
+    The measured facts travel with each candidate because they are the reason for the order. An
+    operator moving a model to the top is choosing between "honours the duration you ask for" and
+    "ignores it and returns 6 s", and that choice cannot be made from a model name.
+    """
+    connected = set((await _media_providers()).keys())
+    out: list[dict] = []
+    for name in media_plane.capability_names():
+        cap = media_plane.capability(name)
+        cands = [c for c in (cap.get("candidates") or []) if isinstance(c, dict)]
+        rows = []
+        for c in cands:
+            model = str(c.get("model") or "")
+            provider = str(c.get("provider") or "")
+            rows.append({
+                "model": model,
+                "provider": provider,
+                "connected": provider in connected,
+                "off": bool(c.get("policy_off")),
+                # Why it is where it is, in the words the file recorded when it was called.
+                "resolution": c.get("resolution") or "",
+                "seconds": c.get("duration_observed_s"),
+                "duration_ignored": bool(c.get("duration_ignored")),
+                "accepts_input_image": c.get("accepts_input_image"),
+                "usd": c.get("usd"),
+                "verification": c.get("verification") or "",
+                # The clause the chain would use if this one were asked for right now.
+                "unavailable": media_plane.stood_down(c),
+            })
+        out.append({"capability": name, "unit": cap.get("unit") or "", "candidates": rows})
+    return out
+
+
 @app.get("/v1/admin/integrations")
 async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
@@ -3450,7 +3524,9 @@ async def admin_integrations_get(request: Request) -> dict:
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
-            "catalog": _provider_catalog_public()}
+            "catalog": _provider_catalog_public(),
+            "media_chains": await _media_chains_public(),
+            "media_policy": await _media_policy_doc()}
 
 
 class IntegrationsBody(BaseModel):
@@ -3459,6 +3535,9 @@ class IntegrationsBody(BaseModel):
     # Optional: a console that predates image routing still saves without wiping the image map.
     # Absent means "leave it alone", which is not the same as an empty dict meaning "clear it".
     image_model_map: dict | None = None
+    # Same rule: absent leaves the media preference alone, {} clears it back to the catalog's own
+    # order. A console that does not know about media routing must not silently reset it.
+    media_policy: dict | None = None
 
 
 @app.put("/v1/admin/integrations")
@@ -3539,6 +3618,26 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
     if imm is not None:
         await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY, json.dumps(imm))
+    if body.media_policy is not None:
+        # Only models this deployment actually HAS. A preference naming a model the catalog does
+        # not carry is silent dead weight: it survives every write, explains nothing, and reorders
+        # nothing — and the day that name appears in an upgraded catalog it takes effect without
+        # anyone choosing it.
+        known = {str(c.get("model")) for n in media_plane.capability_names()
+                 for c in (media_plane.capability(n).get("candidates") or [])
+                 if isinstance(c, dict)}
+        clean: dict = {}
+        for cap, pref in (body.media_policy or {}).items():
+            if not isinstance(pref, dict):
+                continue
+            order = [str(m) for m in (pref.get("order") or []) if str(m) in known]
+            off = [str(m) for m in (pref.get("disabled") or []) if str(m) in known]
+            if order or off:
+                clean[str(cap)] = {"order": order, "disabled": off}
+        await _vault_put(GLOBAL_TENANT, _MEDIA_POLICY_KEY, json.dumps(clean))
+        # The plane caches it, so the write must publish it. Otherwise the order takes effect on
+        # the next restart, which is indistinguishable from the control not working.
+        media_plane.set_policy(clean)
     # Answer with what will actually route, not with what was just filed away — the two differ by
     # every model claimed on read, and the console renders this straight into the picker.
     return {"ok": True, "integrations": [_integration_public(i) for i in out],
