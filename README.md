@@ -257,12 +257,12 @@ a style system, then slide by slide.
 The deck below came from one sentence: *"A 5-slide deck explaining what a container image is, for
 new engineers."*
 
-![The Slides editor mid-run: thumbnails filling in on the left, the agent narrating on the right](docs/images/slides-3-editor-working.png)
+![The Slides editor: the finished deck on the canvas, and the run that produced it on the right](docs/images/kit-slides.png)
 
-You watch it build. Slides appear as it works, so when the shape is wrong you can say so while
-there are two slides to change instead of twenty.
-
-![The finished five-slide deck, conversation hidden](docs/images/slides-4-finished-deck.png)
+The panel on the right is the run itself, not a progress bar. It settled the structure, built a
+style system, checked what the canvas would accept, wrote the deck, then validated it, and it says
+so as it goes. Slides appear while it works, so when the shape is wrong you can say so while there
+are two slides to change instead of twenty.
 
 Nothing here is a picture of a slide: every element is a real object on the canvas, so you can drag
 it, resize it, retype it, or ask for another pass in the same conversation.
@@ -272,16 +272,20 @@ it, resize it, retype it, or ask for another pass in the same conversation.
 Rows are your data. An agent column runs one of your harnesses on every row, with the columns to
 its left as input, and the sheet fills itself cell by cell.
 
-This one came from *"Five classic sci-fi novels: title, author, year published, and an agent column
-that writes a one-sentence summary."*
+This one opened with *"help me build a sheet, i wanna use this to map investors in silicon valley.
+the goal is to provide this one to investors outside of SV the startups invested by investors based
+SV."*
 
-![The Sheets editor mid-run: three rows written, two spinning, 3/5 in the progress bar](docs/images/sheets-3-agent-column-running.png)
+![The Sheets editor: real investor rows, an agent column's output on each one, and the conversation that built it](docs/images/kit-sheets.png)
 
-The agent built the sheet, wrote the per-row prompt itself, and then handed it back for you to run.
-Press Run and the column fills in row order, with a live count and a Stop button, because a column
-of a thousand rows is a thing you should be able to change your mind about.
+The agent built the columns and wrote the per-row prompt itself. The rows arrived on a follow-up,
+*"search some real data and from internet"*, and it went and found four real investors with their
+firm's own profile pages rather than inventing plausible ones, and it left the agent column alone
+while it did, on the grounds that it had not run those cells and would not write results it had not
+got. Running the column is what filled it.
 
-![The finished sheet: three columns of data and a fourth an agent wrote](docs/images/sheets-4-finished-sheet.png)
+That is the Run button, and the column fills in row order with a live count and a Stop button,
+because a column of a thousand rows is a thing you should be able to change your mind about.
 
 **One thing to know on a brand-new instance.** An agent column runs one of your *other* agents, and a
 sheet will not run itself, so on an instance where Sheets is the only thing you have launched, the
@@ -303,13 +307,17 @@ built.
 ![Launching the Dashboards kit: what to run it on, and which database to read](docs/images/dashboard-2-launch.png)
 
 This is the one kit with setup, and it is two fields: the connection and the sample-rows switch.
-The dashboard below is one turn from *"Show me how sales are doing: revenue over time, by channel,
-and the top products."*
 
-![The finished dashboard: three stat panels, two charts, and a top-products table](docs/images/dashboard-4-dashboard.png)
+The one below opened with *"Revenue by month and the top 5 countries by revenue, plus total paid
+revenue."* and then kept going in the same conversation. The panels you see are a later pass: the
+layout was asked for by dropping a picture of it into the chat.
+
+![The Dashboards kit: live panels on the left, the conversation that shaped them on the right](docs/images/kit-dashboard.png)
 
 There is nowhere in a dashboard to type a number. Every figure on that page is the result of a
-query that ran when the page opened, which is the property that makes it worth trusting.
+query that ran when the page opened, which is the property that makes it worth trusting. Ask for a
+change and it runs each query before it wires it into a panel, so a panel that renders is a panel
+whose query works.
 
 <details>
 <summary>Connecting a database</summary>
