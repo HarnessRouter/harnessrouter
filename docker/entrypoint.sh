@@ -103,6 +103,15 @@ elif [ "$HR_AUTH_PASSWORD" = "harnessrouter" ]; then
   echo "[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance."
 fi
 export PORT="${PORT:-3000}"
+# Next binds to $HOSTNAME, and Docker sets that to the container id, which resolves to ONE of the
+# container's addresses. That is fine with a single network and silently fatal with two: connect
+# this container to a user-defined network — which is exactly what the README tells you to do to
+# reach a database — and after the next restart Next comes up on that network's address while the
+# published port still forwards to the bridge one. Nothing is listening where the port lands, so
+# the console answers 502 while the container reports healthy and the log says "Ready".
+# Measured on the test box 2026-08-16: LISTEN 172.18.0.5:3000, published 127.0.0.1:3000 -> the
+# bridge ip. Binding every interface is the only answer that survives a second network.
+export HOSTNAME=0.0.0.0
 
 # ── agent CLIs: installed here, not shipped in the image ──────────────────────
 # Claude Code is distributed under Anthropic's own terms and hermes-agent declares no license,

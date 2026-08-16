@@ -3469,7 +3469,13 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     for i in body.integrations:
         name = str(i.get("name") or "").strip()
         provider = str(i.get("provider") or "").lower()
-        if not name or provider not in {p for p, _ in _INTEGRATION_WIRING}:
+        # Against the CATALOG, which is the list of providers this console offers, and not against
+        # _INTEGRATION_WIRING, which answers a different question: which agent backends can be
+        # driven by one. A media-only provider has no backend wiring by definition, so validating
+        # here against the wiring made ElevenLabs unsaveable — and because the console PUTs the
+        # WHOLE document, one such row already in the vault failed every subsequent write and no
+        # integration of any kind could be added to that instance again.
+        if not name or provider not in _PROVIDER_CATALOG:
             raise HTTPException(400, f"integration needs a name and a known provider (got '{provider}')")
         cfg = {k: v for k, v in (i.get("config") or {}).items() if v not in (None, "")}
         # The client never sees secrets (sentinel) — carry stored values through unchanged edits.
