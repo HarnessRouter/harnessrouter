@@ -3353,6 +3353,21 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret_label": "API Key",
         "key_hint": "vck_…",
     },
+    # Media only: it serves no chat model, so it carries no entry in _VENDOR_MODELS and shows no
+    # models on its row. It is HERE because the console validates every entry in the integrations
+    # document against this table on every write — so with ElevenLabs connected and absent from
+    # it, the whole document was refused with "integration needs a name and a known provider (got
+    # 'elevenlabs')" and NO integration could be added or edited on that instance again. Measured
+    # on the test box 2026-08-16, where an ElevenLabs connection added for the media plane had
+    # quietly locked the page.
+    "elevenlabs": {
+        "label": "ElevenLabs",
+        "base_url": "https://api.elevenlabs.io",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "sk_…",
+    },
     "azure-foundry": {
         "label": "Azure OpenAI",
         "base_url": None,          # one resource per customer — there is no default to know
@@ -4027,6 +4042,10 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
     "openai": {"gpt-image-1": "gpt-image-1", "gpt-image-1-mini": "gpt-image-1-mini"},
     "azure":  {"gpt-image-1": "gpt-image-1"},
     "azure-foundry": {"gpt-image-1": "gpt-image-1"},
+    # Verified on the live gateway 2026-08-16: gpt-image-1-mini returned a 1,286,643 byte PNG at
+    # 1024x1024 through the ordinary /v1/images/generations path.
+    "vercel": {"gpt-image-1": "openai/gpt-image-1",
+               "gpt-image-1-mini": "openai/gpt-image-1-mini"},
 }
 
 
