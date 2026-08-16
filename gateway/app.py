@@ -900,6 +900,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "hermes"): "openai-api",
     ("openai", "codex"): "openai",             ("openai", "hermes"): "openai-api",
     ("anthropic", "claude"): "anthropic",      ("anthropic", "hermes"): "anthropic",
+    # Vercel's gateway answers on BOTH shapes from one base_url and one key: OpenAI's
+    # /v1/chat/completions and Anthropic's /v1/messages. That is the same pair TokenRouter
+    # offers, so it carries all three backends by the same runner providers, for the same
+    # reasons — 'tokenrouter' being the runner's name for "OpenAI/Anthropic-compatible, and the
+    # base_url says where", not a statement about whose service it is.
+    ("vercel", "claude"): "tokenrouter",       ("vercel", "codex"): "tokenrouter",
+    ("vercel", "hermes"): "openai-api",
 }
 
 
@@ -3338,6 +3345,14 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
     },
+    "vercel": {
+        "label": "Vercel AI Gateway",
+        "base_url": "https://ai-gateway.vercel.sh/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "vck_…",
+    },
     "azure-foundry": {
         "label": "Azure OpenAI",
         "base_url": None,          # one resource per customer — there is no default to know
@@ -4017,6 +4032,23 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
 
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
                                  if c not in _TOKENROUTER_NO_CHANNEL}
+
+# Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
+# OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
+# the two aggregators disagree about who publishes the model, not about which model it is.
+#
+# Checked against the gateway's own list (GET https://ai-gateway.vercel.sh/v1/models, which needs
+# no key) on 2026-08-15: 25 of the 29 resolve byte-identical, these 4 do not, and every one of the
+# 29 exists there under one name or the other. A slug that stops resolving belongs here or nowhere
+# — an aggregator that does not serve what the picker offers is the broken promise recorded above.
+_VERCEL_RESLUG = {
+    "qwen3.7-max":        "alibaba/qwen3.7-max",
+    "qwen3.8-max":        "alibaba/qwen3.8-max",
+    "qwen3.7-flash":      "alibaba/qwen3.7-flash",
+    "mistral-medium-3.5": "mistral/mistral-medium-3.5",
+}
+_VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
+                            for c, v in _VENDOR_MODELS["openrouter"].items()}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
