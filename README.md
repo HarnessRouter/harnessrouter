@@ -40,9 +40,8 @@ Six steps, and at the end of them you have a running instance, a signed-in conso
 that has answered you.
 
 You need Docker, about 4 GB of disk, and an API key from a model provider. There is no account to
-create and
-nothing to sign up for. The provider key is the only credential in the story, and it never leaves
-the box except to call the provider it belongs to.
+create and nothing to sign up for. The provider key is the only credential in the story, and it
+never leaves the box except to call the provider it belongs to.
 
 ### 1. Pull the image
 
@@ -56,14 +55,115 @@ About 700 MB to download.
 when you need two machines to run the same bytes, by naming a version in a compose file you share
 with a team. Releases are listed on [Docker Hub](https://hub.docker.com/r/harnessrouter/harnessrouter/tags).
 
-### 2. Connect a model provider
+### 2. Run it
+
+```bash
+docker run -d --name harnessrouter \
+  -p 127.0.0.1:3000:3000 \
+  -v harnessrouter:/data \
+  -e HR_AUTH_PASSWORD='something only you know' \
+  harnessrouter/harnessrouter
+```
+
+No provider key here. The instance comes up without one and you connect a provider from the console
+in step 5, which is the shorter road: a key pasted into a form cannot be misspelled into a shell
+history, and changing it later does not mean recreating the container.
+
+Three parts of that line are load-bearing. `-p 127.0.0.1:` keeps the console on loopback, which is
+what you want until you have changed the password. If port 3000 is already busy, change only the
+left-hand number (`-p 127.0.0.1:3100:3000`), because the container always listens on 3000 inside.
+`-v harnessrouter:/data` is where everything durable lives, including the agent CLIs installed in
+the next step, so keeping that volume is what makes the second start fast. And `HR_AUTH_PASSWORD`
+is the difference between an instance only you can drive and one whose password is printed in this
+file.
+
+Compose works too (`cp .env.example .env`, `docker compose up -d`), but read `docker-compose.yml`
+before you do. It publishes `3000:3000` on every interface rather than on loopback, and
+`.env.example` ships with the default password filled in. Change those two lines and it behaves
+like the command above.
+
+### 3. Watch the first start
+
+```bash
+docker logs -f harnessrouter
+```
+
+**The first start takes about half a minute, and most of it looks like nothing is happening.**
+This is what it says:
+
+```
+[harnessrouter] installing Claude Code (Anthropic's terms apply)…
+[harnessrouter] installing Codex (Apache-2.0)…
+[harnessrouter] installing Hermes (check its upstream license before use)…
+[harnessrouter] data=/data  backends available: claude codex hermes
+[harnessrouter] ready on :3000
+   ▲ Next.js 15.5.23
+   - Local:        http://5e9ac64dd926:3000
+   - Network:      http://5e9ac64dd926:3000
+
+ ✓ Starting...
+ ✓ Ready in 123ms
+```
+
+**The agent CLIs are fetched now rather than shipped in the image, and that is a licensing fact
+rather than a packaging preference.** Claude Code is distributed under Anthropic's own terms and
+hermes-agent declares no license at all, so neither can be redistributed inside a public image.
+Installing them on first run means you install them yourself, from upstream, under those terms,
+which is also why you should read them before you use those two backends. Codex is Apache-2.0 and
+arrives the same way, so all three land in one place.
+
+Expect about half a minute, longer on a slow connection. `backends available:` is the line worth
+reading: it lists what actually installed, so a backend that failed is named rather than silently
+missing, and the others still work.
+
+This happens once per volume, not once per start. Every start after it takes a few seconds and
+prints no install lines at all.
+
+If you skipped `HR_AUTH_PASSWORD` in step 2, one more line comes first, and comes back on every
+start until you fix it:
+
+```
+[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance.
+```
+
+### 4. Sign in
+
+Open <http://localhost:3000>. The console is behind a login, on by default, covering the pages and
+the API alike:
+
+![The sign-in screen](docs/images/01-login.png)
+
+The username is `harnessrouter` unless you set `HR_AUTH_USER`; the password is whatever you passed
+as `HR_AUTH_PASSWORD`. If you set neither, both are `harnessrouter`, and the defaults are printed
+here, which makes them a placeholder rather than a secret, and the container says so on every start
+until you change them.
+
+You can change both from **Profile**, in the account menu at the top right, which asks for the
+current password as well as the new one, so an unattended tab cannot be used to take over the
+instance. They are then stored on the data volume (`/data/selfhost-auth.json`: a username, a salt
+and a hash, never the password) and take precedence over the environment from then on. An
+`HR_AUTH_PASSWORD` set at `docker run` months ago cannot quietly undo a password change; after one,
+the environment's password is refused and the start-up line changes to say where the real one came
+from:
+
+```
+[harnessrouter] sign in as 'harnessrouter' (credentials set from the profile page)
+```
+
+Saving signs out every other browser and restarts the console, which takes about a second. Yours
+stays signed in.
+
+Forgot it? There is no reset email to send, so delete `/data/selfhost-auth.json` and restart. The
+instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
+
+### 5. Connect a model provider
 
 **Nothing runs until you do this.** There is no bundled model, no trial key, and no free tier
-hiding in the image. A fresh instance with no connection will start, sign you in, and then have
-nothing to run a turn against.
+hiding in the image. The instance you just signed into will do everything except answer you, which
+is what this step buys.
 
-Sign in, open **Integrations**, and press **Add Integration**. It asks three things: a name, the
-provider, and your API key.
+Open **Integrations** and press **Add Integration**. It asks three things: a name, the provider,
+and your API key.
 
 ![Adding a provider on the Integrations page](docs/images/05-add-integration.png)
 
@@ -116,105 +216,6 @@ step entirely:
 {"error":{"type":"invalid_request_error","code":"invalid_input","message":"no provider configured for backend 'codex'. Add an integration for a provider that serves 'gpt-5.4-mini', or configure a connection policy"}}
 ```
 
-### 3. Run it
-
-```bash
-docker run -d --name harnessrouter \
-  -p 127.0.0.1:3000:3000 \
-  -v harnessrouter:/data \
-  -e HR_AUTH_PASSWORD='something only you know' \
-  -e HR_SECRET_GLOBAL_HARNESS_CONN_ANTHROPIC='{"name":"anthropic","provider":"anthropic","api_key":"sk-ant-…"}' \
-  -e HR_SECRET_GLOBAL_HARNESS_POLICY_CLAUDE='{"chain":["anthropic"]}' \
-  harnessrouter/harnessrouter
-```
-
-Three parts of that line are load-bearing. `-p 127.0.0.1:` keeps the console on loopback, which is
-what you want until you have changed the password. If port 3000 is already busy, change only the
-left-hand number (`-p 127.0.0.1:3100:3000`), because the container always listens on 3000 inside.
-`-v harnessrouter:/data` is where everything durable lives, including the agent CLIs installed in
-the next step, so keeping that volume is what makes the second start fast. And `HR_AUTH_PASSWORD`
-is the difference between an instance only you can drive and one whose password is printed in this
-file.
-
-Compose works too (`cp .env.example .env`, put your key in it, `docker compose up -d`), but read
-`docker-compose.yml` before you do. It publishes `3000:3000` on every interface rather than on
-loopback, and `.env.example` ships with the default password filled in. Change those two lines and
-it behaves like the command above.
-
-### 4. Watch the first start
-
-```bash
-docker logs -f harnessrouter
-```
-
-**The first start takes about half a minute, and most of it looks like nothing is happening.**
-This is what it says:
-
-```
-[harnessrouter] installing Claude Code (Anthropic's terms apply)…
-[harnessrouter] installing Codex (Apache-2.0)…
-[harnessrouter] installing Hermes (check its upstream license before use)…
-[harnessrouter] data=/data  backends available: claude codex hermes
-[harnessrouter] ready on :3000
-   ▲ Next.js 15.5.23
-   - Local:        http://5e9ac64dd926:3000
-   - Network:      http://5e9ac64dd926:3000
-
- ✓ Starting...
- ✓ Ready in 123ms
-```
-
-**The agent CLIs are fetched now rather than shipped in the image, and that is a licensing fact
-rather than a packaging preference.** Claude Code is distributed under Anthropic's own terms and
-hermes-agent declares no license at all, so neither can be redistributed inside a public image.
-Installing them on first run means you install them yourself, from upstream, under those terms,
-which is also why you should read them before you use those two backends. Codex is Apache-2.0 and
-arrives the same way, so all three land in one place.
-
-Expect about half a minute, longer on a slow connection. `backends available:` is the line worth
-reading: it lists what actually installed, so a backend that failed is named rather than silently
-missing, and the others still work.
-
-This happens once per volume, not once per start. Every start after it takes a few seconds and
-prints no install lines at all.
-
-If you skipped `HR_AUTH_PASSWORD` in step 3, one more line comes first, and comes back on every
-start until you fix it:
-
-```
-[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance.
-```
-
-### 5. Sign in
-
-Open <http://localhost:3000>. The console is behind a login, on by default, covering the pages and
-the API alike:
-
-![The sign-in screen](docs/images/01-login.png)
-
-The username is `harnessrouter` unless you set `HR_AUTH_USER`; the password is whatever you passed
-as `HR_AUTH_PASSWORD`. If you set neither, both are `harnessrouter`, and the defaults are printed
-here, which makes them a placeholder rather than a secret, and the container says so on every start
-until you change them.
-
-You can change both from **Profile**, in the account menu at the top right, which asks for the
-current password as well as the new one, so an unattended tab cannot be used to take over the
-instance. They are then stored on the data volume (`/data/selfhost-auth.json`: a username, a salt
-and a hash, never the password) and take precedence over the environment from then on. An
-`HR_AUTH_PASSWORD` set at `docker run` months ago cannot quietly undo a password change; after one,
-the environment's password is refused and the start-up line changes to say where the real one came
-from:
-
-```
-[harnessrouter] sign in as 'harnessrouter' (credentials set from the profile page)
-```
-
-Saving signs out every other browser and restarts the console, which takes about a second. Yours
-stays signed in.
-
-Forgot it? There is no reset email to send, so delete `/data/selfhost-auth.json` and restart. The
-instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
-
 ### 6. Give it something to do
 
 **Tasks → New Task.** Pick a harness in the switcher on the left, choose a model next to the
@@ -240,7 +241,7 @@ customers need" is meant to be short. More arrive over time; your instance lists
 ![The Starter Kits page, before any kit has been launched](docs/images/dashboard-1-starter-kits.png)
 
 Each card names the base and the model it will run on before you launch it, so you can see what a
-kit is about to spend before it spends it. What it names depends on the keys you gave it in step 2:
+kit is about to spend before it spends it. What it names depends on the keys you gave it in step 5:
 the screenshot above is an instance with three providers connected, and an instance with one will
 recommend that one on every card. Launching asks a single question, what to run it on, and the
 runtimes you have no key for are listed but disabled, with the reason on them:
@@ -395,7 +396,7 @@ same components, the same API client. Surfaces that need a service a single box 
 such as accounts, billing, and marketplace, are simply not shown.
 
 **Supported harnesses:** Codex, Claude Code, and Hermes, installed on first run rather than shipped
-in the image, for the license reasons in step 4. Review each tool's terms before you use it.
+in the image, for the license reasons in step 3. Review each tool's terms before you use it.
 
 **Bring your own key.** Your provider credentials are read from the environment at start-up and
 handed to the agent directly. They are never written into the image, never committed, and never
