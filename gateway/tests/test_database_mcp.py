@@ -940,6 +940,36 @@ def test_a_kit_that_declares_a_database_will_not_launch_without_one(api, kit):
     assert next(k for k in api.get("/v1/kits").json()["kits"] if k["id"] == kit)["launched"] is False
 
 
+def test_the_database_tool_exists_because_the_kit_declares_it(api, kit):
+    """The tool belongs to the KIT DEFINITION, not to the credential.
+
+    A dashboard harness whose connection never landed used to carry only the base harness's
+    built-in tools and no database tool at all, which reads as "this kit cannot query a database"
+    rather than "this kit is not finished being set up". The entry is now provisioned at launch
+    the way the media kit's is.
+    """
+    hid = _launch(api, kit, "postgres", PG_DSN).json()["harnessId"]
+    ids = [e["id"] for e in api.get(f"/v1/harnesses/{hid}").json()["mcpServers"]]
+    assert ENTRY_ID in ids, "the kit declares a database, so the tool must be listed"
+
+
+def test_relaunching_restores_a_harness_that_lost_its_database_tool(api, kit):
+    """Pressing Launch again is the documented way to reconnect, so it is also the repair.
+
+    A harness created before the entry was provisioned at launch has no database tool and no way
+    to get one: the kit card offers Open rather than Launch, and the tool list has no database to
+    add. Relaunching has to be able to put it back.
+    """
+    hid = _launch(api, kit, "postgres", PG_DSN).json()["harnessId"]
+    asyncio.run(app._mcp_write(hid, []))          # the shape of an older harness
+    assert api.get(f"/v1/harnesses/{hid}").json()["mcpServers"] == []
+
+    again = api.post(f"/v1/kits/{kit}/launch", json={})
+    assert again.status_code == 200 and again.json()["created"] is False
+    ids = [e["id"] for e in api.get(f"/v1/harnesses/{hid}").json()["mcpServers"]]
+    assert ENTRY_ID in ids, "a second Launch must restore the tool"
+
+
 def test_a_kit_that_reads_no_database_declares_none(api, monkeypatch):
     monkeypatch.setattr(app, "_kits", lambda: {"slides": {"id": "slides", "title": "Slides",
                                                           "app": {"route": "/kits/slides"},

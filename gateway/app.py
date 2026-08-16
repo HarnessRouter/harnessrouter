@@ -7198,6 +7198,37 @@ async def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
     return eng, c, host, db
 
 
+async def _hosted_db_entry(hid: str, v: dict | None, decl: dict) -> None:
+    """The database ENTRY, with no credential in it.
+
+    A kit that declares `launch.database` gets its database tool the moment it is launched, the
+    same way a kit that declares media gets its media tool — because the tool belongs to the KIT
+    DEFINITION, not to the credential. Tying the entry's existence to a connection string meant
+    a dashboard harness could sit there with the five built-in tools and no way to reach a
+    database, and nothing on the page explaining that the tool was missing rather than broken.
+
+    An entry with no record is honestly unconnected: the tool is listed, and asking it anything
+    says so. That is a better thing to hand someone than a tool that is not there at all, which
+    reads as "this kit cannot do that" rather than "this kit is not finished being set up".
+
+    Never overwrites a connected entry — reconnecting is _hosted_db_attach's job, and this runs
+    on every launch including the idempotent second press.
+    """
+    origins = _own_origins()
+    if not origins:
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set "
+                        "HARNESS_PUBLIC_BASE_URL.", "database")
+    cur = _mcp_list(v)
+    if any(str(e.get("id") or "") == decl["id"] for e in cur):
+        return                                   # already there, connected or not
+    entry = {"id": decl["id"], "name": decl["name"],
+             "url": origins[0] + _HOSTED_MCP_PREFIX + "database", "transport": "http",
+             "enabled": True}
+    await _mcp_write(hid, cur + [entry])
+    print(f"[sql] {hid}: database tool provisioned (no connection yet)", flush=True)
+
+
 async def _hosted_db_attach(org: str, hid: str, v: dict | None, decl: dict,
                             checked: tuple[str, str, str, str], sample_rows: bool) -> None:
     """Provision a database connection: one encrypted record, one ordinary entry.
@@ -10721,8 +10752,13 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         # Someone who typed a connection string and pressed Launch means "connect this", whether
         # or not the Harness already existed — which is also how you reconnect after a password
         # change. Without one the existing connection is left alone.
-        if db_in:
+        if decl:
+            # The tool comes from the kit definition, so a harness launched before this existed —
+            # or one whose connection never landed — gets it on the next press of Launch.
             existing = await _mcp_migrate(org, hid0, existing) or existing
+            await _hosted_db_entry(hid0, existing, decl)
+            existing = await _vertex_get(hid0) or existing
+        if db_in:
             await _hosted_db_attach(org, hid0, existing, decl, checked, db_in.sample_rows)
             existing = await _vertex_get(hid0) or existing
         if media_decl:
@@ -10769,6 +10805,9 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
     v = {"id": hid, **props}
+    if decl:
+        await _hosted_db_entry(hid, v, decl)
+        v = await _vertex_get(hid) or v
     if db_in:
         await _hosted_db_attach(org, hid, v, decl, checked, db_in.sample_rows)
         v = await _vertex_get(hid) or v

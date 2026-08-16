@@ -230,9 +230,12 @@ the instance is gone; copy it and you have moved the instance, harnesses, transc
 
 ## Starter kits
 
-A kit is a working product in one click. It provisions the harness it needs, installs the skill
-that teaches that agent the product's format, and opens its own app. More arrive over time; your
-instance lists the ones it has.
+Starter kits are worked examples, and they are here to show you what this can be pointed at.
+
+Each one is a whole agent product rather than a snippet: an app, an agent configured to drive it,
+and the skill that teaches that agent the format it writes. Use one, then read it: every kit is
+open source, and the distance between "I see how Slides works" and "I can build the one my
+customers need" is meant to be short. More arrive over time; your instance lists the ones it has.
 
 ![The Starter Kits page, before any kit has been launched](docs/images/dashboard-1-starter-kits.png)
 
