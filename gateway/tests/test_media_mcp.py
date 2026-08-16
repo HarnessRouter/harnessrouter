@@ -2114,6 +2114,43 @@ def test_a_layer_rides_over_the_cut_without_moving_it(client, harness, session, 
     assert abs(rec["seconds"] - 2.0) < 0.5, rec
 
 
+def test_a_sound_that_is_no_longer_on_the_canvas_stops_the_export(client, harness, session,
+                                                                   provider):
+    """A film delivered without the music somebody asked for is not the film.
+
+    Audio was the one track written into the timeline without being checked. An id that had gone
+    stale — which happens the moment a clip is placed again — stayed in the document, was dropped
+    without a word at export, and the silent film reported success. Found by running a real brief
+    end to end: the agent noticed its own audio ids had changed. The code never would have.
+    """
+    tok = _cred(harness, session)
+    a, _b = _two_ready_clips(client, tok, provider, session)
+    _ok(_call(client, tok, "set_timeline", {"shots": [{"element_id": a}]}))
+    # Reach past the tool and put a sound in the document naming something that is not there —
+    # exactly the state a re-placed clip leaves behind.
+    scene = asyncio.run(app._media_scene_read(session))
+    scene["timeline"]["audio"] = [{"elementId": "el_gone", "startS": 0.0, "gainDb": 0.0}]
+    asyncio.run(app._media_scene_write(session, scene))
+
+    err = _call(client, tok, "export_timeline", {})
+    assert err.get("isError"), err
+    assert "Sound 1 is no longer on the canvas" in json.dumps(err), err
+
+
+def test_set_timeline_says_when_a_sound_names_the_wrong_thing(client, harness, session, provider):
+    """The warning a shot gets, a sound now gets too — including being handed a video."""
+    tok = _cred(harness, session)
+    a, _b = _two_ready_clips(client, tok, provider, session)
+    out = _ok(_call(client, tok, "set_timeline", {
+        "shots": [{"element_id": a}],
+        "audio": [{"element_id": "el_nope"}, {"element_id": a}]}))
+    warned = " ".join(out.get("warnings") or [])
+    assert "not on the canvas" in warned, out
+    assert "rather than a sound" in warned, out
+    scene = asyncio.run(app._media_scene_read(session))
+    assert scene["timeline"]["audio"] == [], scene["timeline"]
+
+
 def test_a_layer_that_has_not_landed_refuses_the_export_like_a_shot(client, harness, session,
                                                                     provider):
     """Half a film is not a film. A layer still rendering stops the export saying so, rather

@@ -9746,9 +9746,25 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 a, b, _ = media_plane.shot_window(
                     {"inS": s.get("in_s"), "outS": s.get("out_s")}, m)
                 shots.append({"elementId": eid, "inS": a, "outS": b})
-            audio = [{"elementId": str(a.get("element_id") or ""),
-                      "startS": float(a.get("start_s") or 0.0),
-                      "gainDb": float(a.get("gain_db") or 0.0)} for a in audio_in]
+            # CHECKED THE SAME WAY THE SHOTS ARE. Written blind, a bed naming an element that
+            # is gone — an id that changed when the clip was placed again — stayed in the
+            # document, was dropped without a word at export, and the film came out silent.
+            audio = []
+            for i, a in enumerate(audio_in, 1):
+                eid = str(a.get("element_id") or "")
+                m = media_plane.media_of(by_id.get(eid) or {})
+                if not m:
+                    warnings.append(f"Sound {i} names {eid}, which is not on the canvas.")
+                    continue
+                if m.get("kind") != "audio":
+                    warnings.append(f"Sound {i} names {eid}, which is a {m.get('kind')} rather "
+                                    f"than a sound. Put it in `shots` or `overlays`.")
+                    continue
+                if m.get("status") != "ready":
+                    warnings.append(f"Sound {i} ({eid}) is still rendering — export will refuse "
+                                    f"until it lands.")
+                audio.append({"elementId": eid, "startS": float(a.get("start_s") or 0.0),
+                              "gainDb": float(a.get("gain_db") or 0.0)})
             # A LAYER IS PLACED, NOT QUEUED. An overlay names the moment on the film's clock
             # where it appears, so adding one never moves the shots underneath it.
             overlays = []
@@ -9843,12 +9859,23 @@ async def _media_export_start(hid: str, sid: str, org: str, entry_id: str,
     if total > float(cap.get("max_total_s") or 600):
         raise media_plane.ExportRefused(
             f"That film is {total:.0f}s and the limit here is {cap.get('max_total_s')}s.")
-    audio_plan = [{"media_id": str(media_plane.media_of(by_id.get(a.get("elementId")) or {})
-                                   .get("mediaId") or ""),
-                   "start_s": float(a.get("startS") or 0.0),
-                   "gain_db": float(a.get("gainDb") or 0.0)}
-                  for a in tl.get("audio") or []]
-    audio_plan = [a for a in audio_plan if a["media_id"]]
+    # The sound under the film. Refused rather than dropped, for the same reason a shot is: a
+    # film delivered without the music somebody asked for is not the film, and the silent version
+    # used to report success.
+    audio_plan: list[dict] = []
+    for i, a in enumerate(tl.get("audio") or [], 1):
+        m = media_plane.media_of(by_id.get(a.get("elementId")) or {})
+        if not m:
+            raise media_plane.ExportRefused(
+                f"Sound {i} is no longer on the canvas. Take it off the timeline, or put the "
+                f"clip back, before the film is cut.")
+        if m.get("status") != "ready" or not m.get("mediaId"):
+            raise media_plane.ExportRefused(
+                f"Sound {i} is still rendering. Everything in the film has to have landed "
+                f"before it can be cut.")
+        audio_plan.append({"media_id": str(m["mediaId"]),
+                           "start_s": float(a.get("startS") or 0.0),
+                           "gain_db": float(a.get("gainDb") or 0.0)})
 
     # The layers above the cut. A layer whose clip has not landed is refused for the same reason
     # a shot is: half a film is not a film, and the alternative is exporting it silently missing.
