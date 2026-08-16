@@ -101,12 +101,46 @@ _all_calls: list[dict] = []
 # ── tiny real media, so verification is exercised on bytes and not on a stub ──────
 PNG_1PX = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
-WAV_SILENCE = (b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00"
-               b"\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
-# One MPEG-1 Layer III frame header and its payload. ElevenLabs answers with mp3 BYTES and no JSON
-# at all, so what the raw shapes are fed here has to be bytes that `sniff` genuinely identifies —
-# a JSON stub would let the raw path pass a test the product fails on the first real call.
-MP3_SILENCE = b"\xff\xfb\x90\x00" + bytes(414)
+def _wav(seconds: float = 1.0) -> bytes:
+    """A real wav with real samples in it. The header alone declared a data chunk of length ZERO
+    — a file of no duration, which is what the product now refuses, and a speech candidate that
+    returned one was failing the whole chain down to the next model."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "a.wav")
+        try:
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-f", "lavfi",
+                            "-i", f"sine=frequency=330:duration={seconds}", out],
+                           capture_output=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            return (b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00"
+                    b"\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+        return Path(out).read_bytes()
+
+
+WAV_SILENCE = _wav()
+def _mp3(seconds: float = 2.0) -> bytes:
+    """A real, tiny mp3 — one ffprobe can read a DURATION out of.
+
+    It used to be a single frame header and 414 zero bytes: enough for `sniff` to call it audio,
+    and not enough to be a sound. The product now refuses a file whose length cannot be read (a
+    bed goes onto a timeline that sums durations), so a stub here would be a fixture asserting
+    the opposite of what ships. ElevenLabs answers with mp3 BYTES and no JSON at all, so what the
+    raw shapes are fed has to be bytes that behave like the real thing all the way down.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "a.mp3")
+        try:
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-f", "lavfi",
+                            "-i", f"sine=frequency=440:duration={seconds}",
+                            "-c:a", "libmp3lame", "-b:a", "64k", out],
+                           capture_output=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            # No ffmpeg: the duration check does not run either, so the old stub is honest here.
+            return b"\xff\xfb\x90\x00" + bytes(414)
+        return Path(out).read_bytes()
+
+
+MP3_SILENCE = _mp3()
 
 
 def _mp4(seconds: float = 1.0, size: str = "128x72") -> bytes:
@@ -3077,3 +3111,78 @@ def test_a_preference_naming_an_unknown_model_orders_nothing():
         assert [c["model"] for c in media_plane.capability("text_to_video")["candidates"]] == before
     finally:
         media_plane.set_policy({})
+
+
+# ── what a provider said, and what came back ──────────────────────────────────────
+# Both of these were measured against ElevenLabs and both are the same failure in the end: the
+# product knew something was wrong and said nothing useful about it.
+
+def test_a_validation_error_reaches_the_agent_in_the_providers_own_words():
+    """Pydantic v2 — so FastAPI, so a large share of providers — reports `detail` as a LIST.
+
+    Read as a str or a dict, all of it was dropped and the agent got "the provider answered HTTP
+    422". The one sentence that says what to do instead ("greater than or equal to 3000") was
+    right there in the body.
+    """
+    doc = {"detail": [{"type": "greater_than_equal",
+                       "loc": ["body", "music_length_ms"],
+                       "msg": "Input should be greater than or equal to 3000",
+                       "input": 1000, "ctx": {"ge": 3000}}]}
+    said = media_plane.provider_message(doc, 422)
+    assert "greater than or equal to 3000" in said, said
+    assert "music_length_ms" in said, said          # and WHICH field it was about
+    assert "HTTP 422" not in said, said             # not our paraphrase over the top of it
+
+
+def test_a_music_ask_below_the_floor_is_refused_before_it_is_spent():
+    """The floor is the provider's own 422, recorded as measurement. Asking for a one-second
+    sting — the obvious thing to ask a music tool for — used to reach the provider, fail, and
+    teach the agent nothing."""
+    cand = next(c for c in media_plane.capability("text_to_music").get("candidates") or []
+                if c.get("model") == "elevenlabs/music-v1")
+    assert cand.get("duration_min_s") == 3, cand.get("duration_min_s")
+    why = media_plane.can_serve(cand, {"seconds": 1})
+    assert why and "shortest is 3" in why, why
+    assert not media_plane.can_serve(cand, {"seconds": 10}), "a 10 s ask was refused"
+
+
+@needs_ffmpeg
+def test_an_unreadable_sound_is_refused_exactly_like_an_unreadable_shot():
+    """23 bytes labelled audio/mpeg used to come back "succeeded", show as ready on the canvas,
+    and carry a null duration into a timeline that sums durations.
+
+    The rule was written for video and every word of it is as true of sound: a bed lives on the
+    same timeline, is summed by timeline_total and cut by assemble.
+    """
+    junk = b"\xff\xfb\x90\x00" + bytes(19)
+    with pytest.raises(media_plane.MediaEmpty) as e:
+        media_plane.verify("audio", junk)
+    assert "no duration" in str(e.value), str(e.value)
+    # A REAL mp3 still passes, so this is a duration check and not a size check — without this
+    # half the test would be satisfied by refusing all sound.
+    with tempfile.TemporaryDirectory() as d:
+        mp3 = os.path.join(d, "a.mp3")
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-f", "lavfi",
+                        "-i", "sine=frequency=440:duration=2", "-c:a", "libmp3lame", mp3],
+                       capture_output=True, check=True)
+        ok = media_plane.verify("audio", Path(mp3).read_bytes())
+    assert float(ok["seconds"]) > 1.5, ok
+
+
+def test_streamed_audio_deltas_are_decoded_one_by_one_and_joined_as_bytes():
+    """Each delta carries its own complete base64; the BYTES are what get joined.
+
+    Joining the strings and decoding once corrupts everything after the first delta whose byte
+    count is not a multiple of three — that one ends in padding, and padding does not belong in
+    the middle of a stream. Providers send whatever sizes they like, so that is the ordinary
+    case. It survived because a sound was never checked for a duration: the wreckage still began
+    with a RIFF header, so it sniffed as audio and was called a success.
+    """
+    want = bytes(range(256)) * 7                       # 1792 bytes: not a multiple of 3
+    cuts = [want[:22], want[22:1000], want[1000:]]     # 22 % 3 == 1, 978 % 3 == 0, and a tail
+    frames = ['data: ' + json.dumps({"choices": [{"delta": {"audio": {
+        "data": base64.b64encode(c).decode(), "transcript": t}}}]})
+        for c, t in zip(cuts, ("one ", "two ", "three"))] + ["data: [DONE]"]
+    got = media_plane._read_stream_audio({"format": "wav"}, frames)
+    assert got.data == want, (len(got.data), len(want))
+    assert got.transcript == "one two three"

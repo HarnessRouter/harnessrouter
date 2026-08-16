@@ -1165,8 +1165,15 @@ def _read_stream_audio(cand: dict, chunks: list[str]) -> Payload:
                     transcript.append(str(aud["transcript"]))
     if not b64_parts:
         raise MediaEmpty("the provider streamed no audio")
+    # EACH DELTA IS ITS OWN BASE64, so each is decoded on its own and the BYTES are joined.
+    # Joining the strings and decoding once — which is what this did — corrupts everything after
+    # the first delta whose byte count is not a multiple of three, because that one ends in
+    # padding and padding does not belong in the middle. Streams arrive in whatever sizes the
+    # provider feels like, so that is the ordinary case, not the corner. It went unnoticed
+    # because a sound was never checked for a duration: the wreckage still began with a RIFF
+    # header, so it sniffed as audio and was called a success.
     fmt = str(cand.get("format") or "wav")
-    return Payload(data=_b64("".join(b64_parts)), mime=f"audio/{fmt}",
+    return Payload(data=b"".join(_b64(p) for p in b64_parts), mime=f"audio/{fmt}",
                    transcript="".join(transcript))
 
 
@@ -1358,6 +1365,23 @@ def provider_message(doc, status: int) -> str:
                 for k2 in ("message", "detail", "msg"):
                     if isinstance(v.get(k2), str) and v[k2].strip():
                         return scrub(str(v[k2]).strip())
+            # A LIST IS WHAT A VALIDATION ERROR LOOKS LIKE. Pydantic v2 — so FastAPI, so a large
+            # share of providers — reports `detail` as a list of failures, each naming the field
+            # and the bound it broke. Read as a str or a dict, all of it was dropped, and the one
+            # sentence that says what to do instead ("must be >= 3000") never reached the agent.
+            if isinstance(v, list):
+                said = []
+                for item in v[:3]:
+                    if isinstance(item, str) and item.strip():
+                        said.append(item.strip())
+                    elif isinstance(item, dict):
+                        msg = str(item.get("msg") or item.get("message") or "").strip()
+                        where = ".".join(str(x) for x in (item.get("loc") or [])
+                                         if not isinstance(x, int))
+                        if msg:
+                            said.append(f"{where}: {msg}" if where else msg)
+                if said:
+                    return scrub("; ".join(said))
         if isinstance(doc.get("code"), str) and doc["code"] and doc["code"] != "success":
             return scrub(str(doc["code"]))
     return f"the provider answered HTTP {status}"
@@ -1436,9 +1460,14 @@ def verify(kind: str, data: bytes) -> dict:
     out = {"mime": mime, "ext": ext, "bytes": len(data), "width": 0, "height": 0, "seconds": 0.0}
     if want in ("video", "audio"):
         probed = probe(data, ext)
-        if want == "video" and not probed.get("seconds"):
-            # A video whose duration cannot be read cannot be cut, timed or summed. Refusing is
-            # the honest answer; a zero-length shot in a timeline is not.
+        if not probed.get("seconds"):
+            # A file whose duration cannot be read cannot be cut, timed or summed. Refusing is the
+            # honest answer; a zero-length shot in a timeline is not.
+            #
+            # THIS GUARDED VIDEO ONLY, AND EVERY WORD OF IT IS AS TRUE OF SOUND: a bed lives on
+            # the same timeline, is summed by timeline_total and cut by assemble. Twenty-three
+            # bytes labelled audio/mpeg came back "succeeded", showed as ready on the canvas, and
+            # carried a null duration into the arithmetic.
             if have_ffmpeg():
                 raise MediaEmpty("the file came back unreadable — no duration in it")
         out.update({k: v for k, v in probed.items() if v})
