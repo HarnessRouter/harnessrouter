@@ -2168,18 +2168,34 @@ def test_a_sound_that_is_no_longer_on_the_canvas_stops_the_export(client, harnes
     assert "Sound 1 is no longer on the canvas" in json.dumps(err), err
 
 
-def test_set_timeline_says_when_a_sound_names_the_wrong_thing(client, harness, session, provider):
-    """The warning a shot gets, a sound now gets too — including being handed a video."""
+def test_set_timeline_refuses_a_cut_that_names_something_that_is_not_there(client, harness,
+                                                                          session, provider):
+    """A warning the caller is free to ignore is not a guard when the result is silence.
+
+    This began as a warning: the bad entry was skipped, the rest was written, and the tool
+    reported success. A real run lost its entire music bed that way — the ids had gone stale
+    while the clips were placed again, every sound was dropped, and the film exported without a
+    note of music in it. Nothing failed, so nothing was fixed. Naming something that is not on
+    the canvas is now a refusal that changes nothing at all.
+    """
     tok = _cred(harness, session)
     a, _b = _two_ready_clips(client, tok, provider, session)
-    out = _ok(_call(client, tok, "set_timeline", {
-        "shots": [{"element_id": a}],
-        "audio": [{"element_id": "el_nope"}, {"element_id": a}]}))
-    warned = " ".join(out.get("warnings") or [])
-    assert "not on the canvas" in warned, out
-    assert "rather than a sound" in warned, out
+    _ok(_call(client, tok, "set_timeline", {"shots": [{"element_id": a}]}))
+
+    err = _call(client, tok, "set_timeline", {
+        "shots": [{"element_id": a}], "audio": [{"element_id": "el_nope"}]})
+    assert err.get("isError"), err
+    assert "not on the canvas" in json.dumps(err), err
+    # A sound that is really a video is the other half of the same mistake.
+    err2 = _call(client, tok, "set_timeline", {
+        "shots": [{"element_id": a}], "audio": [{"element_id": a}]})
+    assert err2.get("isError") and "rather than a sound" in json.dumps(err2), err2
+
+    # And the cut that was already there is untouched — a refusal does not half-replace it.
     scene = asyncio.run(app._media_scene_read(session))
+    assert [s["elementId"] for s in scene["timeline"]["shots"]] == [a], scene["timeline"]
     assert scene["timeline"]["audio"] == [], scene["timeline"]
+
 
 
 def test_a_layer_that_has_not_landed_refuses_the_export_like_a_shot(client, harness, session,

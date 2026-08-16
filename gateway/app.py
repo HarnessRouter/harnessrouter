@@ -9743,6 +9743,12 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
             return _tool_text(f"A timeline holds at most {max_shots} shots; this one has "
                               f"{len(shots_in)}.", True)
         warnings: list[str] = []
+        # NAMING SOMETHING THAT IS NOT THERE IS A MISTAKE, NOT A NOTE IN THE MARGIN. Skipping it
+        # and reporting a warning wrote a cut that quietly lacked what was asked for: a real run
+        # lost its whole music bed that way — the ids had gone stale, every entry was dropped,
+        # the film exported without a note of music in it and nothing failed. A warning the
+        # caller is free to ignore is not a guard when the result is silence.
+        bad: list[str] = []
         result: dict = {}
 
         def mutate(scene: dict):
@@ -9752,7 +9758,7 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 eid = str(s.get("element_id") or "")
                 el = by_id.get(eid)
                 if not el:
-                    warnings.append(f"Shot {i} names {eid}, which is not on the canvas.")
+                    bad.append(f"Shot {i} names {eid}, which is not on the canvas.")
                     continue
                 m = media_plane.media_of(el)
                 if m.get("status") != "ready":
@@ -9777,11 +9783,11 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 eid = str(a.get("element_id") or "")
                 m = media_plane.media_of(by_id.get(eid) or {})
                 if not m:
-                    warnings.append(f"Sound {i} names {eid}, which is not on the canvas.")
+                    bad.append(f"Sound {i} names {eid}, which is not on the canvas.")
                     continue
                 if m.get("kind") != "audio":
-                    warnings.append(f"Sound {i} names {eid}, which is a {m.get('kind')} rather "
-                                    f"than a sound. Put it in `shots` or `overlays`.")
+                    bad.append(f"Sound {i} names {eid}, which is a {m.get('kind')} rather than a "
+                              f"sound. Put it in `shots` or `overlays`.")
                     continue
                 if m.get("status") != "ready":
                     warnings.append(f"Sound {i} ({eid}) is still rendering — export will refuse "
@@ -9795,7 +9801,7 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 eid = str(o.get("element_id") or "")
                 el = by_id.get(eid)
                 if not el:
-                    warnings.append(f"Layer {i} names {eid}, which is not on the canvas.")
+                    bad.append(f"Layer {i} names {eid}, which is not on the canvas.")
                     continue
                 m = media_plane.media_of(el)
                 a, b, _ = media_plane.shot_window(
@@ -9821,6 +9827,31 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
             result["n"] = len(shots)
             result["layers"] = len(overlays)
             return None
+
+        # Checked against the canvas BEFORE anything is written, so a refusal leaves the cut
+        # exactly as it was rather than half-replaced.
+        probe = await _media_scene_read(sid)
+        by_id = {e.get("id"): e for e in probe.get("elements") or []}
+        check_bad: list[str] = []
+        for i, s_in in enumerate(shots_in, 1):
+            if str(s_in.get("element_id") or "") not in by_id:
+                check_bad.append(f"Shot {i} names {s_in.get('element_id')}, which is not on the "
+                                 f"canvas.")
+        for i, a_in in enumerate(audio_in, 1):
+            m = media_plane.media_of(by_id.get(str(a_in.get("element_id") or "")) or {})
+            if not m:
+                check_bad.append(f"Sound {i} names {a_in.get('element_id')}, which is not on the "
+                                 f"canvas.")
+            elif m.get("kind") != "audio":
+                check_bad.append(f"Sound {i} names {a_in.get('element_id')}, which is a "
+                                 f"{m.get('kind')} rather than a sound.")
+        for i, o_in in enumerate(overlays_in, 1):
+            if str(o_in.get("element_id") or "") not in by_id:
+                check_bad.append(f"Layer {i} names {o_in.get('element_id')}, which is not on the "
+                                 f"canvas.")
+        if check_bad:
+            return _tool_text(" ".join(check_bad) + " Nothing was changed — call describe_canvas "
+                              "for the ids that exist now.", True)
 
         rev, _ = await _media_scene_touch(sid, mutate)
         out = {"scene_rev": rev,
