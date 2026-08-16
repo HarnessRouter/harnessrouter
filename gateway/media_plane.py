@@ -1457,6 +1457,36 @@ def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
 
 
+def grab_frame(path: str, seconds: float | None = None) -> bytes:
+    """One frame of a clip, as jpeg bytes. `seconds` defaults to the LAST frame.
+
+    This is how one shot continues into the next: the frame a clip ends on becomes the frame the
+    next shot starts from, so the cut lands on the same picture instead of on a second guess at
+    the same scene. Nothing else can produce that frame — the still that seeded a shot is where
+    it BEGAN, and five seconds of movement later the world has moved on.
+    """
+    if not have_ffmpeg():
+        raise ExportRefused("This deployment cannot read a frame out of a clip — ffmpeg is not "
+                            "installed.")
+    dur = float(probe_file(path).get("seconds") or 0.0)
+    if seconds is None:
+        # Not the very last presentation timestamp: seeking exactly to the end lands past the
+        # final frame on some files and decodes nothing at all.
+        seconds = max(0.0, dur - 0.08) if dur else 0.0
+    out = path + ".frame.jpg"
+    p = _run(["ffmpeg", "-nostdin", "-y", "-ss", f"{max(0.0, seconds):.3f}", "-i", path,
+              "-frames:v", "1", "-q:v", "2", out], timeout=120)
+    if p.returncode != 0 or not os.path.exists(out) or not os.path.getsize(out):
+        raise ExportRefused("That clip's frame could not be read.")
+    try:
+        return pathlib.Path(out).read_bytes()
+    finally:
+        try:
+            os.unlink(out)
+        except OSError:
+            pass
+
+
 def probe_file(path: str) -> dict:
     """{seconds, width, height, has_audio} for a file on disk, or {} when it cannot be read."""
     if not have_ffmpeg():

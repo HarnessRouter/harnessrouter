@@ -8977,11 +8977,15 @@ _MEDIA_MCP_TOOLS = [
                                      "description": ("REQUIRED. Every model bills by length and "
                                                      "one of them defaults to 15 s.")},
                          "from_image": {"type": "string",
-                                        "description": ("A media id (med_…) or job id (mjob_…) "
-                                                        "from an earlier image. Animates that "
-                                                        "image instead of generating from text. "
-                                                        "Only some models can do this and the "
-                                                        "tool says which one it used.")},
+                                        "description": ("A media id (med_…) or job id (mjob_…) to "
+                                                        "start from, instead of generating from "
+                                                        "text alone. An IMAGE becomes this shot's "
+                                                        "first frame. A CLIP means 'carry on from "
+                                                        "where that one ended' — its last frame "
+                                                        "is used, which is how two shots join "
+                                                        "without a visible jump. Only some models "
+                                                        "can do this and the tool says which one "
+                                                        "it used.")},
                          "aspect": {"enum": ["16:9", "9:16", "1:1"]},
                          "allow_watermark": {"type": "boolean", "default": False},
                          "shot": {"type": "string", "maxLength": 60,
@@ -9260,6 +9264,25 @@ async def _media_resolve_input_image(sid: str, ref: str) -> tuple[str, str, str]
         if not job.get("media_id"):
             raise media_plane.MediaError(f"Job {ref} has produced nothing to work from yet.")
         med = str(job["media_id"])
+
+    # NAMING A CLIP MEANS "CARRY ON FROM WHERE THAT ONE ENDED", and the frame it ended on is the
+    # only thing that can express it: the still that seeded a shot is where the shot BEGAN, and
+    # five seconds of movement later the world has moved on. Handing the mp4 over as though it
+    # were an image is what happened before — a video sent to an image input, paid for, refused.
+    meta = await _media_meta(sid, med) or {}
+    if str(meta.get("mime") or "").startswith("video/") or str(meta.get("ext") or "") == "mp4":
+        data = await _blob_get(_media_blob(sid, med, str(meta.get("ext") or "mp4")), kb=BLOB_KB)
+        if not data:
+            raise media_plane.MediaError(f"The clip behind {med} is no longer readable.")
+        tmp = tempfile.mkdtemp(prefix="hr-frame-")
+        try:
+            path = os.path.join(tmp, f"clip.{meta.get('ext') or 'mp4'}")
+            pathlib.Path(path).write_bytes(data)
+            frame = await media_plane.to_thread(media_plane.grab_frame, path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return med, base64.b64encode(frame).decode(), "image/jpeg"
+
     b64, mime = await _media_read_image(sid, med)
     return med, b64, mime
 

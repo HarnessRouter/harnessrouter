@@ -2114,6 +2114,37 @@ def test_a_layer_rides_over_the_cut_without_moving_it(client, harness, session, 
     assert abs(rec["seconds"] - 2.0) < 0.5, rec
 
 
+@needs_ffmpeg
+def test_naming_a_clip_as_the_input_takes_the_frame_it_ENDED_on():
+    """How one shot continues into the next.
+
+    A still that seeded a shot is where the shot BEGAN; five seconds of movement later the world
+    has moved on, so seeding the next shot from it produces a visible jump backwards. The frame
+    to carry forward is the one the clip ended on. This clip goes green-to-red, and what comes
+    back is red.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        clip = os.path.join(d, "c.mp4")
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-f", "lavfi",
+                        "-i", "color=c=green:s=128x72:d=1", "-f", "lavfi",
+                        "-i", "color=c=red:s=128x72:d=1",
+                        "-filter_complex", "[0][1]concat=n=2:v=1[v]", "-map", "[v]",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", clip],
+                       capture_output=True, check=True)
+        last = media_plane.grab_frame(clip)
+        first = media_plane.grab_frame(clip, 0.0)
+        def middle(jpg: bytes) -> tuple[int, int, int]:
+            f = os.path.join(d, "f.jpg")
+            Path(f).write_bytes(jpg)
+            raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", f, "-vf",
+                                  "crop=8:8:60:32", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                                 capture_output=True, check=True).stdout
+            return tuple(raw[:3])
+        ends, begins = middle(last), middle(first)
+    assert ends[0] > ends[1], f"the closing frame was not the red one: {ends}"
+    assert begins[1] > begins[0], f"the opening frame was not the green one: {begins}"
+
+
 def test_a_sound_that_is_no_longer_on_the_canvas_stops_the_export(client, harness, session,
                                                                    provider):
     """A film delivered without the music somebody asked for is not the film.
