@@ -257,12 +257,12 @@ a style system, then slide by slide.
 The deck below came from one sentence: *"A 5-slide deck explaining what a container image is, for
 new engineers."*
 
-![The Slides editor: the finished deck on the canvas, and the run that produced it on the right](docs/images/kit-slides.png)
+![The Slides editor: the sentence at the top of the conversation, the run underneath it, and the deck it produced](docs/images/kit-slides.png)
 
-The panel on the right is the run itself, not a progress bar. It settled the structure, built a
-style system, checked what the canvas would accept, wrote the deck, then validated it, and it says
-so as it goes. Slides appear while it works, so when the shape is wrong you can say so while there
-are two slides to change instead of twenty.
+That sentence is at the top of the panel on the right, and everything under it is the run, not a
+progress bar. It settled the structure, built a style system, checked what the canvas would accept,
+wrote the deck, then validated it, and it says so as it goes. Slides appear while it works, so when
+the shape is wrong you can say so while there are two slides to change instead of twenty.
 
 Nothing here is a picture of a slide: every element is a real object on the canvas, so you can drag
 it, resize it, retype it, or ask for another pass in the same conversation.
@@ -276,15 +276,14 @@ This one opened with *"help me build a sheet, i wanna use this to map investors 
 the goal is to provide this one to investors outside of SV the startups invested by investors based
 SV."*
 
-![The Sheets editor: real investor rows, an agent column's output on each one, and the conversation that built it](docs/images/kit-sheets.png)
+![The Sheets editor: the request at the top of the conversation, real investor rows, and an agent column's output on each one](docs/images/kit-sheets.png)
 
-The agent built the columns and wrote the per-row prompt itself. The rows arrived on a follow-up,
-*"search some real data and from internet"*, and it went and found four real investors with their
-firm's own profile pages rather than inventing plausible ones, and it left the agent column alone
-while it did, on the grounds that it had not run those cells and would not write results it had not
-got. Running the column is what filled it.
+From that, the agent decided the columns, worked out which of them a person fills in and which one
+an agent should, and wrote the per-row prompt itself. The rows came from a follow-up, *"search some
+real data and from internet"*, and it went and found four real investors with their firm's own
+profile pages rather than inventing plausible ones.
 
-That is the Run button, and the column fills in row order with a live count and a Stop button,
+Then you press Run, and the agent column fills in row order with a live count and a Stop button,
 because a column of a thousand rows is a thing you should be able to change your mind about.
 
 **One thing to know on a brand-new instance.** An agent column runs one of your *other* agents, and a
@@ -309,10 +308,11 @@ built.
 This is the one kit with setup, and it is two fields: the connection and the sample-rows switch.
 
 The one below opened with *"Revenue by month and the top 5 countries by revenue, plus total paid
-revenue."* and then kept going in the same conversation. The panels you see are a later pass: the
-layout was asked for by dropping a picture of it into the chat.
+revenue."* Both turns of that conversation are in the panel on the right: the first built it, and
+the second, *"Enrich the dashboard like this"* with a picture of the layout attached, is where the
+panels you see came from.
 
-![The Dashboards kit: live panels on the left, the conversation that shaped them on the right](docs/images/kit-dashboard.png)
+![The Dashboards kit: both turns of the conversation on the right, and the live panels they produced](docs/images/kit-dashboard.png)
 
 There is nowhere in a dashboard to type a number. Every figure on that page is the result of a
 query that ran when the page opened, which is the property that makes it worth trusting. Ask for a
