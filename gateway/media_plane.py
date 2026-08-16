@@ -124,6 +124,8 @@ SESSION_BUDGET_USD = float(os.environ.get("HR_MEDIA_SESSION_BUDGET_USD", "25"))
 # forwarded" is true for every entry in the file, including one added later without a `params`.
 _SHAPE_TUNABLES = {
     "video-generation": ("prompt", "duration", "image", "mode", "size"),
+    "vercel-video": ("prompt", "duration", "image", "size"),
+    "vercel-speech": ("prompt", "voice"),
     "image-generation": ("prompt", "n", "size", "image"),
     "openai": ("prompt", "image"),
     "gemini": ("prompt", "image"),
@@ -138,6 +140,14 @@ _SHAPE_TUNABLES = {
 # The shapes whose 200 IS THE MEDIA. Every other shape answers with a document that says where the
 # media is or carries it base64'd inside; these answer with the file. See `response_doc`.
 _RAW_SHAPES = frozenset({"elevenlabs-music", "elevenlabs-speech"})
+
+# Vercel's media protocol version. Not a guess and not the model's `supported_specifications`:
+# every other value tried answers 400 "Unsupported gateway protocol version".
+_VERCEL_PROTOCOL = "0.0.1"
+# Its video endpoint names resolutions rather than taking WxH. Asking for "480p" returned a
+# 854x480 file, so the label is the request and the pixels are the provider's business.
+_VERCEL_RES = {"854x480": "480p", "1280x720": "720p", "1920x1080": "1080p",
+               "480x854": "480p", "720x1280": "720p", "1080x1920": "1080p"}
 
 
 @functools.lru_cache(maxsize=1)
@@ -596,12 +606,18 @@ class Submit:
     are not tunables — a caller cannot influence them.
     """
 
-    __slots__ = ("method", "url", "body", "tunables", "stream", "timeout")
+    __slots__ = ("method", "url", "body", "tunables", "stream", "timeout", "headers")
 
     def __init__(self, method: str, url: str, body: dict, tunables: dict,
-                 stream: bool = False, timeout: float = SUBMIT_TIMEOUT_S):
+                 stream: bool = False, timeout: float = SUBMIT_TIMEOUT_S,
+                 headers: dict | None = None):
         self.method, self.url, self.body = method, url, body
         self.tunables, self.stream, self.timeout = tunables, stream, timeout
+        # Non-credential headers a shape needs to be understood at all: Vercel's media endpoints
+        # take the model and the protocol version there rather than in the body. NEVER the
+        # credential — that is `auth_headers`, built once at the call site from the provider entry,
+        # so there stays exactly one place a key can be written into a request.
+        self.headers = headers or {}
 
     def __repr__(self) -> str:      # pragma: no cover - debugging aid
         return f"<Submit {self.method} {self.url} tunables={sorted(self.tunables)}>"
@@ -676,6 +692,51 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
             body["size"] = (size.replace("x", "*") if cand.get("size_format") == "W*H"
                             else size)
         return Submit("POST", f"{base}/video/generations", body, tun, timeout=_timeout_for(cand))
+
+    # Vercel's AI Gateway puts media on `/v4/ai/<kind>-model`, and takes the model and the
+    # protocol version as HEADERS rather than in the body. Both are required: without
+    # `ai-gateway-protocol-version` every call answers 400 "Unsupported gateway protocol
+    # version", whatever else is right, and that is the whole body of the response.
+    #
+    # Measured against the live gateway on 2026-08-16 (Future HR key). The version that works is
+    # `0.0.1`; v2/v3/v4 and bare 1/2/3 are all rejected, so it is a protocol version and NOT the
+    # model's `supported_specifications`, which say v2/v3/v4 for the very models these calls land
+    # on. Pinned here because a wrong guess is indistinguishable from an outage.
+    if shape in ("vercel-video", "vercel-speech"):
+        hdr = {"ai-model-id": model, "ai-gateway-protocol-version": _VERCEL_PROTOCOL}
+        root = _api_root(base)                     # the /v4 lives on the root, not under /v1
+
+        if shape == "vercel-video":
+            body = {}
+            prompt = take("prompt", params.get("prompt"))
+            if prompt is not None:
+                body["prompt"] = prompt
+            secs = take("duration", params.get("seconds"))
+            if secs is not None:
+                body["duration"] = int(secs) if float(secs).is_integer() else float(secs)
+            size = take("size", asked_size)
+            if size is not None:
+                # This endpoint takes a named resolution, not WxH: 854x480 came back for "480p".
+                body["resolution"] = _VERCEL_RES.get(size, size)
+            img = take("image", params.get("image"))
+            if img is not None:
+                body["image"] = img
+            return Submit("POST", f"{root}/v4/ai/video-model", body, tun,
+                          timeout=_timeout_for(cand), headers=hdr)
+
+        body = {}
+        prompt = take("prompt", params.get("prompt"))
+        if prompt is not None:
+            body["text"] = spoken_prompt(cand, prompt)
+        voice = take("voice", voice_for(cand, params))
+        if voice:
+            # This endpoint addresses voices BY NAME ("alloy"), so the name is what goes on the
+            # wire. `voice_id` only answers for a candidate that declares a name -> id map, and
+            # sending its "" for a list-style candidate put an empty voice in every request.
+            body["voice"] = voice_id(cand, voice) or voice
+        body["outputFormat"] = str(cand.get("format") or "mp3")
+        return Submit("POST", f"{root}/v4/ai/speech-model", body, tun,
+                      timeout=_timeout_for(cand), headers=hdr)
 
     if shape == "image-generation":
         body = {"model": model}
@@ -951,6 +1012,30 @@ def _read_submit(cand: dict, status: int, doc) -> tuple[str, Payload | None]:
             return "", Payload(data=_b64(str(audio["data"])), mime=f"audio/{fmt}",
                                transcript=str(audio.get("transcript") or ""))
         raise MediaEmpty("the provider answered with no audio")
+
+    # Both Vercel media shapes are SYNCHRONOUS: the render happens inside the submit and the 200
+    # carries the finished thing. There is no task id to poll, so `_read_submit` returns the
+    # payload and the job never enters the polling walk at all.
+    if shape == "vercel-video":
+        vids = doc.get("videos")
+        first = vids[0] if isinstance(vids, list) and vids and isinstance(vids[0], dict) else {}
+        # Measured: a 5 s 480p seedance-2.5 render answered with a presigned url, not bytes, and
+        # the file behind it was 3.6 MB. Both are read because the shape documents `type`.
+        if first.get("url"):
+            return "", Payload(url=str(first["url"]),
+                               mime=str(first.get("mediaType") or "video/mp4"))
+        if first.get("base64") or first.get("data"):
+            return "", Payload(data=_b64(str(first.get("base64") or first.get("data"))),
+                               mime=str(first.get("mediaType") or "video/mp4"))
+        raise MediaEmpty(provider_message(doc, status) or
+                         "the provider answered with no video")
+
+    if shape == "vercel-speech":
+        if doc.get("audio"):
+            fmt = str(cand.get("format") or "mp3")
+            return "", Payload(data=_b64(str(doc["audio"])), mime=f"audio/{fmt}")
+        raise MediaEmpty(provider_message(doc, status) or
+                         "the provider answered with no audio")
 
     raise MediaError(f"No adapter for endpoint shape {shape!r}.")
 

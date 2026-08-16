@@ -7904,7 +7904,11 @@ async def _media_call(cand: dict, prov: dict, params: dict,
     # that is deliberate: this function is the one place every outbound submit passes through, and
     # everything it has learnt to special-case has cost a round of the budget bug. It builds one
     # header out of one dict; a provider with a third auth style is a catalog edit.
-    headers = {**media_plane.auth_headers(prov), "content-type": "application/json"}
+    # The shape's own headers go UNDER the credential and the content type, never over them: a
+    # catalog entry names a model and a protocol version, and must not be able to name an
+    # `authorization` that would send the key somewhere this did not decide.
+    headers = {**sub.headers, **media_plane.auth_headers(prov),
+               "content-type": "application/json"}
     cl = _media_client()
     stopped = budget.claim()
     if stopped:

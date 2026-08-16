@@ -10,240 +10,847 @@
     "difference has to survive in the file or the next person cannot tell which they are reading."
   ],
   "$auth": [
-    "`auth` says how a provider is signed, beside the url that says where to send it — the same",
+    "`auth` says how a provider is signed, beside the url that says where to send it \u2014 the same",
     "kind of fact, learnt in the same measurement. Absent means `authorization: Bearer <key>`, and",
     "both entries below state theirs anyway: a provider that omits it should be a provider nobody",
     "had to think about, not one whose style was never checked. `prefix` of \"\" means the key bare.",
     "Measured 2026-08-15: api.elevenlabs.io answers 401 to a bearer and 200 to xi-api-key."
   ],
   "providers": {
-    "tokenrouter": { "integration_provider": "tokenrouter", "base_url": "https://api.tokenrouter.com/v1",
-                     "auth": { "header": "authorization", "prefix": "Bearer " } },
-    "elevenlabs":  { "integration_provider": "elevenlabs",  "base_url": "https://api.elevenlabs.io",
-                     "auth": { "header": "xi-api-key", "prefix": "" } }
+    "tokenrouter": {
+      "integration_provider": "tokenrouter",
+      "base_url": "https://api.tokenrouter.com/v1",
+      "auth": {
+        "header": "authorization",
+        "prefix": "Bearer "
+      }
+    },
+    "elevenlabs": {
+      "integration_provider": "elevenlabs",
+      "base_url": "https://api.elevenlabs.io",
+      "auth": {
+        "header": "xi-api-key",
+        "prefix": ""
+      }
+    },
+    "vercel": {
+      "integration_provider": "vercel",
+      "base_url": "https://ai-gateway.vercel.sh/v1",
+      "auth": {
+        "header": "authorization",
+        "prefix": "Bearer "
+      }
+    }
   },
-
   "capabilities": {
-
     "text_to_video": {
       "unit": "clip",
       "candidates": [
-        { "model": "dreamina-seedance-2-5-hc", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration"], "in": ["text"], "out": ["video"],
-          "resolution": "1280x720", "accepts_input_image": false,
-          "duration_ignored": true, "duration_observed_s": 6.08,
+        {
+          "model": "dreamina-seedance-2-5-hc",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "video"
+          ],
+          "resolution": "1280x720",
+          "accepts_input_image": false,
+          "duration_ignored": true,
+          "duration_observed_s": 6.08,
           "keep": "Owner's preferred model, and the reason nothing here skips a candidate for being marked broken: it sat at rank 1 through the whole outage, cost nothing to keep trying, and started working again on its own.",
-          "measured": "e2e run 2026-08-15, later than the sweep above: TokenRouter fixed the upstream mapping (eva-video-2.5-t2v-480p-720p) and it rendered a real 1280x720 clip. It IGNORES duration — 1 s was asked for and 6.08 s came back — and it REJECTS an input image url, so it is not a candidate for image_to_video. `duration` is still sent because a video submit that carries none lets the model pick its own, which is how kling bills 15 s.",
-          "verification": "verified" },
-
-        { "model": "MiniMax-Hailuo-2.3", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration"], "in": ["text"], "out": ["video"],
-          "durations_s": [6, 10], "duration_required": true,
-          "resolution": "1366x768", "accepts_input_image": false,
-          "quota": 140000, "quota_measured": true, "usd": 0.28, "latency_s": 240,
+          "measured": "e2e run 2026-08-15, later than the sweep above: TokenRouter fixed the upstream mapping (eva-video-2.5-t2v-480p-720p) and it rendered a real 1280x720 clip. It IGNORES duration \u2014 1 s was asked for and 6.08 s came back \u2014 and it REJECTS an input image url, so it is not a candidate for image_to_video. `duration` is still sent because a video submit that carries none lets the model pick its own, which is how kling bills 15 s.",
+          "verification": "verified"
+        },
+        {
+          "model": "MiniMax-Hailuo-2.3",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "video"
+          ],
+          "durations_s": [
+            6,
+            10
+          ],
+          "duration_required": true,
+          "resolution": "1366x768",
+          "accepts_input_image": false,
+          "quota": 140000,
+          "quota_measured": true,
+          "usd": 0.28,
+          "latency_s": 240,
           "output_url_expires": false,
           "note": "image/image_url/resolution/size/aspect_ratio/mode are ALL silently ignored and still bill.",
-          "verification": "verified" },
-
-        { "model": "kling-v3", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration", "image", "mode"], "in": ["text", "image"], "out": ["video"],
-          "duration_max_s": 15, "durations_rejected_s": [1], "duration_required": true,
+          "verification": "verified"
+        },
+        {
+          "model": "kling-v3",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration",
+            "image",
+            "mode"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "video"
+          ],
+          "duration_max_s": 15,
+          "durations_rejected_s": [
+            1
+          ],
+          "duration_required": true,
           "default_duration_s": 15.041,
-          "accepts_input_image": true, "input_image_param": "image", "input_image_encoding": "base64",
-          "quota": 840000, "quota_measured": true, "usd": 1.68, "latency_s": 240,
+          "accepts_input_image": true,
+          "input_image_param": "image",
+          "input_image_encoding": "base64",
+          "quota": 840000,
+          "quota_measured": true,
+          "usd": 1.68,
+          "latency_s": 240,
           "output_url_expires": true,
           "note": "Sending no duration yields a 15.041 s clip at 6x MiniMax's price. duration is REQUIRED here.",
-          "measured": "e2e run 2026-08-15: REJECTS duration 1, which this file had claimed as its floor. The claimed floor is gone rather than moved — what the shortest accepted duration is was not measured, and a number nobody measured is worse than no number.",
-          "verification": "verified" },
-
-        { "model": "kling-v2-6", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration", "image", "mode"], "in": ["text", "image"], "out": ["video"],
-          "duration_max_s": 15, "durations_rejected_s": [1], "duration_required": true,
-          "accepts_input_image": true, "input_image_param": "image", "input_image_encoding": "base64",
+          "measured": "e2e run 2026-08-15: REJECTS duration 1, which this file had claimed as its floor. The claimed floor is gone rather than moved \u2014 what the shortest accepted duration is was not measured, and a number nobody measured is worse than no number.",
+          "verification": "verified"
+        },
+        {
+          "model": "kling-v2-6",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration",
+            "image",
+            "mode"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "video"
+          ],
+          "duration_max_s": 15,
+          "durations_rejected_s": [
+            1
+          ],
+          "duration_required": true,
+          "accepts_input_image": true,
+          "input_image_param": "image",
+          "input_image_encoding": "base64",
           "output_url_expires": true,
           "note": "Submit verified; limits inferred from kling-v3 (same family, same relay path).",
           "measured": "e2e run 2026-08-15: REJECTS duration 1, same as kling-v3. Floor removed for the same reason.",
-          "verification": "verified" },
-
-        { "model": "happyhorse-1.0-t2v", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration", "size"], "in": ["text"], "out": ["video"],
-          "duration_min_s": 3, "duration_max_s": 15, "duration_required": true,
-          "size_format": "W*H", "resolution": "1920*1080", "accepts_input_image": false,
-          "quota": 500000, "quota_measured": true, "usd": 1.00, "latency_s": 240,
-          "output_url_expires": true, "output_url_ttl_s": 86400,
+          "verification": "verified"
+        },
+        {
+          "model": "happyhorse-1.0-t2v",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration",
+            "size"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "video"
+          ],
+          "duration_min_s": 3,
+          "duration_max_s": 15,
+          "duration_required": true,
+          "size_format": "W*H",
+          "resolution": "1920*1080",
+          "accepts_input_image": false,
+          "quota": 500000,
+          "quota_measured": true,
+          "usd": 1.0,
+          "latency_s": 240,
+          "output_url_expires": true,
+          "output_url_ttl_s": 86400,
           "watermark": true,
-          "note": "Output file is named '…_refiner_watermark.mp4'. Never selected unless allow_watermark:true.",
-          "verification": "verified" },
-
-        { "model": "kling-v3-omni", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration"],
-          "status": "broken", "error": "400 fail_to_fetch_task — upstream 'model is not supported'",
-          "in": ["text"], "out": ["video"], "verification": "verified_prior" },
-
-        { "model": "kling-3.0-turbo", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration"],
-          "status": "broken", "error": "500 api_panic 'assignment to entry in nil map' (relay crash)",
-          "in": ["text"], "out": ["video"], "verification": "verified_prior" }
+          "note": "Output file is named '\u2026_refiner_watermark.mp4'. Never selected unless allow_watermark:true.",
+          "verification": "verified"
+        },
+        {
+          "model": "kling-v3-omni",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration"
+          ],
+          "status": "broken",
+          "error": "400 fail_to_fetch_task \u2014 upstream 'model is not supported'",
+          "in": [
+            "text"
+          ],
+          "out": [
+            "video"
+          ],
+          "verification": "verified_prior"
+        },
+        {
+          "model": "kling-3.0-turbo",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration"
+          ],
+          "status": "broken",
+          "error": "500 api_panic 'assignment to entry in nil map' (relay crash)",
+          "in": [
+            "text"
+          ],
+          "out": [
+            "video"
+          ],
+          "verification": "verified_prior"
+        },
+        {
+          "model": "bytedance/seedance-2.5",
+          "provider": "vercel",
+          "shape": "vercel-video",
+          "params": [
+            "prompt",
+            "duration",
+            "size"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "video"
+          ],
+          "resolution": "854x480",
+          "accepts_input_image": false,
+          "duration_observed_s": 5.056,
+          "latency_s": 116.0,
+          "usd": 0.5182759,
+          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: asked for 5 s at 480p and got back a presigned url to a 3,617,186 byte mp4, 854x480, h264 with an aac track it was not asked for. It HONOURS duration (5 asked, 5.056 delivered), unlike the tokenrouter seedance entry. Cost is the gateway's own number from providerMetadata.gateway.cost, not an estimate: $0.5182759 for those 48,437 completion tokens. Took 116 s inside the submit, so it is synchronous and never enters the poll walk.",
+          "verification": "verified"
+        }
       ]
     },
-
     "image_to_video": {
       "unit": "clip",
-      "no_fallback_note": "Only kling accepts an input image. MiniMax and happyhorse IGNORE image/image_url and bill for a text-only clip — verified. dreamina REJECTS one outright and is not listed here at all. If both kling models are down this capability has NO substitute and must refuse.",
+      "no_fallback_note": "Only kling accepts an input image. MiniMax and happyhorse IGNORE image/image_url and bill for a text-only clip \u2014 verified. dreamina REJECTS one outright and is not listed here at all. If both kling models are down this capability has NO substitute and must refuse.",
       "candidates": [
-        { "model": "kling-v3", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration", "image", "mode"], "in": ["text", "image"], "out": ["video"],
-          "input_image_param": "image", "input_image_encoding": "base64", "duration_required": true,
-          "duration_max_s": 15, "durations_rejected_s": [1],
+        {
+          "model": "kling-v3",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration",
+            "image",
+            "mode"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "video"
+          ],
+          "input_image_param": "image",
+          "input_image_encoding": "base64",
+          "duration_required": true,
+          "duration_max_s": 15,
+          "durations_rejected_s": [
+            1
+          ],
           "accepts_input_image": true,
-          "quota": 840000, "quota_measured": true, "usd": 1.68, "latency_s": 240,
+          "quota": 840000,
+          "quota_measured": true,
+          "usd": 1.68,
+          "latency_s": 240,
           "output_url_expires": true,
-          "note": "The image param is recognised and validated (400 code 1201 on non-base64) — verified. An end-to-end i2v render was NOT run.",
-          "measured": "e2e run 2026-08-15: REJECTS duration 1; claimed floor removed. dreamina-seedance-2-5-hc was REMOVED from this chain the same day — it rejects an input image url, so listing it here would spend a rank-1 slot on a model that cannot do this capability at all.",
-          "verification": "inferred" },
-        { "model": "kling-v2-6", "provider": "tokenrouter", "shape": "video-generation",
-          "params": ["prompt", "duration", "image", "mode"], "in": ["text", "image"], "out": ["video"],
-          "input_image_param": "image", "input_image_encoding": "base64", "duration_required": true,
-          "duration_max_s": 15, "durations_rejected_s": [1],
-          "accepts_input_image": true, "output_url_expires": true,
+          "note": "The image param is recognised and validated (400 code 1201 on non-base64) \u2014 verified. An end-to-end i2v render was NOT run.",
+          "measured": "e2e run 2026-08-15: REJECTS duration 1; claimed floor removed. dreamina-seedance-2-5-hc was REMOVED from this chain the same day \u2014 it rejects an input image url, so listing it here would spend a rank-1 slot on a model that cannot do this capability at all.",
+          "verification": "inferred"
+        },
+        {
+          "model": "kling-v2-6",
+          "provider": "tokenrouter",
+          "shape": "video-generation",
+          "params": [
+            "prompt",
+            "duration",
+            "image",
+            "mode"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "video"
+          ],
+          "input_image_param": "image",
+          "input_image_encoding": "base64",
+          "duration_required": true,
+          "duration_max_s": 15,
+          "durations_rejected_s": [
+            1
+          ],
+          "accepts_input_image": true,
+          "output_url_expires": true,
           "measured": "e2e run 2026-08-15: REJECTS duration 1; claimed floor removed.",
-          "verification": "inferred" }
+          "verification": "inferred"
+        }
       ]
     },
-
     "text_to_image": {
       "unit": "image",
       "$order": "Ordered by latency, not by prestige: an image here is almost always a FRAME on the way to a video, so a 91-second model at the head of the chain turns a four-shot storyboard into six minutes of waiting.",
       "candidates": [
-        { "model": "google/gemini-3.1-flash-lite-image", "provider": "tokenrouter", "shape": "gemini",
-          "params": ["prompt"], "in": ["text", "image"], "out": ["image", "text"], "latency_s": 4.15,
-          "output_mime": "image/jpeg", "accepts_input_image": true, "verification": "verified" },
-        { "model": "bytedance-seed/seedream-4.5", "provider": "tokenrouter", "shape": "image-generation",
-          "params": ["prompt", "n", "size"], "in": ["text", "image"], "out": ["image"], "latency_s": 6.05,
-          "min_pixels": 3686400, "sizes_verified": ["1920x1920"],
-          "output_url_expires": true, "accepts_input_image": true,
-          "note": "Rejects anything under 3,686,400 px with 400 InvalidParameter — skipped when a smaller size is asked for.",
-          "verification": "verified" },
-        { "model": "google/gemini-3.1-flash-image-preview", "provider": "tokenrouter", "shape": "gemini",
-          "params": ["prompt"], "in": ["text", "image"], "out": ["image", "text"], "latency_s": 14.48,
-          "output_mime": "image/png", "accepts_input_image": true, "verification": "verified" },
-        { "model": "bytedance-seed/seedream-5.0-lite", "provider": "tokenrouter", "shape": "image-generation",
-          "params": ["prompt", "n", "size"], "in": ["text", "image"], "out": ["image"], "latency_s": 17.74,
-          "min_pixels": 3686400, "sizes_verified": ["1920x1920"], "output_url_expires": true,
-          "accepts_input_image": true, "verification": "verified" },
-        { "model": "microsoft/mai-image-2.5", "provider": "tokenrouter", "shape": "openai",
-          "params": ["prompt"], "in": ["text", "image"], "out": ["image"], "latency_s": 21.95,
-          "usd": 0.048188, "quota_measured": true, "usd_source": "usage.cost reported inline",
-          "accepts_input_image": true, "verification": "verified" },
-        { "model": "openai/gpt-5.4-image-2", "provider": "tokenrouter", "shape": "image-generation",
-          "params": ["prompt", "n", "size"], "in": ["text"], "out": ["image"],
-          "sizes_verified": ["1024x1024"], "output_field": "b64_json", "verification": "verified_prior" },
-        { "model": "google/gemini-2.5-flash-image", "provider": "tokenrouter", "shape": "gemini",
-          "params": ["prompt"], "in": ["text", "image"], "out": ["image", "text"], "output_mime": "image/png",
-          "accepts_input_image": true, "verification": "verified" },
-        { "model": "openai/gpt-5-image-mini", "provider": "tokenrouter", "shape": "openai",
-          "params": ["prompt"], "in": ["text", "image"], "out": ["image"], "latency_s": 41.67,
-          "accepts_input_image": true, "note": "Returns an encrypted reasoning block beside the image; ignore it.",
-          "verification": "verified" },
-        { "model": "openai/gpt-5-image", "provider": "tokenrouter", "shape": "openai",
-          "params": ["prompt"], "in": ["text", "image"], "out": ["image"], "latency_s": 57.08,
-          "accepts_input_image": true, "verification": "verified" },
-        { "model": "bytedance-seed/seedream-5.0-pro", "provider": "tokenrouter", "shape": "image-generation",
-          "params": ["prompt", "n", "size"], "in": ["text", "image"], "out": ["image"], "latency_s": 91.05,
-          "sizes_verified": ["1024x1024"], "output_url_expires": true, "accepts_input_image": true,
-          "note": "The 3.69 Mpx floor is NOT family-wide — this one accepts 1024x1024.", "verification": "verified" },
-        { "model": "google/gemini-3-pro-image-preview", "provider": "tokenrouter", "shape": "gemini",
-          "params": ["prompt"],
+        {
+          "model": "google/gemini-3.1-flash-lite-image",
+          "provider": "tokenrouter",
+          "shape": "gemini",
+          "params": [
+            "prompt"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image",
+            "text"
+          ],
+          "latency_s": 4.15,
+          "output_mime": "image/jpeg",
+          "accepts_input_image": true,
+          "verification": "verified"
+        },
+        {
+          "model": "bytedance-seed/seedream-4.5",
+          "provider": "tokenrouter",
+          "shape": "image-generation",
+          "params": [
+            "prompt",
+            "n",
+            "size"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "latency_s": 6.05,
+          "min_pixels": 3686400,
+          "sizes_verified": [
+            "1920x1920"
+          ],
+          "output_url_expires": true,
+          "accepts_input_image": true,
+          "note": "Rejects anything under 3,686,400 px with 400 InvalidParameter \u2014 skipped when a smaller size is asked for.",
+          "verification": "verified"
+        },
+        {
+          "model": "google/gemini-3.1-flash-image-preview",
+          "provider": "tokenrouter",
+          "shape": "gemini",
+          "params": [
+            "prompt"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image",
+            "text"
+          ],
+          "latency_s": 14.48,
+          "output_mime": "image/png",
+          "accepts_input_image": true,
+          "verification": "verified"
+        },
+        {
+          "model": "bytedance-seed/seedream-5.0-lite",
+          "provider": "tokenrouter",
+          "shape": "image-generation",
+          "params": [
+            "prompt",
+            "n",
+            "size"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "latency_s": 17.74,
+          "min_pixels": 3686400,
+          "sizes_verified": [
+            "1920x1920"
+          ],
+          "output_url_expires": true,
+          "accepts_input_image": true,
+          "verification": "verified"
+        },
+        {
+          "model": "microsoft/mai-image-2.5",
+          "provider": "tokenrouter",
+          "shape": "openai",
+          "params": [
+            "prompt"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "latency_s": 21.95,
+          "usd": 0.048188,
+          "quota_measured": true,
+          "usd_source": "usage.cost reported inline",
+          "accepts_input_image": true,
+          "verification": "verified"
+        },
+        {
+          "model": "openai/gpt-5.4-image-2",
+          "provider": "tokenrouter",
+          "shape": "image-generation",
+          "params": [
+            "prompt",
+            "n",
+            "size"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "image"
+          ],
+          "sizes_verified": [
+            "1024x1024"
+          ],
+          "output_field": "b64_json",
+          "verification": "verified_prior"
+        },
+        {
+          "model": "google/gemini-2.5-flash-image",
+          "provider": "tokenrouter",
+          "shape": "gemini",
+          "params": [
+            "prompt"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image",
+            "text"
+          ],
+          "output_mime": "image/png",
+          "accepts_input_image": true,
+          "verification": "verified"
+        },
+        {
+          "model": "openai/gpt-5-image-mini",
+          "provider": "tokenrouter",
+          "shape": "openai",
+          "params": [
+            "prompt"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "latency_s": 41.67,
+          "accepts_input_image": true,
+          "note": "Returns an encrypted reasoning block beside the image; ignore it.",
+          "verification": "verified"
+        },
+        {
+          "model": "openai/gpt-5-image",
+          "provider": "tokenrouter",
+          "shape": "openai",
+          "params": [
+            "prompt"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "latency_s": 57.08,
+          "accepts_input_image": true,
+          "verification": "verified"
+        },
+        {
+          "model": "bytedance-seed/seedream-5.0-pro",
+          "provider": "tokenrouter",
+          "shape": "image-generation",
+          "params": [
+            "prompt",
+            "n",
+            "size"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "latency_s": 91.05,
+          "sizes_verified": [
+            "1024x1024"
+          ],
+          "output_url_expires": true,
+          "accepts_input_image": true,
+          "note": "The 3.69 Mpx floor is NOT family-wide \u2014 this one accepts 1024x1024.",
+          "verification": "verified"
+        },
+        {
+          "model": "google/gemini-3-pro-image-preview",
+          "provider": "tokenrouter",
+          "shape": "gemini",
+          "params": [
+            "prompt"
+          ],
           "status": "excluded",
-          "error": "200 OK, parts:[], finishReason STOP — bills ~1356 tokens and returns nothing. Identical with responseModalities set.",
+          "error": "200 OK, parts:[], finishReason STOP \u2014 bills ~1356 tokens and returns nothing. Identical with responseModalities set.",
           "excluded_reason": "Fails silently AND bills. Never selectable; kept in the file so nobody re-adds it.",
           "measured": "e2e run 2026-08-15 confirmed it again, and this entry is why availability is asserted on a MEDIA PAYLOAD and never on a 200: a status code would read this model as working, on every call, for as long as it kept billing. read_submit enforces that for all five shapes, so a sibling cannot do the same quietly.",
-          "verification": "verified" }
+          "verification": "verified"
+        },
+        {
+          "model": "openai/gpt-image-1-mini",
+          "provider": "vercel",
+          "shape": "image-generation",
+          "params": [
+            "prompt",
+            "n",
+            "size"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "image"
+          ],
+          "resolution": "1024x1024",
+          "latency_s": 20.0,
+          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: the EXISTING image-generation shape works unchanged here, because /v1/images/generations is what it already posts. Returned b64_json which decoded to a 1,286,643 byte PNG, 1024x1024.",
+          "verification": "verified"
+        }
       ]
     },
-
     "image_to_image": {
       "unit": "image",
-      "$warning": "NOTHING IN THIS CAPABILITY WAS VERIFIED — no image-input call was ever made. Ordering mirrors text_to_image. The build task for this tool is: verify each candidate with one call before the tool is enabled.",
+      "$warning": "NOTHING IN THIS CAPABILITY WAS VERIFIED \u2014 no image-input call was ever made. Ordering mirrors text_to_image. The build task for this tool is: verify each candidate with one call before the tool is enabled.",
       "candidates": [
-        { "model": "google/gemini-3.1-flash-lite-image", "provider": "tokenrouter", "shape": "gemini",
-          "params": ["prompt", "image"], "in": ["text", "image"], "out": ["image", "text"],
-          "accepts_input_image": true, "output_mime": "image/jpeg",
-          "input_method": "an inlineData part beside the text part", "verification": "inferred" },
-        { "model": "bytedance-seed/seedream-4.5", "provider": "tokenrouter", "shape": "image-generation",
-          "params": ["prompt", "n", "size", "image"], "in": ["text", "image"], "out": ["image"],
-          "min_pixels": 3686400, "accepts_input_image": true, "output_url_expires": true,
-          "input_method": "an `image` field; the endpoint reports usage.input_images", "verification": "inferred" },
-        { "model": "google/gemini-3.1-flash-image-preview", "provider": "tokenrouter", "shape": "gemini",
-          "params": ["prompt", "image"], "in": ["text", "image"], "out": ["image", "text"],
-          "accepts_input_image": true, "output_mime": "image/png", "verification": "inferred" },
-        { "model": "microsoft/mai-image-2.5", "provider": "tokenrouter", "shape": "openai",
-          "params": ["prompt", "image"], "in": ["text", "image"], "out": ["image"],
+        {
+          "model": "google/gemini-3.1-flash-lite-image",
+          "provider": "tokenrouter",
+          "shape": "gemini",
+          "params": [
+            "prompt",
+            "image"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image",
+            "text"
+          ],
           "accepts_input_image": true,
-          "input_method": "an image_url content part in the user message", "verification": "inferred" },
-        { "model": "openai/gpt-5-image-mini", "provider": "tokenrouter", "shape": "openai",
-          "params": ["prompt", "image"], "in": ["text", "image"], "out": ["image"],
-          "accepts_input_image": true, "verification": "inferred" }
+          "output_mime": "image/jpeg",
+          "input_method": "an inlineData part beside the text part",
+          "verification": "inferred"
+        },
+        {
+          "model": "bytedance-seed/seedream-4.5",
+          "provider": "tokenrouter",
+          "shape": "image-generation",
+          "params": [
+            "prompt",
+            "n",
+            "size",
+            "image"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "min_pixels": 3686400,
+          "accepts_input_image": true,
+          "output_url_expires": true,
+          "input_method": "an `image` field; the endpoint reports usage.input_images",
+          "verification": "inferred"
+        },
+        {
+          "model": "google/gemini-3.1-flash-image-preview",
+          "provider": "tokenrouter",
+          "shape": "gemini",
+          "params": [
+            "prompt",
+            "image"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image",
+            "text"
+          ],
+          "accepts_input_image": true,
+          "output_mime": "image/png",
+          "verification": "inferred"
+        },
+        {
+          "model": "microsoft/mai-image-2.5",
+          "provider": "tokenrouter",
+          "shape": "openai",
+          "params": [
+            "prompt",
+            "image"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "accepts_input_image": true,
+          "input_method": "an image_url content part in the user message",
+          "verification": "inferred"
+        },
+        {
+          "model": "openai/gpt-5-image-mini",
+          "provider": "tokenrouter",
+          "shape": "openai",
+          "params": [
+            "prompt",
+            "image"
+          ],
+          "in": [
+            "text",
+            "image"
+          ],
+          "out": [
+            "image"
+          ],
+          "accepts_input_image": true,
+          "verification": "inferred"
+        }
       ]
     },
-
     "text_to_speech": {
       "unit": "line",
-      "$order": "A READER FIRST, then the two that answer. The gpt-audio pair are conversational models doing narration: 'Say: hello.' returned 'Hello! It's great to talk with you.' They stay in the chain because they are a real fallback for a line of speech, and they carry `answers_prompts` so the code sends them the read-aloud instruction they need and warns the agent about the one defect they have. Ranking them first was never a preference — it was the only option there was. Neither does SSML, voice cloning or word timing.",
+      "$order": "A READER FIRST, then the two that answer. The gpt-audio pair are conversational models doing narration: 'Say: hello.' returned 'Hello! It's great to talk with you.' They stay in the chain because they are a real fallback for a line of speech, and they carry `answers_prompts` so the code sends them the read-aloud instruction they need and warns the agent about the one defect they have. Ranking them first was never a preference \u2014 it was the only option there was. Neither does SSML, voice cloning or word timing.",
       "candidates": [
-        { "model": "eleven_multilingual_v2", "provider": "elevenlabs", "shape": "elevenlabs-speech",
-          "params": ["prompt", "voice"], "in": ["text"], "out": ["audio"],
-          "format": "mp3", "output_mime": "audio/mpeg", "latency_s": 1.88,
+        {
+          "model": "eleven_multilingual_v2",
+          "provider": "elevenlabs",
+          "shape": "elevenlabs-speech",
+          "params": [
+            "prompt",
+            "voice"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "audio"
+          ],
+          "format": "mp3",
+          "output_mime": "audio/mpeg",
+          "latency_s": 1.88,
           "default_voice": "George",
-          "$voices": "The account's own library, read from GET /v1/voices on 2026-08-15 — 22 voices, keyed by the short name a caller would say and mapped to the id the URL carries. The provider's `name` field also carries a descriptor ('George - Warm, Captivating Storyteller'); the descriptor is characterisation, not identity, and a name with a trailing space in it is not something to make an agent type. `default_voice` is George because that descriptor names the job this tool does; it is a choice, written down here so it can be argued with rather than discovered.",
+          "$voices": "The account's own library, read from GET /v1/voices on 2026-08-15 \u2014 22 voices, keyed by the short name a caller would say and mapped to the id the URL carries. The provider's `name` field also carries a descriptor ('George - Warm, Captivating Storyteller'); the descriptor is characterisation, not identity, and a name with a trailing space in it is not something to make an agent type. `default_voice` is George because that descriptor names the job this tool does; it is a choice, written down here so it can be argued with rather than discovered.",
           "voices": {
-            "Roger": "CwhRBWXzGAHq8TQ4Fs17", "Sarah": "EXAVITQu4vr4xnSDxMaL",
-            "Laura": "FGY2WhTYpPnrIDTdsKH5", "Charlie": "IKne3meq5aSn9XLyUdCD",
-            "George": "JBFqnCBsd6RMkjVDRZzb", "Callum": "N2lVS1w4EtoT3dr4eOWO",
-            "River": "SAz9YHcvj6GT2YYXdXww", "Harry": "SOYHLrjzK2X1ezoPC6cr",
-            "Liam": "TX3LPaxmHKxFdv7VOQHJ", "Alice": "Xb7hH8MSUJpSbSDYk0k2",
-            "Matilda": "XrExE9yKIg1WjnnlVkGX", "Will": "bIHbv24MWmeRgasZH58o",
-            "Jessica": "cgSgspJ2msm6clMCkdW9", "Eric": "cjVigY5qzO86Huf0OWal",
-            "Bella": "hpp4J3VqNfWAUOO0d1Us", "Chris": "iP95p4xoKVk53GoZ742B",
-            "Brian": "nPczCjzI2devNBz1zQrb", "Daniel": "onwK4e9ZLuTAKqWW03F9",
-            "Lily": "pFZP5JQG7iQjIQuC4Bku", "Adam": "pNInz6obpgDQGcFmaJgB",
-            "Bill": "pqHfZKP75CvOlQylNhV4", "Anna Su": "9lHjugDhwqoxA5MhX0az" },
-          "note": "Reads what it is given, verbatim, and returns no transcript — there is nothing to compare, because nothing was paraphrased. `model_id` is this entry's own name; the VOICE is the path segment. It is NOT marked answers_prompts, which is the whole reason it is ranked above the two below.",
-          "measured": "e2e run 2026-08-15 against the live account, through the ordinary chain: POST /v1/text-to-speech/{voice_id} answered 200 with 23449 raw bytes of audio/mpeg — a 1.437 s mp3 in 1.880 s — for the 23-character line 'Hello from the gateway.' in George's voice. It READ the line; nothing was answered. Listed in GET /v1/models. Cost 6 characters of the 64945 budget (provider's own /v1/usage/character-stats), which is LESS than the line is long — so the budget is not one-character-per-character on this tier and nothing here pretends to know the rate. No `usd` for the same reason as the music entry.",
-          "verification": "verified" },
-        { "model": "openai/gpt-audio-mini", "provider": "tokenrouter", "shape": "audio-chat",
-          "params": ["messages", "modalities", "audio"], "in": ["text"], "out": ["audio", "text"],
-          "voices": ["alloy"], "format": "wav", "latency_s": 3.03, "stream_required": false,
+            "Roger": "CwhRBWXzGAHq8TQ4Fs17",
+            "Sarah": "EXAVITQu4vr4xnSDxMaL",
+            "Laura": "FGY2WhTYpPnrIDTdsKH5",
+            "Charlie": "IKne3meq5aSn9XLyUdCD",
+            "George": "JBFqnCBsd6RMkjVDRZzb",
+            "Callum": "N2lVS1w4EtoT3dr4eOWO",
+            "River": "SAz9YHcvj6GT2YYXdXww",
+            "Harry": "SOYHLrjzK2X1ezoPC6cr",
+            "Liam": "TX3LPaxmHKxFdv7VOQHJ",
+            "Alice": "Xb7hH8MSUJpSbSDYk0k2",
+            "Matilda": "XrExE9yKIg1WjnnlVkGX",
+            "Will": "bIHbv24MWmeRgasZH58o",
+            "Jessica": "cgSgspJ2msm6clMCkdW9",
+            "Eric": "cjVigY5qzO86Huf0OWal",
+            "Bella": "hpp4J3VqNfWAUOO0d1Us",
+            "Chris": "iP95p4xoKVk53GoZ742B",
+            "Brian": "nPczCjzI2devNBz1zQrb",
+            "Daniel": "onwK4e9ZLuTAKqWW03F9",
+            "Lily": "pFZP5JQG7iQjIQuC4Bku",
+            "Adam": "pNInz6obpgDQGcFmaJgB",
+            "Bill": "pqHfZKP75CvOlQylNhV4",
+            "Anna Su": "9lHjugDhwqoxA5MhX0az"
+          },
+          "note": "Reads what it is given, verbatim, and returns no transcript \u2014 there is nothing to compare, because nothing was paraphrased. `model_id` is this entry's own name; the VOICE is the path segment. It is NOT marked answers_prompts, which is the whole reason it is ranked above the two below.",
+          "measured": "e2e run 2026-08-15 against the live account, through the ordinary chain: POST /v1/text-to-speech/{voice_id} answered 200 with 23449 raw bytes of audio/mpeg \u2014 a 1.437 s mp3 in 1.880 s \u2014 for the 23-character line 'Hello from the gateway.' in George's voice. It READ the line; nothing was answered. Listed in GET /v1/models. Cost 6 characters of the 64945 budget (provider's own /v1/usage/character-stats), which is LESS than the line is long \u2014 so the budget is not one-character-per-character on this tier and nothing here pretends to know the rate. No `usd` for the same reason as the music entry.",
+          "verification": "verified"
+        },
+        {
+          "model": "openai/tts-1",
+          "provider": "vercel",
+          "shape": "vercel-speech",
+          "params": [
+            "prompt",
+            "voice"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "audio"
+          ],
+          "voices": [
+            "alloy",
+            "echo",
+            "fable",
+            "onyx",
+            "nova",
+            "shimmer"
+          ],
+          "format": "mp3",
+          "latency_s": 3.0,
+          "measured": "verified e2e 2026-08-16 against the live gateway on the Future HR key: returned base64 audio in a JSON body (NOT raw bytes like the elevenlabs shapes), which decoded to a 26,880 byte mp3, 1.68 s, 24 kHz mono, warnings empty.",
+          "verification": "verified"
+        },
+        {
+          "model": "openai/gpt-audio-mini",
+          "provider": "tokenrouter",
+          "shape": "audio-chat",
+          "params": [
+            "messages",
+            "modalities",
+            "audio"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "audio",
+            "text"
+          ],
+          "voices": [
+            "alloy"
+          ],
+          "format": "wav",
+          "latency_s": 3.03,
+          "stream_required": false,
           "answers_prompts": true,
-          "verification": "verified" },
-        { "model": "openai/gpt-audio", "provider": "tokenrouter", "shape": "audio-chat",
-          "params": ["messages", "modalities", "audio", "stream"], "in": ["text"], "out": ["audio", "text"],
-          "voices": ["alloy"], "format": "wav", "latency_s": 2.6, "stream_required": true,
+          "verification": "verified"
+        },
+        {
+          "model": "openai/gpt-audio",
+          "provider": "tokenrouter",
+          "shape": "audio-chat",
+          "params": [
+            "messages",
+            "modalities",
+            "audio",
+            "stream"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "audio",
+            "text"
+          ],
+          "voices": [
+            "alloy"
+          ],
+          "format": "wav",
+          "latency_s": 2.6,
+          "stream_required": true,
           "answers_prompts": true,
           "note": "400 'Audio output requires stream: true' without it; audio arrives at choices[0].delta.audio and must be concatenated.",
-          "verification": "verified" }
+          "verification": "verified"
+        }
       ]
     },
-
     "text_to_music": {
       "unit": "track",
-      "instead": "Do not use generate_speech instead — it produces conversation, not music.",
-      "$comment": "All 125 TokenRouter entries were searched by name (suno|udio|lyria|musicgen|music|song|melody) and by tag: the only audio-capable models there are the two conversational speech ones. The owner chose ElevenLabs Music direct. ONE candidate, and no key is stored here: it lives in the integrations document as an ordinary provider entry, like every other. This candidate spent a day stood down with `paid_plan_required` and no adapter behind it; both facts are gone because both were fixed, and the entry is otherwise the same entry — which is the point of leaving a preferred-but-blocked model ranked in place.",
+      "instead": "Do not use generate_speech instead \u2014 it produces conversation, not music.",
+      "$comment": "All 125 TokenRouter entries were searched by name (suno|udio|lyria|musicgen|music|song|melody) and by tag: the only audio-capable models there are the two conversational speech ones. The owner chose ElevenLabs Music direct. ONE candidate, and no key is stored here: it lives in the integrations document as an ordinary provider entry, like every other. This candidate spent a day stood down with `paid_plan_required` and no adapter behind it; both facts are gone because both were fixed, and the entry is otherwise the same entry \u2014 which is the point of leaving a preferred-but-blocked model ranked in place.",
       "candidates": [
-        { "model": "elevenlabs/music-v1", "provider": "elevenlabs", "shape": "elevenlabs-music",
-          "params": ["prompt", "duration"], "in": ["text"], "out": ["audio"],
-          "format": "mp3", "output_mime": "audio/mpeg", "latency_s": 5.59,
-          "note": "The endpoint takes NO model id — `elevenlabs/music-v1` is our name for the candidate, which is what the chain reports, quarantines and prices on. Length is `music_length_ms`, in MILLISECONDS, where every other duration in this file is seconds.",
-          "measured": "e2e run 2026-08-15 against the live account, through the ordinary chain: the earlier 402 paid_plan_required is gone (tier `payg`) and POST /v1/music answered 200 with 160541 raw bytes of audio/mpeg — a 10.031 s mp3 in 5.588 s, for music_length_ms 10000. It HONOURS the length asked for; 10.031 against 10.000 is the encoder's frame alignment, not a model ignoring an argument, so no duration_ignored here. Cost 69 characters of the 64945 budget (provider's own /v1/usage/character-stats, breakdown_type=product_type). Only a 10 s render was measured, so no floor and no ceiling are recorded — a duration nobody asked for is worse than no duration, and this endpoint bills. No `usd`: this account is metered in characters and a dollar figure would be one somebody invented.",
-          "verification": "verified" }
+        {
+          "model": "elevenlabs/music-v1",
+          "provider": "elevenlabs",
+          "shape": "elevenlabs-music",
+          "params": [
+            "prompt",
+            "duration"
+          ],
+          "in": [
+            "text"
+          ],
+          "out": [
+            "audio"
+          ],
+          "format": "mp3",
+          "output_mime": "audio/mpeg",
+          "latency_s": 5.59,
+          "note": "The endpoint takes NO model id \u2014 `elevenlabs/music-v1` is our name for the candidate, which is what the chain reports, quarantines and prices on. Length is `music_length_ms`, in MILLISECONDS, where every other duration in this file is seconds.",
+          "measured": "e2e run 2026-08-15 against the live account, through the ordinary chain: the earlier 402 paid_plan_required is gone (tier `payg`) and POST /v1/music answered 200 with 160541 raw bytes of audio/mpeg \u2014 a 10.031 s mp3 in 5.588 s, for music_length_ms 10000. It HONOURS the length asked for; 10.031 against 10.000 is the encoder's frame alignment, not a model ignoring an argument, so no duration_ignored here. Cost 69 characters of the 64945 budget (provider's own /v1/usage/character-stats, breakdown_type=product_type). Only a 10 s render was measured, so no floor and no ceiling are recorded \u2014 a duration nobody asked for is worse than no duration, and this endpoint bills. No `usd`: this account is metered in characters and a dollar figure would be one somebody invented.",
+          "verification": "verified"
+        }
       ]
     },
-
     "export": {
       "unit": "film",
       "local": true,
       "candidates": [],
-      "requires_binary": ["ffmpeg", "ffprobe"],
+      "requires_binary": [
+        "ffmpeg",
+        "ffprobe"
+      ],
       "$comment": "Not a provider capability. Reported unavailable when the image was built without ffmpeg.",
       "max_shots": 40,
       "max_total_s": 600
