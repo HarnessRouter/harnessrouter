@@ -7722,9 +7722,8 @@ def _uhp_message(e: HTTPException) -> str:
 
 _MEDIA_SERVER = "media"
 _MEDIA_SCENE_FILE = "scene.excalidraw"
-# How long a still is held when the cut does not say. Not a measurement — a still has no
-# length of its own — so it is a stated default rather than a number pretending to be one.
-STILL_HOLD_S = 3.0
+# How long a still is held when the cut does not say lives with the rest of that decision, in
+# media_plane.shot_window — a second copy here is how the total and the film came to disagree.
 # Candidates stood down after a BILLABLE failure. Per-replica and in memory on purpose: it is a
 # hint that saves money, not state anything depends on, and a replica that has not seen the
 # failure simply pays for one more attempt rather than serving a stale verdict for half an hour.
@@ -9720,8 +9719,12 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
                 rw, rh = media_plane.parse_size(res)
                 if w and h and rw and rh and abs(w / h - rw / rh) > 0.02:
                     warnings.append(f"Shot {i} is {w}x{h} and will be letterboxed into {res}.")
-                shots.append({"elementId": eid, "inS": float(s.get("in_s") or 0.0),
-                              "outS": float(s.get("out_s") or m.get("seconds") or 0.0)})
+                # Normalised on the way IN, so what is stored is what will be filmed. Written
+                # raw, a still the agent placed without a duration was stored as outS 0 — in the
+                # cut, absent from the film, and nothing anywhere said why.
+                a, b, _ = media_plane.shot_window(
+                    {"inS": s.get("in_s"), "outS": s.get("out_s")}, m)
+                shots.append({"elementId": eid, "inS": a, "outS": b})
             audio = [{"elementId": str(a.get("element_id") or ""),
                       "startS": float(a.get("start_s") or 0.0),
                       "gainDb": float(a.get("gain_db") or 0.0)} for a in audio_in]
@@ -9789,13 +9792,10 @@ async def _media_export_start(hid: str, sid: str, org: str, entry_id: str,
             raise media_plane.ExportRefused(
                 f"Shot {i} is still rendering. Every shot has to have landed before the film can "
                 f"be cut.")
-        # A still carries no `seconds`, so its hold comes from the SHOT. Falling through to 0 is
-        # what made an image in the cut fail the whole export.
-        out_s = s.get("outS")
-        if out_s is None:
-            out_s = m.get("seconds") or (STILL_HOLD_S if m.get("kind") == "image" else 0.0)
-        plan.append({"media_id": str(m["mediaId"]), "in_s": float(s.get("inS") or 0.0),
-                     "out_s": float(out_s or 0.0)})
+        # What window of the clip this shot shows — asked of the one function that answers it, so
+        # the film, the planned total and the preview cannot come to different conclusions.
+        in_s, out_s, still = media_plane.shot_window(s, m)
+        plan.append({"media_id": str(m["mediaId"]), "in_s": in_s, "out_s": out_s, "still": still})
     total = media_plane.timeline_total(scene)
     if total > float(cap.get("max_total_s") or 600):
         raise media_plane.ExportRefused(
@@ -9836,7 +9836,8 @@ async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
                 raise media_plane.ExportRefused(f"Shot {i + 1} is no longer readable.")
             path = os.path.join(tmp, f"shot{i}.{meta.get('ext') or 'mp4'}")
             pathlib.Path(path).write_bytes(data)
-            shots.append({"path": path, "in_s": s["in_s"], "out_s": s["out_s"]})
+            shots.append({"path": path, "in_s": s["in_s"], "out_s": s["out_s"],
+                          "still": s["still"]})
             job["progress"] = f"{i + 1}/{len(plan)} shots"
             await _media_job_save(job)
         tracks = []

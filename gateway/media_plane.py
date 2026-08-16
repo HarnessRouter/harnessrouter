@@ -1533,11 +1533,11 @@ def assemble(shots: list[dict], audio: list[dict], *, fps: int, resolution: str,
         end = float(shot.get("out_s") or dur or 0.0) or dur
         end = min(end, dur) if dur else end
 
-        # A STILL HAS NO DURATION OF ITS OWN, so the CUT decides how long it is shown. ffprobe
-        # reports 0 seconds for a png, which used to make this refuse the whole film with "shot N
-        # has no length" — the still was in the timeline, the export was impossible, and nothing
-        # said the two facts were connected. `-loop 1 -t` is what turns one frame into a segment.
-        still = dur <= 0 and not info.get("has_audio")
+        # A STILL HAS NO DURATION OF ITS OWN, so the CUT decides how long it is shown, and
+        # `-loop 1 -t` is what turns one frame into a segment. WHETHER a shot is a still is the
+        # caller's to state — see shot_window(). This asked ffprobe once, and a jpeg (which
+        # reports 0.04s) was clamped to a single frame while the identical png was held for 3s.
+        still = bool(shot.get("still")) or (dur <= 0 and not info.get("has_audio"))
         if still:
             hold = float(shot.get("out_s") or 0.0) - start
             if hold <= 0:
@@ -1867,6 +1867,40 @@ def sanitize_scene(doc) -> dict:
     return out
 
 
+# How long a still is held when the cut doesn't say. The kit has the same number in
+# src/lib/timeline.js — a preview that disagrees with the film is the bug this whole module
+# exists to prevent, so the two constants are one decision written twice, and neither moves alone.
+STILL_HOLD_S = 3.0
+
+
+def shot_window(shot: dict, media: dict) -> tuple[float, float, bool]:
+    """What part of a clip a shot shows: (in_s, out_s, is_still). THE answer to that question.
+
+    It used to be answered in five places that disagreed. A 13-second cut exported as a 10-second
+    film and every guard passed, because the planner said a still lasts STILL_HOLD_S, the total
+    said an unbounded still lasts 0s, and the assembler asked ffprobe — which reports no duration
+    for a png and 0.04s (one frame at 25fps) for a jpeg. Same picture, three answers, and the
+    jpeg was cut down to a single frame.
+
+    A STILL IS A STILL BECAUSE THE DOCUMENT SAYS IT IS AN IMAGE. Not because a file failed to
+    report a duration. It has no length of its own, so the cut decides; if the cut is silent it
+    is held for STILL_HOLD_S. A video is bounded by the length it was actually measured to be.
+    """
+    dur = float(media.get("seconds") or 0.0)
+    still = media.get("kind") == "image" or (dur <= 0 and media.get("kind") != "video")
+    in_s = max(0.0, float(shot.get("inS") or 0.0))
+    raw = shot.get("outS")
+    out_s = float(raw) if raw not in (None, "") else 0.0
+    if still:
+        # 0 gets here from writers that fell back to `seconds` a still does not have.
+        if out_s <= in_s:
+            out_s = in_s + STILL_HOLD_S
+        return in_s, out_s, True
+    if out_s <= 0 or out_s > dur:
+        out_s = dur
+    return min(in_s, out_s), out_s, False
+
+
 def timeline_total(scene: dict, ready_only: bool = False) -> float:
     """Summed from the clips' REAL measured durations, never from the seconds someone asked for."""
     by_id = {e.get("id"): e for e in scene.get("elements") or []}
@@ -1876,10 +1910,8 @@ def timeline_total(scene: dict, ready_only: bool = False) -> float:
         m = media_of(el)
         if ready_only and m.get("status") != "ready":
             continue
-        dur = float(m.get("seconds") or 0.0)
-        a = float(shot.get("inS") or 0.0)
-        b = float(shot.get("outS") or dur or 0.0) or dur
-        total += max(0.0, min(b, dur or b) - a)
+        a, b, _ = shot_window(shot, m)
+        total += max(0.0, b - a)
     return round(total, 3)
 
 

@@ -2155,6 +2155,69 @@ def test_export_fails_when_the_assembled_length_is_not_the_planned_length(monkey
     assert "Nothing was delivered" in msg
 
 
+def _still(ext: str, size: str = "128x72") -> bytes:
+    """One real picture. The ENCODING is the point: ffprobe reports no duration for a png and
+    0.04s — one frame at 25fps — for a jpeg, and the exporter used to believe it."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, f"s.{ext}")
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-f", "lavfi",
+                        "-i", f"color=c=red:s={size}:d=1", "-frames:v", "1", out],
+                       capture_output=True, check=True)
+        return Path(out).read_bytes()
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("ext,probed", [("png", 0.0), ("jpg", 0.04)])
+def test_a_still_is_held_for_its_full_window_whatever_the_file_says_it_is(monkeypatch, ext,
+                                                                          probed):
+    """A 3-second still is 3 seconds of film.
+
+    `probed` is not invented: the deployment's ffprobe read the png as having no duration and the
+    jpeg as 0.04s — one frame at 25fps — so the exporter held one for three seconds and clamped
+    the other to a single frame. A 13-second timeline came out as a 10-second film and no guard
+    objected, because the plan had asked the same wrong question. Which build of ffmpeg is
+    installed must not be able to change the length of a customer's film.
+    """
+    real = media_plane.probe_file
+    with tempfile.TemporaryDirectory() as d:
+        pic = os.path.join(d, f"s.{ext}")
+        Path(pic).write_bytes(_still(ext))
+        out = os.path.join(d, "out.mp4")
+        monkeypatch.setattr(media_plane, "probe_file",
+                            lambda p: {**real(p), "seconds": probed} if p == pic else real(p))
+        got = media_plane.assemble(
+            [{"path": pic, "in_s": 0.0, "out_s": 3.0, "still": True}], [],
+            fps=24, resolution="320x180", out_path=out)
+    assert abs(float(got["seconds"]) - 3.0) < 0.25, got
+
+
+def test_shot_window_answers_for_a_still_the_same_way_however_the_shot_was_written():
+    """The three writers that fed the export each had their own idea of a still's length: one
+    wrote outS 0, one left it out, one measured the file. All three mean 'hold it'."""
+    img = {"kind": "image", "status": "ready", "mediaId": "m1"}
+    for shot in ({"inS": None, "outS": None}, {"inS": 0, "outS": 0}, {}):
+        a, b, still = media_plane.shot_window(shot, img)
+        assert (a, b, still) == (0.0, media_plane.STILL_HOLD_S, True), shot
+    # An explicit hold is obeyed, and a video is still bounded by what it was measured to be.
+    assert media_plane.shot_window({"inS": 1, "outS": 5}, img) == (1.0, 5.0, True)
+    vid = {"kind": "video", "status": "ready", "seconds": 6.0}
+    assert media_plane.shot_window({"inS": 0, "outS": 99}, vid) == (0.0, 6.0, False)
+    assert media_plane.shot_window({"inS": 2, "outS": None}, vid) == (2.0, 6.0, False)
+
+
+def test_the_planned_total_counts_a_still_that_nothing_gave_a_length():
+    """timeline_total is the number the app shows and the number the export promises. It read 0
+    for an unbounded still while the timeline drew 3 seconds of it."""
+    scene = {"elements": [{"id": "e1", "customData": {"media": {"kind": "image", "status":
+                                                                "ready", "mediaId": "m1"}}},
+                          {"id": "e2", "customData": {"media": {"kind": "video", "status":
+                                                                "ready", "mediaId": "m2",
+                                                                "seconds": 6.0}}}],
+             "timeline": {"shots": [{"elementId": "e1"},
+                                    {"elementId": "e2", "inS": 0, "outS": 2.0}]}}
+    assert media_plane.timeline_total(scene) == media_plane.STILL_HOLD_S + 2.0
+
+
 @needs_ffmpeg
 def test_export_refuses_while_a_shot_is_still_rendering(client, harness, session, provider):
     tok = _cred(harness, session)
