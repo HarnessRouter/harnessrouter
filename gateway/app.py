@@ -10157,6 +10157,9 @@ async def get_media_jobs(hid: str, eid: str, sid: str, request: Request,
         except Exception:  # noqa: BLE001
             pass
         out.append({"job_id": job["id"], "status": job.get("status"),
+                    # WHEN it was submitted. Without it a caller holding several exports cannot
+                    # tell which one is the latest, and the app followed whichever came first.
+                    "created_at": job.get("created_at") or 0,
                     "capability": job.get("capability"), "model": job.get("model"),
                     "media_id": job.get("media_id") or None,
                     "element_id": job.get("element_id") or None,
