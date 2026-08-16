@@ -714,10 +714,18 @@ def build_submit(cand: dict, base_url: str, params: dict) -> Submit:
             secs = take("duration", params.get("seconds"))
             if secs is not None:
                 body["duration"] = int(secs) if float(secs).is_integer() else float(secs)
-            size = take("size", asked_size)
-            if size is not None:
-                # This endpoint takes a named resolution, not WxH: 854x480 came back for "480p".
-                body["resolution"] = _VERCEL_RES.get(size, size)
+            # The tier is this candidate's OWN verified resolution, not the caller's frame. This
+            # endpoint accepts named tiers ("480p") and refuses a WxH, and each model publishes
+            # only some of them — so a size computed for an aspect arrives as a frame the provider
+            # has never heard of. A candidate that takes no `size` tunable therefore renders at
+            # exactly the tier it was measured at, and one asked for a shape it cannot hold is
+            # skipped upstream by can_serve rather than reframed here.
+            tier = _VERCEL_RES.get(str(cand.get("resolution") or ""))
+            asked = take("size", asked_size)          # only when the entry declares `size`
+            if asked is not None:
+                tier = _VERCEL_RES.get(asked, tier)
+            if tier:
+                body["resolution"] = tier
             img = take("image", params.get("image"))
             if img is not None:
                 body["image"] = img
