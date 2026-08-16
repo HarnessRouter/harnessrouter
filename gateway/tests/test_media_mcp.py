@@ -3186,3 +3186,40 @@ def test_streamed_audio_deltas_are_decoded_one_by_one_and_joined_as_bytes():
     got = media_plane._read_stream_audio({"format": "wav"}, frames)
     assert got.data == want, (len(got.data), len(want))
     assert got.transcript == "one two three"
+
+
+@needs_ffmpeg
+def test_a_picture_can_be_imported_and_then_animated_from(api, client, harness, session,
+                                                          provider):
+    """A reference image the person already has becomes media the agent can render FROM.
+
+    Everything else in a session arrived by being rendered, so a template's reference frame had
+    nowhere to live: shown in the app and unusable, or not offered. The import goes through the
+    same verification a render does — and what comes back is a media id like any other, which is
+    the whole point: `from_image` takes it without knowing where it came from.
+    """
+    tok = _cred(harness, session)
+    png = _still("png")
+    base = f"/v1/harnesses/{harness}/servers/{ENTRY_ID}/sessions/{session}/media"
+    r = api.post(base, content=png, headers={"x-media-label": "Reference"})
+    assert r.status_code == 200, r.text
+    rec = r.json()
+    assert rec["kind"] == "image" and rec["media_id"].startswith("med_"), rec
+    assert rec["width"] and rec["height"], rec
+
+    # It reads back through the ordinary media route, byte for byte.
+    got = api.get(f"{base}/{rec['media_id']}")
+    assert got.status_code == 200 and got.content == png
+
+    # And it is a legal input to a render, exactly like a generated still.
+    out = _ok(_call(client, tok, "generate_video",
+                    {"prompt": "animate this", "seconds": 6, "from_image": rec["media_id"]}))
+    assert out.get("job_id"), out
+
+
+def test_an_import_that_is_not_media_is_refused_rather_than_stored(api, harness, session):
+    """The kind is read from the bytes, never from what the caller claims to be sending."""
+    base = f"/v1/harnesses/{harness}/servers/{ENTRY_ID}/sessions/{session}/media"
+    r = api.post(base, content=b"this is not a picture")
+    assert r.status_code == 415, r.text
+    assert api.post(base, content=b"").status_code == 400

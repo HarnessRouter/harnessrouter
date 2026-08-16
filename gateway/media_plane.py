@@ -1458,9 +1458,12 @@ def verify(kind: str, data: bytes) -> dict:
     if not mime.startswith(want + "/"):
         raise MediaEmpty(f"the provider returned {mime} where a {want} was expected")
     out = {"mime": mime, "ext": ext, "bytes": len(data), "width": 0, "height": 0, "seconds": 0.0}
-    if want in ("video", "audio"):
+    if want in ("video", "audio", "image"):
+        # A PICTURE HAS A SIZE AND IT IS MEASURABLE, so it is measured — an imported reference
+        # used to report 0x0, which is a number nobody can act on standing in for one anybody
+        # could have read off the file.
         probed = probe(data, ext)
-        if not probed.get("seconds"):
+        if want != "image" and not probed.get("seconds"):
             # A file whose duration cannot be read cannot be cut, timed or summed. Refusing is the
             # honest answer; a zero-length shot in a timeline is not.
             #

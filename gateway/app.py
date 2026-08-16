@@ -10265,6 +10265,44 @@ async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> d
             "total_seconds": job.get("planned_seconds"), "status": job["status"]}
 
 
+@app.post("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media")
+async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> dict:
+    """Put a picture the person already has into this video, as media the agent can work from.
+
+    EVERYTHING ELSE IN A SESSION ARRIVED BY BEING RENDERED, which meant a reference image — the
+    frame a template starts from, a photograph of the actual product — had nowhere to live. It
+    could be shown in the app and never used, which is decoration, or not offered at all.
+
+    It goes through the same door a render does: `_media_store` verifies the bytes really are
+    what they claim before anything is kept, so an import cannot put a file into a timeline that
+    the exporter will later refuse. The kind is read from the bytes, not from what the caller
+    says they sent.
+    """
+    org, entry, _sv = await _media_route(hid, sid, eid, request)
+    data = await request.body()
+    if not data:
+        raise uhp_error(400, "empty_upload", "There were no bytes in that upload.")
+    if len(data) > media_plane.MAX_BYTES:
+        raise uhp_error(413, "too_large",
+                        f"That file is {len(data)} bytes and the limit here is "
+                        f"{media_plane.MAX_BYTES}.")
+    mime, _ext = media_plane.sniff(data)
+    kind = {"image": "image", "video": "video", "audio": "audio"}.get(
+        str(mime or "").split("/")[0] or "", "")
+    if not kind:
+        raise uhp_error(415, "not_media",
+                        "That file is not a picture, a clip or a sound this can read.")
+    try:
+        rec = await _media_store(sid, kind, data, {
+            "model": "", "capability": "import", "job_id": "",
+            "prompt": (request.headers.get("x-media-label") or "")[:200]})
+    except media_plane.MediaError as e:
+        raise uhp_error(400, "import_refused", str(e)) from e
+    return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
+            "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],
+            "seconds": rec["seconds"]}
+
+
 @app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media/{med}")
 async def get_media_bytes(hid: str, eid: str, sid: str, med: str, request: Request) -> Response:
     """The bytes, with Range support.
