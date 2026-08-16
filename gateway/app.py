@@ -10045,7 +10045,7 @@ def _kits() -> dict:
         except Exception:  # noqa: BLE001
             print(f"[kits] {kid}/kit.json is not valid JSON — skipped", flush=True)
     if out:
-        print(f"[kits] {len(out)} available: {', '.join(sorted(out))}", flush=True)
+        print(f"[kits] {len(out)} available: {', '.join(out)}", flush=True)
     return out
 
 
@@ -10613,7 +10613,13 @@ async def list_kits(request: Request) -> dict:
     rows = await _vg_list_by_org("Harness", org)
     by_kit = {str(r.get("kit") or ""): r for r in rows if str(r.get("deleted") or "0") != "1"}
     out = []
-    for kid, kit in sorted(_kits().items()):
+    # Manifest order, NOT alphabetical. kits.json lists the kits in the order the catalogue wants
+    # them shown, install-kits.sh bundles them in that order, and _kits() builds its dict by
+    # walking the manifest — so the intent survives all the way here and sorting threw it away.
+    # A catalogue that cannot decide what a newcomer sees first is a catalogue in name only, and
+    # "add a second file to specify the order" would be a second source of truth for something
+    # kits.json already says.
+    for kid, kit in _kits().items():
         h = by_kit.get(kid)
         row = {"id": kid, "object": "kit",
                     "title": kit.get("title") or kid,
