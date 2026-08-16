@@ -10292,15 +10292,44 @@ async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> d
     if not kind:
         raise uhp_error(415, "not_media",
                         "That file is not a picture, a clip or a sound this can read.")
+    label = (request.headers.get("x-media-label") or "")[:200]
     try:
         rec = await _media_store(sid, kind, data, {
-            "model": "", "capability": "import", "job_id": "",
-            "prompt": (request.headers.get("x-media-label") or "")[:200]})
+            "model": "", "capability": "import", "job_id": "", "prompt": label})
     except media_plane.MediaError as e:
         raise uhp_error(400, "import_refused", str(e)) from e
+
+    # ON THE CANVAS, IN THE SAME CALL. Media that is only in the store is invisible: the agent's
+    # one view of a video is describe_canvas, and it said so itself when a reference was imported
+    # and not placed — "it exists as media but was never put on the board". Doing it here also
+    # removes a race the browser could not win, since the agent reads the canvas within seconds
+    # of the session existing. `?place=0` for a caller that wants the bytes and nothing else.
+    element_id = ""
+    if str(request.query_params.get("place") or "1") not in ("0", "false", "no"):
+        med = rec["media_id"]
+
+        def mutate(scene: dict) -> None:
+            els = scene.get("elements") or []
+            x, y = media_plane.next_free([e for e in els if not e.get("isDeleted")])
+            el = media_plane.media_element(
+                rec["kind"], x=x, y=y, w=media_plane.TILE_W, h=media_plane.TILE_H,
+                media_id=med, status="ready", cap="import", label=label,
+                seconds=float(rec.get("seconds") or 0),
+                width=int(rec.get("width") or 0), height=int(rec.get("height") or 0),
+                media_url=_media_url(hid, str(entry.get("id") or eid), sid, med))
+            if rec["kind"] == "image":
+                scene.setdefault("files", {})[med] = media_plane.file_entry(
+                    med, str(rec.get("mime") or "image/png"),
+                    _media_url(hid, str(entry.get("id") or eid), sid, med))
+            els.append(el)
+            scene["elements"] = els
+            return el["id"]
+
+        _rev, element_id = await _media_scene_touch(sid, mutate)
+
     return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
             "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],
-            "seconds": rec["seconds"]}
+            "seconds": rec["seconds"], "element_id": element_id or None}
 
 
 @app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media/{med}")

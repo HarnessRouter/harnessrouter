@@ -3207,6 +3207,17 @@ def test_a_picture_can_be_imported_and_then_animated_from(api, client, harness, 
     assert rec["kind"] == "image" and rec["media_id"].startswith("med_"), rec
     assert rec["width"] and rec["height"], rec
 
+    # AND IT IS ON THE CANVAS. Media that is only in the store is invisible to the agent, whose
+    # one view of a video is describe_canvas — it said exactly that when a reference was imported
+    # and not placed. `?place=0` is the way to ask for the bytes alone.
+    assert rec["element_id"], rec
+    scene = asyncio.run(app._media_scene_read(session))
+    el = next((e for e in scene["elements"] if e.get("id") == rec["element_id"]), None)
+    assert el and (el.get("customData") or {}).get("media", {}).get("mediaId") == rec["media_id"]
+    assert scene["files"].get(rec["media_id"]), "an image needs a file entry to be drawn"
+    quiet = api.post(f"{base}?place=0", content=_still("jpg"))
+    assert quiet.status_code == 200 and quiet.json()["element_id"] is None, quiet.text
+
     # It reads back through the ordinary media route, byte for byte.
     got = api.get(f"{base}/{rec['media_id']}")
     assert got.status_code == 200 and got.content == png
