@@ -861,6 +861,18 @@ body.hr-resizing iframe { pointer-events: none; }
 }
 .kit-actions-spacer { flex: 1; }
 .kit-link { font-size: 12.5px; color: var(--muted); text-decoration: none; }
+
+/* A link that performs an action rather than navigating. Same look as .kit-link so the two
+   footer affordances read as siblings, but a <button> because it opens a dialog: a link that
+   goes nowhere is a link screen readers and middle-clicks both get wrong. */
+.kit-link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 .kit-link:hover { color: var(--ink); text-decoration: underline; }
 .kit-actions .button { display: inline-flex; align-items: center; gap: 7px; }
 .kit-actions .button iconify-icon { font-size: 15px; }

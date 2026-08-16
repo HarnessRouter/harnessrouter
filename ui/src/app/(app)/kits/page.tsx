@@ -219,7 +219,17 @@ export default function KitsPage() {
                   {k.launched && k.harnessId && (
                     <a className="kit-link" href={`/harnesses/${k.harnessId}`}>Harness settings</a>
                   )}
-                  <span className="kit-actions-spacer" />
+                  {/* Reconnect. Launch is idempotent, and a connection string sent to a kit that
+                    already exists means "connect this": that is how you move a kit to another
+                    database, or recover from a password change. Without this the dialog is
+                    unreachable the moment a kit is running, because the button turns into Open
+                    and the kit's own app points at "this kit's settings", which was a place that
+                    did not exist. Only for kits that read a database. */}
+                {k.launched && k.database && (
+                  <button className="kit-link kit-link-button" type="button"
+                          onClick={() => setPicking(k)}>Reconnect database</button>
+                )}
+                <span className="kit-actions-spacer" />
                   <button className="button primary" type="button" disabled={busy === k.id}
                     onClick={() => (k.launched ? openApp(k.route || `/kits/${k.id}`) : setPicking(k))}>
                     {busy === k.id ? 'Launching…' : k.launched ? 'Open' : 'Launch'}
@@ -278,7 +288,12 @@ function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
   // builds would have nothing to read. Relaunching keeps what it already reads, so a blank field
   // is fine once it has been launched.
   const missing = Boolean(kit.database) && !kit.launched && !db.connectionString.trim();
-  const canLaunch = (custom ? Boolean(cBase && cModel) : Boolean(sel)) && !missing;
+  // Reconnecting does not choose a runtime: the server keeps the harness it already made and
+  // applies only the connection, so requiring a choice here would disable the button behind a
+  // picker that is deliberately not on screen.
+  const canLaunch = kit.launched
+    ? Boolean(db.connectionString.trim())
+    : (custom ? Boolean(cBase && cModel) : Boolean(sel)) && !missing;
 
   function go() {
     if (custom) { onLaunch(cBase, cModel, db); return; }
@@ -293,17 +308,18 @@ function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
         <button className="kit-dialog-x" type="button" onClick={onClose} aria-label="Close">
           <iconify-icon icon="tabler:x"></iconify-icon>
         </button>
-        <h2 id="kit-launch-title">Launch {kit.title}</h2>
-        <p className="kit-dialog-sub">Choose what it runs on. You can change this later in the
-          Harness settings.</p>
+        <h2 id="kit-launch-title">{kit.launched ? `Reconnect ${kit.title}` : `Launch ${kit.title}`}</h2>
+        <p className="kit-dialog-sub">{kit.launched
+          ? 'Point it at a different database, or give it a new password for the one it already reads.'
+          : 'Choose what it runs on. You can change this later in the Harness settings.'}</p>
 
-        {nothingAvailable && !custom && (
+        {!kit.launched && nothingAvailable && !custom && (
           <div className="hr-error" role="alert">
             None of these can run yet — connect a provider on the Integrations page first.
           </div>
         )}
 
-        {!custom && (
+        {!kit.launched && !custom && (
           <div className="kit-choices">
             {kit.choices.map((c) => {
               const id = `${c.base}/${c.model}`;
@@ -375,7 +391,7 @@ function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
           <span className="kit-dialog-spacer" />
           <button className="button" type="button" onClick={onClose}>Cancel</button>
           <button className="button primary" type="button" disabled={busy || !canLaunch} onClick={go}>
-            {busy ? 'Launching…' : 'Launch'}
+            {busy ? (kit.launched ? 'Connecting…' : 'Launching…') : (kit.launched ? 'Reconnect' : 'Launch')}
           </button>
         </div>
       </div>
