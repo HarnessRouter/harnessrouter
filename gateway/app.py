@@ -9095,7 +9095,11 @@ _MEDIA_MCP_TOOLS = [
 
     {"name": "set_timeline",
      "description": ("The cut: which shots, in what order, at what length. ARRAY ORDER IS THE CUT "
-                     "ORDER — it is never inferred from where things sit on the canvas."),
+                     "ORDER — it is never inferred from where things sit on the canvas. "
+                     "`overlays` are layers above the cut: each names the second of the film it "
+                     "appears at, so adding one never moves the shots underneath. A layer fills "
+                     "the frame unless given a smaller `scale`, and the film stays as long as "
+                     "its shots — a layer running past the end is trimmed."),
      "inputSchema": {"type": "object", "required": ["shots"], "additionalProperties": False,
                      "properties": {
                          "shots": {"type": "array", "minItems": 1, "maxItems": 40,
@@ -9117,6 +9121,22 @@ _MEDIA_MCP_TOOLS = [
                                                                         "minimum": -40,
                                                                         "maximum": 6,
                                                                         "default": 0}}}},
+                         "overlays": {"type": "array", "maxItems": 12,
+                                      "items": {"type": "object",
+                                                "required": ["element_id", "start_s"],
+                                                "additionalProperties": False,
+                                                "properties": {
+                                                    "element_id": {"type": "string"},
+                                                    "start_s": {"type": "number", "minimum": 0},
+                                                    "in_s": {"type": "number", "minimum": 0},
+                                                    "out_s": {"type": "number", "minimum": 0},
+                                                    "layer": {"type": "integer", "minimum": 1,
+                                                              "maximum": 8, "default": 1},
+                                                    "scale": {"type": "number", "minimum": 0.05,
+                                                              "maximum": 1, "default": 1},
+                                                    "position": {"enum": ["full", "tl", "tr",
+                                                                          "bl", "br", "center"],
+                                                                 "default": "full"}}}},
                          "fps": {"enum": [24, 25, 30], "default": 30},
                          "resolution": {"enum": ["1920x1080", "1080x1920", "1080x1080"],
                                         "default": "1920x1080"}}}},
@@ -9693,6 +9713,7 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
     if name == "set_timeline":
         shots_in = args.get("shots") or []
         audio_in = args.get("audio") or []
+        overlays_in = args.get("overlays") or []
         cap = media_plane.capability("export")
         max_shots = int(cap.get("max_shots") or 40)
         if len(shots_in) > max_shots:
@@ -9728,22 +9749,44 @@ async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
             audio = [{"elementId": str(a.get("element_id") or ""),
                       "startS": float(a.get("start_s") or 0.0),
                       "gainDb": float(a.get("gain_db") or 0.0)} for a in audio_in]
+            # A LAYER IS PLACED, NOT QUEUED. An overlay names the moment on the film's clock
+            # where it appears, so adding one never moves the shots underneath it.
+            overlays = []
+            for i, o in enumerate(overlays_in, 1):
+                eid = str(o.get("element_id") or "")
+                el = by_id.get(eid)
+                if not el:
+                    warnings.append(f"Layer {i} names {eid}, which is not on the canvas.")
+                    continue
+                m = media_plane.media_of(el)
+                a, b, _ = media_plane.shot_window(
+                    {"inS": o.get("in_s"), "outS": o.get("out_s")}, m)
+                pos = str(o.get("position") or "full")
+                if pos not in media_plane.OVERLAY_POS:
+                    warnings.append(f"Layer {i} asks to sit {pos!r}; it will fill the frame.")
+                    pos = "full"
+                overlays.append({"elementId": eid, "layer": max(1, int(o.get("layer") or 1)),
+                                 "startS": max(0.0, float(o.get("start_s") or 0.0)),
+                                 "inS": a, "outS": b, "position": pos,
+                                 "scale": min(1.0, max(0.05, float(o.get("scale") or 1.0)))})
             scene["timeline"] = {"v": 1, "fps": int(args.get("fps") or 30),
                                  "resolution": str(args.get("resolution") or "1920x1080"),
                                  # ARRAY ORDER IS THE CUT ORDER. Never derived from canvas
                                  # position: dragging a card would silently re-cut the film.
-                                 "shots": shots, "audio": audio,
+                                 "shots": shots, "audio": audio, "overlays": overlays,
                                  "updatedAt": int(time.time() * 1000)}
             result["total"] = media_plane.timeline_total(scene)
             result["ready"] = bool(shots) and all(
                 media_plane.media_of(by_id.get(s["elementId"], {})).get("status") == "ready"
                 for s in shots)
             result["n"] = len(shots)
+            result["layers"] = len(overlays)
             return None
 
         rev, _ = await _media_scene_touch(sid, mutate)
         out = {"scene_rev": rev,
-               "timeline": {"shots": result.get("n", 0), "fps": int(args.get("fps") or 30),
+               "timeline": {"shots": result.get("n", 0), "layers": result.get("layers", 0),
+                            "fps": int(args.get("fps") or 30),
                             "resolution": str(args.get("resolution") or "1920x1080")},
                "total_seconds": result.get("total", 0.0), "ready": bool(result.get("ready"))}
         if warnings:
@@ -9807,6 +9850,26 @@ async def _media_export_start(hid: str, sid: str, org: str, entry_id: str,
                   for a in tl.get("audio") or []]
     audio_plan = [a for a in audio_plan if a["media_id"]]
 
+    # The layers above the cut. A layer whose clip has not landed is refused for the same reason
+    # a shot is: half a film is not a film, and the alternative is exporting it silently missing.
+    overlay_plan: list[dict] = []
+    for i, o in enumerate(tl.get("overlays") or [], 1):
+        m = media_plane.media_of(by_id.get(o.get("elementId")) or {})
+        if not m:
+            continue                       # the layer names something that is not a clip
+        # STATUS FIRST. Asking for the media id first skipped every layer that had not landed
+        # yet — the export ran, succeeded, and quietly did not contain them.
+        if m.get("status") != "ready" or not m.get("mediaId"):
+            raise media_plane.ExportRefused(
+                f"Layer {i} is still rendering. Every layer has to have landed before the film "
+                f"can be cut.")
+        o_in, o_out, still = media_plane.shot_window(o, m)
+        overlay_plan.append({"media_id": str(m["mediaId"]), "in_s": o_in, "out_s": o_out,
+                             "still": still, "start_s": max(0.0, float(o.get("startS") or 0.0)),
+                             "layer": max(1, int(o.get("layer") or 1)),
+                             "pos": str(o.get("position") or "full"),
+                             "scale": float(o.get("scale") or 1.0)})
+
     now = int(time.time() * 1000)
     job = {"id": "mjob_" + uuid.uuid4().hex[:16], "org": org, "harness": hid, "session": sid,
            "entry": entry_id, "capability": "export", "params_json": json.dumps({}), "params": {},
@@ -9817,13 +9880,14 @@ async def _media_export_start(hid: str, sid: str, org: str, entry_id: str,
            "shots": len(plan), "planned_seconds": total,
            "progress": f"0/{len(plan)} shots", "filename": filename or "film.mp4"}
     await _media_job_save(job)
-    asyncio.create_task(_media_export_run(job, plan, audio_plan, int(tl.get("fps") or 30),
+    asyncio.create_task(_media_export_run(job, plan, audio_plan, overlay_plan,
+                                          int(tl.get("fps") or 30),
                                           str(tl.get("resolution") or "1920x1080")))
     return job
 
 
-async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict], fps: int,
-                            resolution: str) -> None:
+async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
+                            overlay_plan: list[dict], fps: int, resolution: str) -> None:
     sid = str(job["session"])
     tmp = tempfile.mkdtemp(prefix="hr-media-")
     try:
@@ -9850,12 +9914,25 @@ async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
             path = os.path.join(tmp, f"track{j}.{meta.get('ext') or 'wav'}")
             pathlib.Path(path).write_bytes(data)
             tracks.append({"path": path, "start_s": a["start_s"], "gain_db": a["gain_db"]})
+        layers = []
+        for j, o in enumerate(overlay_plan):
+            meta = await _media_meta(sid, o["media_id"]) or {}
+            data = await _blob_get(_media_blob(sid, o["media_id"], str(meta.get("ext") or "mp4")),
+                                   kb=BLOB_KB)
+            if not data:
+                raise media_plane.ExportRefused(f"Layer {j + 1} is no longer readable.")
+            path = os.path.join(tmp, f"layer{j}.{meta.get('ext') or 'mp4'}")
+            pathlib.Path(path).write_bytes(data)
+            layers.append({**o, "path": path,
+                           "has_audio": bool(media_plane.probe_file(path).get("has_audio"))})
         out_path = os.path.join(tmp, "film.mp4")
         info = await media_plane.to_thread(media_plane.assemble, shots, tracks, fps=fps,
-                                           resolution=resolution, out_path=out_path)
+                                           resolution=resolution, out_path=out_path,
+                                           overlays=layers)
         data = pathlib.Path(out_path).read_bytes()
         await _media_job_land(job, data)
-        print(f"[media] {sid}: exported {len(shots)} shots, {info['seconds']}s", flush=True)
+        print(f"[media] {sid}: exported {len(shots)} shots"
+              f"{f' + {len(layers)} layers' if layers else ''}, {info['seconds']}s", flush=True)
     except Exception as e:  # noqa: BLE001
         job.update({"status": "failed", "error": str(e)})
         await _media_job_save(job)

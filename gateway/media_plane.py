@@ -1500,13 +1500,38 @@ class ExportRefused(MediaError):
     """The film cannot be assembled, and the sentence says what would fix it."""
 
 
+# Where an overlay sits when it is not filling the frame, as a fraction of the frame, and the
+# inset that keeps a corner off the very edge. Five places, because five is what a menu can offer
+# and what the preview can draw exactly — a free-form x/y belongs to a canvas with drag handles,
+# and building the field before the handles is building a promise.
+OVERLAY_POS = {"full": None, "tl": (0.0, 0.0), "tr": (1.0, 0.0), "bl": (0.0, 1.0),
+               "br": (1.0, 1.0), "center": (0.5, 0.5)}
+OVERLAY_INSET = 0.03
+
+
+def _overlay_xy(pos: str, scale: float) -> tuple[str, str]:
+    """ffmpeg x:y for an overlay of `scale` of the frame, in one of the named places."""
+    at = OVERLAY_POS.get(pos) or OVERLAY_POS["center"]
+    fx, fy = at
+    pad = f"{OVERLAY_INSET}*W"
+    x = "(W-w)/2" if fx == 0.5 else (pad if fx == 0.0 else f"W-w-{pad}")
+    y = "(H-h)/2" if fy == 0.5 else (pad if fy == 0.0 else f"H-h-{pad}")
+    return x, y
+
+
 def assemble(shots: list[dict], audio: list[dict], *, fps: int, resolution: str,
-             out_path: str, on_progress=None) -> dict:
+             out_path: str, overlays: list[dict] | None = None, on_progress=None) -> dict:
     """Cut the shots together into one file. Returns {seconds, width, height, bytes}.
 
     LETTERBOX, NEVER STRETCH. Every shot is scaled to fit inside the timeline's own declared
     resolution and padded to it — not resized to whatever the first clip happened to be, which
     distorts an entire film because one shot was shot in portrait.
+
+    THE SHOTS ARE THE FILM'S SPINE AND THE OVERLAYS SIT ON TOP OF IT. An overlay is placed at a
+    time rather than queued in an order, so adding one never moves anything underneath it — that
+    is the whole difference between a second layer and another shot. The film is as long as its
+    spine: an overlay hanging off the end is trimmed, because a layer above cannot lengthen what
+    it is layered over.
 
     THEN THE OUTPUT IS PROBED AND ITS DURATION COMPARED WITH THE PLAN. A mismatch fails the job
     and reports both numbers. An assembled duration nobody checks is an assembled duration nobody
@@ -1577,18 +1602,59 @@ def assemble(shots: list[dict], audio: list[dict], *, fps: int, resolution: str,
         if on_progress:
             on_progress(i, len(shots))
 
-    filters.append(f"{concat_in}concat=n={len(shots)}:v=1:a=1[vout][acat]")
+    filters.append(f"{concat_in}concat=n={len(shots)}:v=1:a=1[vcat][acat]")
+
+    # ── the layers above the spine ───────────────────────────────────────────────
+    # Composited in `layer` order, so what the timeline draws on top is what ends up on top.
+    # Each one is seeked to its own in-point and then shifted to the moment on the FILM'S clock
+    # where the cut places it; `enable` keeps it off screen the rest of the time.
+    last_video, over_audio, n_in = "vcat", [], len(shots)
+    ordered = sorted(enumerate(overlays or []), key=lambda p: (int(p[1].get("layer") or 1), p[0]))
+    for j, (_, ov) in enumerate(ordered):
+        o_in = max(0.0, float(ov.get("in_s") or 0.0))
+        o_out = float(ov.get("out_s") or 0.0)
+        at = max(0.0, float(ov.get("start_s") or 0.0))
+        span = o_out - o_in
+        if span <= 0 or at >= planned:
+            continue                      # nothing to draw, or entirely past the end of the film
+        span = min(span, planned - at)    # the spine is the film; a layer cannot extend it
+        k, n_in = n_in, n_in + 1
+        if ov.get("still"):
+            inputs += ["-loop", "1", "-t", f"{span:.3f}", "-i", ov["path"]]
+        else:
+            inputs += ["-ss", f"{o_in:.3f}", "-to", f"{o_in + span:.3f}", "-i", ov["path"]]
+        scale = min(1.0, max(0.05, float(ov.get("scale") or 1.0)))
+        pos = str(ov.get("pos") or "full")
+        box = f"{int(W * scale)}:{int(H * scale)}"
+        filters.append(f"[{k}:v]scale={box}:force_original_aspect_ratio=decrease,setsar=1,"
+                       f"fps={fps},format=yuva420p,setpts=PTS-STARTPTS+{at:.3f}/TB[ov{j}]")
+        x, y = _overlay_xy(pos if scale < 1.0 else "center", scale)
+        filters.append(f"[{last_video}][ov{j}]overlay={x}:{y}:eof_action=pass:"
+                       f"enable='between(t,{at:.3f},{at + span:.3f})'[vov{j}]")
+        last_video = f"vov{j}"
+        if ov.get("has_audio"):
+            over_audio.append({"input": k, "start_s": at, "gain_db": ov.get("gain_db") or 0.0})
+    filters.append(f"[{last_video}]null[vout]")
+
     last_audio = "acat"
-    if audio:
+    beds = list(audio or [])
+    if beds or over_audio:
         mix_in = "[acat]"
-        for j, tr in enumerate(audio):
-            k = len(shots) + j
+        for j, tr in enumerate(beds):
+            k, n_in = n_in, n_in + 1
             inputs += ["-i", tr["path"]]
             delay = int(max(0.0, float(tr.get("start_s") or 0.0)) * 1000)
             gain = float(tr.get("gain_db") or 0.0)
             filters.append(f"[{k}:a]adelay={delay}|{delay},volume={gain}dB[m{j}]")
             mix_in += f"[m{j}]"
-        filters.append(f"{mix_in}amix=inputs={len(audio) + 1}:duration=first:"
+        # An overlay's own sound comes with it. A talking head dropped onto a layer that plays
+        # silent is a layer that lost half of what was dropped on it.
+        for j, tr in enumerate(over_audio):
+            delay = int(tr["start_s"] * 1000)
+            filters.append(f"[{tr['input']}:a]adelay={delay}|{delay},"
+                           f"volume={float(tr['gain_db'])}dB[mo{j}]")
+            mix_in += f"[mo{j}]"
+        filters.append(f"{mix_in}amix=inputs={len(beds) + len(over_audio) + 1}:duration=first:"
                        f"dropout_transition=0,alimiter=limit=0.95[aout]")
         last_audio = "aout"
 
@@ -1627,7 +1693,7 @@ def new_scene(title: str = "") -> dict:
             "elements": [], "appState": {"viewBackgroundColor": "#ffffff", "gridSize": None},
             "files": {},
             "timeline": {"v": 1, "fps": 30, "resolution": "1920x1080", "shots": [], "audio": [],
-                         "updatedAt": int(time.time() * 1000)},
+                         "overlays": [], "updatedAt": int(time.time() * 1000)},
             "meta": {"title": title, "rev": 0}}
 
 

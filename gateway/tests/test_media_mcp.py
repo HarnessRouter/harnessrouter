@@ -2084,6 +2084,55 @@ def test_the_timeline_is_explicit_order_and_warns_honestly(client, harness, sess
 
 
 @needs_ffmpeg
+def test_a_layer_rides_over_the_cut_without_moving_it(client, harness, session, provider):
+    """A second layer, end to end through the agent's own tools.
+
+    Two one-second shots make a two-second film. Putting a layer over the second of them leaves
+    it a two-second film — that is the entire point of a layer, as against a third shot — and the
+    layer is stored placed at a moment rather than queued in an order.
+    """
+    tok = _cred(harness, session)
+    a, b = _two_ready_clips(client, tok, provider, session)
+    out = _ok(_call(client, tok, "set_timeline", {
+        "shots": [{"element_id": a}, {"element_id": b}],
+        "overlays": [{"element_id": a, "start_s": 1.0, "scale": 0.4, "position": "br"}],
+        "resolution": "1920x1080", "fps": 24}))
+    assert out["total_seconds"] == 2.0, out   # the layer did not lengthen the film
+    assert out["timeline"]["layers"] == 1, out
+    scene = asyncio.run(app._media_scene_read(session))
+    stored = scene["timeline"]["overlays"]
+    assert stored == [{"elementId": a, "layer": 1, "startS": 1.0, "inS": 0.0, "outS": 1.0,
+                       "position": "br", "scale": 0.4}], stored
+
+    job = _ok(_call(client, tok, "export_timeline", {}))
+    for _ in range(120):
+        rec = asyncio.run(app._media_job_get(job["job_id"]))
+        if rec["status"] != "running":
+            break
+        time.sleep(0.5)
+    assert rec["status"] == "succeeded", rec.get("error")
+    assert abs(rec["seconds"] - 2.0) < 0.5, rec
+
+
+def test_a_layer_that_has_not_landed_refuses_the_export_like_a_shot(client, harness, session,
+                                                                    provider):
+    """Half a film is not a film. A layer still rendering stops the export saying so, rather
+    than delivering the cut with the layer silently missing from it."""
+    tok = _cred(harness, session)
+    a, _b = _two_ready_clips(client, tok, provider, session)
+    provider.fail["dreamina-seedance-2-5-hc"] = (400, {"message": "no"})
+    pending = _ok(_call(client, tok, "generate_video", {"prompt": "later", "seconds": 6}))
+    eid = _ok(_call(client, tok, "place",
+                    {"items": [{"job_id": pending["job_id"]}]}))["placed"][0]["element_id"]
+    _ok(_call(client, tok, "set_timeline", {
+        "shots": [{"element_id": a}],
+        "overlays": [{"element_id": eid, "start_s": 0.0}]}))
+    err = _call(client, tok, "export_timeline", {})
+    assert err.get("isError"), err
+    assert "Layer 1 is still rendering" in json.dumps(err), err
+
+
+@needs_ffmpeg
 def test_export_letterboxes_and_validates_its_own_duration(client, harness, session, provider):
     """Invariants 22 and 23. One 9:16 shot in position 1 must not distort the film, and an
     assembled duration nobody checks is one nobody notices is wrong."""
@@ -2189,6 +2238,91 @@ def test_a_still_is_held_for_its_full_window_whatever_the_file_says_it_is(monkey
             [{"path": pic, "in_s": 0.0, "out_s": 3.0, "still": True}], [],
             fps=24, resolution="320x180", out_path=out)
     assert abs(float(got["seconds"]) - 3.0) < 0.25, got
+
+
+def _pixel_at(path: str, t: float, x: int, y: int) -> tuple[int, int, int]:
+    """What colour the film actually shows at a moment. Reading the picture is the only way to
+    know a layer was composited — ffmpeg exits 0 for a filter chain that drew nothing.
+
+    Straight to rawvideo: an 8x8 crop rather than 1x1, because the png encoder rejects a
+    one-pixel image outright and the test would fail for a reason that has nothing to do with
+    the film.
+    """
+    raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", str(t), "-i", path,
+                          "-frames:v", "1", "-vf", f"crop=8:8:{x - 4}:{y - 4}",
+                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                         capture_output=True, check=True).stdout
+    assert raw, f"no frame at {t}s of {path}"
+    return tuple(raw[:3])
+
+
+@needs_ffmpeg
+def test_an_overlay_is_on_screen_only_while_the_cut_says_it_is():
+    """A second layer, read out of the finished film.
+
+    The spine is blue for six seconds. A red clip is laid over the middle two. Before and after
+    those two seconds the frame is blue; during them it is red — and the film is still six
+    seconds long, because a layer above cannot lengthen what it is layered over.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        base = os.path.join(d, "base.mp4")
+        Path(base).write_bytes(_mp4(6.0))
+        top = os.path.join(d, "top.mp4")
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-f", "lavfi",
+                        "-i", "color=c=red:s=128x72:d=2", "-c:v", "libx264", "-pix_fmt",
+                        "yuv420p", "-t", "2", top], capture_output=True, check=True)
+        out = os.path.join(d, "out.mp4")
+        got = media_plane.assemble(
+            [{"path": base, "in_s": 0.0, "out_s": 6.0, "still": False}], [],
+            overlays=[{"path": top, "start_s": 2.0, "in_s": 0.0, "out_s": 2.0, "layer": 1}],
+            fps=24, resolution="320x180", out_path=out)
+        assert abs(float(got["seconds"]) - 6.0) < 0.3, got
+        mid = (160, 90)
+        before, during, after = (_pixel_at(out, 1.0, *mid), _pixel_at(out, 3.0, *mid),
+                                 _pixel_at(out, 5.0, *mid))
+    assert before[2] > before[0] and after[2] > after[0], (before, after)   # blue spine
+    assert during[0] > during[2], during                                    # red layer on top
+
+
+@needs_ffmpeg
+def test_an_overlay_hanging_off_the_end_is_trimmed_not_refused():
+    """The film is as long as its spine. An overlay that starts one second before the end and
+    runs for four does not produce a nine-second film with three seconds of nothing under it."""
+    with tempfile.TemporaryDirectory() as d:
+        base, top = os.path.join(d, "b.mp4"), os.path.join(d, "t.mp4")
+        Path(base).write_bytes(_mp4(3.0))
+        Path(top).write_bytes(_mp4(4.0))
+        out = os.path.join(d, "out.mp4")
+        got = media_plane.assemble(
+            [{"path": base, "in_s": 0.0, "out_s": 3.0, "still": False}], [],
+            overlays=[{"path": top, "start_s": 2.0, "in_s": 0.0, "out_s": 4.0, "layer": 1}],
+            fps=24, resolution="320x180", out_path=out)
+    assert abs(float(got["seconds"]) - 3.0) < 0.3, got
+
+
+@needs_ffmpeg
+def test_layers_composite_in_the_order_the_timeline_stacks_them():
+    """What the timeline draws on top is what ends up on top — layer 2 covers layer 1."""
+    with tempfile.TemporaryDirectory() as d:
+        base = os.path.join(d, "b.mp4")
+        Path(base).write_bytes(_mp4(3.0))
+        made = {}
+        for name, colour in (("one", "red"), ("two", "green")):
+            p = os.path.join(d, f"{name}.mp4")
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-f", "lavfi",
+                            "-i", f"color=c={colour}:s=128x72:d=2", "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p", "-t", "2", p], capture_output=True, check=True)
+            made[name] = p
+        out = os.path.join(d, "out.mp4")
+        media_plane.assemble(
+            [{"path": base, "in_s": 0.0, "out_s": 3.0, "still": False}], [],
+            # Written in the reverse of the order they stack, so passing the list through
+            # unsorted would put red on top and fail.
+            overlays=[{"path": made["two"], "start_s": 0.0, "in_s": 0, "out_s": 2.0, "layer": 2},
+                      {"path": made["one"], "start_s": 0.0, "in_s": 0, "out_s": 2.0, "layer": 1}],
+            fps=24, resolution="320x180", out_path=out)
+        px = _pixel_at(out, 1.0, 160, 90)
+    assert px[1] > px[0], px      # green (layer 2) won
 
 
 def test_shot_window_answers_for_a_still_the_same_way_however_the_shot_was_written():
