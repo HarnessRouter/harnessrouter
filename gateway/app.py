@@ -7722,6 +7722,9 @@ def _uhp_message(e: HTTPException) -> str:
 
 _MEDIA_SERVER = "media"
 _MEDIA_SCENE_FILE = "scene.excalidraw"
+# How long a still is held when the cut does not say. Not a measurement — a still has no
+# length of its own — so it is a stated default rather than a number pretending to be one.
+STILL_HOLD_S = 3.0
 # Candidates stood down after a BILLABLE failure. Per-replica and in memory on purpose: it is a
 # hint that saves money, not state anything depends on, and a replica that has not seen the
 # failure simply pays for one more attempt rather than serving a stale verdict for half an hour.
@@ -9786,8 +9789,13 @@ async def _media_export_start(hid: str, sid: str, org: str, entry_id: str,
             raise media_plane.ExportRefused(
                 f"Shot {i} is still rendering. Every shot has to have landed before the film can "
                 f"be cut.")
+        # A still carries no `seconds`, so its hold comes from the SHOT. Falling through to 0 is
+        # what made an image in the cut fail the whole export.
+        out_s = s.get("outS")
+        if out_s is None:
+            out_s = m.get("seconds") or (STILL_HOLD_S if m.get("kind") == "image" else 0.0)
         plan.append({"media_id": str(m["mediaId"]), "in_s": float(s.get("inS") or 0.0),
-                     "out_s": float(s.get("outS") or m.get("seconds") or 0.0)})
+                     "out_s": float(out_s or 0.0)})
     total = media_plane.timeline_total(scene)
     if total > float(cap.get("max_total_s") or 600):
         raise media_plane.ExportRefused(

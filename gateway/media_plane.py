@@ -1532,6 +1532,31 @@ def assemble(shots: list[dict], audio: list[dict], *, fps: int, resolution: str,
         start = max(0.0, float(shot.get("in_s") or 0.0))
         end = float(shot.get("out_s") or dur or 0.0) or dur
         end = min(end, dur) if dur else end
+
+        # A STILL HAS NO DURATION OF ITS OWN, so the CUT decides how long it is shown. ffprobe
+        # reports 0 seconds for a png, which used to make this refuse the whole film with "shot N
+        # has no length" — the still was in the timeline, the export was impossible, and nothing
+        # said the two facts were connected. `-loop 1 -t` is what turns one frame into a segment.
+        still = dur <= 0 and not info.get("has_audio")
+        if still:
+            hold = float(shot.get("out_s") or 0.0) - start
+            if hold <= 0:
+                raise ExportRefused(
+                    f"Shot {i + 1} is a still and nothing says how long to hold it. Give it a "
+                    f"duration on the timeline.")
+            planned += hold
+            inputs += ["-loop", "1", "-t", f"{hold:.3f}", "-i", path]
+            filters.append(
+                f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},setsar=1,"
+                f"format=yuv420p[v{i}]")
+            filters.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{hold:.3f},"
+                           f"asetpts=PTS-STARTPTS[a{i}]")
+            concat_in += f"[v{i}][a{i}]"
+            if on_progress:
+                on_progress(i, len(shots))
+            continue
+
         if end <= start:
             raise ExportRefused(f"Shot {i + 1} has no length between {start}s and {end}s.")
         planned += end - start
