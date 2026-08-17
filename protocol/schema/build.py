@@ -48,7 +48,7 @@ def build() -> dict:
     defs = rewrite_refs(spec["components"]["schemas"])
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": f"https://unifiedharnessprotocol.io/schema/uhp-{VERSION}.schema.json",
+        "$id": f"https://unifiedharnessprotocol.org/schema/uhp-{VERSION}.schema.json",
         "title": "Unified Harness Protocol",
         "description": (
             f"Object definitions for UHP {VERSION}. Generated from "

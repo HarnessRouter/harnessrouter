@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unifiedharnessprotocol.io/schema/uhp-2026-08-11.schema.json",
+  "$id": "https://unifiedharnessprotocol.org/schema/uhp-2026-08-11.schema.json",
   "title": "Unified Harness Protocol",
   "description": "Object definitions for UHP 2026-08-11. Generated from uhp-2026-08-11.openapi.yaml by build.py — do not edit by hand.",
   "$defs": {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the unifiedharnessprotocol.io site from the specification.
+"""Build the unifiedharnessprotocol.org site from the specification.
 
 The site is GENERATED from the markdown in protocol/, never written separately. A hand-maintained
 copy of a specification is a second specification, and the two only ever agree on the day they are
@@ -28,7 +28,7 @@ HERE = pathlib.Path(__file__).parent
 ROOT = HERE.parent                        # protocol/
 DIST = HERE / "dist"
 VERSION = "2026-08-11"
-SITE = "unifiedharnessprotocol.io"
+SITE = "unifiedharnessprotocol.org"
 
 # ── information architecture ────────────────────────────────────────────────────────────
 # Mirrors the shape a protocol site is expected to have — an introduction, a versioned
@@ -205,24 +205,24 @@ def rewrite_links(html_text: str, depth: int) -> str:
     """Point in-repo markdown links at their built pages."""
     up = "../" * depth
     pairs = [
-        (rf'href="(?:\.\./)*versions/{VERSION}/([a-z]+)\.md"', rf'href="{up}spec/\1.html"'),
-        (r'href="(?:\.\./)*README\.md"', f'href="{up}index.html"'),
-        (r'href="(?:\.\./)*VERSIONING\.md"', f'href="{up}versioning.html"'),
-        (r'href="(?:\.\./)*GOVERNANCE\.md"', f'href="{up}governance.html"'),
-        (r'href="(?:\.\./)*CHANGELOG\.md"', f'href="{up}changelog.html"'),
-        (r'href="(?:\.\./)*conformance/?"', f'href="{up}conformance.html"'),
-        (r'href="(?:\.\./)*\.\./conformance/"', f'href="{up}conformance.html"'),
-        (r'href="([a-z]+)\.md"', rf'href="\1.html"'),
+        (rf'href="(?:\.\./)*versions/{VERSION}/([a-z]+)\.md"', rf'href="{up}spec/\1"'),
+        (r'href="(?:\.\./)*README\.md"', f'href="{url_for("index.html", up)}"'),
+        (r'href="(?:\.\./)*VERSIONING\.md"', f'href="{up}versioning"'),
+        (r'href="(?:\.\./)*GOVERNANCE\.md"', f'href="{up}governance"'),
+        (r'href="(?:\.\./)*CHANGELOG\.md"', f'href="{up}changelog"'),
+        (r'href="(?:\.\./)*conformance/?"', f'href="{up}conformance"'),
+        (r'href="(?:\.\./)*\.\./conformance/"', f'href="{up}conformance"'),
+        (r'href="([a-z]+)\.md"', rf'href="\1"'),
         (r'href="(?:\.\./)*schema/([^"/]+)"',
          rf'href="{up}schema/\1"'),                       # the machine-readable files ship with the site
-        (r'href="(?:\.\./)*schema/"', f'href="{up}spec/schema.html"'),
-        (r'href="versions/2026-08-11/"', f'href="{up}spec/index.html"'),
+        (r'href="(?:\.\./)*schema/"', f'href="{up}spec/schema"'),
+        (r'href="versions/2026-08-11/"', f'href="{up}spec/"'),
         # An anchor into another document's section: keep the section, retarget the document.
-        (r'href="(?:\.\./)*VERSIONING\.md#([^"]+)"', rf'href="{up}versioning.html#\1"'),
-        (r'href="(?:\.\./)*GOVERNANCE\.md#([^"]+)"', rf'href="{up}governance.html#\1"'),
-        (r'href="(?:\.\./)*README\.md#([^"]+)"', rf'href="{up}index.html#\1"'),
+        (r'href="(?:\.\./)*VERSIONING\.md#([^"]+)"', rf'href="{up}versioning#\1"'),
+        (r'href="(?:\.\./)*GOVERNANCE\.md#([^"]+)"', rf'href="{up}governance#\1"'),
+        (r'href="(?:\.\./)*README\.md#([^"]+)"', rf'href="{url_for("index.html", up)}#\1"'),
         (rf'href="(?:\.\./)*versions/{VERSION}/([a-z]+)\.md#([^"]+)"',
-         rf'href="{up}spec/\1.html#\2"'),
+         rf'href="{up}spec/\1#\2"'),
     ]
     for pat, repl in pairs:
         html_text = re.sub(pat, repl, html_text)
@@ -233,6 +233,22 @@ def flat_pages():
     return [(path, title, src) for _, items in NAV for path, title, src in items]
 
 
+def url_for(path: str, up: str = "") -> str:
+    """The URL a LINK should use. Files keep .html on disk; links drop it.
+
+    A standards site gets cited, and a citation to .../spec/errors.html cannot survive a change
+    of static host or generator, while .../spec/errors can. vercel.json sets cleanUrls, which
+    serves the extensionless form and redirects the .html one, so old links keep working.
+    """
+    if path == "index.html":
+        rel = ""
+    elif path.endswith("/index.html"):
+        rel = path[: -len("/index.html")]          # spec/index.html -> spec
+    else:
+        rel = path[: -len(".html")]                # conformance.html -> conformance
+    return (up + rel) or "./"
+
+
 def sidebar(current: str, depth: int) -> str:
     up = "../" * depth
     out = []
@@ -240,7 +256,7 @@ def sidebar(current: str, depth: int) -> str:
         out.append(f'<div class="group"><h4>{html.escape(group)}</h4>')
         for path, title, _ in items:
             cls = ' class="active"' if path == current else ""
-            out.append(f'<a href="{up}{path}"{cls}>{html.escape(title)}</a>')
+            out.append(f'<a href="{url_for(path, up)}"{cls}>{html.escape(title)}</a>')
         out.append("</div>")
     return "\n".join(out)
 
@@ -253,8 +269,8 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "") -> str
     next_ = pages[idx + 1] if 0 <= idx < len(pages) - 1 else None
     pager = ""
     if prev_ or next_:
-        left = f'<a href="{up}{prev_[0]}">&larr; {html.escape(prev_[1])}</a>' if prev_ else "<span></span>"
-        right = f'<a href="{up}{next_[0]}">{html.escape(next_[1])} &rarr;</a>' if next_ else "<span></span>"
+        left = f'<a href="{url_for(prev_[0], up)}">&larr; {html.escape(prev_[1])}</a>' if prev_ else "<span></span>"
+        right = f'<a href="{url_for(next_[0], up)}">{html.escape(next_[1])} &rarr;</a>' if next_ else "<span></span>"
         pager = f'<div class="pager">{left}{right}</div>'
 
     return f"""<!doctype html>
@@ -272,13 +288,13 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "") -> str
 <body>
 <header class="top">
   <button id="menu" aria-label="Toggle navigation">☰</button>
-  <a class="brand" href="{up}index.html"><span class="mark">U</span> Unified Harness Protocol</a>
+  <a class="brand" href="{url_for("index.html", up)}"><span class="mark">U</span> Unified Harness Protocol</a>
   <span class="ver">{VERSION}</span>
   <span class="spacer"></span>
   <nav>
-    <a href="{up}spec/index.html">Specification</a>
-    <a href="{up}conformance.html">Conformance</a>
-    <a href="{up}governance.html">Governance</a>
+    <a href="{url_for("spec/index.html", up)}">Specification</a>
+    <a href="{url_for("conformance.html", up)}">Conformance</a>
+    <a href="{url_for("governance.html", up)}">Governance</a>
     <a href="https://github.com/HarnessRouter/harnessrouter">GitHub</a>
   </nav>
 </header>
@@ -302,20 +318,34 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "") -> str
 """
 
 
-HERO = """
+def check_count() -> int:
+    """How many checks the conformance suite actually registers.
+
+    Counted from checks.py rather than typed here. The hero said 47 while the suite registered 52,
+    because a number written by hand into a second file is only correct on the day it is written —
+    and on a standards site, a wrong count is a claim about the standard.
+    """
+    src = (ROOT / "conformance/uhp_conformance/checks.py").read_text()
+    n = len(re.findall(r"^@check\(", src, flags=re.M))
+    if n == 0:
+        sys.exit("build: found no @check-registered conformance checks — decorator renamed?")
+    return n
+
+
+HERO = f"""
 <div class="hero">
   <h1>The Unified Harness Protocol</h1>
   <p class="lede">One open standard for driving complete agent harnesses — Codex, Claude Code,
   Hermes, and whatever ships next — so a product integrates once instead of once per harness.</p>
 </div>
 <div class="cards">
-  <a class="card" href="spec/index.html"><b>Read the specification</b>
+  <a class="card" href="spec/"><b>Read the specification</b>
     <span>Normative, versioned, and testable. Ten chapters from architecture to errors.</span></a>
-  <a class="card" href="conformance.html"><b>Run the conformance suite</b>
-    <span>47 checks across three classes. Passing it is the only conformance claim that means anything.</span></a>
-  <a class="card" href="spec/schema.html"><b>Generate a client</b>
+  <a class="card" href="conformance"><b>Run the conformance suite</b>
+    <span>{check_count()} checks across three classes. Passing it is the only conformance claim that means anything.</span></a>
+  <a class="card" href="spec/schema"><b>Generate a client</b>
     <span>OpenAPI 3.1 and JSON Schema 2020-12, published per version.</span></a>
-  <a class="card" href="governance.html"><b>Propose a change</b>
+  <a class="card" href="governance"><b>Propose a change</b>
     <span>Prose first. Spec, reference implementation and suite move together.</span></a>
 </div>
 """
@@ -345,10 +375,16 @@ def build() -> int:
     # Publishing metadata: a protocol site that cannot be crawled is a protocol nobody finds.
     (DIST / "robots.txt").write_text(
         f"User-agent: *\nAllow: /\nSitemap: https://{SITE}/sitemap.xml\n")
-    urls = "".join(f"  <url><loc>https://{SITE}/{p}</loc></url>\n" for p, _, _ in flat_pages())
+    urls = "".join(f"  <url><loc>https://{SITE}/{url_for(p).lstrip('./')}</loc></url>\n"
+                   for p, _, _ in flat_pages())
     (DIST / "sitemap.xml").write_text(
         f'<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}</urlset>\n')
+
+    # Host config travels WITH the build, so `python site/build.py && vercel deploy dist` is the
+    # whole publish. cleanUrls lives there, and the extensionless links this file emits depend on
+    # it — keeping the two in separate places is how they drift apart.
+    shutil.copy(HERE / "vercel.json", DIST / "vercel.json")
 
     # The machine-readable definitions are part of the standard, so they are served with it.
     shutil.copytree(ROOT / "schema", DIST / "schema",
