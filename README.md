@@ -51,13 +51,18 @@ docker pull harnessrouter/harnessrouter
 
 About 700 MB to download.
 
-`latest` is the current release, and pulling it again is how you upgrade. Pin a version only
-when you need two machines to run the same bytes, by naming a version in a compose file you share
-with a team. Releases are listed on [Docker Hub](https://hub.docker.com/r/harnessrouter/harnessrouter/tags).
+<details>
+<summary>Pinning a version instead of <code>latest</code></summary>
+
+`latest` is the current release, and pulling it again is how you upgrade. Pin a version only when
+you need two machines to run the same bytes, by naming a version in a compose file you share with a
+team. Releases are listed on [Docker Hub](https://hub.docker.com/r/harnessrouter/harnessrouter/tags).
+
+</details>
 
 ### 2. Run it
 
-Copy this line as it is. Nothing in it is a placeholder.
+Copy this as it is. Nothing in it is a placeholder — no provider key, no password.
 
 ```bash
 docker run -d --name harnessrouter \
@@ -66,20 +71,26 @@ docker run -d --name harnessrouter \
   harnessrouter/harnessrouter
 ```
 
-No provider key here. The instance comes up without one and you connect a provider from the console
-in step 5, which is the shorter road: a key pasted into a form cannot be misspelled into a shell
-history, and changing it later does not mean recreating the container.
+If port 3000 is already busy, change only the left-hand number (`-p 127.0.0.1:3100:3000`), because
+the container always listens on 3000 inside.
 
-No password here either. The instance starts on the default login — username `harnessrouter`,
-password `harnessrouter` — which is safe enough while `-p 127.0.0.1:` keeps it on loopback, and
-which you change from the console in step 4. Set it here instead if you would rather, but then it
-is that password you sign in with, not the default one.
+<details>
+<summary>What each part of that line does</summary>
 
-Two parts of that line are load-bearing. `-p 127.0.0.1:` keeps the console reachable only from this
-machine. If port 3000 is already busy, change only the left-hand number
-(`-p 127.0.0.1:3100:3000`), because the container always listens on 3000 inside. And
-`-v harnessrouter:/data` is where everything durable lives, including the agent CLIs installed in
-the next step, so keeping that volume is what makes the second start fast.
+`-p 127.0.0.1:3000:3000` keeps the console reachable only from this machine. That is what makes it
+safe to start on a default login and change it afterwards.
+
+`-v harnessrouter:/data` is where everything durable lives: the database, your files, and the agent
+CLIs installed on the first start. Keeping that volume is what makes every later start fast.
+
+No provider key, because you connect a provider from the console in step 5. That is the shorter
+road: a key pasted into a form cannot be misspelled into a shell history, and changing it later does
+not mean recreating the container.
+
+No password, because the instance starts on a default login that step 4 gives you and asks you to
+change.
+
+</details>
 
 <details>
 <summary>Choosing your own username and password at <code>docker run</code></summary>
@@ -113,17 +124,15 @@ command above.
 
 ### 3. Wait for it to say it is ready
 
-**Do not open the browser yet.** The container returns your prompt in about a second, but the
-console is not up for roughly another half a minute, and until it is, <http://localhost:3000>
-refuses the connection. That is the first-run install still working, not a broken container.
-
-Watch for the line that says it is ready:
+**Do not open the browser yet.** `docker run` gives your prompt back in about a second, but the
+console needs roughly another half a minute, and until then <http://localhost:3000> refuses the
+connection. That is the first start still working, not a broken container.
 
 ```bash
 docker logs -f harnessrouter
 ```
 
-**Most of that half a minute looks like nothing is happening.** This is what it says:
+Wait for `ready on :3000`, then open the browser:
 
 ```
 [harnessrouter] installing Claude Code (Anthropic's terms apply)…
@@ -131,20 +140,16 @@ docker logs -f harnessrouter
 [harnessrouter] installing Hermes (check its upstream license before use)…
 [harnessrouter] data=/data  backends available: claude codex hermes
 [harnessrouter] ready on :3000
-   ▲ Next.js 15.5.23
-   - Local:        http://5e9ac64dd926:3000
-   - Network:      http://5e9ac64dd926:3000
-
- ✓ Starting...
- ✓ Ready in 123ms
 ```
 
-**`ready on :3000` is the line you are waiting for.** Once it appears, open the browser and go to
-step 4. `backends available:` is the other one worth reading: it lists what actually installed, so a
-backend that failed is named rather than silently missing, and the others still work.
+This wait happens once per volume. Every start after it takes a few seconds and prints no install
+lines at all.
 
-This wait happens once per volume, not once per start. Every start after it takes a few seconds and
-prints no install lines at all.
+<details>
+<summary>The other lines, and why the first start is the slow one</summary>
+
+`backends available:` lists what actually installed, so a backend that failed is named rather than
+silently missing, and the others still work.
 
 You will also see this line, and it comes back on every start until you change the password in step
 4. On a loopback-only instance it is a reminder rather than a problem:
@@ -153,71 +158,77 @@ You will also see this line, and it comes back on every start until you change t
 [harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance.
 ```
 
-<details>
-<summary>Why the agent CLIs are installed on first run instead of shipped in the image</summary>
-
-It is a licensing fact rather than a packaging preference. Claude Code is distributed under
-Anthropic's own terms and hermes-agent declares no license at all, so neither can be redistributed
-inside a public image. Installing them on first run means you install them yourself, from upstream,
-under those terms — which is also why you should read them before you use those two backends. Codex
-is Apache-2.0 and arrives the same way, so all three land in one place.
+The agent CLIs are fetched on the first start rather than shipped in the image, and that is a
+licensing fact rather than a packaging preference. Claude Code is distributed under Anthropic's own
+terms and hermes-agent declares no license at all, so neither can be redistributed inside a public
+image. Installing them on first run means you install them yourself, from upstream, under those
+terms — which is also why you should read them before you use those two backends. Codex is
+Apache-2.0 and arrives the same way, so all three land in one place.
 
 </details>
 
 ### 4. Sign in
 
-Open <http://localhost:3000>. The console is behind a login, on by default, covering the pages and
-the API alike:
-
-![The sign-in screen](docs/images/01-login.png)
-
-If you ran the command in step 2 as printed, sign in with:
+Open <http://localhost:3000> and sign in with:
 
 | | |
 |---|---|
 | Username | `harnessrouter` |
 | Password | `harnessrouter` |
 
-Those are the defaults, and printing them here is what makes them a placeholder rather than a
-secret — which is why the container nags you about the password on every start until you change it.
-If you set `HR_AUTH_USER` or `HR_AUTH_PASSWORD` yourself, sign in with what you set instead; the
+![The sign-in screen](docs/images/01-login.png)
+
+**Change the password now**, from **Profile** in the account menu at the top right. Saving restarts
+the console, which takes about a second.
+
+If you set `HR_AUTH_USER` or `HR_AUTH_PASSWORD` at `docker run`, sign in with those instead — the
 defaults are then refused.
 
-**Change the password now**, from **Profile**, in the account menu at the top right. It asks for the
-current password as well as the new one, so an unattended tab cannot be used to take over the
-instance. They are then stored on the data volume (`/data/selfhost-auth.json`: a username, a salt
-and a hash, never the password) and take precedence over the environment from then on. An
-`HR_AUTH_PASSWORD` set at `docker run` months ago cannot quietly undo a password change; after one,
-the environment's password is refused and the start-up line changes to say where the real one came
-from:
+<details>
+<summary>Where the password lives, and what to do if you forget it</summary>
+
+Printing the defaults here is what makes them a placeholder rather than a secret, which is why the
+container warns about the password on every start until you change it.
+
+The profile page asks for the current password as well as the new one, so an unattended tab cannot
+be used to take over the instance. New credentials are stored on the data volume
+(`/data/selfhost-auth.json`: a username, a salt and a hash, never the password) and take precedence
+over the environment from then on — an `HR_AUTH_PASSWORD` set at `docker run` months ago cannot
+quietly undo a password change. After one, the start-up line changes to say where the real password
+came from:
 
 ```
 [harnessrouter] sign in as 'harnessrouter' (credentials set from the profile page)
 ```
 
-Saving signs out every other browser and restarts the console, which takes about a second. Yours
-stays signed in.
+Saving also signs out every other browser. Yours stays signed in.
 
 Forgot it? There is no reset email to send, so delete `/data/selfhost-auth.json` and restart. The
 instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
 
+</details>
+
 ### 5. Connect a model provider
 
 **Nothing runs until you do this.** There is no bundled model, no trial key, and no free tier
-hiding in the image. The instance you just signed into will do everything except answer you, which
-is what this step buys.
+hiding in the image.
 
 Open **Integrations** and press **Add Integration**. It asks three things: a name, the provider,
 and your API key.
 
 ![Adding a provider on the Integrations page](docs/images/05-add-integration.png)
 
-Which models that provider serves is not your problem to configure: the product keeps that list
-and adds to it as providers ship models. Pick the provider, paste the key, and the models it
-covers appear on the row.
+Which models that provider serves is not your problem to configure: the product keeps that list and
+adds to it as providers ship models. Pick the provider, paste the key, and the models it covers
+appear on the row.
 
-If you run more than one provider, the mappings underneath decide which one serves a given model.
-With a single integration there is nothing to set.
+<details>
+<summary>Running more than one provider</summary>
+
+The mappings underneath the integrations decide which one serves a given model. With a single
+integration there is nothing to set.
+
+</details>
 
 <details>
 <summary>Setting it from the environment instead, for a scripted deploy</summary>
@@ -255,12 +266,16 @@ problem, because it only offers you providers that work.
 
 </details>
 
-A backend with nothing connected is forthcoming about it, which is what you get if you skip this
-step entirely:
+<details>
+<summary>What a backend with nothing connected says</summary>
+
+Forthcoming about it, which is what you get if you skip this step entirely:
 
 ```json
 {"error":{"type":"invalid_request_error","code":"invalid_input","message":"no provider configured for backend 'codex'. Add an integration for a provider that serves 'gpt-5.4-mini', or configure a connection policy"}}
 ```
+
+</details>
 
 ### 6. Give it something to do
 
@@ -270,13 +285,18 @@ file it touches, and the answer at the end.
 
 ![A task: the request, the commands, the files it wrote, and the test result](docs/images/task-run.png)
 
+That is the whole install. State is SQLite and files on one Docker volume. Delete the volume and
+the instance is gone; copy it and you have moved the instance, harnesses, transcripts and all.
+
+<details>
+<summary>What is happening in that screenshot</summary>
+
 That one asked for a small utility with tests. The agent wrote it, built a fixture tree with
 duplicates planted in it, ran the suite, and came back with `2 tests ran, OK`, which is an answer
 you can check rather than one you have to trust. Everything it produced is on the transcript to
 take away, a file at a time or the lot as a zip.
 
-That is the whole install. State is SQLite and files on one Docker volume. Delete the volume and
-the instance is gone; copy it and you have moved the instance, harnesses, transcripts and all.
+</details>
 
 ---
 
