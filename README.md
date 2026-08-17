@@ -306,43 +306,56 @@ Starter kits are worked examples, and they are here to show you what this can be
 
 Each one is a whole agent product rather than a snippet: an app, an agent configured to drive it,
 and the skill that teaches that agent the format it writes. Use one, then read it: every kit is
-open source, and the distance between "I see how Slides works" and "I can build the one my
-customers need" is meant to be short. More arrive over time; your instance lists the ones it has.
+open source. More arrive over time; your instance lists the ones it has.
 
 ![The Starter Kits page, before any kit has been launched](docs/images/dashboard-1-starter-kits.png)
+
+Launching asks one question: what to run it on.
+
+<details>
+<summary>What the launch dialog is telling you</summary>
 
 Each card names the base and the model it will run on before you launch it, so you can see what a
 kit is about to spend before it spends it. What it names depends on the keys you gave it in step 5:
 the screenshot above is an instance with three providers connected, and an instance with one will
-recommend that one on every card. Launching asks a single question, what to run it on, and the
-runtimes you have no key for are listed but disabled, with the reason on them:
+recommend that one on every card.
+
+The runtimes you have no key for are listed but disabled, with the reason on them:
 
 > Hermes · `deepseek-v4-pro` · Not connected. Add a provider that serves this model to use it.
 
 What the dialog recommends is a suggestion you can overrule, not a default you have to accept.
 
+</details>
+
 ### Slides
 
 A deck is one conversation. Ask for a presentation and the agent designs it: structure first, then
-a style system, then slide by slide.
+a style system, then slide by slide. Slides appear while it works, so when the shape is wrong you
+can say so while there are two slides to change instead of twenty.
 
 The deck below came from one sentence: *"A 5-slide deck explaining what a container image is, for
 new engineers."*
 
 ![The Slides editor: the sentence at the top of the conversation, the run underneath it, and the deck it produced](docs/images/kit-slides.png)
 
-That sentence is at the top of the panel on the right, and everything under it is the run, not a
-progress bar. It settled the structure, built a style system, checked what the canvas would accept,
-wrote the deck, then validated it, and it says so as it goes. Slides appear while it works, so when
-the shape is wrong you can say so while there are two slides to change instead of twenty.
+<details>
+<summary>What you are looking at in the panel on the right</summary>
+
+That is the run, not a progress bar. It settled the structure, built a style system, checked what
+the canvas would accept, wrote the deck, then validated it, and it says so as it goes.
 
 Nothing here is a picture of a slide: every element is a real object on the canvas, so you can drag
 it, resize it, retype it, or ask for another pass in the same conversation.
 
+</details>
+
 ### Sheets
 
 Rows are your data. An agent column runs one of your harnesses on every row, with the columns to
-its left as input, and the sheet fills itself cell by cell.
+its left as input, and the sheet fills itself cell by cell. Press Run and it fills in row order with
+a live count and a Stop button, because a column of a thousand rows is a thing you should be able to
+change your mind about.
 
 This one opened with *"help me build a sheet, i wanna use this to map investors in silicon valley.
 the goal is to provide this one to investors outside of SV the startups invested by investors based
@@ -350,23 +363,29 @@ SV."*
 
 ![The Sheets editor: the request at the top of the conversation, real investor rows, and an agent column's output on each one](docs/images/kit-sheets.png)
 
-From that, the agent decided the columns, worked out which of them a person fills in and which one
-an agent should, and wrote the per-row prompt itself. The rows came from a follow-up, *"search some
-real data and from internet"*, and it went and found four real investors with their firm's own
-profile pages rather than inventing plausible ones.
+<details>
+<summary>How that sheet got built</summary>
 
-Then you press Run, and the agent column fills in row order with a live count and a Stop button,
-because a column of a thousand rows is a thing you should be able to change your mind about.
+From that sentence, the agent decided the columns, worked out which of them a person fills in and
+which one an agent should, and wrote the per-row prompt itself. The rows came from a follow-up,
+*"search some real data and from internet"*, and it went and found four real investors with their
+firm's own profile pages rather than inventing plausible ones.
 
-**One thing to know on a brand-new instance.** An agent column runs one of your *other* agents, and a
-sheet will not run itself, so on an instance where Sheets is the only thing you have launched, the
-column menu has nothing to offer and says so:
+</details>
+
+<details>
+<summary>If the agent-column menu says you have no other agents</summary>
+
+An agent column runs one of your *other* agents, and a sheet will not run itself. So on an instance
+where Sheets is the only thing you have launched, the column menu has nothing to offer and says so:
 
 > Choose an agent… · You have no other agents yet. Create one, then choose it here.
 
 **Harnesses → Add Harness** is the fix: a base, a model, a name, and it is ready in seconds. The
 picker then lists it with the model it runs on. If you add one while a sheet is open, reload the
 sheet first, because the list is read when the page loads.
+
+</details>
 
 ### Dashboards
 
@@ -379,17 +398,22 @@ built.
 
 This is the one kit with setup, and it is two fields: the connection and the sample-rows switch.
 
-The one below opened with *"Revenue by month and the top 5 countries by revenue, plus total paid
-revenue."* Both turns of that conversation are in the panel on the right: the first built it, and
-the second, *"Enrich the dashboard like this"* with a picture of the layout attached, is where the
-panels you see came from.
-
 ![The Dashboards kit: both turns of the conversation on the right, and the live panels they produced](docs/images/kit-dashboard.png)
+
+<details>
+<summary>How that dashboard got built, and why its numbers are worth trusting</summary>
+
+It opened with *"Revenue by month and the top 5 countries by revenue, plus total paid revenue."*
+Both turns of that conversation are in the panel on the right: the first built it, and the second,
+*"Enrich the dashboard like this"* with a picture of the layout attached, is where the panels you
+see came from.
 
 There is nowhere in a dashboard to type a number. Every figure on that page is the result of a
 query that ran when the page opened, which is the property that makes it worth trusting. Ask for a
 change and it runs each query before it wires it into a panel, so a panel that renders is a panel
 whose query works.
+
+</details>
 
 <details>
 <summary>Connecting a database</summary>
@@ -444,13 +468,13 @@ column names and types and no values at all.
 
 ### Videos
 
-The fourth kit describes a film and gets one back: it plans the shots, renders each, lays them out
-on a canvas you can rearrange, and assembles them into a single video you can download. Clips
-render in the background, so you keep working while they arrive.
+Describe a film and get one back: it plans the shots, renders each, lays them out on a canvas you
+can rearrange, and assembles them into a single video you can download. Clips render in the
+background, so you keep working while they arrive.
 
-It is the one kit that spends real money per second of output rather than per turn, because every
-shot is a generation. Try it once you already know what the console is
-doing.
+> [!WARNING]
+> This is the one kit that spends real money per second of output rather than per turn, because
+> every shot is a generation. Try it once you already know what the console is doing.
 
 ---
 
@@ -555,7 +579,7 @@ session cookie. Sign in once and keep the cookie:
 ```bash
 curl -s -c hr.cookies http://localhost:3000/api/selfhost/login \
   -H 'content-type: application/json' \
-  -d '{"username":"harnessrouter","password":"YOUR_PASSWORD"}'
+  -d '{"username":"harnessrouter","password":"harnessrouter"}'   # your password, not the default
 # {"ok":true}
 ```
 
@@ -585,13 +609,19 @@ curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
 That turn is not a side channel: it appears in the console under **Tasks**, against the same
 harness, with its full transcript. The console and the API are the same instance seen twice.
 
+<details>
+<summary>The rest of the surface</summary>
+
 `harness_id` accepts one of the built-in ids the console shows on the Harnesses page: `codex`,
-`claude-code`, `hermes`, or the id of a harness you created. Harness CRUD (`/v1/harnesses`), the model catalog (`/v1/models`), sessions
-(`/v1/sessions/{id}/turns`, `/cancel`) and task listing (`/v1/traces`) are all on the same prefix.
-Set `"stream":true` for server-sent events instead of one response at the end.
+`claude-code`, `hermes`, or the id of a harness you created. Harness CRUD (`/v1/harnesses`), the
+model catalog (`/v1/models`), sessions (`/v1/sessions/{id}/turns`, `/cancel`) and task listing
+(`/v1/traces`) are all on the same prefix. Set `"stream":true` for server-sent events instead of
+one response at the end.
 
 If the box is one nobody else can reach, `HR_AUTH_DISABLED=1` removes the gate entirely and the
 same calls work with no cookie at all.
+
+</details>
 
 ## Putting it on a public URL
 
@@ -603,11 +633,6 @@ provider key.
 > right here, which makes them a placeholder, not a secret; the container warns on every start
 > while the default is still in place. `HR_AUTH_DISABLED=1` removes the gate entirely, which is
 > only reasonable on a machine nobody else can reach.
-
-Changing it from **Profile** signs out every other browser and restarts the console. That restart
-is what makes "signed out everywhere" true rather than merely displayed: the gate reads its
-signing key once at start-up and cannot be told about a change in place. A task that is mid-turn
-runs straight through it.
 
 For TLS, keep the console on loopback and put a terminating proxy in front. With Caddy that is
 one file and a real certificate, automatically:
@@ -626,6 +651,16 @@ looks frozen until the turn ends.
 
 Pin the tag, and do not run `0.1.x` or `0.2.0`: they have no sign-in gate at all, so an instance
 running them is open to anyone who can reach the port. `0.3.0` is the first release with one.
+
+<details>
+<summary>Why changing the password restarts the console</summary>
+
+Changing it from **Profile** signs out every other browser and restarts the console. That restart
+is what makes "signed out everywhere" true rather than merely displayed: the gate reads its
+signing key once at start-up and cannot be told about a change in place. A task that is mid-turn
+runs straight through it.
+
+</details>
 
 ## Moving to the hosted service
 
