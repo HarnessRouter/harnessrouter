@@ -115,19 +115,6 @@ export default function HarnessSettingsPage() {
                 <p><span className={'status ' + (degraded ? 'warning' : 'healthy')}>{degraded ? 'Needs review' : 'Connected and healthy'}</span> · Base Harness: {base?.name || draft?.baseLabel}{readOnly ? ' · built-in' : ''}</p></div>
             </div>
           </div>
-          <div className="header-actions">
-            {readOnly && (
-              <button className="button" type="button" disabled={busy} onClick={async () => {
-                setBusy(true);
-                try {
-                  const c = await createCustom({ name: `${oob!.name} (custom)`, base: oob!.id, defaultModel: oobDefaultModel(oob), systemPrompt: oob!.systemPrompt });
-                  router.push(`/harnesses/${encodeURIComponent(c.id)}`);
-                } finally { setBusy(false); }
-              }}><iconify-icon icon="tabler:git-fork"></iconify-icon>Fork and Customize</button>
-            )}
-            <button className="button primary" type="button" onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
-              <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
-          </div>
         </div>
 
         <div className="detail-metrics" aria-label="Selected Harness metrics">
@@ -334,7 +321,30 @@ export default function HarnessSettingsPage() {
               {dirty && (
                 <button className="button" type="button" disabled={busy} onClick={() => setDraft(saved)}>Discard Changes</button>
               )}
-              <button className="button primary" type="submit" disabled={!dirty || busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
+              {dirty ? (
+                <button className="button primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
+              ) : (
+                <button className="button primary" type="button"
+                  onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
+                  <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
+              )}
+            </div>
+          )}
+          {/* Built-ins have nothing to save, but they still need somewhere to act — same bar,
+              same corner, so the action never moves depending on which harness you opened. */}
+          {readOnly && (
+            <div className="settings-form-footer settings-footer-sticky">
+              <span className="settings-footer-spacer" />
+              <button className="button" type="button" disabled={busy} onClick={async () => {
+                setBusy(true);
+                try {
+                  const c = await createCustom({ name: `${oob!.name} (custom)`, base: oob!.id, defaultModel: oobDefaultModel(oob), systemPrompt: oob!.systemPrompt });
+                  router.push(`/harnesses/${encodeURIComponent(c.id)}`);
+                } finally { setBusy(false); }
+              }}><iconify-icon icon="tabler:git-fork"></iconify-icon>Fork and Customize</button>
+              <button className="button primary" type="button"
+                onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
+                <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
             </div>
           )}
         </form>
