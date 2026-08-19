@@ -263,6 +263,7 @@ problem, because it only offers you providers that work.
 | `bedrock` | Claude Code, Hermes |
 | `tokenrouter` | Claude Code, Codex, Hermes |
 | `vercel` | Claude Code, Codex, Hermes |
+| `llmtr` | Claude Code, Codex, Hermes |
 
 </details>
 
