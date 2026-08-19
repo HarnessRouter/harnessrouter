@@ -914,6 +914,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # base_url says where", not a statement about whose service it is.
     ("vercel", "claude"): "tokenrouter",       ("vercel", "codex"): "tokenrouter",
     ("vercel", "hermes"): "openai-api",
+    # LLMTR answers on the same two shapes from one base_url and one key, so it is wired like
+    # Vercel. Its Anthropic surface is not in the published catalogue — every model there lists
+    # OpenAI endpoints only — but it is real, and was probed live on 2026-08-19: POST /v1/messages
+    # with anthropic/claude-sonnet-4.6 came back 200 with a proper Anthropic message envelope,
+    # while an unknown path under /v1 answers {"type":"not_found"}.
+    ("llmtr", "claude"): "tokenrouter",        ("llmtr", "codex"): "tokenrouter",
+    ("llmtr", "hermes"): "openai-api",
 }
 
 
@@ -3388,6 +3395,14 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret_label": "API Key",
         "key_hint": "vck_…",
     },
+    "llmtr": {
+        "label": "LLMTR",
+        "base_url": "https://llmtr.com/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "llmtr-…",
+    },
     # Media only: it serves no chat model, so it carries no entry in _VENDOR_MODELS and shows no
     # models on its row. It is HERE because the console validates every entry in the integrations
     # document against this table on every write — so with ElevenLabs connected and absent from
@@ -4117,6 +4132,92 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "hunyuan-3":          "tencent/hy3",
         "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
         "qwen3.7-flash":      "qwen/qwen3.7-flash",
+    },
+    # LLMTR is a Turkey-hosted gateway: models running on its own infrastructure in Turkey
+    # beside the global frontier catalogue, behind one base_url and one key. Ids are
+    # vendor-qualified like OpenRouter's, so the canonical is the id with the vendor prefix
+    # removed — except where a canonical for that model already exists above (hunyuan-3 is
+    # tencent/hy3, nemotron-3-ultra is the 550b-a55b id), because one model arriving in the
+    # picker twice under two names is worse than a name that reads oddly.
+    #
+    # This table is deliberately the INTERSECTION with _MODEL_CATALOG rather than everything
+    # LLMTR serves: connecting the provider adds no name to any picker, it only makes models
+    # that are already there reachable through Turkey. Its published catalogue
+    # (GET https://llmtr.com/v1/models, which needs no key) was read and measured on
+    # 2026-08-19: of 245 published ids, 131 clear the agent-loop bar _MODEL_CATALOG states,
+    # and the 107 of those that only LLMTR serves — including the three Turkey-resident
+    # models, gemma-4, qwen3-6-35b and qwen3-5-4b — are proposed separately, once the
+    # capability test can check this catalogue the way it checks OpenRouter's. The rules
+    # they were measured by, so that follow-up can re-apply them rather than trust a number:
+    #
+    #   1. Text out and `tools` in supported_parameters — the same agent-loop bar
+    #      _MODEL_CATALOG states. 81 fail it: embedders, image/video/speech models, and the
+    #      small Turkish chat models (trendyol-asure-12b, magibu-11b-v8, medgemma-4b) that
+    #      serve no tools.
+    #   2. No dated snapshot of an id already listed (qwen-plus-2025-07-14 beside qwen-plus).
+    #      The snapshot is the same model under a pinned name; two picker rows for it help
+    #      nobody.
+    #   3. The transport has to be the one the runner will actually use for that id. Both ways
+    #      round, and 17 models fail it: gpt-5.4/5.2/5.1/5/o1/o3 and friends are published here
+    #      for /v1/chat/completions only while hermes drives every gpt-5*/o[1-4] id over
+    #      /v1/responses (_HERMES_RESPONSES_API_MODEL), and the grok ids are published for
+    #      /v1/responses only while hermes drives them over chat. Offering either is a picker
+    #      row that fails on send — the same broken promise _TOKENROUTER_NO_CHANNEL records.
+    #   4. It has to answer. Every id was called live on 2026-08-19 — max_tokens=4 on
+    #      /v1/chat/completions, max_output_tokens=16 on /v1/responses — and seven published as
+    #      available did not, twice: llmtr/muse-glimmer-30b-tr returns no bytes at all (45 s,
+    #      70 s and 120 s), publicai/apertus-8b-instruct 502s after about a minute,
+    #      llmtr/ornith-1-35b and anthropic/claude-opus-4.1 502 immediately, aion-labs/aion-2.5
+    #      and publicai/apertus-v1.5-8b 400, and openai/gpt-oss-120b 402 while the gpt-oss-20b
+    #      beside it answers. A catalogue entry is an advertisement; an answer is the product.
+    #
+    # A ping is not a long agentic turn, so the harnesses on the test box ran real ones, each
+    # completing without substitution: Claude Code over /v1/messages on claude-sonnet-4.6 and
+    # claude-opus-4.8, hermes over /v1/chat/completions on claude-haiku-4.5, and codex over
+    # /v1/responses on gpt-5.3-codex and gpt-5.5, both of which called the shell tool and came
+    # back with its real output. A model here that turns out to fail a real turn comes off this
+    # table the same way those seven did.
+    #
+    # One thing those runs turned up that is NOT this table's doing, recorded so the next person
+    # does not have to rediscover it: driven by CODEX, gpt-5.6-sol, gpt-5.6-terra and
+    # gpt-5.6-luna finish a turn but are never offered tools, so they cannot act — they answer
+    # that they have no shell and stop. This is the codex CLI, not the provider. Pointed at a
+    # local endpoint that records what it is sent, codex 0.148.0 emits the gpt-5.6-* request with
+    # NO `tools` and NO `instructions` field at all, while the same binary against the same
+    # endpoint sends 11 tools and a 21k-char instructions block for gpt-5.5. Nothing ever reaches
+    # the provider for it to drop. The family first tries wss://api.openai.com/v1/responses and
+    # its request carries x-codex-window-id, so it appears to expect the WebSocket session where
+    # tools and instructions are established on the connection; falling back to plain HTTPS
+    # against a configured provider, it sends neither. HERMES drives the same three ids over the
+    # same /v1/responses transport against the same base_url with tools intact. So it applies to
+    # every non-OpenAI provider, not this one: all three are already in _MODEL_CATALOG["codex"]
+    # and reachable through openrouter, tokenrouter and vercel. Left alone here rather than
+    # worked around in one vendor's table.
+    "llmtr": {
+        "gpt-5.6-sol":        "openai/gpt-5.6-sol",
+        "gpt-5.6-terra":      "openai/gpt-5.6-terra",
+        "gpt-5.6-luna":       "openai/gpt-5.6-luna",
+        "gpt-5.5":            "openai/gpt-5.5",
+        "gpt-5.3-codex":      "openai/gpt-5.3-codex",
+        "claude-opus-5":      "anthropic/claude-opus-5",
+        "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-opus-4.8":    "anthropic/claude-opus-4.8",
+        "claude-sonnet-5":    "anthropic/claude-sonnet-5",
+        "claude-opus-4.7":    "anthropic/claude-opus-4.7",
+        "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
+        "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
+        "gemini-3.6-flash":   "google/gemini-3.6-flash",
+        "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
+        "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
+        "kimi-k3":            "moonshot/kimi-k3",
+        "qwen3.7-max":        "qwen/qwen3.7-max",
+        "qwen3.8-max":        "qwen/qwen3.8-max",
+        "kimi-k2.7-code":     "moonshot/kimi-k2.7-code",
+        "step-3.7-flash":     "stepfun/step-3.7-flash",
+        "minimax-m3":         "minimax/minimax-m3",
+        "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
+        "hunyuan-3":          "tencent/hy3",
+        "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
     },
 }
 
