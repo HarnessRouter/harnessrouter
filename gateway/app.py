@@ -914,6 +914,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # base_url says where", not a statement about whose service it is.
     ("vercel", "claude"): "tokenrouter",       ("vercel", "codex"): "tokenrouter",
     ("vercel", "hermes"): "openai-api",
+    # LLMTR answers on the same two shapes from one base_url and one key, so it is wired like
+    # Vercel. Its Anthropic surface is not in the published catalogue — every model there lists
+    # OpenAI endpoints only — but it is real, and was probed live on 2026-08-19: POST /v1/messages
+    # with anthropic/claude-sonnet-4.6 came back 200 with a proper Anthropic message envelope,
+    # while an unknown path under /v1 answers {"type":"not_found"}.
+    ("llmtr", "claude"): "tokenrouter",        ("llmtr", "codex"): "tokenrouter",
+    ("llmtr", "hermes"): "openai-api",
 }
 
 
@@ -3388,6 +3395,14 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret_label": "API Key",
         "key_hint": "vck_…",
     },
+    "llmtr": {
+        "label": "LLMTR",
+        "base_url": "https://llmtr.com/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "llmtr-…",
+    },
     # Media only: it serves no chat model, so it carries no entry in _VENDOR_MODELS and shows no
     # models on its row. It is HERE because the console validates every entry in the integrations
     # document against this table on every write — so with ElevenLabs connected and absent from
@@ -4118,6 +4133,199 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
         "qwen3.7-flash":      "qwen/qwen3.7-flash",
     },
+    # LLMTR is a Turkey-hosted gateway: models running on its own infrastructure in Turkey
+    # beside the global frontier catalogue, behind one base_url and one key. Ids are
+    # vendor-qualified like OpenRouter's, so the canonical is the id with the vendor prefix
+    # removed — except where a canonical for that model already exists above (hunyuan-3 is
+    # tencent/hy3, nemotron-3-ultra is the 550b-a55b id), because one model arriving in the
+    # picker twice under two names is worse than a name that reads oddly.
+    #
+    # Admitted from its own published catalogue (GET https://llmtr.com/v1/models, which needs no
+    # key), read 2026-08-19, by four rules applied to all 245 published models, which leave the
+    # 131 below:
+    #
+    #   1. Text out and `tools` in supported_parameters — the same agent-loop bar _MODEL_CATALOG
+    #      states. 81 fail it: embedders, image/video/speech models, and the small Turkish chat
+    #      models (trendyol-asure-12b, magibu-11b-v8, medgemma-4b) that serve no tools.
+    #   2. No dated snapshot of an id already listed (qwen-plus-2025-07-14 beside qwen-plus). The
+    #      snapshot is the same model under a pinned name; two picker rows for it help nobody.
+    #   3. The transport has to be the one the runner will actually use for that id. Both ways
+    #      round, and 17 models fail it: gpt-5.4/5.2/5.1/5/o1/o3 and friends are published here
+    #      for /v1/chat/completions only while hermes drives every gpt-5*/o[1-4] id over
+    #      /v1/responses (_HERMES_RESPONSES_API_MODEL), and the grok ids are published for
+    #      /v1/responses only while hermes drives them over chat. Offering either is a picker row
+    #      that fails on send — the same broken promise _TOKENROUTER_NO_CHANNEL records.
+    #   4. It has to answer. Every id below was called live on 2026-08-19 — max_tokens=4 on
+    #      /v1/chat/completions, max_output_tokens=16 on /v1/responses — and seven published as
+    #      available did not, twice: llmtr/muse-glimmer-30b-tr returns no bytes at all (45 s,
+    #      70 s and 120 s), publicai/apertus-8b-instruct 502s after about a minute,
+    #      llmtr/ornith-1-35b and anthropic/claude-opus-4.1 502 immediately, aion-labs/aion-2.5
+    #      and publicai/apertus-v1.5-8b 400, and openai/gpt-oss-120b 402 while the gpt-oss-20b
+    #      beside it answers. A catalogue entry is an advertisement; an answer is the product.
+    #
+    # A ping is not a long agentic turn, so the harnesses on the test box ran real ones the same
+    # day: Claude Code over /v1/messages on claude-sonnet-4.6, and hermes over
+    # /v1/chat/completions on claude-haiku-4.5 and on the Turkey-hosted qwen3-6-35b, each
+    # completing without substitution. /v1/responses — the transport codex drives — was
+    # exercised as a direct call on gpt-5.6-luna rather than as a turn. A model here that turns
+    # out to fail a real turn comes off this table the same way those seven did.
+    "llmtr": {
+        # Turkey-resident, on LLMTR’s own infrastructure
+        "gemma-4":                             "llmtr/gemma-4",
+        "qwen3-6-35b":                         "llmtr/qwen3-6-35b",
+        "qwen3-5-4b":                          "llmtr/qwen3-5-4b",
+        # openai
+        "gpt-5.6-sol":                         "openai/gpt-5.6-sol",
+        "gpt-5.6-sol-pro":                     "openai/gpt-5.6-sol-pro",
+        "gpt-5.6-terra":                       "openai/gpt-5.6-terra",
+        "gpt-5.6-terra-pro":                   "openai/gpt-5.6-terra-pro",
+        "gpt-5.6-luna":                        "openai/gpt-5.6-luna",
+        "gpt-5.6-luna-pro":                    "openai/gpt-5.6-luna-pro",
+        "gpt-5.5":                             "openai/gpt-5.5",
+        "gpt-5.5-pro":                         "openai/gpt-5.5-pro",
+        "gpt-4.1":                             "openai/gpt-4.1",
+        "gpt-4o":                              "openai/gpt-4o",
+        "gpt-5.3-codex":                       "openai/gpt-5.3-codex",
+        "gpt-4.1-mini":                        "openai/gpt-4.1-mini",
+        "gpt-4.1-nano":                        "openai/gpt-4.1-nano",
+        "gpt-4o-mini":                         "openai/gpt-4o-mini",
+        "gpt-oss-20b":                         "openai/gpt-oss-20b",
+        "gpt-oss-safeguard-20b":               "openai/gpt-oss-safeguard-20b",
+        "gpt-4-turbo":                         "openai/gpt-4-turbo",
+        "gpt-3.5-turbo":                       "openai/gpt-3.5-turbo",
+        # anthropic
+        "claude-fable-5":                      "anthropic/claude-fable-5",
+        "claude-opus-5":                       "anthropic/claude-opus-5",
+        "claude-opus-4.8":                     "anthropic/claude-opus-4.8",
+        "claude-opus-4.7":                     "anthropic/claude-opus-4.7",
+        "claude-opus-4.6":                     "anthropic/claude-opus-4.6",
+        "claude-opus-4.5":                     "anthropic/claude-opus-4.5",
+        "claude-sonnet-5":                     "anthropic/claude-sonnet-5",
+        "claude-sonnet-4.6":                   "anthropic/claude-sonnet-4.6",
+        "claude-sonnet-4.5":                   "anthropic/claude-sonnet-4.5",
+        "claude-haiku-4.5":                    "anthropic/claude-haiku-4.5",
+        # google
+        "gemini-3.7-flash":                    "google/gemini-3.7-flash",
+        "gemini-2.5-flash":                    "google/gemini-2.5-flash",
+        "gemini-2.5-flash-lite":               "google/gemini-2.5-flash-lite",
+        "gemini-2.5-pro":                      "google/gemini-2.5-pro",
+        "gemini-3-flash-preview":              "google/gemini-3-flash-preview",
+        "gemini-3.1-flash-lite":               "google/gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview":              "google/gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools":  "google/gemini-3.1-pro-preview-customtools",
+        "gemini-3.5-flash":                    "google/gemini-3.5-flash",
+        "gemini-3.5-flash-lite":               "google/gemini-3.5-flash-lite",
+        "gemini-3.6-flash":                    "google/gemini-3.6-flash",
+        # deepseek
+        "deepseek-v4-flash":                   "deepseek/deepseek-v4-flash",
+        "deepseek-v4-pro":                     "deepseek/deepseek-v4-pro",
+        "deepseek-chat":                       "deepseek/deepseek-chat",
+        "deepseek-reasoner":                   "deepseek/deepseek-reasoner",
+        "deepseek-v4-pro-0813":                "deepseek/deepseek-v4-pro-0813",
+        # qwen
+        "qwen3.8-max":                         "qwen/qwen3.8-max",
+        "qwen3.7-max":                         "qwen/qwen3.7-max",
+        "qwen3.8-2.4t-a95b":                   "qwen/qwen3.8-2.4t-a95b",
+        "qwen3.7-plus":                        "qwen/qwen3.7-plus",
+        "qwen3.6-flash":                       "qwen/qwen3.6-flash",
+        "qwen-plus":                           "qwen/qwen-plus",
+        "qwen-plus-character-ja":              "qwen/qwen-plus-character-ja",
+        "qwen-plus-latest":                    "qwen/qwen-plus-latest",
+        "qwen3-max":                           "qwen/qwen3-max",
+        "qwen3-max-preview":                   "qwen/qwen3-max-preview",
+        "qwen3.6-plus":                        "qwen/qwen3.6-plus",
+        "qwen-mt-plus":                        "qwen/qwen-mt-plus",
+        "qwen3-coder-flash":                   "qwen/qwen3-coder-flash",
+        "qwen3-coder-plus":                    "qwen/qwen3-coder-plus",
+        "qwen3-vl-plus":                       "qwen/qwen3-vl-plus",
+        "qwen3.5-plus":                        "qwen/qwen3.5-plus",
+        "qwen3.6-27b-free":                    "qwen/qwen3.6-27b-free",
+        # zai
+        "glm-5.3":                             "zai/glm-5.3",
+        "glm-5.2":                             "zai/glm-5.2",
+        "glm-5.1":                             "zai/glm-5.1",
+        "glm-5":                               "zai/glm-5",
+        "glm-5-turbo":                         "zai/glm-5-turbo",
+        "glm-5v-turbo":                        "zai/glm-5v-turbo",
+        "glm-4.7":                             "zai/glm-4.7",
+        "glm-4.7-flashx":                      "zai/glm-4.7-flashx",
+        "glm-4.6":                             "zai/glm-4.6",
+        "glm-4.5":                             "zai/glm-4.5",
+        "glm-4.5-x":                           "zai/glm-4.5-x",
+        "glm-4.5-air":                         "zai/glm-4.5-air",
+        "glm-4.5-airx":                        "zai/glm-4.5-airx",
+        "glm-4-32b-0414-128k":                 "zai/glm-4-32b-0414-128k",
+        "glm-4.6v":                            "zai/glm-4.6v",
+        "glm-4.6v-flashx":                     "zai/glm-4.6v-flashx",
+        "glm-4.5v":                            "zai/glm-4.5v",
+        # moonshot
+        "kimi-k3":                             "moonshot/kimi-k3",
+        "kimi-k2.7-code":                      "moonshot/kimi-k2.7-code",
+        "kimi-k2.6":                           "moonshot/kimi-k2.6",
+        "kimi-k2.5":                           "moonshot/kimi-k2.5",
+        # mistral
+        "mistral-large-latest":                "mistral/mistral-large-latest",
+        "mistral-small-latest":                "mistral/mistral-small-latest",
+        "mistral-medium-latest":               "mistral/mistral-medium-latest",
+        "devstral-medium-latest":              "mistral/devstral-medium-latest",
+        "magistral-medium-latest":             "mistral/magistral-medium-latest",
+        "magistral-small-latest":              "mistral/magistral-small-latest",
+        "devstral-small-latest":               "mistral/devstral-small-latest",
+        "codestral-latest":                    "mistral/codestral-latest",
+        "pixtral-12b":                         "mistral/pixtral-12b",
+        "ministral-14b-latest":                "mistral/ministral-14b-latest",
+        "ministral-8b-latest":                 "mistral/ministral-8b-latest",
+        "ministral-3b-latest":                 "mistral/ministral-3b-latest",
+        "voxtral-small-latest":                "mistral/voxtral-small-latest",
+        # meta
+        "muse-spark-1.2":                      "meta/muse-spark-1.2",
+        "muse-glimmer-30b":                    "meta/muse-glimmer-30b",
+        "muse-spark-1.1":                      "meta/muse-spark-1.1",
+        "muse-spark-1.2-contributor":          "meta/muse-spark-1.2-contributor",
+        "llama-3.3-70b-instruct-12k":          "meta/llama-3.3-70b-instruct-12k",
+        # nvidia
+        "nemotron-3-ultra":                    "nvidia/nemotron-3-ultra-550b-a55b",
+        "nemotron-3-super-120b-a12b":          "nvidia/nemotron-3-super-120b-a12b",
+        "nemotron-3-nano-30b-a3b":             "nvidia/nemotron-3-nano-30b-a3b",
+        "nemotron-nano-12b-v2-vl":             "nvidia/nemotron-nano-12b-v2-vl",
+        # stepfun
+        "step-3.7-flash":                      "stepfun/step-3.7-flash",
+        "step-3.5-flash":                      "stepfun/step-3.5-flash",
+        "step-3.5-flash-2603":                 "stepfun/step-3.5-flash-2603",
+        # minimax
+        "minimax-m3":                          "minimax/minimax-m3",
+        # inclusionai
+        "ling-3.0-flash":                      "inclusionai/ling-3.0-flash",
+        # tencent
+        "hunyuan-3":                           "tencent/hy3",
+        # aion-labs
+        "aion-3.0":                            "aion-labs/aion-3.0",
+        "aion-3.0-mini":                       "aion-labs/aion-3.0-mini",
+        "aion-2.0":                            "aion-labs/aion-2.0",
+        "aion-rp-llama-3.1-8b":                "aion-labs/aion-rp-llama-3.1-8b",
+        # publicai
+        "apertus-v1.5-70b":                    "publicai/apertus-v1.5-70b",
+        "apertus-70b-instruct":                "publicai/apertus-70b-instruct",
+        # thinkingmachines
+        "inkling":                             "thinkingmachines/inkling",
+        "inkling-small":                       "thinkingmachines/inkling-small",
+        # mimo
+        "mimo-v2.5-pro":                       "mimo/mimo-v2.5-pro",
+        "mimo-v2.5":                           "mimo/mimo-v2.5",
+        # kwaikat
+        "kat-coder-pro-v2.5":                  "kwaikat/kat-coder-pro-v2.5",
+        "kat-coder-air-v2.5":                  "kwaikat/kat-coder-air-v2.5",
+        # upstage
+        "solar-pro4":                          "upstage/solar-pro4",
+        "solar-pro3":                          "upstage/solar-pro3",
+        "solar-pro2":                          "upstage/solar-pro2",
+        # poolside
+        "laguna-xs-2.1":                       "poolside/laguna-xs-2.1",
+        # gemma
+        "gemma-4-26b-a4b-it":                  "gemma/gemma-4-26b-a4b-it",
+        # dots-studio
+        "dots-3-note-preview":                 "dots-studio/dots-3-note-preview",
+    },
 }
 
 # TokenRouter speaks OpenRouter's slugs, so it starts from that table rather than a second copy
@@ -4173,6 +4381,7 @@ _VERCEL_RESLUG = {
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
+
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
@@ -4255,7 +4464,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
                           # OpenAI's most capable agentic coding model, there is no 5.6-codex).
-                          "gpt-5.3-codex"]},
+                          "gpt-5.3-codex",
+                          # Responses-API `pro` variants, served by LLMTR: the same base
+                          # models above with reasoning.mode=pro defaulted on, so they need
+                          # no separate wiring.
+                          "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
+                          "gpt-5.5-pro"]},
     # claude-opus-5 is now wired in both _ANTHROPIC_CLAUDE and _BEDROCK_CLAUDE (ids read off
     # Anthropic's models overview and AWS's own model card), so it routes directly instead of
     # falling through to the unmapped default it used at launch.
@@ -4280,7 +4494,45 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
-                          "qwen3.7-flash"]},
+                          "qwen3.7-flash",
+                          # Everything else the LLMTR gateway serves that clears the
+                          # agent-loop bar; _VENDOR_MODELS["llmtr"] carries the rule this
+                          # set was derived by and what it excludes. Most are LLMTR-only
+                          # today, so on an instance without that integration they render
+                          # as unavailable rather than disappearing.
+                          "gemma-4", "qwen3-6-35b", "qwen3-5-4b",
+                          "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "gpt-5.5-pro",
+                          "gpt-4.1", "gpt-4o", "gemini-3.7-flash", "gemini-2.5-flash",
+                          "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-3-flash-preview",
+                          "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                          "gemini-3.1-pro-preview-customtools", "gemini-3.5-flash",
+                          "gemini-3.5-flash-lite", "claude-opus-4.6", "claude-opus-4.5",
+                          "claude-sonnet-4.5", "qwen3.8-2.4t-a95b", "qwen3.7-plus", "qwen3.6-flash",
+                          "qwen-plus", "qwen-plus-character-ja", "qwen-plus-latest", "qwen3-max",
+                          "qwen3-max-preview", "qwen3.6-plus", "glm-5.3", "glm-5.2", "glm-5.1",
+                          "glm-5", "glm-5-turbo", "glm-5v-turbo", "mistral-large-latest",
+                          "mistral-small-latest", "mistral-medium-latest", "devstral-medium-latest",
+                          "inkling", "inkling-small", "mimo-v2.5-pro", "mimo-v2.5",
+                          "apertus-v1.5-70b", "muse-spark-1.2",
+                          "muse-glimmer-30b", "kimi-k2.6", "kimi-k2.5", "laguna-xs-2.1", "aion-3.0",
+                          "aion-3.0-mini", "solar-pro4", "gemma-4-26b-a4b-it",
+                          "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini",
+                          "gpt-oss-20b", "gpt-oss-safeguard-20b", "gpt-4-turbo", "gpt-3.5-turbo",
+                          "qwen-mt-plus", "qwen3-coder-flash",
+                          "qwen3-coder-plus", "qwen3-vl-plus", "qwen3.5-plus", "qwen3.6-27b-free",
+                          "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5", "glm-4.5-x",
+                          "glm-4.5-air", "glm-4.5-airx", "glm-4-32b-0414-128k", "glm-4.6v",
+                          "glm-4.6v-flashx", "glm-4.5v", "deepseek-chat", "deepseek-reasoner",
+                          "deepseek-v4-pro-0813", "magistral-medium-latest",
+                          "magistral-small-latest", "devstral-small-latest", "codestral-latest",
+                          "pixtral-12b", "ministral-14b-latest", "ministral-8b-latest",
+                          "ministral-3b-latest", "voxtral-small-latest",
+                          "apertus-70b-instruct", "muse-spark-1.1", "muse-spark-1.2-contributor",
+                          "llama-3.3-70b-instruct-12k", "nemotron-3-super-120b-a12b",
+                          "nemotron-3-nano-30b-a3b", "nemotron-nano-12b-v2-vl", "step-3.5-flash",
+                          "step-3.5-flash-2603", "aion-2.0", "aion-rp-llama-3.1-8b",
+                          "kat-coder-pro-v2.5", "kat-coder-air-v2.5", "solar-pro3", "solar-pro2",
+                          "dots-3-note-preview"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
