@@ -227,3 +227,22 @@ def test_build_vision_default_keeps_image_input(tmp_path):
              model="moonshotai/kimi-k3")
     mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
     assert mj["providers"]["hr"]["models"][0]["input"] == ["text", "image"]
+
+
+def test_non_prefix_revision_does_not_duplicate():
+    """When the final text is NOT an extension of what streamed (a kimi channel did this live),
+    re-emitting the full text paints the answer twice in the transcript. The deltas stay, the
+    re-emit is suppressed, and the result event carries the authoritative final text."""
+    stream = [
+        {"type": "session", "id": "s3", "cwd": "/ws"},
+        {"type": "message_start", "message": {"role": "assistant", "content": []}},
+        {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "Thinking aloud…"}},
+        {"type": "message_end", "message": _ok_msg("The real answer.", {"input": 1, "output": 1})},
+        {"type": "agent_end"},
+    ]
+    chunks, state = _run(stream)
+    texts = [c["text"] for e in _flat(chunks) if e.get("type") == "assistant"
+             for c in e["message"]["content"] if c.get("type") == "text"]
+    assert texts == ["Thinking aloud…"]          # no duplicate paint
+    result = next(e for e in _flat(chunks) if e.get("type") == "result")
+    assert result["result"] == "The real answer."  # the authoritative text still lands
