@@ -921,6 +921,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # while an unknown path under /v1 answers {"type":"not_found"}.
     ("llmtr", "claude"): "tokenrouter",        ("llmtr", "codex"): "tokenrouter",
     ("llmtr", "hermes"): "openai-api",
+    # Pi (earendil-works pi coding agent) is multi-family like hermes: native env auth for the
+    # two vendors it speaks directly, a models.json custom provider for everything with a
+    # base_url. 'tokenrouter' on the runner again means "OpenAI/Anthropic-compatible, api picked
+    # by model family" — TokenRouter, Vercel and LLMTR all serve both shapes from one base_url.
+    ("anthropic", "pi"): "anthropic",          ("openai", "pi"): "openai",
+    ("azure-foundry", "pi"): "azure",
+    ("openrouter", "pi"): "openai-api",
+    ("tokenrouter", "pi"): "tokenrouter",      ("vercel", "pi"): "tokenrouter",
+    ("llmtr", "pi"): "tokenrouter",
 }
 
 
@@ -4300,7 +4309,7 @@ def _map_model(conn: dict, friendly: str) -> str | None:
     table = _vendor_models(provider)
     if friendly and friendly in table:
         return table[friendly]
-    if backend == "claude" or (backend == "hermes" and provider in ("anthropic", "bedrock")):
+    if backend == "claude" or (backend in ("hermes", "pi") and provider in ("anthropic", "bedrock")):
         # Older claude ids the catalog no longer lists still map, and a caller may pass a
         # provider-native id directly; _LEGACY_CLAUDE_IDS carries both, keyed bare (opus-4.5).
         legacy = _BEDROCK_CLAUDE if provider == "bedrock" else _ANTHROPIC_CLAUDE
@@ -4382,8 +4391,18 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash"]},
+    # pi (earendil-works pi coding agent) is multi-family the same way hermes is: the CLI's
+    # unified LLM layer runs either family natively and anything OpenAI/Anthropic-compatible
+    # through a custom provider. The list starts as the gpt + claude catalogs — the two families
+    # whose serving paths the e2e verified — and grows the same way hermes's did: a model is
+    # added when a real pi turn on the live provider has been checked for substitution.
+    "pi": {"default": "gpt-5.4",
+           "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                      "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                      "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"]},
 }
-_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes"}
+_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
 # values win), silently rejecting the us.anthropic.* ids this set exists to allow.
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
@@ -4418,6 +4437,8 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "claude"
     if base == "hermes":
         return "hermes"
+    if base == "pi":
+        return "pi"
     return ""
 
 
@@ -4427,9 +4448,9 @@ def _model_authorized(requested: str, backend: str) -> bool:
         return False
     if r in {m.lower() for m in _MODEL_CATALOG.get(backend, {}).get("models", [])}:
         return True
-    if backend in ("claude", "hermes") and r in _PROVIDER_CLAUDE_IDS:
+    if backend in ("claude", "hermes", "pi") and r in _PROVIDER_CLAUDE_IDS:
         return True   # power users may pass a provider-native claude id (claude-opus-4-8 / us.anthropic...)
-    if backend in ("codex", "hermes") and r.startswith("gpt-"):
+    if backend in ("codex", "hermes", "pi") and r.startswith("gpt-"):
         return True   # gpt-* family; Azure deployment names vary
     return False
 
@@ -5312,7 +5333,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # explicitly selected — that's not a valid provider id. Treat it as "unset" and inherit, in order:
     #   previous round's model -> the harness default_model -> connection default (in _map_model).
     # This keeps a conversation on the user's chosen model and never ships the bare backend to Bedrock.
-    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", ""}
+    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", ""}
     if model_req.lower() in _BARE:
         inherited = ""
         if body.previous_response_id:
@@ -10809,6 +10830,17 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("Bash", "Bash"), ("Read", "Read"), ("Edit", "Edit"), ("Write", "Write"),
                   ("Grep", "Grep"), ("Glob", "Glob"), ("WebFetch", "WebFetch"),
                   ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
+        "tool_enforcement": "hard",
+    },
+    "pi": {
+        "label": "Pi", "backend": "pi", "status": "ready",
+        "system_prompt": ("You are Pi, a minimal autonomous coding agent. You operate on a real "
+                          "git workspace, reading, writing and editing files and running bash "
+                          "to complete the task end to end."),
+        # Pi's four built-in tools, by their real names — -xt enforces these hard, so a disabled
+        # tool is genuinely absent, not merely requested (see _build_pi in the runner).
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit")],
         "tool_enforcement": "hard",
     },
     "hermes": {

@@ -124,7 +124,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -135,6 +135,7 @@ backend_bin() {
     claude) echo "$TOOLS/bin/claude" ;;
     codex)  echo "$TOOLS/bin/codex" ;;
     hermes) echo "$TOOLS/venv/bin/hermes" ;;
+    pi)     echo "$TOOLS/bin/pi" ;;
   esac
 }
 
@@ -170,6 +171,15 @@ install_backends() {
     try_install "Codex" npm install -g --prefix "$TOOLS" --no-audit --no-fund @openai/codex || true
   fi
 
+  if wanted pi && [ ! -x "$(backend_bin pi)" ]; then
+    echo "[harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…"
+    # --ignore-scripts is pi's own documented install form. The MCP adapter is a pi extension
+    # (github.com/nicobailon/pi-mcp-adapter): pi deliberately ships without MCP, and the runner
+    # mounts this adapter via -e only on turns that actually configure MCP servers.
+    try_install "Pi" npm install -g --prefix "$TOOLS" --no-audit --no-fund --ignore-scripts \
+        @earendil-works/pi-coding-agent pi-mcp-adapter || true
+  fi
+
   if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
     try_install "Hermes" sh -c "\"$PY\" -m venv \"$TOOLS/venv\" \
@@ -185,6 +195,8 @@ install_backends() {
   # for hermes aborted the whole entrypoint — exit 1, no message, the log ending on an install line
   # so it read as if the install had killed it. HR_BACKENDS=claude, =codex and =claude,codex were
   # all unusable, which is exactly the choice the licence note above asks people to make.
+  # Where the runner finds the MCP extension to mount (-e) on pi turns with MCP servers.
+  [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ] && export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
   if wanted hermes; then verify_hermes_mcp; fi
 }
 
