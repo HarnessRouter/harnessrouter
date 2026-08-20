@@ -137,8 +137,9 @@ Wait for `ready on :3000`, then open the browser:
 ```
 [harnessrouter] installing Claude Code (Anthropic's terms apply)…
 [harnessrouter] installing Codex (Apache-2.0)…
+[harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…
 [harnessrouter] installing Hermes (check its upstream license before use)…
-[harnessrouter] data=/data  backends available: claude codex hermes
+[harnessrouter] data=/data  backends available: claude codex hermes pi
 [harnessrouter] ready on :3000
 ```
 
@@ -162,8 +163,9 @@ The agent CLIs are fetched on the first start rather than shipped in the image, 
 licensing fact rather than a packaging preference. Claude Code is distributed under Anthropic's own
 terms and hermes-agent declares no license at all, so neither can be redistributed inside a public
 image. Installing them on first run means you install them yourself, from upstream, under those
-terms — which is also why you should read them before you use those two backends. Codex is
-Apache-2.0 and arrives the same way, so all three land in one place.
+terms — which is also why you should read them before you use those two backends. Codex
+(Apache-2.0) and Pi (MIT, with its MIT-licensed MCP adapter) arrive the same way, so all
+four land in one place.
 
 </details>
 
@@ -256,14 +258,14 @@ problem, because it only offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes |
-| `openai` | Codex, Hermes |
-| `openrouter` | Codex, Hermes |
-| `azure-foundry` | Codex, Hermes |
+| `anthropic` | Claude Code, Hermes, Pi |
+| `openai` | Codex, Hermes, Pi |
+| `openrouter` | Codex, Hermes, Pi |
+| `azure-foundry` | Codex, Hermes, Pi |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes |
-| `vercel` | Claude Code, Codex, Hermes |
-| `llmtr` | Claude Code, Codex, Hermes |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi |
+| `vercel` | Claude Code, Codex, Hermes, Pi |
+| `llmtr` | Claude Code, Codex, Hermes, Pi |
 
 </details>
 

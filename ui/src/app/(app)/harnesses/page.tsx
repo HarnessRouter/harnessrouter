@@ -51,6 +51,9 @@ export default function HarnessesPage() {
       const b = baseOf(r).toLowerCase();
       if (baseFlt === 'codex') return b.includes('codex');
       if (baseFlt === 'hermes') return b.includes('hermes');
+      // 'pi' must be an exact-ish match: substring would also catch every base that merely
+      // contains the letters (nothing today, but 'claude' teaches the lesson cheaply).
+      if (baseFlt === 'pi') return b === 'pi' || b.startsWith('pi ');
       return b.includes('claude');
     })
     .filter((r) => healthFlt === 'all' || (healthFlt === 'review') === isDegraded(r));
@@ -83,6 +86,7 @@ export default function HarnessesPage() {
               <option value="all">All Base Harnesses</option>
               <option value="codex">Codex</option>
               <option value="claude">Claude Code</option>
+              <option value="pi">Pi</option>
               <option value="hermes">Hermes</option>
             </select>
             <select className="select" aria-label="Filter Harnesses by health" value={healthFlt} onChange={(e) => setHealthFlt(e.target.value)}>
@@ -152,7 +156,9 @@ export default function HarnessesPage() {
                             ? 'Best for repository work, code changes, shell commands, and generated files.'
                             : o.id === 'hermes'
                               ? 'Self-improving agent that builds memory and skills across Tasks, best for evolving, long-running work.'
-                              : 'Best for long-context analysis, document workflows, and structured review.'}</span></span>
+                              : o.id === 'pi'
+                                ? 'Minimal, steerable harness with four core tools, best when you want a lean agent you can shape.'
+                                : 'Best for long-context analysis, document workflows, and structured review.'}</span></span>
                         <span className="base-choice-models">{oobDefaultModel(o)} default</span>
                       </label>
                     ))}
