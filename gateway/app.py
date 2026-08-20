@@ -10854,6 +10854,16 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
         "tool_enforcement": "hard",
     },
+    "hermes": {
+        "label": "Hermes", "backend": "hermes", "status": "ready",
+        "system_prompt": ("You are Hermes, a self-improving autonomous agent. You work on a real "
+                          "project workspace with shell and file access, complete tasks end to end, "
+                          "and build a persistent memory and skill library from what you learn."),
+        "tools": [("terminal", "Terminal"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("patch", "Patch"), ("search_files", "Search"), ("web_search", "Web Search"),
+                  ("web_extract", "Web Extract")],
+        "tool_enforcement": "instruction",
+    },
     "pi": {
         "label": "Pi", "backend": "pi", "status": "ready",
         "system_prompt": ("You are Pi, a minimal autonomous coding agent. You operate on a real "
@@ -10864,16 +10874,6 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
                   ("edit", "Edit")],
         "tool_enforcement": "hard",
-    },
-    "hermes": {
-        "label": "Hermes", "backend": "hermes", "status": "ready",
-        "system_prompt": ("You are Hermes, a self-improving autonomous agent. You work on a real "
-                          "project workspace with shell and file access, complete tasks end to end, "
-                          "and build a persistent memory and skill library from what you learn."),
-        "tools": [("terminal", "Terminal"), ("read_file", "File Read"), ("write_file", "File Write"),
-                  ("patch", "Patch"), ("search_files", "Search"), ("web_search", "Web Search"),
-                  ("web_extract", "Web Extract")],
-        "tool_enforcement": "instruction",
     },
 }
 
