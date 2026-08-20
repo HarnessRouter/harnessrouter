@@ -163,7 +163,7 @@ jobs:
           docker logs smoke 2>&1 | tail -30
           LINE=$(docker logs smoke 2>&1 | grep "backends available" | tail -1 || true)
           echo "$LINE"
-          for b in claude codex hermes pi; do
+          for b in claude codex hermes pi dsh; do
             echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on ${{ matrix.arch }}"; exit 1; }
           done
           docker exec smoke ls /opt/harnessrouter/kits

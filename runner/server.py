@@ -24,6 +24,10 @@ Backends + providers (registry-driven — pi was added as exactly that one entry
     - azure-foundry : AZURE_FOUNDRY_API_KEY + AZURE_FOUNDRY_BASE_URL (gpt family)
     - bedrock       : AWS_BEARER_TOKEN_BEDROCK (or key pair) + AWS_REGION (claude family)
     - anthropic     : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
+  backend "dsh" (DeepSeek Harness; official Python SDK drives the bundled JSON-RPC
+  runtime — runner/dsh_driver.py re-emits its session.events as NDJSON):
+    - deepseek    : any OpenAI-compatible deepseek-family endpoint; DEEPSEEK-shaped auth
+                    goes to the driver as HR_DSH_* and stays OUT of the runtime env
   backend "pi" (earendil-works pi coding agent; `pi -p --mode json` event stream,
   multi-family like hermes — custom providers via ~/.pi/agent/models.json):
     - anthropic     : ANTHROPIC_API_KEY (native), base_url via models.json when set
@@ -164,6 +168,10 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # key for custom providers — neither may travel in a checkpoint tarball.
                       "./.harness/home/.pi/agent/auth.json",
                       "./.harness/home/.pi/agent/models.json",
+                      # dsh: the MCP cordis overlay can carry auth headers (same standing as
+                      # claude's .mcp.json); the provider KEY itself never lands anywhere —
+                      # it lives only in the driver process (see dsh_driver.py's relay).
+                      "./.harness/home/.dsh/cordis.yml",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -177,6 +185,7 @@ CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
 HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
+DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
 # Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
@@ -464,10 +473,10 @@ _AGENTS_END = "<!-- harness-skills:end -->"
 
 
 def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
-    """The agent's instruction file: AGENTS.md for Codex, Hermes and Pi (all three read AGENTS.md
-    from the cwd — pi loads it as a context file, before its project-trust gate), CLAUDE.md for
-    Claude Code — each CLI reads its own file as project instructions."""
-    return pathlib.Path(cwd) / ("AGENTS.md" if backend in ("codex", "hermes", "pi") else "CLAUDE.md")
+    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi and dsh (all four read
+    AGENTS.md from the cwd — pi as a context file before its trust gate, dsh via its
+    dsh-agent-instructions workspace loader), CLAUDE.md for Claude Code."""
+    return pathlib.Path(cwd) / ("AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh") else "CLAUDE.md")
 
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
@@ -1080,6 +1089,170 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
     return ["codex", "exec", *common, "--cd", cwd, prompt]
 
 
+# ── dsh (DeepSeek Harness) ──────────────────────────────────────────────────────
+# The turn process is runner/dsh_driver.py inside the pinned dsh venv: the official Python SDK
+# launches the bundled runtime executable, and every session.event notification comes back as
+# one NDJSON line {"m": method, "p": payload}. Cancel stays a process-group kill — the SDK's
+# close ladder never runs on a killed driver, and the runtime dies with the group.
+# "deepseek" is the launch provider (dsh's own adapter, auto-mounted); everything else rides
+# dsh-llm-pi-ai — pi's unified LLM library as a Cordis plugin — through a hand-declared route
+# at the driver's relay, so the api-by-family rules are the ones the pi backend already proved.
+DSH_PROVIDERS = {"deepseek", "anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+_DSH_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1",
+                     "openai": "https://api.openai.com/v1",
+                     "deepseek": "https://api.deepseek.com/v1"}
+DSH_PYTHON = os.environ.get("HR_DSH_PYTHON", "/data/agent-tools/dsh-venv/bin/python")
+_DSH_DEEPSEEK_MODEL = re.compile(r"(?:^|/)deepseek", re.I)
+DSH_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dsh_driver.py")
+
+
+def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+               resume_session_id: str | None = None,
+               mcp_servers: list[dict] | None = None, vision: bool = True) -> list[str]:
+    pr = provider or "deepseek"
+    if pr not in DSH_PROVIDERS:
+        raise HTTPException(400, f"unknown dsh provider '{pr}' (one of {sorted(DSH_PROVIDERS)})")
+    base = auth.base_url or _DSH_DEFAULT_BASE.get(pr, "")
+    if not base:
+        raise HTTPException(400, f"dsh provider '{pr}' needs a base_url (none configured)")
+    if not base.rstrip("/").endswith("/v1"):
+        base = base.rstrip("/") + "/v1"   # the relay joins upstream paths against a /v1 base
+    # HR_DSH_*: consumed and scrubbed by the driver before the runtime starts. The runtime gets
+    # a loopback relay URL and a placeholder key — the credential never enters its environment.
+    env["HR_DSH_BASE_URL"] = base
+    env["HR_DSH_API_KEY"] = auth.api_key or ""
+    # No system_prompt in the job: harness instructions land in AGENTS.md (dsh reads it via
+    # its dsh-agent-instructions loader), same mechanism as codex/hermes/pi.
+    job = {"prompt": prompt, "model": model, "cwd": cwd,
+           "session_id": resume_session_id or "",
+           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url")]}
+    if not _DSH_DEEPSEEK_MODEL.search(model or ""):
+        # Family decides the route, not the integration's name: deepseek models keep the
+        # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
+        # family rides the pi-ai route. api by family — the same routing the pi backend
+        # live-verified on these channels.
+        if pr == "anthropic" or _PI_CLAUDE_MODEL.search(model or ""):
+            api = "anthropic-messages"
+        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+            api = "openai-responses"
+        else:
+            api = "openai-completions"
+        job["llm"] = {"api": api, "vision": vision}
+    return [DSH_PYTHON, DSH_DRIVER, json.dumps(job)]
+
+
+def _dsh_tool_result_text(msg: dict) -> tuple[str, str, bool]:
+    """(tool_use_id, text, is_error) from a dsh tool/result data.message."""
+    tuid, text, err = "", "", False
+    for c in (msg.get("content") or []):
+        if isinstance(c, dict) and c.get("type") == "tool-result":
+            tuid = str(c.get("toolCallId") or "")
+            err = bool(c.get("isError"))
+            parts = [x.get("text") or "" for x in (c.get("content") or [])
+                     if isinstance(x, dict) and x.get("type") == "text"]
+            text = "\n".join(x for x in parts if x)
+    return tuid, text, err
+
+
+def _dsh_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE driver NDJSON line to zero+ canonical claude stream-json events.
+
+    Shapes are the live captures of 2026-08-20 (bad-key run, tool run, retry run) — see the
+    fixtures in tests/test_dsh_normalize.py. Two audit rules are load-bearing here: usage is
+    keyed by (turn, step) and REPLACED, never summed twice; and the terminal status comes from
+    the last turn/end reason — the driver exits 0 either way."""
+    m, p = obj.get("m"), obj.get("p") or {}
+    if m == "__hr_init":
+        sid = p.get("session_id") or ""
+        if sid:
+            state["_dsh_init"] = True
+            return [{"type": "system", "subtype": "init", "session_id": sid,
+                     "model": state.get("model")}]
+        return []
+    if m == "__hr_result":
+        usage_map = state.get("_dsh_usage") or {}
+        usage: dict = {}
+        for u in usage_map.values():
+            for k, v in u.items():
+                usage[k] = usage.get(k, 0) + v
+        usage = {k: v for k, v in usage.items() if v}
+        reason = p.get("reason")
+        final = p.get("final") or state.get("final", "")
+        state["final"] = final
+        if reason == "completed" or (reason is None and final):
+            return [{"type": "result", "subtype": "success", "is_error": False,
+                     "result": final, "usage": usage}]
+        if reason == "max-tokens":
+            return [{"type": "result", "subtype": "error_max_turns", "is_error": False,
+                     "result": final, "usage": usage}]
+        err = state.get("_dsh_error") or f"deepseek-harness turn ended: {reason}"
+        return [{"type": "result", "subtype": "error", "is_error": True,
+                 "result": err, "usage": usage}]
+    if m != "session.event":
+        return []
+    ev = p.get("event") or {}
+    t = ev.get("type")
+    d = ev.get("data") or {}
+    if not state.get("_dsh_init") and p.get("sessionId"):
+        state["_dsh_init"] = True
+        return [{"type": "system", "subtype": "init", "session_id": p["sessionId"],
+                 "model": state.get("model")}] + _dsh_to_claude(obj, state)
+    if t == "assistant/chunk":
+        c = d.get("chunk") or {}
+        ct = c.get("type")
+        if ct == "text-delta" and c.get("text"):
+            state["_dsh_text"] = state.get("_dsh_text", "") + c["text"]
+            state["final"] = state["_dsh_text"]
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": c["text"]}]}}]
+        if ct == "reasoning-delta" and c.get("text"):
+            return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": c["text"]}]}}]
+        if ct == "usage":
+            u = c.get("usage") or {}
+            mapped = {"input_tokens": int(u.get("inputTokens") or 0),
+                      "output_tokens": int(u.get("outputTokens") or 0)}
+            if u.get("cacheReadTokens"):
+                mapped["cache_read_tokens"] = int(u["cacheReadTokens"])
+            if u.get("cacheWriteTokens"):
+                mapped["cache_write_tokens"] = int(u["cacheWriteTokens"])
+            # replace-by-(turn,step): retries re-report the same step; summing would double-bill
+            state.setdefault("_dsh_usage", {})[(d.get("turn"), d.get("step"))] = mapped
+            return []
+        return []   # block-start/block-end/tool-call-delta/finish: committed events cover them
+    if t == "assistant/message":
+        msg = d.get("message") or {}
+        full = "".join(c.get("text") or "" for c in (msg.get("content") or [])
+                       if isinstance(c, dict) and c.get("type") == "text")
+        streamed = state.get("_dsh_text", "")
+        state["_dsh_text"] = ""
+        if full:
+            state["final"] = full
+        if full and full != streamed:
+            if not streamed:
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full}]}}]
+            if full.startswith(streamed):
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full[len(streamed):]}]}}]
+        return []   # matches, or a non-prefix revision (already painted — the pi lesson)
+    if t == "tool/call":
+        try:
+            args = json.loads(d.get("arguments") or "{}")
+        except Exception:  # noqa: BLE001
+            args = {"raw": d.get("arguments")}
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": d.get("callId") or f"dsh{ev.get('seq', 0)}",
+             "name": d.get("name") or "tool", "input": args}]}}]
+    if t == "tool/result":
+        tuid, text, err = _dsh_tool_result_text(d.get("message") or {})
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid or "dsh",
+             "is_error": err, "content": text}]}}]
+    if t == "turn/end":
+        reason = (d.get("reason") or {})
+        if reason.get("kind") == "error":
+            state["_dsh_error"] = str((reason.get("error") or {}).get("message") or "dsh error")
+        return []
+    return []
+
+
 # ── pi (earendil-works pi coding agent) ─────────────────────────────────────────
 # One-shot turns run `pi -p --mode json`: a JSONL event stream on stdout (session header,
 # message deltas, tool executions, agent_end). Sessions are JSONL trees under
@@ -1454,6 +1627,8 @@ BACKENDS = {
                "normalize": None},
     "pi": {"providers": sorted(PI_PROVIDERS), "default_model": PI_DEFAULT_MODEL,
            "normalize": _pi_to_claude},
+    "dsh": {"providers": sorted(DSH_PROVIDERS), "default_model": DSH_DEFAULT_MODEL,
+            "normalize": _dsh_to_claude},
 }
 
 
@@ -2222,7 +2397,7 @@ def capabilities(identifier: str = "") -> dict:
 
 
 class TurnReq(BaseModel):
-    backend: str = "claude"          # claude | codex | hermes | pi
+    backend: str = "claude"          # claude | codex | hermes | pi | dsh
     provider: str | None = None      # see BACKENDS[...].providers
     model: str | None = None
     prompt: str
@@ -2291,7 +2466,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     #     than a block. Written here once rather than as two divergent branches — hermes previously
     #     had neither, and silently ignored every disabled tool.
     agent_doc = req.agent_doc or ""
-    if backend in ("codex", "hermes") and req.tools_disabled:
+    if backend in ("codex", "hermes", "dsh") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
@@ -2336,6 +2511,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         hermes_provider = (req.provider or "bedrock").lower()
         hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                          max_turns=req.max_turns, mcp_servers=req.mcp_servers)
+    elif backend == "dsh":
+        model = model or DSH_DEFAULT_MODEL
+        cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
+                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                         vision=bool(req.vision))
     elif backend == "pi":
         model = model or PI_DEFAULT_MODEL
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,

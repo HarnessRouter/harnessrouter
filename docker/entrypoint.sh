@@ -124,7 +124,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -136,6 +136,7 @@ backend_bin() {
     codex)  echo "$TOOLS/bin/codex" ;;
     hermes) echo "$TOOLS/venv/bin/hermes" ;;
     pi)     echo "$TOOLS/bin/pi" ;;
+    dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
   esac
 }
 
@@ -180,6 +181,22 @@ install_backends() {
         @earendil-works/pi-coding-agent pi-mcp-adapter || true
   fi
 
+  if wanted dsh && [ ! -x "$(backend_bin dsh)" ]; then
+    echo "[harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…"
+    # Pinned EXACTLY, not 'latest': upstream is a developer preview that warns of breaking
+    # changes, and the runner's driver/normalizer are written against these bytes. An upgrade
+    # is an adapter-compatibility change that lands through a PR, never through a fresh volume
+    # pulling a newer wheel. Own venv: its dependency tree must not fight hermes's.
+    try_install "DeepSeek Harness" sh -c "\"$PY\" -m venv \"$TOOLS/dsh-venv\" \
+        && \"$TOOLS/dsh-venv/bin/pip\" install --no-cache-dir -q \
+             'deepseek-harness-sdk==0.1.0rc7' 'deepseek-harness-runtime-bin==0.1.0rc7' pyyaml \
+        && \"$TOOLS/dsh-venv/bin/python\" -c 'import deepseek_harness, deepseek_harness_runtime, yaml; deepseek_harness_runtime.bundled_runtime_path()' \
+        && printf '#!/bin/sh\nexit 0\n' > \"$TOOLS/dsh-venv/bin/dsh-ready\" \
+        && chmod +x \"$TOOLS/dsh-venv/bin/dsh-ready\"" || true
+    # dsh-ready exists ONLY after the import check proved the runtime executable resolves —
+    # a venv whose pip half-failed must not report the backend as available.
+  fi
+
   if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
     try_install "Hermes" sh -c "\"$PY\" -m venv \"$TOOLS/venv\" \
@@ -197,6 +214,7 @@ install_backends() {
   # all unusable, which is exactly the choice the licence note above asks people to make.
   # Where the runner finds the MCP extension to mount (-e) on pi turns with MCP servers.
   [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ] && export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
+  [ -x "$TOOLS/dsh-venv/bin/python" ] && export HR_DSH_PYTHON="$TOOLS/dsh-venv/bin/python"
   if wanted hermes; then verify_hermes_mcp; fi
 }
 
@@ -236,7 +254,7 @@ cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null |
 trap cleanup TERM INT EXIT
 
 avail=""; missing=""
-for b in claude codex hermes pi; do
+for b in claude codex hermes pi dsh; do
   wanted "$b" || continue
   if [ -x "$(backend_bin "$b")" ]; then avail="$avail $b"; else missing="$missing $b"; fi
 done

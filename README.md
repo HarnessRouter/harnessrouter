@@ -138,8 +138,9 @@ Wait for `ready on :3000`, then open the browser:
 [harnessrouter] installing Claude Code (Anthropic's terms apply)…
 [harnessrouter] installing Codex (Apache-2.0)…
 [harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…
+[harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…
 [harnessrouter] installing Hermes (check its upstream license before use)…
-[harnessrouter] data=/data  backends available: claude codex hermes pi
+[harnessrouter] data=/data  backends available: claude codex hermes pi dsh
 [harnessrouter] ready on :3000
 ```
 
@@ -164,8 +165,9 @@ licensing fact rather than a packaging preference. Claude Code is distributed un
 terms and hermes-agent declares no license at all, so neither can be redistributed inside a public
 image. Installing them on first run means you install them yourself, from upstream, under those
 terms — which is also why you should read them before you use those two backends. Codex
-(Apache-2.0) and Pi (MIT, with its MIT-licensed MCP adapter) arrive the same way, so all
-four land in one place.
+(Apache-2.0), Pi (MIT, with its MIT-licensed MCP adapter) and DeepSeek Harness (MIT,
+a developer preview pinned to an exact version) arrive the same way, so all five land
+in one place.
 
 </details>
 
@@ -260,12 +262,12 @@ problem, because it only offers you providers that work.
 |---|---|
 | `anthropic` | Claude Code, Hermes, Pi |
 | `openai` | Codex, Hermes, Pi |
-| `openrouter` | Codex, Hermes, Pi |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness |
 | `azure-foundry` | Codex, Hermes, Pi |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi |
-| `vercel` | Claude Code, Codex, Hermes, Pi |
-| `llmtr` | Claude Code, Codex, Hermes, Pi |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness |
 
 </details>
 
