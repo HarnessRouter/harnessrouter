@@ -74,5 +74,8 @@ jobs:
       # refuses the tree (several deps still declare React 18 peers while the app runs 19).
       - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
       - run: npm run type-check
-      - run: npm test
+      # The console has no jest tests yet, and bare `jest` exits 1 on "No tests found" — which
+      # would read as a test failure when the truth is an empty suite. The flag makes an empty
+      # suite pass and a failing test still fail; the first real test file makes it moot.
+      - run: npm test -- --passWithNoTests
       - run: npm run build
