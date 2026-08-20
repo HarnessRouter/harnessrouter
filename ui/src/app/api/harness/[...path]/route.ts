@@ -17,6 +17,7 @@
 // constants — a request from the browser cannot claim an identity this box doesn't have.
 import type { NextRequest } from 'next/server';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
+import { AUTH_DISABLED, SESSION_COOKIE, sessionValid } from '@/lib/selfhost-auth';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800; // long agent turns stream for minutes
@@ -40,11 +41,23 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   // claims, the forwarded org/member headers are no longer trusted for identity. A request with
   // no bearer (no session) gets no key -> the gateway 401s it, so it can't ride the BFF onto the
   // internal path with self-asserted identity.
-  if (INTERNAL_KEY && (auth || SELF_HOSTED)) headers['x-harness-internal'] = INTERNAL_KEY;
-  if (SELF_HOSTED) {
+  //
+  // SELF-HOSTED: trust is the SESSION, not the transport. This used to stamp the internal key on
+  // every request because "there is no login" — written before the login gate existed. Once the
+  // gate let bearer-carrying API calls through to here (so console-minted sk-hr keys work at
+  // all), unconditional stamping would have authenticated ANY bearer as the local org. So: a
+  // caller with a valid session cookie (the signed-in console) gets internal trust and the
+  // pinned local identity; anyone else forwards their Authorization bare, and the gateway's
+  // _apikey_resolve is the judge — an invalid key gets the gateway's own 401.
+  const selfhostTrusted = SELF_HOSTED
+    && (AUTH_DISABLED || await sessionValid(req.cookies.get(SESSION_COOKIE)?.value));
+  if (INTERNAL_KEY && (SELF_HOSTED ? selfhostTrusted : auth)) {
+    headers['x-harness-internal'] = INTERNAL_KEY;
+  }
+  if (selfhostTrusted) {
     headers['x-harness-org'] = LOCAL_ORG;
     headers['x-harness-member'] = LOCAL_MEMBER;
-  } else {
+  } else if (!SELF_HOSTED) {
     const org = req.headers.get('x-harness-org');
     if (org) headers['x-harness-org'] = org;
     const member = req.headers.get('x-harness-member');

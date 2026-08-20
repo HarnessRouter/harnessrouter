@@ -32,8 +32,11 @@ const STATIC_ASSET = /\.(svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|css|js|m
  *  own format: pages and everything else stay cookie-gated. */
 function isApiKeyCall(req: NextRequest, path: string): boolean {
   if (!path.startsWith('/api/harness/')) return false;
-  const auth = req.headers.get('authorization') || '';
-  return /^Bearer sk-hr-[A-Za-z0-9]+$/.test(auth);
+  // ANY bearer, not just well-formed keys: an invalid credential must get the gateway's own
+  // 401 (error.type authentication_error, UHP-Version header) — the shape UHP check A-02
+  // requires — not this gate's sign-in JSON. The proxy attaches internal trust only for
+  // cookie-authenticated callers, so a bearer-only request stands or falls on its key alone.
+  return (req.headers.get('authorization') || '').toLowerCase().startsWith('bearer ');
 }
 
 /** Reachable without a session: the login page, the endpoints it posts to, and static assets.
@@ -42,6 +45,10 @@ function isPublic(path: string): boolean {
   return path === '/login'
     || path === '/api/selfhost/login'
     || path === '/api/selfhost/logout'
+    // UHP discovery is unauthenticated BY SPEC (D-02): a client must be able to learn whether
+    // this is a UHP server before deciding what credential to present. The document is version
+    // metadata — no user data.
+    || path === '/api/harness/v1/uhp'
     || path.startsWith('/_next/')
     // An /api path is never a static asset, whatever it ends with. Neither is /data — those are
     // files a TASK produced, and agents write .png, .svg, .css and .js routinely. Matching those
