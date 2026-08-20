@@ -94,15 +94,15 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     const ctType = res.headers.get('content-type') || 'application/json';
     // Stream SSE through without buffering (live deltas).
     if (ctType.includes('text/event-stream') && res.body) {
-      return new Response(res.body, {
-        status: res.status,
-        headers: {
-          'content-type': 'text/event-stream',
-          'cache-control': 'no-cache, no-transform',
-          connection: 'keep-alive',
-          'x-accel-buffering': 'no',
-        },
-      });
+      const sse: Record<string, string> = {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      };
+      const uhpV = res.headers.get('uhp-version');
+      if (uhpV) sse['uhp-version'] = uhpV;
+      return new Response(res.body, { status: res.status, headers: sse });
     }
     // STREAM the response body straight through (HR-INF-015): traces, workspace artifacts, ZIP
     // archives, and file downloads can be GBs, buffering them in the BFF's memory (the old
@@ -116,8 +116,10 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     // play at all and that no timeline can scrub. accept-ranges is what advertises the capability
     // in the first place; etag/cache-control let an immutable clip be fetched once instead of on
     // every scrub.
+    // uhp-version is part of the protocol's contract ("on every response", UHP V-01): the
+    // gateway stamps it and this allow-list was silently eating it.
     for (const h of ['content-disposition', 'content-length', 'content-range', 'accept-ranges',
-      'etag', 'cache-control', 'last-modified', 'vary']) {
+      'etag', 'cache-control', 'last-modified', 'vary', 'uhp-version']) {
       const v = res.headers.get(h);
       if (v) out[h] = v;
     }
