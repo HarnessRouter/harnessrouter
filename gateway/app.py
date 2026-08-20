@@ -4393,14 +4393,24 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "qwen3.7-flash"]},
     # pi (earendil-works pi coding agent) is multi-family the same way hermes is: the CLI's
     # unified LLM layer runs either family natively and anything OpenAI/Anthropic-compatible
-    # through a custom provider. The list starts as the gpt + claude catalogs — the two families
-    # whose serving paths the e2e verified — and grows the same way hermes's did: a model is
-    # added when a real pi turn on the live provider has been checked for substitution.
+    # through a custom provider. The list grew the same way hermes's did — a model is added when
+    # a real pi turn on the live provider has been checked for substitution:
+    #   2026-08-19: gpt + claude families through the product path (claude-haiku-4.5 and
+    #   gpt-5.4-mini, TokenRouter connection, trace checked for substitution).
+    #   2026-08-19: the frontier set below, each probed through the pi CLI on the TokenRouter
+    #   connection (openai-completions custom provider); every reply echoed exactly and every
+    #   response reported the requested model id. hunyuan-3, ling-3.0-flash, minimax-m3,
+    #   nemotron-3-ultra and qwen3.7-flash are NOT here: TokenRouter lists no channel for them,
+    #   hermes serves them via OpenRouter, and no OpenRouter credential was available to probe
+    #   pi with — unprobed is unlisted, per the bar at the top of this table.
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
-                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"]},
+                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                      "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                      "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                      "mistral-medium-3.5", "step-3.7-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
