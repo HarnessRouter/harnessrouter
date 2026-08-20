@@ -160,7 +160,11 @@ def _compose_cordis(home: pathlib.Path, servers: list[dict], llm: dict | None = 
         # relay; apiKeyEnv resolves a placeholder, and the relay injects the real credential
         # upstream — same isolation as the deepseek path.
         api = llm.get("api") or "openai-completions"
-        base_url = f"http://127.0.0.1:{relay_port}/v1"
+        # The same /v1 lesson the pi backend already paid for: the anthropic-messages client
+        # appends /v1/messages to its base itself, the openai clients want /v1 present. Getting
+        # it wrong here produced /v1/v1/messages against the relay — measured, not guessed.
+        base_url = (f"http://127.0.0.1:{relay_port}" if api == "anthropic-messages"
+                    else f"http://127.0.0.1:{relay_port}/v1")
         blocks.append({"id": "hr-llm", "name": "@deepseek-ai/dsh-llm-pi-ai", "config": {
             "providers": {"hr": {
                 "displayName": "HR Gateway",

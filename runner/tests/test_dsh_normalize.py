@@ -184,3 +184,21 @@ def test_build_dsh_native_anthropic_default_base(tmp_path):
     env = {"HOME": str(tmp_path)}
     _build_dsh("anthropic", Auth(api_key="k"), "claude-sonnet-4-6", "x", str(tmp_path), env)
     assert env["HR_DSH_BASE_URL"] == "https://api.anthropic.com/v1"
+
+
+def test_compose_cordis_v1_normalization_per_api(tmp_path, monkeypatch):
+    """anthropic-messages appends /v1/messages itself — its relay base must be bare; the openai
+    apis want /v1 present. The doubled /v1/v1/messages this guards against was measured live."""
+    import types, sys as _sys
+    fake = types.ModuleType("deepseek_harness_runtime")
+    cfg = tmp_path / "bundled.yml"
+    cfg.write_text("- id: sdk-jsonrpc-server\n  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'\n")
+    fake.bundled_default_config_path = lambda: str(cfg)
+    monkeypatch.setitem(_sys.modules, "deepseek_harness_runtime", fake)
+    home = tmp_path / "home"
+    out_a = pathlib.Path(dsh_driver._compose_cordis(home, [], llm={"api": "anthropic-messages"},
+                                                    relay_port=9999, model="claude-haiku-4-5")).read_text()
+    assert "baseURL: http://127.0.0.1:9999\n" in out_a and "9999/v1" not in out_a
+    out_o = pathlib.Path(dsh_driver._compose_cordis(home, [], llm={"api": "openai-responses"},
+                                                    relay_port=9999, model="gpt-5.4-mini")).read_text()
+    assert "baseURL: http://127.0.0.1:9999/v1" in out_o
