@@ -1098,11 +1098,19 @@ PI_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 _PI_CLAUDE_MODEL = re.compile(r"(?:^|/)(?:us\.anthropic\.)?claude", re.I)
 
 
-def _pi_models_json(api: str, base_url: str, api_key: str, model: str) -> str:
+def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
+                    vision: bool = True) -> str:
     """A one-provider ~/.pi/agent/models.json ("hr") for a custom endpoint. Pi's anthropic client
     appends /v1/messages to baseUrl while its openai clients expect the /v1 to already be there
     (both read straight off pi's own docs/models.md examples), so the /v1 suffix is normalized
-    per api instead of trusting how the integration happened to store the URL."""
+    per api instead of trusting how the integration happened to store the URL.
+
+    `input` is pi's capability gate, and it is load-bearing on RESUME: a session that once ran a
+    vision model can carry an image tool-result, which pi replays to the current model as a user
+    message with an image part — verified against a capturing sink. Declared text-only, pi drops
+    the image and the turn runs; declared vision on a model whose channel refuses images, the
+    whole turn dies on the provider's 400. The gateway says which models are text-only, from
+    live probes, so vision stays the default."""
     base = (base_url or "").rstrip("/")
     if api == "anthropic-messages":
         base = base.removesuffix("/v1")
@@ -1111,7 +1119,7 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str) -> str:
     return json.dumps({"providers": {"hr": {
         "baseUrl": base, "api": api, "apiKey": api_key,
         "models": [{"id": model, "name": model, "reasoning": False,
-                    "input": ["text", "image"],
+                    "input": ["text", "image"] if vision else ["text"],
                     "contextWindow": 200000, "maxTokens": 32000}],
     }}}, indent=2)
 
@@ -1146,7 +1154,7 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
 
 def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
               resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-              tools_disabled: list[str] | None = None) -> list[str]:
+              tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
     pr = provider or "anthropic"
     if pr not in PI_PROVIDERS:
         raise HTTPException(400, f"unknown pi provider '{pr}' (one of {sorted(PI_PROVIDERS)})")
@@ -1167,7 +1175,7 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
         else:
             api = "openai-completions"
         (home / ".pi" / "agent" / "models.json").write_text(
-            _pi_models_json(api, auth.base_url, auth.api_key or "", model))
+            _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision))
         pname = "hr"
     else:
         pname = pr
@@ -2225,6 +2233,7 @@ class TurnReq(BaseModel):
     image_auth: dict | None = None         # {base_url, api_key, model} for image generation via the broker
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
+    vision: bool = True                    # pi: whether the model's channel accepts image input
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
 
 
@@ -2324,7 +2333,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or PI_DEFAULT_MODEL
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                        tools_disabled=req.tools_disabled)
+                        tools_disabled=req.tools_disabled, vision=bool(req.vision))
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,

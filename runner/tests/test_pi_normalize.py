@@ -208,3 +208,22 @@ def test_models_json_v1_normalization():
     assert a["providers"]["hr"]["baseUrl"] == "https://x.example"
     b = json.loads(_pi_models_json("openai-completions", "https://x.example", "k", "m"))
     assert b["providers"]["hr"]["baseUrl"] == "https://x.example/v1"
+
+
+def test_build_text_only_model_declares_text_input(tmp_path):
+    """A text-only channel (qwen3.7-max via TokenRouter) must get input:["text"] — pi then DROPS
+    replayed image tool-results instead of sending a user+image message the channel 400s on.
+    Mechanism verified against a capturing sink: vision=True serialized the session's image as
+    a user message with an image part (the exact shape the provider rejected); vision=False
+    omitted it and the turn completed."""
+    cmd, _ = _cmdline(tmp_path, provider="tokenrouter", base_url="https://tr.example/v1",
+                      model="qwen/qwen3.7-max", vision=False)
+    mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
+    assert mj["providers"]["hr"]["models"][0]["input"] == ["text"]
+
+
+def test_build_vision_default_keeps_image_input(tmp_path):
+    _cmdline(tmp_path, provider="tokenrouter", base_url="https://tr.example/v1",
+             model="moonshotai/kimi-k3")
+    mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
+    assert mj["providers"]["hr"]["models"][0]["input"] == ["text", "image"]

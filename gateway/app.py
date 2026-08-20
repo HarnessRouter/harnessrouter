@@ -4413,6 +4413,16 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "mistral-medium-3.5", "step-3.7-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi"}
+# Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
+# 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
+#   qwen3.7-max  -> 400 InvalidParameter "Unexpected item type in content"  (rejects the TYPE)
+#   qwen3.8-max  -> 400 about image DIMENSIONS (a 1x1 probe) — i.e. it accepts images
+#   gemini-3.6-flash, deepseek-v4-pro, kimi-k3, mistral-medium-3.5, step-3.7-flash -> all 200
+# Consumed by the pi backend: pi replays a session's image tool-results to the CURRENT model
+# (a cross-model conversation is one session), so a text-only channel turns every follow-up in
+# an image-bearing session into a hard 400. Declared text-only, pi drops the image instead —
+# a degraded answer beats a dead conversation.
+_TEXT_ONLY_INPUT = {"qwen3.7-max"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
 # values win), silently rejecting the us.anthropic.* ids this set exists to allow.
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
@@ -4797,6 +4807,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "idempotency_key": f"{translator.resp_id}:{name}",
                 # token-level streaming (claude): runner adds --include-partial-messages + emits deltas
                 "partial_messages": bool(partial_messages),
+                # pi: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
+                "vision": model_req.strip().lower() not in _TEXT_ONLY_INPUT,
                 # codex streaming: run via the app-server protocol (item/agentMessage/delta)
                 "codex_appserver": bool(codex_appserver)}
         # Stop requested while we were resolving the connection / provisioning the previous
