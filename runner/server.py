@@ -1094,28 +1094,50 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
 # launches the bundled runtime executable, and every session.event notification comes back as
 # one NDJSON line {"m": method, "p": payload}. Cancel stays a process-group kill — the SDK's
 # close ladder never runs on a killed driver, and the runtime dies with the group.
-DSH_PROVIDERS = {"deepseek"}
+# "deepseek" is the launch provider (dsh's own adapter, auto-mounted); everything else rides
+# dsh-llm-pi-ai — pi's unified LLM library as a Cordis plugin — through a hand-declared route
+# at the driver's relay, so the api-by-family rules are the ones the pi backend already proved.
+DSH_PROVIDERS = {"deepseek", "anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+_DSH_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1",
+                     "openai": "https://api.openai.com/v1",
+                     "deepseek": "https://api.deepseek.com/v1"}
 DSH_PYTHON = os.environ.get("HR_DSH_PYTHON", "/data/agent-tools/dsh-venv/bin/python")
+_DSH_DEEPSEEK_MODEL = re.compile(r"(?:^|/)deepseek", re.I)
 DSH_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dsh_driver.py")
 
 
 def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                resume_session_id: str | None = None,
-               mcp_servers: list[dict] | None = None) -> list[str]:
+               mcp_servers: list[dict] | None = None, vision: bool = True) -> list[str]:
     pr = provider or "deepseek"
     if pr not in DSH_PROVIDERS:
         raise HTTPException(400, f"unknown dsh provider '{pr}' (one of {sorted(DSH_PROVIDERS)})")
-    if not auth.base_url and not auth.api_key:
-        raise HTTPException(400, "dsh needs an OpenAI-compatible endpoint (base_url) and api_key")
+    base = auth.base_url or _DSH_DEFAULT_BASE.get(pr, "")
+    if not base:
+        raise HTTPException(400, f"dsh provider '{pr}' needs a base_url (none configured)")
+    if not base.rstrip("/").endswith("/v1"):
+        base = base.rstrip("/") + "/v1"   # the relay joins upstream paths against a /v1 base
     # HR_DSH_*: consumed and scrubbed by the driver before the runtime starts. The runtime gets
     # a loopback relay URL and a placeholder key — the credential never enters its environment.
-    env["HR_DSH_BASE_URL"] = (auth.base_url or "https://api.deepseek.com/v1")
+    env["HR_DSH_BASE_URL"] = base
     env["HR_DSH_API_KEY"] = auth.api_key or ""
     # No system_prompt in the job: harness instructions land in AGENTS.md (dsh reads it via
     # its dsh-agent-instructions loader), same mechanism as codex/hermes/pi.
     job = {"prompt": prompt, "model": model, "cwd": cwd,
            "session_id": resume_session_id or "",
            "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url")]}
+    if not _DSH_DEEPSEEK_MODEL.search(model or ""):
+        # Family decides the route, not the integration's name: deepseek models keep the
+        # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
+        # family rides the pi-ai route. api by family — the same routing the pi backend
+        # live-verified on these channels.
+        if pr == "anthropic" or _PI_CLAUDE_MODEL.search(model or ""):
+            api = "anthropic-messages"
+        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+            api = "openai-responses"
+        else:
+            api = "openai-completions"
+        job["llm"] = {"api": api, "vision": vision}
     return [DSH_PYTHON, DSH_DRIVER, json.dumps(job)]
 
 
@@ -2492,7 +2514,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     elif backend == "dsh":
         model = model or DSH_DEFAULT_MODEL
         cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
-                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                         vision=bool(req.vision))
     elif backend == "pi":
         model = model or PI_DEFAULT_MODEL
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,

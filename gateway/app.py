@@ -930,12 +930,16 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "pi"): "openai-api",
     ("tokenrouter", "pi"): "tokenrouter",      ("vercel", "pi"): "tokenrouter",
     ("llmtr", "pi"): "tokenrouter",
-    # dsh (DeepSeek Harness) runs the deepseek family over any OpenAI-compatible endpoint —
-    # 'deepseek' on the runner means exactly that (base_url + key; the driver's relay
-    # normalizes aggregator stream quirks). A first-party DeepSeek Platform integration is
-    # NOT listed yet: nobody here holds a platform.deepseek.com key, and unprobed is unlisted.
-    ("tokenrouter", "dsh"): "deepseek",        ("openrouter", "dsh"): "deepseek",
-    ("vercel", "dsh"): "deepseek",             ("llmtr", "dsh"): "deepseek",
+    # dsh (DeepSeek Harness) is multi-family via dsh-llm-pi-ai — pi's unified LLM library as
+    # a Cordis plugin — so its wiring mirrors pi's: 'deepseek' on the runner is the launch
+    # adapter for the deepseek family, 'tokenrouter' again means "OpenAI/Anthropic-compatible,
+    # api picked by model family" at the driver's relay. A first-party DeepSeek Platform
+    # integration is still NOT listed: nobody here holds a platform key; unprobed is unlisted.
+    ("anthropic", "dsh"): "anthropic",         ("openai", "dsh"): "openai",
+    ("azure-foundry", "dsh"): "azure",
+    ("openrouter", "dsh"): "openai-api",
+    ("tokenrouter", "dsh"): "tokenrouter",     ("vercel", "dsh"): "tokenrouter",
+    ("llmtr", "dsh"): "tokenrouter",
 }
 
 
@@ -4315,7 +4319,7 @@ def _map_model(conn: dict, friendly: str) -> str | None:
     table = _vendor_models(provider)
     if friendly and friendly in table:
         return table[friendly]
-    if backend == "claude" or (backend in ("hermes", "pi") and provider in ("anthropic", "bedrock")):
+    if backend == "claude" or (backend in ("hermes", "pi", "dsh") and provider in ("anthropic", "bedrock")):
         # Older claude ids the catalog no longer lists still map, and a caller may pass a
         # provider-native id directly; _LEGACY_CLAUDE_IDS carries both, keyed bare (opus-4.5).
         legacy = _BEDROCK_CLAUDE if provider == "bedrock" else _ANTHROPIC_CLAUDE
@@ -4409,13 +4413,21 @@ _MODEL_CATALOG: dict[str, dict] = {
     #   nemotron-3-ultra and qwen3.7-flash are NOT here: TokenRouter lists no channel for them,
     #   hermes serves them via OpenRouter, and no OpenRouter credential was available to probe
     #   pi with — unprobed is unlisted, per the bar at the top of this table.
-    # dsh (DeepSeek Harness) is single-family BY DESIGN in this first phase: the audit that
-    # scoped this backend (2026-08-13, harnessrouter-management) defers multi-provider
-    # composition until one provider path has proven model/usage/tool/error consistency.
-    # Both models probe-verified through the full product path on the TokenRouter connection
-    # (2026-08-20), substitution-checked.
+    # dsh (DeepSeek Harness) went multi-family once the single-provider phase the audit
+    # required had proven itself (deepseek family, full product path, 2026-08-20). The wider
+    # families ride dsh-llm-pi-ai — pi's LLM library as a dsh plugin — through the driver's
+    # relay, so the serving paths are the ones pi's rows already earned; each family below was
+    # re-verified through a real dsh turn on the TokenRouter connection, substitution-checked,
+    # and the frontier set was probed per-model through the dsh driver (2026-08-20).
     "dsh": {"default": "deepseek-v4-pro",
-            "models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
+            "models": ["deepseek-v4-pro", "deepseek-v4-flash",
+                       "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                       "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                       "gemini-3.6-flash", "kimi-k3", "kimi-k2.7-code",
+                       "qwen3.7-max", "qwen3.8-max",
+                       "mistral-medium-3.5", "step-3.7-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4483,9 +4495,9 @@ def _model_authorized(requested: str, backend: str) -> bool:
         return False
     if r in {m.lower() for m in _MODEL_CATALOG.get(backend, {}).get("models", [])}:
         return True
-    if backend in ("claude", "hermes", "pi") and r in _PROVIDER_CLAUDE_IDS:
+    if backend in ("claude", "hermes", "pi", "dsh") and r in _PROVIDER_CLAUDE_IDS:
         return True   # power users may pass a provider-native claude id (claude-opus-4-8 / us.anthropic...)
-    if backend in ("codex", "hermes", "pi") and r.startswith("gpt-"):
+    if backend in ("codex", "hermes", "pi", "dsh") and r.startswith("gpt-"):
         return True   # gpt-* family; Azure deployment names vary
     if backend == "dsh" and r.startswith(("deepseek", "deepseek/")):
         return True   # deepseek family; aggregator slugs vary (deepseek/deepseek-v4-pro)

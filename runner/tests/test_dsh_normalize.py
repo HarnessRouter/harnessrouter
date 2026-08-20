@@ -165,3 +165,22 @@ def test_build_dsh_stages_creds_out_of_argv(tmp_path):
     assert job["session_id"] == "sid-9"
     assert job["mcp_servers"][0]["url"] == "https://mcp.example/mcp"
     assert "system_prompt" not in job
+
+
+def test_build_dsh_routes_by_family_not_provider(tmp_path):
+    """deepseek models keep the verified launch adapter whatever the integration is called;
+    claude/gpt/other families ride the pi-ai route with the api the pi backend proved."""
+    env = {"HOME": str(tmp_path)}
+    a = Auth(api_key="k", base_url="https://tr.example/v1")
+    j = lambda cmd: json.loads(cmd[2])
+    assert "llm" not in j(_build_dsh("tokenrouter", a, "deepseek/deepseek-v4-pro", "x", str(tmp_path), env))
+    assert j(_build_dsh("tokenrouter", a, "claude-haiku-4-5", "x", str(tmp_path), env))["llm"]["api"] == "anthropic-messages"
+    assert j(_build_dsh("tokenrouter", a, "gpt-5.4-mini", "x", str(tmp_path), env))["llm"]["api"] == "openai-responses"
+    assert j(_build_dsh("tokenrouter", a, "moonshotai/kimi-k3", "x", str(tmp_path), env))["llm"]["api"] == "openai-completions"
+    assert j(_build_dsh("tokenrouter", a, "qwen/qwen3.7-max", "x", str(tmp_path), env, vision=False))["llm"]["vision"] is False
+
+
+def test_build_dsh_native_anthropic_default_base(tmp_path):
+    env = {"HOME": str(tmp_path)}
+    _build_dsh("anthropic", Auth(api_key="k"), "claude-sonnet-4-6", "x", str(tmp_path), env)
+    assert env["HR_DSH_BASE_URL"] == "https://api.anthropic.com/v1"
