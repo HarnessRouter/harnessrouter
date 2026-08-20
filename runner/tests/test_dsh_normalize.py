@@ -202,3 +202,22 @@ def test_compose_cordis_v1_normalization_per_api(tmp_path, monkeypatch):
     out_o = pathlib.Path(dsh_driver._compose_cordis(home, [], llm={"api": "openai-responses"},
                                                     relay_port=9999, model="gpt-5.4-mini")).read_text()
     assert "baseURL: http://127.0.0.1:9999/v1" in out_o
+
+
+# ── reasoning_effort strip-and-retry (conformance T-01 against LLMTR, 2026-08-20) ──────────────
+# The deepseek-official adapter sends reasoning_effort unconditionally; aggregators serving
+# deepseek/* over the OpenAI shape refuse the whole request. The relay retries once without the
+# parameter and then strips it for the rest of the turn.
+
+def test_drop_reasoning_effort_removes_only_that_key():
+    body = json.dumps({"model": "deepseek-v4-pro", "reasoning_effort": "high",
+                       "messages": [{"role": "user", "content": "hi"}]}).encode()
+    out = json.loads(dsh_driver._drop_reasoning_effort(body))
+    assert "reasoning_effort" not in out
+    assert out["model"] == "deepseek-v4-pro" and out["messages"][0]["content"] == "hi"
+
+
+def test_drop_reasoning_effort_leaves_other_bodies_alone():
+    for body in (b"not json at all", b"[1,2,3]",
+                 json.dumps({"model": "m", "messages": []}).encode()):
+        assert dsh_driver._drop_reasoning_effort(body) == body

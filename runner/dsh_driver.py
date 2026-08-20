@@ -49,10 +49,31 @@ def _rewrite_sse_line(line: bytes) -> bytes:
         return line
 
 
+# The deepseek-official adapter sends `reasoning_effort` on every request — DeepSeek's own API
+# takes it, but aggregators serving deepseek/* over the OpenAI shape refuse the whole request
+# (LLMTR: 'The "reasoning_effort" parameter is not supported by "deepseek/deepseek-v4-pro"',
+# captured 2026-08-20 by conformance T-01). The relay retries such a rejection ONCE without the
+# parameter and then strips it for the rest of the turn, so a provider that accepts it keeps it
+# and one that refuses it costs one extra round trip, once. Flipped by _Relay, read per request.
+_strip_reasoning_effort = False
+
+
+def _drop_reasoning_effort(body: bytes) -> bytes:
+    try:
+        obj = json.loads(body)
+        if isinstance(obj, dict) and "reasoning_effort" in obj:
+            del obj["reasoning_effort"]
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 class _Relay(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_POST(self):  # noqa: N802
+        global _strip_reasoning_effort
         body = self.rfile.read(int(self.headers.get("content-length") or 0))
         # The adapters' base URLs point at this relay and they append their own API paths
         # (/v1/chat/completions, /v1/responses, /v1/messages); the upstream base ends in /v1 —
@@ -65,18 +86,29 @@ class _Relay(http.server.BaseHTTPRequestHandler):
         headers["authorization"] = f"Bearer {UPSTREAM_KEY}"
         headers["x-api-key"] = UPSTREAM_KEY   # the anthropic-messages spelling; harmless elsewhere
         headers.setdefault("accept", "*/*")
-        req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
-                                     data=body, method="POST", headers=headers)
-        try:
-            resp = urllib.request.urlopen(req, timeout=600)
-        except urllib.error.HTTPError as e:  # pass provider errors through verbatim
-            data = e.read()
-            self.send_response(e.code)
-            self.send_header("content-type", e.headers.get("content-type") or "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
+        if _strip_reasoning_effort:
+            body = _drop_reasoning_effort(body)
+        resp = None
+        for attempt in (0, 1):
+            req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
+                                         data=body, method="POST", headers=headers)
+            try:
+                resp = urllib.request.urlopen(req, timeout=600)
+                break
+            except urllib.error.HTTPError as e:
+                data = e.read()
+                stripped = _drop_reasoning_effort(body)
+                if attempt == 0 and b"reasoning_effort" in data and stripped != body:
+                    _strip_reasoning_effort = True
+                    body = stripped
+                    continue
+                # pass provider errors through verbatim
+                self.send_response(e.code)
+                self.send_header("content-type", e.headers.get("content-type") or "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
         ctype = resp.headers.get("content-type") or ""
         # The empty-string id/name quirk is a chat-completions stream shape; other protocols
         # (anthropic-messages, openai-responses) pass through byte-faithful.
