@@ -109,10 +109,17 @@ def _emit(method: str, payload) -> None:
     sys.stdout.flush()
 
 
-def _mcp_cordis(home: pathlib.Path, servers: list[dict]) -> str | None:
-    """Bundled default composition + one dsh-mcp-client entry per enabled server."""
+def _compose_cordis(home: pathlib.Path, servers: list[dict]) -> str:
+    """Our runtime composition: the wheel's bundled default, with the SDK server entry swapped
+    for the resume-or-create subclass (see hr_dsh_server.cjs — packaged-bin loads
+    configuration-relative plugins), plus one dsh-mcp-client entry per enabled MCP server."""
     import deepseek_harness_runtime as runtime
     base = pathlib.Path(runtime.bundled_default_config_path()).read_text()
+    needle = "name: '@deepseek-ai/dsh-sdk-jsonrpc-server'"
+    if base.count(needle) != 1:
+        raise SystemExit("dsh bundled cordis no longer names the sdk server exactly once — "
+                         "re-verify hr_dsh_server.cjs against this runtime before shipping")
+    base = base.replace(needle, "name: './hr_dsh_server.cjs'")
     blocks = []
     for i, s in enumerate(servers):
         url = (s or {}).get("url")
@@ -130,12 +137,15 @@ def _mcp_cordis(home: pathlib.Path, servers: list[dict]) -> str | None:
         if hdrs:
             entry["config"]["headers"] = hdrs
         blocks.append(entry)
-    if not blocks:
-        return None
-    import yaml
     path = home / ".dsh" / "cordis.yml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(base + "\n" + yaml.safe_dump(blocks, sort_keys=False))
+    import shutil
+    shutil.copy(pathlib.Path(__file__).with_name("hr_dsh_server.cjs"), path.parent / "hr_dsh_server.cjs")
+    extra = ""
+    if blocks:
+        import yaml
+        extra = "\n" + yaml.safe_dump(blocks, sort_keys=False)
+    path.write_text(base + extra)
     return str(path)
 
 
@@ -157,10 +167,8 @@ def main() -> int:
     from deepseek_harness import DeepSeekHarness
 
     kwargs = dict(provider="deepseek-official", model=job["model"],
-                  cwd=cwd, session_root=str(sessions))
-    cordis = _mcp_cordis(home, job.get("mcp_servers") or [])
-    if cordis:
-        kwargs["cordis"] = cordis
+                  cwd=cwd, session_root=str(sessions),
+                  cordis=_compose_cordis(home, job.get("mcp_servers") or []))
     sid = job.get("session_id") or None
     _emit("__hr_init", {"session_id": sid or "", "relay_port": srv.server_address[1]})
     with DeepSeekHarness(**kwargs) as h:
