@@ -236,7 +236,7 @@ cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null |
 trap cleanup TERM INT EXIT
 
 avail=""; missing=""
-for b in claude codex hermes; do
+for b in claude codex hermes pi; do
   wanted "$b" || continue
   if [ -x "$(backend_bin "$b")" ]; then avail="$avail $b"; else missing="$missing $b"; fi
 done
