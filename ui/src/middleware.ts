@@ -23,6 +23,19 @@ import { AUTH_DISABLED, SELF_HOSTED, SESSION_COOKIE, sessionValid } from '@/lib/
 // protects nothing and breaks the login page, which needs its own logo before anyone can sign in.
 const STATIC_ASSET = /\.(svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|css|js|map)$/i;
 
+/** An API call authenticating with a user-minted key (Authorization: Bearer sk-hr-…).
+ *  The GATEWAY is the authority on those keys — it resolves the org from the key and answers
+ *  401 itself when the key is bad — but this gate ran first and rejected every bearer-only
+ *  request on the cookie check alone, which made the keys the console's own Keys page mints
+ *  unusable on self-host (and made the UHP conformance suite, which authenticates exactly
+ *  this way, unrunnable). Only the API proxy is opened, and only for a bearer in the key's
+ *  own format: pages and everything else stay cookie-gated. */
+function isApiKeyCall(req: NextRequest, path: string): boolean {
+  if (!path.startsWith('/api/harness/')) return false;
+  const auth = req.headers.get('authorization') || '';
+  return /^Bearer sk-hr-[A-Za-z0-9]+$/.test(auth);
+}
+
 /** Reachable without a session: the login page, the endpoints it posts to, and static assets.
  *  Everything else is an allow-list miss, so a route added later is gated by default. */
 function isPublic(path: string): boolean {
@@ -42,6 +55,7 @@ export async function middleware(req: NextRequest) {
 
   const { pathname, search } = req.nextUrl;
   if (isPublic(pathname)) return NextResponse.next();
+  if (isApiKeyCall(req, pathname)) return NextResponse.next();
   if (await sessionValid(req.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
 
   // An API call gets a status it can act on; a page gets sent to the form. Redirecting an API
