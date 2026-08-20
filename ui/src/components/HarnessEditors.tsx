@@ -1,10 +1,11 @@
 'use client';
 // Harness capability editors, shared by the Harness Settings page and the Tasks workbench:
-//   SkillEditor, Agent Skills folder editor (tree + md/code editor + uploads)
-//   McpModal   , MCP server add/edit with live Test connection
+//   SkillEditor   , Agent Skills folder editor (tree + md/code editor + uploads)
+//   McpRow        , one row of a harness's tool list
+//   McpModal      , add/edit for a row, with a live Test connection
 // Extracted from workbench/page.tsx (page files must not carry extra named exports).
 import { useRef, useState } from 'react';
-import { testMcp, storeMcpSecret } from '@/lib/harness';
+import { testMcp, storeMcpSecret, type McpServer } from '@/lib/harness';
 import { Svg, Chevron, IcSkill } from 'reifyui';
 
 const IcTrash = () => <Svg s={15}><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6" /></Svg>;
@@ -316,11 +317,42 @@ export function SkillEditor({ skill, onClose, onSave, nameEditable = false, onNa
   );
 }
 
-// ── MCP server add/edit modal: name + endpoint + bearer token, with a live Test connection
-// that lists the server's tools (handshake runs server-side via the gateway). ─────────────────
-export type McpServer = { id: string; name: string; enabled: boolean; url?: string; auth?: string; transport?: string };
+// ── A harness's tool list: ONE row renderer, no kinds ─────────────────────────────────────────
+// Every entry is an MCP server named by a URL, and that is the whole story this row tells. A
+// database a kit connected is one of them: it has a name, an address and a credential like any
+// other, so it gets the same icon, the same subtitle, the same Edit, Delete and toggle. There is
+// deliberately no branch here — a branch would need a field to branch on, and inventing that
+// field on the entry is what made the database a parallel path in the first place.
+export function McpRow({ server, busy, onEdit, onDelete, onToggle }: {
+  server: McpServer; busy?: boolean;
+  onEdit: () => void; onDelete: () => void; onToggle: () => void;
+}) {
+  const enabled = server.enabled !== false;
+  return (
+    <div className="capability-row">
+      <span className="capability-icon">
+        <iconify-icon icon="tabler:world-www"></iconify-icon>
+      </span>
+      <div className="capability-copy"><strong>{server.name}</strong>
+        <span>Custom MCP · {server.url || 'endpoint'}</span></div>
+      <div className="capability-actions">
+        <button className="button quiet small" type="button" disabled={busy} onClick={onEdit}>Edit</button>
+        <button className="button quiet small" type="button" disabled={busy} onClick={onDelete}>Delete</button>
+        <button className="toggle-button" type="button" disabled={busy} aria-pressed={enabled} onClick={onToggle}>
+          {enabled ? 'Enabled' : 'Disabled'}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Tool add/edit modal ───────────────────────────────────────────────────────────────────────
+// Name + endpoint + bearer token, with a live Test connection that lists the server's tools
+// (handshake runs server-side via the gateway). One form, because there is one kind of entry:
+// a database a kit connected edits here too, and editing its address away from the gateway
+// breaks it exactly the way editing any server's address to the wrong host breaks that one.
 export function McpModal({ server, declaredHeaders = [], onClose, onSave }: {
-  server: McpServer | null; declaredHeaders?: string[]; onClose: () => void; onSave: (s: McpServer) => void;
+  server: McpServer | null; declaredHeaders?: string[];
+  onClose: () => void; onSave: (s: McpServer) => void;
 }) {
   const [name, setName] = useState(server?.name || '');
   const [url, setUrl] = useState(server?.url || '');

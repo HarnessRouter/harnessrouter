@@ -27,7 +27,7 @@
 # This is the SAME console the hosted product runs. Surfaces with no self-hosted backend
 # (billing, marketplace, analytics, sign-in) are hidden by the edition flag rather than removed,
 # so the two stay one codebase. See ui/src/lib/edition.ts.
-FROM node:20-slim AS ui
+FROM node:22-slim AS ui
 WORKDIR /ui
 # git: the UI depends on the ReifyUI component library straight from its repository.
 RUN apt-get update -y && apt-get install -y --no-install-recommends git ca-certificates \
@@ -60,9 +60,9 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
         curl ca-certificates git bash tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Document preview. The built-in harnesses ship docx/pptx/xlsx skills, so agents produce those
-# files routinely — and a presentation you can only download is a worse answer than one you can
-# look at. Browsers render none of them, so the console asks the gateway for a PDF rendition and
+# Document preview. The built-in skills create .docx/.pptx/.xlsx routinely, and LibreOffice is
+# also how those become a PDF — the officecli skill's own PDF export needs a plugin that is not
+# installed. A presentation you can only download is a worse answer than one you can look at. Browsers render none of them, so the console asks the gateway for a PDF rendition and
 # LibreOffice headless is what makes it. Impress/Writer/Calc only, no recommends: the full
 # libreoffice metapackage drags in Java and a desktop stack for no benefit here.
 ARG WITH_DOC_PREVIEW=1
@@ -73,8 +73,21 @@ RUN set -eux; \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Node is needed for the UI server and for the npm-based agent CLIs.
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# Assembling generated clips into one film. ffmpeg cuts and letterboxes the shots; ffprobe is how
+# the gateway learns a clip's real duration and how the assembled film's length is checked against
+# the timeline it was cut from. Built without it, the media server reports export unavailable and
+# refuses honestly — every clip is still downloadable on its own — rather than degrading silently.
+ARG WITH_MEDIA=1
+RUN set -eux; \
+    if [ "$WITH_MEDIA" = "1" ]; then \
+      apt-get update -y && apt-get install -y --no-install-recommends ffmpeg \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Node is needed for the UI server and for the npm-based agent CLIs. 22, not 20: pi's
+# engine floor is >=22.19, and node 20 has been end-of-life since April 2026 anyway —
+# the other CLIs (claude >=18, codex >=20) run unchanged on 22.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
@@ -95,6 +108,50 @@ RUN grep -viE "^(azure-|azure_)" /app/gateway/requirements.txt > /app/gateway/re
     && pip install --no-cache-dir -r /app/gateway/req.local.txt \
     && pip install --no-cache-dir -r /app/runner/requirements.txt
 
+# Built-in skills, from their own repository. Pinned by ref so two builds of the same image tag
+# ship the same catalogue; HR_SKILLS_REF=<sha> for an exact pin, WITH_BUILTIN_SKILLS=0 for none.
+ARG WITH_BUILTIN_SKILLS=1
+ARG HR_SKILLS_REPO=https://github.com/HarnessRouter/skills.git
+ARG HR_SKILLS_REF=main
+ENV HR_BUILTIN_SKILLS_DIR=/opt/harnessrouter/skills
+# officecli keeps an edited document open in a resident process and flushes it to disk some seconds
+# after that process goes idle. A task that writes a document and then ENDS races that timer: the
+# last file it touched is collected before the flush, and the user downloads a workbook whose
+# content silently is not there — `validate` still passes, because the in-memory document is fine.
+# Observed exactly that way: a spreadsheet whose every cell went into a sheet the saved file did
+# not contain. Flushing on every command costs some speed and removes the race entirely, which is
+# the right trade for a document a person is going to open.
+ENV OFFICECLI_RESIDENT_FLUSH=each
+COPY docker/install-skills.sh /tmp/install-skills.sh
+# The RUN layer is keyed on this ARG, so passing a commit sha is what makes the layer rebuild when
+# the skills repo moves. Leaving HR_SKILLS_REF at `main` keeps whatever catalogue an earlier build
+# fetched — release CI resolves the sha and passes it, which is both the cache-bust and the record
+# of exactly what shipped. A local build that wants the newest skills should pass a sha too.
+#
+# This used to be an `ADD https://api.github.com/...` fetching the branch head. That call is
+# unauthenticated, GitHub allows 60 an hour per IP, and CI runners share a busy pool — so every
+# release build eventually died on "failed to load cache key: invalid response status 403" before
+# it compiled a line.
+RUN chmod +x /tmp/install-skills.sh \
+    && WITH_BUILTIN_SKILLS="$WITH_BUILTIN_SKILLS" HR_SKILLS_REPO="$HR_SKILLS_REPO" \
+       HR_SKILLS_REF="$HR_SKILLS_REF" HR_SKILLS_DIR=/opt/harnessrouter/skills \
+       /tmp/install-skills.sh \
+    && rm -f /tmp/install-skills.sh
+
+# Starter Kits: a Harness plus an app, both baked in. Same pull-and-pin shape as the skills
+# bundle above, and the same rule: pass a commit sha to get the newest catalogue, because that
+# is what changes the layer's inputs.
+ARG WITH_STARTER_KITS=1
+ARG HR_KITS_REPO=https://github.com/HarnessRouter/starter-kit.git
+ARG HR_KITS_REF=main
+ENV HR_KITS_DIR=/opt/harnessrouter/kits
+COPY docker/install-kits.sh /tmp/install-kits.sh
+RUN chmod +x /tmp/install-kits.sh \
+    && WITH_STARTER_KITS="$WITH_STARTER_KITS" HR_KITS_REPO="$HR_KITS_REPO" \
+       HR_KITS_REF="$HR_KITS_REF" HR_KITS_DIR=/opt/harnessrouter/kits \
+       /tmp/install-kits.sh \
+    && rm -f /tmp/install-kits.sh
+
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/
 COPY docker/entrypoint.sh /app/entrypoint.sh
@@ -107,9 +164,23 @@ COPY --from=ui /ui/public           /app/ui/public
 
 # The agent CLIs refuse to run as root (they gate their own permission bypass on it), so the
 # runtime user is unprivileged and owns the workspace and data volume.
+#
+# The `rm -rf /home/agent/.npm` is not tidying. HOME is already /home/agent while the kit apps are
+# built above, and those builds run as root — so npm leaves ~1600 root-owned files in the cache
+# the RUNTIME user then cannot write to. First start-up installs the agent CLIs into the data
+# volume as `agent`, npm hits EACCES on its own cache, and the install fails. Its output is
+# discarded (entrypoint.sh: `|| true`), so the only symptom is one WARN line and then every turn
+# on Claude Code or Codex failing. Hermes survives because it installs through pip, into a venv.
+#
+# That made two of the three backends unusable on any fresh volume — which is EVERY new install of
+# this image. It was invisible here because a long-lived volume keeps CLIs installed before the
+# fault existed. The cache is build-time garbage with no runtime value, so it is deleted rather
+# than chowned: nothing can inherit ownership of something that is not there.
 RUN useradd -m -u 10001 agent \
+    && rm -rf /home/agent/.npm /root/.npm \
     && mkdir -p /data \
-    && chown -R agent:agent /data /app
+    && chown -R agent:agent /data /app /home/agent \
+    && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits
 USER agent
 
 EXPOSE 3000

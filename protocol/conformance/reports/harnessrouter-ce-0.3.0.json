@@ -1,0 +1,434 @@
+{
+  "protocol": "uhp",
+  "protocol_version": "2026-08-11",
+  "target": "HarnessRouter Community Edition 0.3.0 (self-hosted container)",
+  "requested_class": "full",
+  "conformant": true,
+  "highest_class_passed": "full",
+  "summary": {
+    "pass": 52,
+    "fail": 0,
+    "skip": 0,
+    "error": 0,
+    "total": 52
+  },
+  "checks": [
+    {
+      "id": "D-01",
+      "title": "Discovery document is served",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#2-capability-discovery",
+      "outcome": "pass",
+      "detail": "conformance_class=full versions=['2026-08-11']"
+    },
+    {
+      "id": "D-02",
+      "title": "Discovery is served without authentication",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#2-capability-discovery",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "D-03",
+      "title": "Discovery document matches the schema",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/schema.md",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "D-04",
+      "title": "default_version is one of versions",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#2-capability-discovery",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "D-05",
+      "title": "conformance_class agrees with capabilities",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#2-capability-discovery",
+      "outcome": "pass",
+      "detail": "class=full"
+    },
+    {
+      "id": "V-01",
+      "title": "UHP-Version header on every response",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#1-version-negotiation",
+      "outcome": "pass",
+      "detail": "UHP-Version: 2026-08-11"
+    },
+    {
+      "id": "V-02",
+      "title": "A supported version is honoured",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#1-version-negotiation",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "V-03",
+      "title": "An unsupported version is refused, not silently substituted",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#1-version-negotiation",
+      "outcome": "pass",
+      "detail": "supported=['2026-08-11']"
+    },
+    {
+      "id": "A-01",
+      "title": "Authenticated endpoints reject an absent credential",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/architecture.md#5-authentication",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "A-02",
+      "title": "Authenticated endpoints reject an invalid credential",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/architecture.md#5-authentication",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "E-01",
+      "title": "Errors use the structured envelope",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/errors.md#1-the-error-envelope",
+      "outcome": "pass",
+      "detail": "code=harness_not_found"
+    },
+    {
+      "id": "E-02",
+      "title": "Unknown harness reports harness_not_found",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/errors.md#31-request-and-routing",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "E-03",
+      "title": "Unknown response reports response_not_found",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/errors.md#31-request-and-routing",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "E-04",
+      "title": "Error messages carry no stack traces",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/errors.md#1-the-error-envelope",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "H-01",
+      "title": "Harness list is served and well formed",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#1-discovering-harnesses",
+      "outcome": "pass",
+      "detail": "5 harness(es)"
+    },
+    {
+      "id": "H-02",
+      "title": "A harness can be fetched by id",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#1-discovering-harnesses",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "H-03",
+      "title": "Model catalogue is served and availability is a boolean",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#3-models",
+      "outcome": "pass",
+      "detail": "39/44 models available"
+    },
+    {
+      "id": "H-04",
+      "title": "Per-harness model list is served",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#3-models",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "T-01",
+      "title": "A non-streaming task returns a valid Response",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/tasks.md#3-the-response-object",
+      "outcome": "pass",
+      "detail": "status=completed in 6.4s"
+    },
+    {
+      "id": "T-02",
+      "title": "A finished task is in a terminal state",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#3-task-lifecycle",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "T-03",
+      "title": "The response names the model that actually ran",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/tasks.md#13-model-selection-and-substitution",
+      "outcome": "pass",
+      "detail": "model=claude-opus-4.8"
+    },
+    {
+      "id": "T-04",
+      "title": "The response reports its session",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#4-session-lifecycle",
+      "outcome": "pass",
+      "detail": "session_id=hsess3db19fb79ef74a34a425e165e49ccd3c"
+    },
+    {
+      "id": "T-05",
+      "title": "usage is an object or explicitly null, never fabricated",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/tasks.md#3-the-response-object",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "T-06",
+      "title": "A stored response can be read back",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/tasks.md#4-reading-a-task-back",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "T-07",
+      "title": "Response ids are prefixed",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/architecture.md#3-object-model",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-01",
+      "title": "A streaming task emits events",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#1-opening-a-stream",
+      "outcome": "pass",
+      "detail": "9 events"
+    },
+    {
+      "id": "S-02",
+      "title": "Stream content type is text/event-stream",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#1-opening-a-stream",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-03",
+      "title": "Every event validates against the schema",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/schema.md",
+      "outcome": "pass",
+      "detail": "9 events valid"
+    },
+    {
+      "id": "S-04",
+      "title": "sequence_number starts at 0 and has no gaps",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#3-ordering-guarantees",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-05",
+      "title": "The first event is response.created",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#3-ordering-guarantees",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-06",
+      "title": "The stream ends with exactly one terminal event",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#4-terminal-events",
+      "outcome": "pass",
+      "detail": "terminal=response.completed"
+    },
+    {
+      "id": "S-07",
+      "title": "The terminal event carries the complete response",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#4-terminal-events",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-08",
+      "title": "Streaming and non-streaming agree on the result shape",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#6-non-streaming",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-09",
+      "title": "The stream is progressive, not buffered to the end",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#1-opening-a-stream",
+      "outcome": "pass",
+      "detail": "events spread over 5.1s"
+    },
+    {
+      "id": "C-01",
+      "title": "A task can continue a session",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#1-continuing-a-session",
+      "outcome": "pass",
+      "detail": "session hsess3db19fb79ef74a34a425e165e49ccd3c extended"
+    },
+    {
+      "id": "C-02",
+      "title": "Cancelling a terminal task succeeds and changes nothing",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#4-cancelling",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "C-03",
+      "title": "A running task can be cancelled and ends non-running",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#4-cancelling",
+      "outcome": "pass",
+      "detail": "final status=cancelled"
+    },
+    {
+      "id": "X-01",
+      "title": "Sessions can be listed",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/sessions.md#2-listing-sessions",
+      "outcome": "pass",
+      "detail": "5 session(s)"
+    },
+    {
+      "id": "X-02",
+      "title": "Session listing reports the end of pagination explicitly",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/sessions.md#2-listing-sessions",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "X-03",
+      "title": "A session can be inspected",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/sessions.md#3-inspecting-a-session",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "X-04",
+      "title": "A session's turn history is available",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/sessions.md#3-inspecting-a-session",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "X-05",
+      "title": "A file can be sent as task input",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/files.md#1-sending-files-in",
+      "outcome": "pass",
+      "detail": "the harness read the file and echoed the token"
+    },
+    {
+      "id": "X-06",
+      "title": "Artifacts of a session can be listed",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/files.md#22-by-listing-the-session",
+      "outcome": "pass",
+      "detail": "1 artifact(s)"
+    },
+    {
+      "id": "X-07",
+      "title": "An artifact downloads as raw bytes with nosniff",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/files.md#3-downloading",
+      "outcome": "pass",
+      "detail": "11 bytes, text/plain; charset=utf-8"
+    },
+    {
+      "id": "X-08",
+      "title": "Artifact ids do not traverse outside their container",
+      "class": "extended",
+      "spec": "protocol/versions/2026-08-11/files.md#5-retention-and-scope",
+      "outcome": "pass",
+      "detail": "traversal probes refused"
+    },
+    {
+      "id": "F-01",
+      "title": "A harness can be created, updated and deleted",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#4-managing-harnesses",
+      "outcome": "pass",
+      "detail": "created, updated and deleted chrn_89269ae2a0b04d30b053333ac207e050"
+    },
+    {
+      "id": "F-03",
+      "title": "A skill folder round-trips through create and read",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#42-skills",
+      "outcome": "pass",
+      "detail": "3 files incl. nested + binary"
+    },
+    {
+      "id": "F-04",
+      "title": "An unrelated harness edit does not destroy skill contents",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#42-skills",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "F-05",
+      "title": "A skill bundle without SKILL.md is refused at config time",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#42-skills",
+      "outcome": "pass",
+      "detail": "refused with HTTP 400"
+    },
+    {
+      "id": "F-06",
+      "title": "MCP servers and disabled tools round-trip",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#41-mcp-servers",
+      "outcome": "pass",
+      "detail": "mcp + disabledTools preserved"
+    },
+    {
+      "id": "F-07",
+      "title": "Configured harnesses are cleaned up",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#53-delete",
+      "outcome": "pass",
+      "detail": "3 removed"
+    },
+    {
+      "id": "F-02",
+      "title": "Creating a harness with an unsupported base is refused",
+      "class": "full",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#41-create",
+      "outcome": "pass",
+      "detail": ""
+    }
+  ],
+  "run_date": "2026-08-11"
+}
