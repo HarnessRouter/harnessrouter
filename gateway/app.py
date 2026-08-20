@@ -10894,6 +10894,9 @@ _BASE_CATALOG: dict[str, dict] = {
     },
     "dsh": {
         "label": "DeepSeek Harness", "backend": "dsh", "status": "ready",
+        # MCP note: the pinned runtime wheel (0.1.0rc7) does not bundle dsh's MCP client yet,
+        # so configured MCP servers are announced-and-skipped per turn (see dsh_driver.py).
+        # The runner flips DSH_RUNTIME_HAS_MCP when the pin moves to a build that ships it.
         "system_prompt": ("You are DeepSeek Harness, an autonomous coding agent. You work on a "
                           "real git workspace, running shell commands and editing files to "
                           "complete the task end to end."),

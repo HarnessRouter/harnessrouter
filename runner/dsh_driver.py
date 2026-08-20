@@ -109,6 +109,14 @@ def _emit(method: str, payload) -> None:
     sys.stdout.flush()
 
 
+# Whether the PINNED runtime wheel bundles @deepseek-ai/dsh-mcp-client. rc7 does NOT — the
+# upstream sdk-runtime README already documents the plugin as bundled, but the wheel predates
+# it: naming the entry makes the plugin tree fail, and a failed tree leaves the runtime alive
+# with a mute stdout, which reads as a hang (measured: the initialize response simply never
+# comes). Flip this when the wheel pin moves to a build that ships the plugin — and re-verify.
+DSH_RUNTIME_HAS_MCP = False
+
+
 def _compose_cordis(home: pathlib.Path, servers: list[dict]) -> str:
     """Our runtime composition: the wheel's bundled default, with the SDK server entry swapped
     for the resume-or-create subclass (see hr_dsh_server.cjs — packaged-bin loads
@@ -166,9 +174,20 @@ def main() -> int:
 
     from deepseek_harness import DeepSeekHarness
 
+    mcp = job.get("mcp_servers") or []
+    if mcp and not DSH_RUNTIME_HAS_MCP:
+        # The pi precedent: a capability the harness asked for but this build cannot provide is
+        # SAID, and the turn still runs — a loud line beats a task wedged on a mute runtime.
+        print("[dsh] MCP servers are configured on this harness, but the pinned DeepSeek Harness "
+              "runtime (0.1.0rc7) does not bundle its MCP client yet — this turn runs without "
+              "them. The next runtime pin restores them.", flush=True)
+        mcp = []
     kwargs = dict(provider="deepseek-official", model=job["model"],
                   cwd=cwd, session_root=str(sessions),
-                  cordis=_compose_cordis(home, job.get("mcp_servers") or []))
+                  cordis=_compose_cordis(home, mcp),
+                  # A runtime whose plugin tree failed stays alive with a mute stdout; without a
+                  # bound the initialize request waits forever and the turn reads as a hang.
+                  request_timeout_seconds=180.0)
     sid = job.get("session_id") or None
     _emit("__hr_init", {"session_id": sid or "", "relay_port": srv.server_address[1]})
     with DeepSeekHarness(**kwargs) as h:
