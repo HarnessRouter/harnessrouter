@@ -27,7 +27,7 @@
 # This is the SAME console the hosted product runs. Surfaces with no self-hosted backend
 # (billing, marketplace, analytics, sign-in) are hidden by the edition flag rather than removed,
 # so the two stay one codebase. See ui/src/lib/edition.ts.
-FROM node:20-slim AS ui
+FROM node:22-slim AS ui
 WORKDIR /ui
 # git: the UI depends on the ReifyUI component library straight from its repository.
 RUN apt-get update -y && apt-get install -y --no-install-recommends git ca-certificates \
@@ -84,8 +84,10 @@ RUN set -eux; \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Node is needed for the UI server and for the npm-based agent CLIs.
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# Node is needed for the UI server and for the npm-based agent CLIs. 22, not 20: pi's
+# engine floor is >=22.19, and node 20 has been end-of-life since April 2026 anyway —
+# the other CLIs (claude >=18, codex >=20) run unchanged on 22.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
