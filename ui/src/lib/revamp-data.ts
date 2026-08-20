@@ -149,7 +149,15 @@ export async function fetchHarnessRows(): Promise<{ rows: HarnessRow[]; all: Tra
       stats: statsFor(byHarness.get(c.id) || []),
     });
   }
-  rows.sort((a, b) => (b.stats.lastActivity || 0) - (a.stats.lastActivity || 0));
+  // Customs first (the things you made, most recently active on top); built-ins after, in
+  // their fixed catalog order. Activity-sorting the built-ins made the list reshuffle under
+  // you — whichever base you had just tried jumped the queue.
+  const oobIndex = new Map(OOB.map((o: OobHarness, i: number) => [o.id, i]));
+  rows.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'custom' ? -1 : 1;
+    if (a.kind === 'builtin') return (oobIndex.get(a.id) ?? 99) - (oobIndex.get(b.id) ?? 99);
+    return (b.stats.lastActivity || 0) - (a.stats.lastActivity || 0);
+  });
   return { rows, all };
 }
 

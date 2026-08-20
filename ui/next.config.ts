@@ -2,6 +2,18 @@ import path from "node:path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // This repository is the self-hosted edition and cannot build another, so that is the default
+  // rather than something every command has to remember to pass.
+  //
+  // The console is one codebase serving two editions, and which one it is gets inlined into the
+  // client bundle from this value at build time. The Dockerfile sets it too; nothing set it for
+  // `npm run dev`, so running the console locally rendered the HOSTED sign-in — an email field, a
+  // password reset, and a "Create one" button pointing at an accounts service no single box has.
+  // The first thing a new contributor saw was a form that cannot work, and a build that loses the
+  // flag SHIPS that form: an instance once went out with a sign-in nobody could pass.
+  //
+  // Still an override, not a constant, because the same source also builds the hosted console.
+  env: { NEXT_PUBLIC_HR_EDITION: process.env.NEXT_PUBLIC_HR_EDITION || "selfhost" },
   // Blue-green deploys: each slot builds AND serves from its own dist dir, so a build never
   // clobbers the directory the live server is reading (mismatched-chunk 404s) and the new
   // slot boots fully before nginx flips — zero 502s during rollout.

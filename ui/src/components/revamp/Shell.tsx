@@ -40,6 +40,9 @@ function highlight(text: string, q: string): React.ReactNode {
 const WORKSPACE_NAV = [
   { href: '/quickstart', icon: 'tabler:rocket', label: 'Quickstart' },
   { href: '/overview', icon: 'tabler:home', label: 'Overview' },
+  // Above Harnesses on purpose: a kit IS a configured Harness plus its app, so it is the
+  // shorter path to something working, and the thing to try before building one by hand.
+  { href: '/kits', icon: 'tabler:sparkles', label: 'Starter Kits' },
   { href: '/harnesses', icon: 'tabler:assembly', label: 'Harnesses' },
   { href: '/tasks', icon: 'tabler:list-details', label: 'Tasks' },
   // Monetization (builder revenue / Stripe Connect) hidden until the backend ships, owner

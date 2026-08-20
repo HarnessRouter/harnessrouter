@@ -9,7 +9,7 @@ into the session; see docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md S0.5).
 A turn runs ONE backend CLI one-shot over /workspace and normalizes its events into a
 single canonical schema (Claude Code `stream-json`) so everything downstream is uniform.
 
-Backends + providers (registry-driven; adding Pi = a new BACKENDS entry):
+Backends + providers (registry-driven — pi was added as exactly that one entry):
   backend "claude" (Claude Code CLI), providers:
     - anthropic   : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
     - bedrock     : CLAUDE_CODE_USE_BEDROCK=1 + AWS creds/bearer + region
@@ -24,6 +24,17 @@ Backends + providers (registry-driven; adding Pi = a new BACKENDS entry):
     - azure-foundry : AZURE_FOUNDRY_API_KEY + AZURE_FOUNDRY_BASE_URL (gpt family)
     - bedrock       : AWS_BEARER_TOKEN_BEDROCK (or key pair) + AWS_REGION (claude family)
     - anthropic     : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
+  backend "dsh" (DeepSeek Harness; official Python SDK drives the bundled JSON-RPC
+  runtime — runner/dsh_driver.py re-emits its session.events as NDJSON):
+    - deepseek    : any OpenAI-compatible deepseek-family endpoint; DEEPSEEK-shaped auth
+                    goes to the driver as HR_DSH_* and stays OUT of the runtime env
+  backend "pi" (earendil-works pi coding agent; `pi -p --mode json` event stream,
+  multi-family like hermes — custom providers via ~/.pi/agent/models.json):
+    - anthropic     : ANTHROPIC_API_KEY (native), base_url via models.json when set
+    - openai        : OPENAI_API_KEY (native), base_url via models.json when set
+    - azure         : models.json openai-responses + base_url
+    - openai-api    : models.json openai-completions + base_url (generic aggregator)
+    - tokenrouter   : models.json, api by model family (claude -> anthropic-messages)
 
 Creds are injected per-session via env (pool secrets) or a body `auth` override for spikes.
 Phase 0b: buffered turn. SSE streaming, git hydrate/commit, mid-turn /input, and the Node
@@ -153,6 +164,14 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # hermes state (state.db conversations) IS checkpointed; its cred files are not.
                       "./.harness/home/.hermes/.env",
                       "./.harness/home/.hermes/auth.json",
+                      # pi stores provider keys in auth.json, and models.json carries the literal
+                      # key for custom providers — neither may travel in a checkpoint tarball.
+                      "./.harness/home/.pi/agent/auth.json",
+                      "./.harness/home/.pi/agent/models.json",
+                      # dsh: the MCP cordis overlay can carry auth headers (same standing as
+                      # claude's .mcp.json); the provider KEY itself never lands anywhere —
+                      # it lives only in the driver process (see dsh_driver.py's relay).
+                      "./.harness/home/.dsh/cordis.yml",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -164,6 +183,9 @@ CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6
 CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
 # Hermes default (the gateway maps friendly names to provider ids before the /turn call).
 HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
+# Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
+PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
+DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
 # Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
@@ -241,6 +263,7 @@ def _git_ensure(ws: str) -> None:
         "# harness: never persist secrets/scratch in the session checkpoint",
         "tmp/", ".gcp-sa.json", ".codex/", ".credentials.json", ".harness/**/.credentials.json",
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
+        ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
         "",
     ]))
     if not (p / ".git").exists():
@@ -251,7 +274,7 @@ def _git_ensure(ws: str) -> None:
 
 # ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
 # Paths never reported as agent-produced output (internal state / scratch / secrets / vcs).
-_PRODUCED_EXCLUDE_PREFIX = (".harness/", "tmp/", ".codex/", ".git/", ".claude/",
+_PRODUCED_EXCLUDE_PREFIX = (".harness/", "tmp/", ".codex/", ".git/", ".claude/", ".pi/",
                             "node_modules/", ".venv/", "venv/", "__pycache__/", ".cache/", ".next/")
 _PRODUCED_EXCLUDE_NAMES = {".gitignore", ".gcp-sa.json", ".credentials.json"}
 # Dependency / install / build-cache noise the agent pulls in (apt debs, npm/py deps, byte-compiled
@@ -394,11 +417,18 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         <cwd>/.harness/home/.claude (see _build_claude). ALSO mirrored to the project
         `.claude/skills/<name>/` so direct reads and project-scoped discovery both work.
       - codex:  .harness/skills/<name>/ (surfaced via AGENTS.md; .harness/ stays out of outputs)
+      - pi:     .harness/home/.pi/agent/skills/<name>/ — pi's USER-GLOBAL skills dir under the
+        redirected $HOME. User-global on purpose: pi gates project-local files behind its trust
+        decision, and user-global skills load unconditionally (agentskills.io format, which is
+        the same SKILL.md this product already stores).
     Each skill: {name, files:[{path, content}]} (or {content} -> SKILL.md).
     Returns [{name, desc, entry}] for the skills actually installed (entry = SKILL.md path)."""
     if backend == "claude":
         rootrels = [".harness/home/.claude/skills", ".claude/skills"]
         entryroot = ".claude/skills"
+    elif backend == "pi":
+        rootrels = [".harness/home/.pi/agent/skills"]
+        entryroot = ".harness/home/.pi/agent/skills"
     else:
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
@@ -443,9 +473,10 @@ _AGENTS_END = "<!-- harness-skills:end -->"
 
 
 def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
-    """The agent's instruction file: AGENTS.md for Codex and Hermes (both read AGENTS.md from the
-    cwd), CLAUDE.md for Claude Code — each CLI reads its own file as project instructions."""
-    return pathlib.Path(cwd) / ("AGENTS.md" if backend in ("codex", "hermes") else "CLAUDE.md")
+    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi and dsh (all four read
+    AGENTS.md from the cwd — pi as a context file before its trust gate, dsh via its
+    dsh-agent-instructions workspace loader), CLAUDE.md for Claude Code."""
+    return pathlib.Path(cwd) / ("AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh") else "CLAUDE.md")
 
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
@@ -830,10 +861,26 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
         cmd.append("--include-partial-messages")
     if mcp_config:   # owner-attached MCP servers (.harness/mcp.json) — adds their tools this turn
         cmd += ["--mcp-config", mcp_config]
-    if disallowed_tools:   # built-in tools the harness disabled (catalog labels → real Claude tool names)
+    # Disabled tools go in settings.json, NOT on the command line. `--disallowedTools` is part of
+    # the permission prompt system, and we pass --dangerously-skip-permissions (autonomous runs
+    # cannot answer a prompt), which disables that system wholesale — so the flag was accepted,
+    # ignored, and the console showed "Disabled" next to a tool the agent went on using. Verified
+    # both ways against the CLI: with the flag the agent still ran bash; with this deny list it
+    # reported having no shell tool and did not run it.
+    if disallowed_tools:
         names = [t.split(" (")[0].strip() for t in disallowed_tools if t and t.strip()]
         if names:
-            cmd += ["--disallowedTools", ",".join(names)]
+            settings_path = cfg_dir / "settings.json"
+            try:
+                current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+                if not isinstance(current, dict):
+                    current = {}
+            except Exception:  # noqa: BLE001 — a corrupt file must not lose the restriction
+                current = {}
+            perms = current.get("permissions") if isinstance(current.get("permissions"), dict) else {}
+            perms["deny"] = names
+            current["permissions"] = perms
+            settings_path.write_text(json.dumps(current, indent=2))
     if resume_session_id:
         # Only resume if the conversation file is ACTUALLY in the (re)hydrated workspace. A prior turn
         # can record a cli_session_id but fail before checkpointing its .jsonl — then `--resume <id>`
@@ -917,45 +964,101 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     return cfg_dir
 
 
-def _strip_codex_encrypted_reasoning(rollouts: list[str]) -> int:
-    """Drop reasoning items from the codex rollout(s) before `resume`, and return how many were removed.
+def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
+    """Make a codex rollout safe to replay, without destroying any of it.
 
-    A Responses reasoning item carries `encrypted_content` (the `gAAA…` chain-of-thought blob) that is
-    bound to the exact upstream account/key that minted it — only that account can decrypt it. Codex
-    replays the whole rollout as the next turn's `input` (with include=reasoning.encrypted_content), so
-    a follow-up served by a DIFFERENT account (chain fallback, key rotation, or a load-balanced proxy)
-    400s with `invalid_encrypted_content`. Worse, the orphaned item stays in the rollout, so EVERY later
-    resume replays it and fails identically — a permanently wedged session.
+    Two hazards live in the same file, and the fix for one used to create the other.
 
-    Removing reasoning items makes resume account-independent: each turn re-reasons from the visible
-    transcript (messages + tool calls/outputs are untouched, so history is preserved). This mirrors the
-    AI Hub chat path, which already drops reasoning. Reasoning generated during the turn is re-stripped
-    before the next resume, so a session can never re-poison."""
-    stripped = 0
+    1. ACCOUNT BINDING. A reasoning item carries `encrypted_content` (the `gAAA…` chain-of-thought
+       blob) that only the account which minted it can decrypt. A follow-up served by a DIFFERENT
+       account (chain fallback, key rotation, a load-balanced proxy) 400s with
+       `invalid_encrypted_content`, and because the item stays in the rollout, EVERY later resume
+       fails identically — a permanently wedged session.
+
+    2. REFERENTIAL INTEGRITY. Against a provider that stores responses (codex sends `store: true`
+       to Azure Responses endpoints), an item `id` replayed in `input` is a REFERENCE into
+       server-side state. The server looks up the response that minted it and requires its
+       siblings. Delete the reasoning item but keep the `msg_…` that was minted beside it and the
+       reference dangles:
+           Item 'msg_…' of type 'message' was provided without its required 'reasoning' item: 'rs_…'
+       Deterministic, not flaky: every follow-up replays at least one such item, so the first turn
+       succeeds and every one after it fails.
+
+    This function previously deleted whole reasoning lines to solve (1), which is precisely what
+    caused (2). It no longer deletes anything. The two concerns turn out to be separable: the
+    `encrypted_content` is what the ACCOUNT owns, the `id` is what the SERVER checks, so keeping
+    the item while dropping the blob satisfies both.
+
+    So:
+      - reasoning items are KEPT, with their `id`, minus `encrypted_content`;
+      - a rollout already damaged by the old behaviour (id-bearing items, no reasoning left to
+        anchor them) is repaired by removing `id` from every provider-minted item, which turns the
+        replay into ordinary content the server does not try to resolve. `call_id`, `phase`,
+        `role`, `content`, `name` and `arguments` are preserved, so tool pairing and transcript
+        survive. Half-measures do not work here: leaving an id on any one item type just moves the
+        error to that type.
+
+    Never deletes a line and never changes the line count, so it is idempotent and cannot shift a
+    byte offset that a future codex version might project history from.
+
+    Returns counts for logging: {"reasoning": n_blobs_dropped, "deref": n_ids_removed,
+                                 "damaged": n_files_repaired}.
+    """
+    # Item id prefixes the provider mints and will therefore try to resolve. `fcr_` is the
+    # function_call_output form; `ctc_` the custom_tool_call form.
+    MINTED = ("msg_", "rs_", "fc_", "fcr_", "ctc_")
+    counts = {"reasoning": 0, "deref": 0, "damaged": 0}
+
     for path in rollouts:
         try:
-            lines = pathlib.Path(path).read_text().splitlines()
+            raw = pathlib.Path(path).read_text()
         except OSError:
             continue
-        out: list[str] = []
-        changed = False
+        lines = raw.splitlines()
+
+        parsed: list[tuple[str, dict | None]] = []
         for line in lines:
-            # Cheap prefilter before JSON parse; a reasoning response_item always carries both tokens.
-            if '"reasoning"' in line and '"encrypted_content"' in line:
-                try:
-                    o = json.loads(line)
-                except ValueError:
-                    out.append(line)
-                    continue
-                pay = o.get("payload") if isinstance(o.get("payload"), dict) else None
-                if o.get("type") == "response_item" and pay and pay.get("type") == "reasoning":
-                    stripped += 1
-                    changed = True
-                    continue  # drop the whole reasoning item
-            out.append(line)
-        if changed:
+            if '"response_item"' not in line:
+                parsed.append((line, None))
+                continue
+            try:
+                parsed.append((line, json.loads(line)))
+            except ValueError:
+                parsed.append((line, None))   # unparseable: preserve verbatim
+
+        # Pass 1 — drop the account-bound blob, keep the item and its id.
+        has_reasoning = False
+        for i, (line, o) in enumerate(parsed):
+            if not o or o.get("type") != "response_item":
+                continue
+            pay = o.get("payload")
+            if not isinstance(pay, dict) or pay.get("type") != "reasoning":
+                continue
+            has_reasoning = True
+            if pay.pop("encrypted_content", None) is not None:
+                counts["reasoning"] += 1
+                parsed[i] = (json.dumps(o), o)
+
+        # Pass 2 — repair a rollout the old delete-based strip already damaged. Only when there is
+        # no reasoning item left to anchor the ids: with reasoning present the references resolve
+        # and stripping ids would needlessly discard continuity.
+        minted = [
+            (i, o) for i, (line, o) in enumerate(parsed)
+            if o and o.get("type") == "response_item" and isinstance(o.get("payload"), dict)
+            and str((o["payload"] or {}).get("id") or "").startswith(MINTED)
+        ]
+        if minted and not has_reasoning:
+            counts["damaged"] += 1
+            for i, o in minted:
+                o["payload"].pop("id", None)
+                counts["deref"] += 1
+                parsed[i] = (json.dumps(o), o)
+
+        out = [line for line, _ in parsed]
+        if out != lines:
             pathlib.Path(path).write_text("\n".join(out) + ("\n" if out else ""))
-    return stripped
+
+    return counts
 
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
@@ -971,11 +1074,12 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
         import glob as _glob
         rollouts = _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True)
         if rollouts:
-            # Strip account-bound encrypted reasoning before replay so a follow-up served by a
-            # different upstream account can't 400 with invalid_encrypted_content (see the helper).
-            n = _strip_codex_encrypted_reasoning(rollouts)
-            if n:
-                print(f"[resume] codex: stripped {n} encrypted reasoning item(s) before resume", flush=True)
+            # Make the rollout safe to replay: drop account-bound reasoning blobs, and repair a
+            # rollout an older build already damaged (see the helper). Logged unconditionally —
+            # staying silent at zero is what hid this step during the investigation.
+            c = _sanitize_codex_rollout(rollouts)
+            print(f"[resume] codex: sanitised rollout — dropped {c['reasoning']} reasoning blob(s), "
+                  f"de-referenced {c['deref']} id(s) across {c['damaged']} damaged file(s)", flush=True)
             # CODEX_HOME is PER-SESSION (hydrate wipes + restores only THIS session's workspace), so
             # the most-recent rollout here IS this conversation. Resume by --last instead of matching
             # the thread UUID to the rollout filename (that match is codex-version-fragile and missed
@@ -983,6 +1087,399 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
             return ["codex", "exec", "resume", "--last", *common, prompt]
         print(f"[resume] codex: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
     return ["codex", "exec", *common, "--cd", cwd, prompt]
+
+
+# ── dsh (DeepSeek Harness) ──────────────────────────────────────────────────────
+# The turn process is runner/dsh_driver.py inside the pinned dsh venv: the official Python SDK
+# launches the bundled runtime executable, and every session.event notification comes back as
+# one NDJSON line {"m": method, "p": payload}. Cancel stays a process-group kill — the SDK's
+# close ladder never runs on a killed driver, and the runtime dies with the group.
+# "deepseek" is the launch provider (dsh's own adapter, auto-mounted); everything else rides
+# dsh-llm-pi-ai — pi's unified LLM library as a Cordis plugin — through a hand-declared route
+# at the driver's relay, so the api-by-family rules are the ones the pi backend already proved.
+DSH_PROVIDERS = {"deepseek", "anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+_DSH_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1",
+                     "openai": "https://api.openai.com/v1",
+                     "deepseek": "https://api.deepseek.com/v1"}
+DSH_PYTHON = os.environ.get("HR_DSH_PYTHON", "/data/agent-tools/dsh-venv/bin/python")
+_DSH_DEEPSEEK_MODEL = re.compile(r"(?:^|/)deepseek", re.I)
+DSH_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dsh_driver.py")
+
+
+def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+               resume_session_id: str | None = None,
+               mcp_servers: list[dict] | None = None, vision: bool = True) -> list[str]:
+    pr = provider or "deepseek"
+    if pr not in DSH_PROVIDERS:
+        raise HTTPException(400, f"unknown dsh provider '{pr}' (one of {sorted(DSH_PROVIDERS)})")
+    base = auth.base_url or _DSH_DEFAULT_BASE.get(pr, "")
+    if not base:
+        raise HTTPException(400, f"dsh provider '{pr}' needs a base_url (none configured)")
+    if not base.rstrip("/").endswith("/v1"):
+        base = base.rstrip("/") + "/v1"   # the relay joins upstream paths against a /v1 base
+    # HR_DSH_*: consumed and scrubbed by the driver before the runtime starts. The runtime gets
+    # a loopback relay URL and a placeholder key — the credential never enters its environment.
+    env["HR_DSH_BASE_URL"] = base
+    env["HR_DSH_API_KEY"] = auth.api_key or ""
+    # No system_prompt in the job: harness instructions land in AGENTS.md (dsh reads it via
+    # its dsh-agent-instructions loader), same mechanism as codex/hermes/pi.
+    job = {"prompt": prompt, "model": model, "cwd": cwd,
+           "session_id": resume_session_id or "",
+           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url")]}
+    if not _DSH_DEEPSEEK_MODEL.search(model or ""):
+        # Family decides the route, not the integration's name: deepseek models keep the
+        # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
+        # family rides the pi-ai route. api by family — the same routing the pi backend
+        # live-verified on these channels.
+        if pr == "anthropic" or _PI_CLAUDE_MODEL.search(model or ""):
+            api = "anthropic-messages"
+        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+            api = "openai-responses"
+        else:
+            api = "openai-completions"
+        job["llm"] = {"api": api, "vision": vision}
+    return [DSH_PYTHON, DSH_DRIVER, json.dumps(job)]
+
+
+def _dsh_tool_result_text(msg: dict) -> tuple[str, str, bool]:
+    """(tool_use_id, text, is_error) from a dsh tool/result data.message."""
+    tuid, text, err = "", "", False
+    for c in (msg.get("content") or []):
+        if isinstance(c, dict) and c.get("type") == "tool-result":
+            tuid = str(c.get("toolCallId") or "")
+            err = bool(c.get("isError"))
+            parts = [x.get("text") or "" for x in (c.get("content") or [])
+                     if isinstance(x, dict) and x.get("type") == "text"]
+            text = "\n".join(x for x in parts if x)
+    return tuid, text, err
+
+
+def _dsh_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE driver NDJSON line to zero+ canonical claude stream-json events.
+
+    Shapes are the live captures of 2026-08-20 (bad-key run, tool run, retry run) — see the
+    fixtures in tests/test_dsh_normalize.py. Two audit rules are load-bearing here: usage is
+    keyed by (turn, step) and REPLACED, never summed twice; and the terminal status comes from
+    the last turn/end reason — the driver exits 0 either way."""
+    m, p = obj.get("m"), obj.get("p") or {}
+    if m == "__hr_init":
+        sid = p.get("session_id") or ""
+        if sid:
+            state["_dsh_init"] = True
+            return [{"type": "system", "subtype": "init", "session_id": sid,
+                     "model": state.get("model")}]
+        return []
+    if m == "__hr_result":
+        usage_map = state.get("_dsh_usage") or {}
+        usage: dict = {}
+        for u in usage_map.values():
+            for k, v in u.items():
+                usage[k] = usage.get(k, 0) + v
+        usage = {k: v for k, v in usage.items() if v}
+        reason = p.get("reason")
+        final = p.get("final") or state.get("final", "")
+        state["final"] = final
+        if reason == "completed" or (reason is None and final):
+            return [{"type": "result", "subtype": "success", "is_error": False,
+                     "result": final, "usage": usage}]
+        if reason == "max-tokens":
+            return [{"type": "result", "subtype": "error_max_turns", "is_error": False,
+                     "result": final, "usage": usage}]
+        err = state.get("_dsh_error") or f"deepseek-harness turn ended: {reason}"
+        return [{"type": "result", "subtype": "error", "is_error": True,
+                 "result": err, "usage": usage}]
+    if m != "session.event":
+        return []
+    ev = p.get("event") or {}
+    t = ev.get("type")
+    d = ev.get("data") or {}
+    if not state.get("_dsh_init") and p.get("sessionId"):
+        state["_dsh_init"] = True
+        return [{"type": "system", "subtype": "init", "session_id": p["sessionId"],
+                 "model": state.get("model")}] + _dsh_to_claude(obj, state)
+    if t == "assistant/chunk":
+        c = d.get("chunk") or {}
+        ct = c.get("type")
+        if ct == "text-delta" and c.get("text"):
+            state["_dsh_text"] = state.get("_dsh_text", "") + c["text"]
+            state["final"] = state["_dsh_text"]
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": c["text"]}]}}]
+        if ct == "reasoning-delta" and c.get("text"):
+            return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": c["text"]}]}}]
+        if ct == "usage":
+            u = c.get("usage") or {}
+            mapped = {"input_tokens": int(u.get("inputTokens") or 0),
+                      "output_tokens": int(u.get("outputTokens") or 0)}
+            if u.get("cacheReadTokens"):
+                mapped["cache_read_tokens"] = int(u["cacheReadTokens"])
+            if u.get("cacheWriteTokens"):
+                mapped["cache_write_tokens"] = int(u["cacheWriteTokens"])
+            # replace-by-(turn,step): retries re-report the same step; summing would double-bill
+            state.setdefault("_dsh_usage", {})[(d.get("turn"), d.get("step"))] = mapped
+            return []
+        return []   # block-start/block-end/tool-call-delta/finish: committed events cover them
+    if t == "assistant/message":
+        msg = d.get("message") or {}
+        full = "".join(c.get("text") or "" for c in (msg.get("content") or [])
+                       if isinstance(c, dict) and c.get("type") == "text")
+        streamed = state.get("_dsh_text", "")
+        state["_dsh_text"] = ""
+        if full:
+            state["final"] = full
+        if full and full != streamed:
+            if not streamed:
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full}]}}]
+            if full.startswith(streamed):
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full[len(streamed):]}]}}]
+        return []   # matches, or a non-prefix revision (already painted — the pi lesson)
+    if t == "tool/call":
+        try:
+            args = json.loads(d.get("arguments") or "{}")
+        except Exception:  # noqa: BLE001
+            args = {"raw": d.get("arguments")}
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": d.get("callId") or f"dsh{ev.get('seq', 0)}",
+             "name": d.get("name") or "tool", "input": args}]}}]
+    if t == "tool/result":
+        tuid, text, err = _dsh_tool_result_text(d.get("message") or {})
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid or "dsh",
+             "is_error": err, "content": text}]}}]
+    if t == "turn/end":
+        reason = (d.get("reason") or {})
+        if reason.get("kind") == "error":
+            state["_dsh_error"] = str((reason.get("error") or {}).get("message") or "dsh error")
+        return []
+    return []
+
+
+# ── pi (earendil-works pi coding agent) ─────────────────────────────────────────
+# One-shot turns run `pi -p --mode json`: a JSONL event stream on stdout (session header,
+# message deltas, tool executions, agent_end). Sessions are JSONL trees under
+# $HOME/.pi/agent/sessions/<cwd-slug>/ — inside the checkpointed workspace, so `--session-id`
+# resumes across sandbox recycling. `--session-id` CREATES the session when the file is missing,
+# which is exactly the fallback the claude/codex paths need explicit existence checks for.
+#
+# The CLI exits 0 even when the provider call fails (verified against 0.84.2 with a bad key:
+# the failure is stopReason="error" + errorMessage ON THE MESSAGE, not an error event, not a
+# nonzero exit). Status therefore comes from the event stream — never from the exit code.
+PI_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+# api field for models.json, by how the endpoint actually speaks. openai-responses vs
+# openai-completions matters for the same reason it does on hermes: the gpt-5 line refuses
+# tool-carrying requests on /v1/chat/completions (see _HERMES_RESPONSES_API_MODEL).
+_PI_CLAUDE_MODEL = re.compile(r"(?:^|/)(?:us\.anthropic\.)?claude", re.I)
+
+
+def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
+                    vision: bool = True) -> str:
+    """A one-provider ~/.pi/agent/models.json ("hr") for a custom endpoint. Pi's anthropic client
+    appends /v1/messages to baseUrl while its openai clients expect the /v1 to already be there
+    (both read straight off pi's own docs/models.md examples), so the /v1 suffix is normalized
+    per api instead of trusting how the integration happened to store the URL.
+
+    `input` is pi's capability gate, and it is load-bearing on RESUME: a session that once ran a
+    vision model can carry an image tool-result, which pi replays to the current model as a user
+    message with an image part — verified against a capturing sink. Declared text-only, pi drops
+    the image and the turn runs; declared vision on a model whose channel refuses images, the
+    whole turn dies on the provider's 400. The gateway says which models are text-only, from
+    live probes, so vision stays the default."""
+    base = (base_url or "").rstrip("/")
+    if api == "anthropic-messages":
+        base = base.removesuffix("/v1")
+    elif not base.endswith("/v1"):
+        base += "/v1"
+    return json.dumps({"providers": {"hr": {
+        "baseUrl": base, "api": api, "apiKey": api_key,
+        "models": [{"id": model, "name": model, "reasoning": False,
+                    "input": ["text", "image"] if vision else ["text"],
+                    "contextWindow": 200000, "maxTokens": 32000}],
+    }}}, indent=2)
+
+
+def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
+    """Write $HOME/.pi/agent/mcp.json for pi-mcp-adapter (same input contract as the claude/codex
+    writers: url + optional auth/headers). Returns whether any server was written. The agent-dir
+    location is deliberate: project-local .pi/mcp.json sits behind pi's trust gate; the agent dir
+    does not."""
+    entries: dict = {}
+    for s in servers or []:
+        url = (s or {}).get("url")
+        if not url:
+            continue
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
+        entry: dict = {"url": url}
+        auth = (s or {}).get("auth")
+        if auth:
+            hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            entry["headers"] = {"Authorization": hdr}
+        if isinstance((s or {}).get("headers"), dict):
+            entry.setdefault("headers", {}).update({str(k): str(v) for k, v in s["headers"].items()
+                                                    if k and v is not None})
+        entries[name] = entry
+    if not entries:
+        return False
+    path = home / ".pi" / "agent" / "mcp.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
+    return True
+
+
+def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+              resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+              tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
+    pr = provider or "anthropic"
+    if pr not in PI_PROVIDERS:
+        raise HTTPException(400, f"unknown pi provider '{pr}' (one of {sorted(PI_PROVIDERS)})")
+    home = pathlib.Path(env.get("HOME") or cwd)
+    (home / ".pi" / "agent").mkdir(parents=True, exist_ok=True)
+
+    # Provider: native env for the two vendors pi speaks natively WITHOUT a base_url override;
+    # everything else (and any base_url override) goes through a models.json custom provider,
+    # because that is the only place pi accepts an endpoint from.
+    use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
+    if use_custom:
+        if not auth.base_url:
+            raise HTTPException(400, f"pi provider '{pr}' needs a base_url (none configured)")
+        if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+            api = "anthropic-messages"
+        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+            api = "openai-responses"
+        else:
+            api = "openai-completions"
+        (home / ".pi" / "agent" / "models.json").write_text(
+            _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision))
+        pname = "hr"
+    else:
+        pname = pr
+        if pr == "anthropic" and auth.api_key:
+            env["ANTHROPIC_API_KEY"] = auth.api_key
+        elif pr == "openai" and auth.api_key:
+            env["OPENAI_API_KEY"] = auth.api_key
+
+    cmd = ["pi", "-p", "--mode", "json", "--provider", pname, "--model", model,
+           # The sandbox is the trust boundary (one Hyper-V-isolated box per session), so
+           # project-local files are trusted the same way claude gets
+           # --dangerously-skip-permissions: explicitly, because nobody is there to answer.
+           "--approve",
+           # Discovery off, mounts explicit: a task could drop .pi/extensions/ into the
+           # workspace and have the next turn execute it. -e paths still load.
+           "--no-extensions"]
+    if resume_session_id:
+        # --session-id resumes the project session when its file is in the (re)hydrated
+        # workspace and CREATES it when not — the fresh-start fallback the other backends
+        # implement by hand is pi's documented behavior, so no existence check here.
+        cmd += ["--session-id", resume_session_id]
+    if tools_disabled:
+        # Pi has a real per-tool switch (-xt) — enforcement, not instruction. Names are pi's
+        # own (bash/read/write/edit); catalog labels arrive as "bash (Shell)"-style, keep the id.
+        names = ",".join(sorted({x.split(" (")[0].strip() for x in tools_disabled if x and x.strip()}))
+        if names:
+            cmd += ["--exclude-tools", names]
+    if _pi_write_mcp(home, mcp_servers):
+        ext = os.environ.get("HR_PI_MCP_EXT", "")
+        if ext and os.path.exists(ext):
+            cmd += ["--extension", ext]
+        else:
+            # Servers were configured but the adapter isn't installed: say so in the stream
+            # (errbuf tail) instead of silently running a turn with no tools.
+            print("[pi] MCP servers configured but pi-mcp-adapter not installed "
+                  "(HR_PI_MCP_EXT unset or missing) — this turn runs without them", flush=True)
+    cmd.append(prompt)
+    return cmd
+
+
+def _pi_usage_add(state: dict, u: dict | None) -> None:
+    """Accumulate pi per-message usage {input, output, cacheRead, cacheWrite} into the turn total.
+    Pi already reports input as fresh-only (cacheRead separate), matching the canonical contract."""
+    if not isinstance(u, dict):
+        return
+    tot = state.setdefault("_pi_usage", {"input_tokens": 0, "output_tokens": 0,
+                                         "cache_read_tokens": 0, "cache_write_tokens": 0})
+    for src, dst in (("input", "input_tokens"), ("output", "output_tokens"),
+                     ("cacheRead", "cache_read_tokens"), ("cacheWrite", "cache_write_tokens")):
+        v = u.get(src)
+        if isinstance(v, (int, float)):
+            tot[dst] += int(v)
+
+
+def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE pi `--mode json` event to zero+ canonical claude stream-json events.
+
+    Text streams from message_update deltas; message_end re-emits only the un-streamed tail
+    (the same self-healing contract as _codex_text_delta: if deltas never arrive, the tail is
+    the whole text). Failure is stopReason=="error" on the assistant message — the CLI exits 0
+    on provider errors, so the result event synthesized at agent_end is the ONLY truthful
+    status signal."""
+    t = obj.get("type")
+    if t == "session":
+        return [{"type": "system", "subtype": "init",
+                 "session_id": obj.get("id"), "model": state.get("model")}]
+    if t == "message_update":
+        ev = obj.get("assistantMessageEvent") or {}
+        et = ev.get("type")
+        if et == "text_delta" and ev.get("delta"):
+            state["_pi_text"] = state.get("_pi_text", "") + ev["delta"]
+            state["final"] = state["_pi_text"]   # the CURRENT message is the candidate final text
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": ev["delta"]}]}}]
+        if et == "thinking_delta" and ev.get("delta"):
+            return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": ev["delta"]}]}}]
+        return []
+    if t == "message_end":
+        msg = obj.get("message") or {}
+        if msg.get("role") != "assistant":
+            return []
+        _pi_usage_add(state, msg.get("usage"))
+        if msg.get("stopReason") == "error":
+            state["_pi_error"] = str(msg.get("errorMessage") or "pi provider error")
+            return []
+        full = "".join(c.get("text") or "" for c in (msg.get("content") or [])
+                       if isinstance(c, dict) and c.get("type") == "text")
+        streamed = state.get("_pi_text", "")
+        state["_pi_text"] = ""
+        # `final` is the LAST assistant message's text (claude result semantics), so message_end
+        # REPLACES it — a mid-run "let me look" followed by the answer must not concatenate.
+        if full:
+            state["final"] = full
+        if full and full != streamed:
+            if not streamed:
+                # no deltas arrived — emit the whole text once (the no-streaming path)
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full}]}}]
+            if full.startswith(streamed):
+                # normal self-healing: emit only the un-streamed tail
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full[len(streamed):]}]}}]
+            # Non-prefix revision (seen live: a kimi channel whose deltas and final text
+            # disagree). The streamed text is already on the user's screen — re-emitting the
+            # full text painted the whole answer twice. Emit nothing: the result event and
+            # state["final"] already carry the authoritative text.
+            return []
+        return []
+    if t == "tool_execution_start":
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": obj.get("toolCallId") or "tool",
+             "name": obj.get("toolName") or "tool", "input": obj.get("args") or {}}]}}]
+    if t == "tool_execution_end":
+        res = obj.get("result")
+        if isinstance(res, dict):
+            # pi ToolResult: {content:[{type:text,...}], details?} — flatten the text blocks
+            parts = [c.get("text") or "" for c in (res.get("content") or [])
+                     if isinstance(c, dict) and c.get("type") == "text"]
+            content = "\n".join(x for x in parts if x) or json.dumps(res, default=str)[:4000]
+        else:
+            content = str(res or "")
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": obj.get("toolCallId") or "tool",
+             "is_error": bool(obj.get("isError")), "content": content}]}}]
+    if t == "agent_end":
+        err = state.get("_pi_error")
+        usage = dict(state.get("_pi_usage") or {})
+        usage = {k: v for k, v in usage.items() if v}
+        if err:
+            return [{"type": "result", "subtype": "error", "is_error": True,
+                     "result": err, "usage": usage}]
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": usage}]
+    return []
 
 
 # ── hermes (NousResearch hermes-agent CLI) ──────────────────────────────────────────
@@ -1128,6 +1625,10 @@ BACKENDS = {
               "normalize": _codex_to_claude},
     "hermes": {"providers": sorted(HERMES_PROVIDERS), "default_model": HERMES_DEFAULT_MODEL,
                "normalize": None},
+    "pi": {"providers": sorted(PI_PROVIDERS), "default_model": PI_DEFAULT_MODEL,
+           "normalize": _pi_to_claude},
+    "dsh": {"providers": sorted(DSH_PROVIDERS), "default_model": DSH_DEFAULT_MODEL,
+            "normalize": _dsh_to_claude},
 }
 
 
@@ -1896,7 +2397,7 @@ def capabilities(identifier: str = "") -> dict:
 
 
 class TurnReq(BaseModel):
-    backend: str = "claude"          # claude | codex | hermes  (pi future)
+    backend: str = "claude"          # claude | codex | hermes | pi | dsh
     provider: str | None = None      # see BACKENDS[...].providers
     model: str | None = None
     prompt: str
@@ -1911,8 +2412,10 @@ class TurnReq(BaseModel):
     agent_doc: str | None = None           # harness instruction doc → AGENTS.md (codex) / CLAUDE.md (claude)
     skills_suppressed: list[str] | None = None  # built-in skill names to NOT mount (harness disabled them)
     tools_disabled: list[str] | None = None     # built-in tool names to disable (claude: --disallowedTools)
+    image_auth: dict | None = None         # {base_url, api_key, model} for image generation via the broker
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
+    vision: bool = True                    # pi: whether the model's channel accepts image input
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
 
 
@@ -1950,16 +2453,37 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     )   # materialize enabled skills for this backend (minus suppressed built-ins)
     # Seed the agent's instruction file (AGENTS.md/CLAUDE.md) from the harness doc + installed skills.
     # The model's system prompt stays the CLI default; persistent instructions live in this file.
-    # Codex has no per-tool CLI flag, so disabled tools are surfaced as an instruction (claude uses the
-    # hard --disallowedTools flag below instead).
+    #
+    # Disabled tools, by what each CLI can actually enforce:
+    #   claude — a `permissions.deny` list in settings.json, a hard block (see _build_claude). The
+    #     agent reports having no such tool. NOT `--disallowedTools`: that belongs to the permission
+    #     prompt system, which --dangerously-skip-permissions turns off.
+    #   codex, hermes — no per-tool switch exists. Codex has none at all; hermes only disables whole
+    #     TOOLSETS, which is a different granularity from the per-tool names a harness configures.
+    #     Both read the agent doc, so both get the same instruction. It is a request to the model,
+    #     not a guarantee — verified reaching the agent on both, and verified as a request: hermes
+    #     complied, codex used the tool anyway. That is why the console calls it a request rather
+    #     than a block. Written here once rather than as two divergent branches — hermes previously
+    #     had neither, and silently ignored every disabled tool.
     agent_doc = req.agent_doc or ""
-    if backend == "codex" and req.tools_disabled:
+    if backend in ("codex", "hermes", "dsh") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
                 f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
     _write_agent_doc(cwd, backend, agent_doc, installed_skills)
     env = os.environ.copy()
+    # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
+    # point at the CHAT connection, which is often a different provider, and one env pair can
+    # only carry one credential. The imagegen skill's wrapper reads these and passes them to the
+    # SDK explicitly, so images work the same on every base. The value is a per-turn broker
+    # credential, never a provider key.
+    if req.image_auth:
+        for k, v in (("HR_IMAGE_BASE_URL", req.image_auth.get("base_url")),
+                     ("HR_IMAGE_KEY", req.image_auth.get("api_key")),
+                     ("HR_IMAGE_MODEL", req.image_auth.get("model"))):
+            if v:
+                env[k] = str(v)
     # CRITICAL for resume: both CLIs write their conversation transcripts under $HOME
     # (~/.claude/projects/*.jsonl, ~/.codex/sessions/*) — NOT under CLAUDE_CONFIG_DIR. The default
     # $HOME is outside /workspace, so transcripts were never checkpointed and `--resume` found nothing
@@ -1987,6 +2511,16 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         hermes_provider = (req.provider or "bedrock").lower()
         hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                          max_turns=req.max_turns, mcp_servers=req.mcp_servers)
+    elif backend == "dsh":
+        model = model or DSH_DEFAULT_MODEL
+        cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
+                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                         vision=bool(req.vision))
+    elif backend == "pi":
+        model = model or PI_DEFAULT_MODEL
+        cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
+                        resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                        tools_disabled=req.tools_disabled, vision=bool(req.vision))
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,

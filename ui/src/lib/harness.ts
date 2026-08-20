@@ -1,6 +1,11 @@
-// Harness data layer. Out-of-box catalog is static for v1 (will read the runner /backends
-// metadata next). Custom harnesses are persisted server-side per-org in the VectorGraph tenant
-// via the gateway (/api/harness/v1/orgs/{org}/harnesses); the BFF injects the internal trust key.
+// Harness data layer.
+//
+// What a base harness CAN DO — its models, its tools, its built-in skills, its system prompt —
+// comes from the server (/v1/bases), never from this file. It used to be hard-coded here, and it
+// drifted: the console advertised four built-in skills (docx, pdf, pptx, xlsx) that exist nowhere,
+// with Replace and Disable buttons next to them acting on nothing, while the agent actually had a
+// completely different set the CLI discovers for itself. The static table below now carries only
+// identity and presentation; every capability field is filled in from the server.
 import { useEffect, useState } from 'react';
 
 import { harnessFetch } from '@/lib/hfetch';
@@ -15,10 +20,17 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
+}
+
+/** One entry in a Harness's tool list. Every entry, with no exceptions and no kinds: a database
+ *  a kit connected is one of these and reads back exactly like a server somewhere else. */
+export interface McpServer {
+  id: string; name: string; enabled: boolean;
+  url?: string; auth?: string; transport?: string;
 }
 
 export interface CustomHarness {
@@ -28,7 +40,7 @@ export interface CustomHarness {
   baseLabel: string;
   defaultModel: string;
   systemPrompt: string;
-  mcpServers: { id: string; name: string; enabled: boolean; url?: string; auth?: string; transport?: string }[];
+  mcpServers: McpServer[];
   // A skill carries its bundle inline as `files`; bundles over the gateway's inline cap are
   // offloaded server-side and round-trip as {name, enabled, blob}, `blob` is an opaque pointer,
   // resolved back to files via getSkillFiles() when editing. Either shape is a REAL own skill.
@@ -44,22 +56,26 @@ export const OOB: OobHarness[] = [
   { id: 'codex', name: 'Codex', version: 'v1.0.1', backend: 'codex', status: 'ready',
     models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2'], defaultModel: 'gpt-5.5', moreModels: 0,
     systemPrompt: 'You are Codex, an autonomous software-engineering agent. You operate on a real git workspace with shell access, reading and editing files and running commands to complete the task, returning reviewable diffs and results.',
-    tools: ['Shell', 'Apply Patch', 'File Read/Write', 'Git', 'Network (sandboxed)'],
-    skills: ['docx', 'pdf', 'pptx', 'xlsx'] },
+    tools: [], skills: [] },
   { id: 'claude-code', name: 'Claude Code', version: 'v1.0.1', backend: 'claude', status: 'ready',
     models: ['claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5'], defaultModel: 'claude-opus-4.8', moreModels: 0,
     systemPrompt: 'You are Claude Code, an agentic coding assistant. You work on a real local git working tree with bash, edit files, run tests, and use sub-agents to complete engineering tasks end to end.',
-    tools: ['Bash', 'Read', 'Edit', 'Write', 'Grep', 'Glob', 'WebFetch', 'Task (subagents)'],
-    skills: ['docx', 'pdf', 'pptx', 'xlsx'] },
-  { id: 'pi', name: 'Pi', version: 'v1.0.1', backend: null, status: 'soon',
-    models: [], moreModels: 0,
-    systemPrompt: 'Pi harness, coming soon.', tools: [], skills: [] },
+    tools: [], skills: [] },
   { id: 'hermes', name: 'Hermes', version: 'v0.19.0', backend: 'hermes', status: 'ready',
     // Multi-family: Hermes runs any frontier model, the gpt + claude catalogs, default gpt-5.5.
     models: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'kimi-k3', 'glm-5.2', 'qwen3.7-max'], defaultModel: 'gpt-5.5', moreModels: 0,
     systemPrompt: 'You are Hermes, a self-improving autonomous agent. You work on a real project workspace with shell and file access, complete tasks end to end, and build a persistent memory and skill library from what you learn, getting more capable the longer you run.',
-    tools: ['Terminal', 'File Read/Write', 'Patch', 'Search', 'Web Search', 'Web Extract', 'Browser'],
-    skills: ['docx', 'pdf', 'pptx', 'xlsx'] },
+    tools: [], skills: [] },
+  { id: 'pi', name: 'Pi', version: 'v0.84.2', backend: 'pi', status: 'ready',
+    // Multi-family like Hermes: the gpt + claude catalogs (placeholder until /v1/models lands).
+    models: ['gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are Pi, a minimal autonomous coding agent. You operate on a real git workspace, reading, writing and editing files and running bash to complete the task end to end.',
+    tools: [], skills: [] },
+  { id: 'dsh', name: 'DeepSeek Harness', version: 'v0.1.0-rc.7', backend: 'dsh', status: 'ready',
+    // Multi-family via dsh-llm-pi-ai (pi's LLM library as a dsh plugin); placeholder until /v1/models lands.
+    models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'deepseek-v4-pro', moreModels: 0,
+    systemPrompt: 'You are DeepSeek Harness, an autonomous coding agent. You work on a real git workspace, running shell commands and editing files to complete the task end to end.',
+    tools: [], skills: [] },
 ];
 
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
@@ -135,6 +151,53 @@ export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
   const fromServer = o.backend ? _catalog?.[o.backend]?.default : '';
   return o.defaultModel || fromServer || oobModels(o)[0] || '';
 };
+
+export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
+export interface BuiltinSkill { name: string; title: string; description: string; defaultEnabled: boolean; origin: string }
+export interface BaseInfo {
+  id: string; label: string; backend: string; status: string; systemPrompt: string;
+  defaultModel: string;
+  models: { id: string; available: boolean; default: boolean }[];
+  tools: BaseTool[];
+  /** Skills bundled into the image, which any harness can use. `defaultEnabled` is what a NEW
+   *  harness starts with; a harness that stored its own answer overrides it. */
+  builtinSkills: BuiltinSkill[];
+  /** false means the base brings its own skills but nothing outside a turn can list them. The UI
+   *  must say that rather than render an empty list as "this base has no skills". */
+  builtinSkillsEnumerable: boolean;
+}
+
+let _bases: Record<string, BaseInfo> | null = null;
+let _basesInflight: Promise<Record<string, BaseInfo>> | null = null;
+
+async function fetchBases(): Promise<Record<string, BaseInfo>> {
+  if (_bases) return _bases;
+  if (_basesInflight) return _basesInflight;
+  _basesInflight = (async () => {
+    try {
+      const r = await harnessFetch('/api/harness/v1/bases', { headers: gwHeaders(), cache: 'no-store' });
+      if (!r.ok) return {};
+      const doc = await r.json();
+      const map: Record<string, BaseInfo> = {};
+      for (const b of doc.bases || []) map[b.id] = b as BaseInfo;
+      _bases = map;
+      return map;
+    } catch { return {}; }
+    finally { _basesInflight = null; }
+  })();
+  return _basesInflight;
+}
+
+/** Server-described bases. null until loaded — a caller shows nothing rather than a guess. */
+export function useBases(): Record<string, BaseInfo> | null {
+  const [b, setB] = useState<Record<string, BaseInfo> | null>(_bases);
+  useEffect(() => {
+    let alive = true;
+    fetchBases().then((m) => { if (alive && Object.keys(m).length) setB(m); });
+    return () => { alive = false; };
+  }, []);
+  return b;
+}
 
 /** Load the server catalog once per tab and re-render when it lands. Any surface that shows a
  *  model picker calls this; without it the placeholder literals would be what the user sees. */
@@ -272,6 +335,22 @@ export async function testMcp(url: string, auth?: string): Promise<{ ok: boolean
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
     body: JSON.stringify({ url, auth: auth || '' }),
+    cache: 'no-store',
+  });
+  if (!r.ok) return { ok: false, error: `test failed: ${r.status}` };
+  return r.json();
+}
+
+/** Probe a database before connecting it: the server opens it, lists what the account can see,
+ *  and holds on to nothing. Same 200-either-way contract as testMcp — a refused password is an
+ *  answer, not a failed request — and the same degrade when the request itself does not land. */
+export async function testDatabase(engine: string, connectionString: string):
+  Promise<{ ok: boolean; error?: string; host?: string; database?: string; tableCount?: number; tables?: string[] }> {
+  const p = principal();
+  const r = await harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(p.orgId)}/mcp-test/database`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
+    body: JSON.stringify({ engine, connection_string: connectionString }),
     cache: 'no-store',
   });
   if (!r.ok) return { ok: false, error: `test failed: ${r.status}` };

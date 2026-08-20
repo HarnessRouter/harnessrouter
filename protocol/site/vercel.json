@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "headers": [
+    {
+      "source": "/schema/(.*).json",
+      "headers": [
+        { "key": "content-type", "value": "application/schema+json; charset=utf-8" },
+        { "key": "access-control-allow-origin", "value": "*" }
+      ]
+    },
+    {
+      "source": "/schema/(.*).yaml",
+      "headers": [
+        { "key": "content-type", "value": "text/yaml; charset=utf-8" },
+        { "key": "access-control-allow-origin", "value": "*" }
+      ]
+    }
+  ]
+}

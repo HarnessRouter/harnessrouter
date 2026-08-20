@@ -20,7 +20,13 @@ import { authHeaders } from '@/lib/chat';
 import { PLATFORM_ADMIN_ORGS, SELF_HOSTED } from '@/lib/edition';
 
 interface ModelRow { canonical: string; provider_id: string }
-interface Integration { name: string; provider: string; config: Record<string, string>; models: ModelRow[] }
+interface Integration {
+  name: string; provider: string; config: Record<string, string>;
+  models: ModelRow[];
+  /** Image models this integration can serve. Separate from `models`: an image model offered in
+   *  a chat picker is a choice that cannot work. */
+  image_models?: ModelRow[];
+}
 interface ProviderField { key: string; label: string; placeholder?: string }
 interface ProviderMeta {
   id: string;
@@ -37,9 +43,31 @@ interface ProviderMeta {
 interface Doc {
   integrations: Integration[];
   model_map: Record<string, string>;
+  /** Images route separately from chat: the integration serving your chat models is usually not
+   *  the one serving images, and an image model in a chat picker is a broken choice. */
+  image_model_map?: Record<string, string>;
   providers: string[];
   catalog: ProviderMeta[];
+  /** Video, speech and music are NOT routed by a model map. They are routed by an ordered chain
+   *  per capability, and the first candidate whose provider is connected wins. */
+  media_chains?: MediaChain[];
+  media_policy?: Record<string, { order?: string[]; disabled?: string[] }>;
 }
+interface MediaCandidate {
+  model: string;
+  provider: string;
+  connected: boolean;
+  off: boolean;
+  resolution?: string;
+  seconds?: number | null;
+  duration_ignored?: boolean;
+  accepts_input_image?: boolean | null;
+  usd?: number | null;
+  verification?: string;
+  /** The clause the chain would use if this one were asked for right now. */
+  unavailable?: string;
+}
+interface MediaChain { capability: string; unit: string; candidates: MediaCandidate[] }
 
 const SECRET = '__secret__';
 
@@ -67,11 +95,17 @@ export default function IntegrationsPage() {
   }, []);
   useEffect(() => { if (allowed) reload(); }, [allowed, reload]);
 
-  async function persist(next: { integrations: Integration[]; model_map: Record<string, string> }) {
+  async function persist(next: { integrations: Integration[]; model_map: Record<string, string>;
+                                 image_model_map?: Record<string, string>;
+                                 media_policy?: Record<string, { order?: string[]; disabled?: string[] }> }) {
+    // Always send every map. The write replaces the whole document, so posting one of them alone
+    // would silently clear the others.
+    const body = { image_model_map: doc?.image_model_map || {},
+                   media_policy: doc?.media_policy || {}, ...next };
     setBusy(true); setErr('');
     try {
       const r = await harnessFetch('/api/harness/v1/admin/integrations', {
-        method: 'PUT', headers: authHeaders(), body: JSON.stringify(next),
+        method: 'PUT', headers: authHeaders(), body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
       setDoc({ ...(doc as Doc), ...(await r.json()) });
@@ -94,6 +128,11 @@ export default function IntegrationsPage() {
   const allCanonicals = useMemo(() => {
     const s = new Set<string>();
     (doc?.integrations || []).forEach((i) => i.models.forEach((m) => s.add(m.canonical)));
+    return [...s].sort();
+  }, [doc]);
+  const allImageCanonicals = useMemo(() => {
+    const s = new Set<string>();
+    (doc?.integrations || []).forEach((i) => (i.image_models || []).forEach((m) => s.add(m.canonical)));
     return [...s].sort();
   }, [doc]);
 
@@ -148,64 +187,48 @@ export default function IntegrationsPage() {
               </table>
             </div>
 
-            <div className="itg-section-head">
-              <div><h2>Model, Integration Mapping</h2>
-                <p>When a Harness runs a model, this decides which integration serves it.{' '}
-                  {SELF_HOSTED
-                    ? 'A model with no integration has no provider, so it can\u2019t be selected.'
-                    : 'Unmapped models use the built-in provider routing.'}</p></div>
-            </div>
-            <div className="table-wrap">
-              <table className="itg-table itg-map-table">
-                <thead><tr><th>Model</th><th>Integration</th><th aria-label="Actions"></th></tr></thead>
-                <tbody>
-                  {Object.entries(doc.model_map).map(([model, iname]) => (
-                    <tr key={model}>
-                      <td>
-                        <select className="select" value={model} disabled={busy}
-                          onChange={(e) => {
-                            const next = { ...doc.model_map };
-                            delete next[model];
-                            next[e.target.value] = iname;
-                            void persist({ integrations: doc.integrations, model_map: next });
-                          }}>
-                          {[model, ...allCanonicals.filter((c) => c !== model && !(c in doc.model_map))].map((c) => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <select className="select" value={iname} disabled={busy}
-                          onChange={(e) => void persist({
-                            integrations: doc.integrations,
-                            model_map: { ...doc.model_map, [model]: e.target.value },
-                          })}>
-                          {doc.integrations.filter((i) => i.models.some((m) => m.canonical === model)).map((i) => (
-                            <option key={i.name} value={i.name}>{i.name}</option>
-                          ))}
-                          {!doc.integrations.some((i) => i.name === iname) && <option value={iname}>{iname}</option>}
-                        </select>
-                      </td>
-                      <td className="itg-row-actions">
-                        <button className="button danger-ghost" type="button" disabled={busy}
-                          onClick={() => {
-                            const next = { ...doc.model_map };
-                            delete next[model];
-                            void persist({ integrations: doc.integrations, model_map: next });
-                          }}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                  <tr><td colSpan={3}>
-                    <AddMappingRow doc={doc} allCanonicals={allCanonicals} busy={busy}
-                      onAdd={(model, iname) => void persist({
-                        integrations: doc.integrations,
-                        model_map: { ...doc.model_map, [model]: iname },
-                      })} />
-                  </td></tr>
-                </tbody>
-              </table>
-            </div>
+            <MappingTable
+              title="Model, Integration Mapping"
+              blurb={<>When a Harness runs a model, this decides which integration serves it.{' '}
+                {SELF_HOSTED
+                  ? 'A model with no integration has no provider, so it can\u2019t be selected.'
+                  : 'Unmapped models use the built-in provider routing.'}</>}
+              map={doc.model_map}
+              allCanonicals={allCanonicals}
+              servedBy={(i, model) => i.models.some((m) => m.canonical === model)}
+              busy={busy} integrations={doc.integrations}
+              onChange={(next) => void persist({ integrations: doc.integrations, model_map: next })}
+              emptyHint="" />
+
+            <MappingTable
+              title="Image Model, Integration Mapping"
+              blurb={<>Which integration generates images. Routed separately from chat because it is
+                usually a different provider \u2014 an Anthropic connection has no image API at all.{' '}
+                An image model with no integration means a Harness cannot generate images.</>}
+              map={doc.image_model_map || {}}
+              allCanonicals={allImageCanonicals}
+              servedBy={(i, model) => (i.image_models || []).some((m) => m.canonical === model)}
+              busy={busy} integrations={doc.integrations}
+              onChange={(next) => void persist({ integrations: doc.integrations,
+                                                 model_map: doc.model_map, image_model_map: next })}
+              emptyHint="None of your integrations serve an image model." />
+
+            {/* Video, speech and music. NOT a map: a chain, in order, with the measurements that
+                justify the order. Flattening it to one row per model would throw away both the
+                ranking and the facts, which are the two things that make a fallback safe. */}
+            {(doc.media_chains || []).filter((c) => c.candidates.length > 0).map((chain) => (
+              <MediaChainTable
+                key={chain.capability}
+                chain={chain}
+                busy={busy}
+                policy={doc.media_policy || {}}
+                onChange={(next) => void persist({ integrations: doc.integrations,
+                                                   model_map: doc.model_map,
+                                                   image_model_map: doc.image_model_map || {},
+                                                   media_policy: next })}
+              />
+            ))}
+
           </>
         )}
       </div>
@@ -328,13 +351,74 @@ export default function IntegrationsPage() {
   );
 }
 
-function AddMappingRow({ doc, allCanonicals, busy, onAdd }: {
-  doc: Doc; allCanonicals: string[]; busy: boolean; onAdd: (model: string, iname: string) => void;
+/** One mapping table. Chat models and image models route independently but the mechanics are
+ *  identical, and two copies of this would drift the moment either changed. */
+function MappingTable({ title, blurb, map, allCanonicals, servedBy, integrations, busy, onChange, emptyHint }: {
+  title: string; blurb: React.ReactNode; map: Record<string, string>; allCanonicals: string[];
+  servedBy: (i: Integration, model: string) => boolean; integrations: Integration[]; busy: boolean;
+  onChange: (next: Record<string, string>) => void; emptyHint: string;
 }) {
-  const unmapped = allCanonicals.filter((c) => !(c in doc.model_map));
+  return (
+    <>
+      <div className="itg-section-head"><div><h2>{title}</h2><p>{blurb}</p></div></div>
+      <div className="table-wrap">
+        <table className="itg-table itg-map-table">
+          <thead><tr><th>Model</th><th>Integration</th><th aria-label="Actions"></th></tr></thead>
+          <tbody>
+            {Object.entries(map).map(([model, iname]) => (
+              <tr key={model}>
+                <td>
+                  <select className="select" value={model} disabled={busy}
+                    onChange={(e) => {
+                      const next = { ...map };
+                      delete next[model];
+                      next[e.target.value] = iname;
+                      onChange(next);
+                    }}>
+                    {[model, ...allCanonicals.filter((c) => c !== model && !(c in map))].map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </td>
+                <td>
+                  <select className="select" value={iname} disabled={busy}
+                    onChange={(e) => onChange({ ...map, [model]: e.target.value })}>
+                    {integrations.filter((i) => servedBy(i, model)).map((i) => (
+                      <option key={i.name} value={i.name}>{i.name}</option>
+                    ))}
+                    {!integrations.some((i) => i.name === iname) && <option value={iname}>{iname}</option>}
+                  </select>
+                </td>
+                <td className="itg-row-actions">
+                  <button className="button danger-ghost" type="button" disabled={busy}
+                    onClick={() => { const next = { ...map }; delete next[model]; onChange(next); }}>Delete</button>
+                </td>
+              </tr>
+            ))}
+            {Object.keys(map).length === 0 && allCanonicals.length === 0 && emptyHint && (
+              <tr><td colSpan={3}><span className="hr-meta">{emptyHint}</span></td></tr>
+            )}
+            <tr><td colSpan={3}>
+              <AddMappingRow map={map} allCanonicals={allCanonicals} integrations={integrations}
+                servedBy={servedBy} busy={busy}
+                onAdd={(model, iname) => onChange({ ...map, [model]: iname })} />
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function AddMappingRow({ map, allCanonicals, integrations, servedBy, busy, onAdd }: {
+  map: Record<string, string>; allCanonicals: string[]; integrations: Integration[];
+  servedBy: (i: Integration, model: string) => boolean; busy: boolean;
+  onAdd: (model: string, iname: string) => void;
+}) {
+  const unmapped = allCanonicals.filter((c) => !(c in map));
   const [model, setModel] = useState('');
   const [iname, setIname] = useState('');
-  const eligible = doc.integrations.filter((i) => i.models.some((m) => m.canonical === model));
+  const eligible = integrations.filter((i) => servedBy(i, model));
   return (
     <div className="itg-addmap">
       <select className="select" value={model} disabled={busy} aria-label="Model to map"
@@ -350,6 +434,101 @@ function AddMappingRow({ doc, allCanonicals, busy, onAdd }: {
       <button className="button" type="button" disabled={busy || !model || !iname}
         onClick={() => { onAdd(model, iname); setModel(''); setIname(''); }}>
         <iconify-icon icon="tabler:plus"></iconify-icon>Add Mapping</button>
+    </div>
+  );
+}
+
+/* ── one media capability's chain ────────────────────────────────────────────────────────────
+   Order is the routing rule: the first candidate whose provider is connected and that can serve
+   the request is the one that runs. So the control is Move up / Move down, not a dropdown — the
+   list IS the policy, and showing it any other way would be showing something that is not what
+   happens.
+
+   Every measured fact travels with its row because those facts are the reason to prefer one over
+   another. "Ignores the duration you ask for" is the difference between a 5-second shot and a
+   6-second one, and nobody can weigh that from a model name. */
+const CAP_TITLE: Record<string, string> = {
+  text_to_video: 'Video, from text',
+  image_to_video: 'Video, from an image',
+  text_to_image: 'Images',
+  image_to_image: 'Images, from an image',
+  text_to_speech: 'Speech',
+  text_to_music: 'Music',
+  export: 'Film assembly',
+};
+
+function MediaChainTable({ chain, policy, busy, onChange }: {
+  chain: MediaChain;
+  policy: Record<string, { order?: string[]; disabled?: string[] }>;
+  busy: boolean;
+  onChange: (next: Record<string, { order?: string[]; disabled?: string[] }>) => void;
+}) {
+  const models = chain.candidates.map((c) => c.model);
+  const cur = policy[chain.capability] || {};
+  const off = new Set(cur.disabled || []);
+
+  /** The order as it stands, with one model moved. Written whole: a preference that lists only
+   *  the models somebody touched leaves the rest to the catalog, and the two disagree the moment
+   *  the catalog changes. */
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= models.length) return;
+    const next = [...models];
+    const [row] = next.splice(from, 1);
+    next.splice(to, 0, row);
+    onChange({ ...policy, [chain.capability]: { order: next, disabled: [...off] } });
+  };
+  const toggle = (model: string) => {
+    const d = new Set(off);
+    if (d.has(model)) d.delete(model); else d.add(model);
+    onChange({ ...policy, [chain.capability]: { order: models, disabled: [...d] } });
+  };
+
+  const facts = (c: MediaCandidate) => {
+    const out: string[] = [];
+    if (c.resolution) out.push(c.resolution);
+    if (typeof c.seconds === 'number') out.push(`${c.seconds}s measured`);
+    if (c.duration_ignored) out.push('ignores the duration you ask for');
+    if (c.accepts_input_image === false) out.push('text only');
+    if (typeof c.usd === 'number') out.push(`$${c.usd.toFixed(2)} a ${chain.unit || 'run'}`);
+    return out;
+  };
+
+  return (
+    <div className="itg-section">
+      <div className="itg-section-head">
+        <div>
+          <h2>{CAP_TITLE[chain.capability] || chain.capability}</h2>
+          <p>Tried in this order. The first one whose provider is connected, and that can do what
+            was asked, is the one that runs.</p>
+        </div>
+      </div>
+      <table className="table">
+        <thead><tr><th>Order</th><th>Model</th><th>Provider</th><th>What it does</th><th /></tr></thead>
+        <tbody>
+          {chain.candidates.map((c, i) => (
+            <tr key={c.model} className={c.off || !c.connected ? 'is-dim' : undefined}>
+              <td>{i + 1}</td>
+              <td>
+                <span className="mono">{c.model}</span>
+                {/* Never colour alone: the state is a word. */}
+                {c.off && <span className="chip"> switched off</span>}
+                {!c.off && !c.connected && <span className="chip"> no key</span>}
+                {!c.off && c.connected && c.unavailable && <span className="chip"> unavailable</span>}
+              </td>
+              <td>{c.provider}</td>
+              <td className="muted">{facts(c).join(' · ') || '—'}</td>
+              <td className="right">
+                <button className="button ghost" type="button" disabled={busy || i === 0}
+                  onClick={() => move(i, i - 1)} aria-label={`Move ${c.model} up`}>Up</button>
+                <button className="button ghost" type="button" disabled={busy || i === chain.candidates.length - 1}
+                  onClick={() => move(i, i + 1)} aria-label={`Move ${c.model} down`}>Down</button>
+                <button className="button ghost" type="button" disabled={busy}
+                  onClick={() => toggle(c.model)}>{c.off ? 'Switch on' : 'Switch off'}</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -23,9 +23,14 @@ import uuid
 import zipfile
 
 import base64
+import contextlib
+import functools
 import hashlib
+import ipaddress
 import mimetypes
+import pathlib
 import shutil
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -38,6 +43,8 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 import backing               # pluggable graph/blob/secret stores (vg | local)
+import media_plane           # the media plane (capability catalog, provider adapters, ffmpeg)
+import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 
 POOL_ENDPOINT = os.environ.get("POOL_MGMT_ENDPOINT", "").rstrip("/")
@@ -731,13 +738,27 @@ async def _resolve_chain(org: str | None, backend: str, explicit: str | None) ->
     for tenant in _tenants_for(org):
         v = await _vault_get(tenant, f"harness-policy-{backend}")
         if v:
-            try:
-                names = json.loads(v)
-                if isinstance(names, list) and names:
-                    return [str(n) for n in names]
-            except Exception:  # noqa: BLE001
-                pass
+            names = _policy_chain(v)
+            if names:
+                return names
     return []
+
+
+def _policy_chain(raw: str) -> list[str]:
+    """The connection names in a policy document.
+
+    TWO shapes are one document, and both must be read here or a working install stops working:
+    `{"chain": ["anthropic"]}` is the form the README, the docker run line and .env.example have
+    always published, so it is what is sitting in operators' .env files; the bare `["anthropic"]`
+    is what PUT /v1/orgs/{org}/policy/{backend} writes. Only the second parsed, which meant the
+    documented quickstart produced a gateway that could serve no model and said nothing about why.
+    """
+    try:
+        doc = json.loads(raw)
+    except Exception:  # noqa: BLE001 — a corrupt policy is no policy, not a crash
+        return []
+    names = doc.get("chain") if isinstance(doc, dict) else doc
+    return [str(n) for n in names if str(n).strip()] if isinstance(names, list) else []
 
 
 _AUTH_FIELDS = ("api_key", "base_url", "aws_region", "aws_access_key_id", "aws_secret_access_key",
@@ -863,6 +884,18 @@ _MODEL_MAP_KEY = "harness-model-map"
 # The document as it was before the most recent write. See admin_integrations_put.
 _INTEGRATIONS_PREV_KEY = "harness-integrations.prev"
 _MODEL_MAP_PREV_KEY = "harness-model-map.prev"
+# Images get their OWN map. Sharing the chat map would put image models in the chat pickers,
+# where picking one is a broken choice; and the two route independently — the integration that
+# serves your chat models is often not the one that serves images.
+_IMAGE_MODEL_MAP_KEY = "harness-image-model-map"
+# Video, speech and music are NOT routed by a model map. They are routed by the media
+# chain: an ordered list of candidates per capability, each carrying what it measurably
+# does, and the first one whose provider is connected wins. This document is the operator's
+# preference over that order — which to try first, which to switch off — and it is kept
+# apart from the catalog for the reason media_plane.set_policy explains: the catalog is
+# measurement, this is policy, and one must not overwrite the other.
+_MEDIA_POLICY_KEY = "harness-media-policy"
+_IMAGE_MODEL_MAP_PREV_KEY = "harness-image-model-map.prev"
 _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token")
 # integration provider type × runner backend -> the runner-side provider that carries it.
 # Absent pair = that backend can't use the integration (mapping falls through to the chain).
@@ -874,6 +907,39 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "hermes"): "openai-api",
     ("openai", "codex"): "openai",             ("openai", "hermes"): "openai-api",
     ("anthropic", "claude"): "anthropic",      ("anthropic", "hermes"): "anthropic",
+    # Vercel's gateway answers on BOTH shapes from one base_url and one key: OpenAI's
+    # /v1/chat/completions and Anthropic's /v1/messages. That is the same pair TokenRouter
+    # offers, so it carries all three backends by the same runner providers, for the same
+    # reasons — 'tokenrouter' being the runner's name for "OpenAI/Anthropic-compatible, and the
+    # base_url says where", not a statement about whose service it is.
+    ("vercel", "claude"): "tokenrouter",       ("vercel", "codex"): "tokenrouter",
+    ("vercel", "hermes"): "openai-api",
+    # LLMTR answers on the same two shapes from one base_url and one key, so it is wired like
+    # Vercel. Its Anthropic surface is not in the published catalogue — every model there lists
+    # OpenAI endpoints only — but it is real, and was probed live on 2026-08-19: POST /v1/messages
+    # with anthropic/claude-sonnet-4.6 came back 200 with a proper Anthropic message envelope,
+    # while an unknown path under /v1 answers {"type":"not_found"}.
+    ("llmtr", "claude"): "tokenrouter",        ("llmtr", "codex"): "tokenrouter",
+    ("llmtr", "hermes"): "openai-api",
+    # Pi (earendil-works pi coding agent) is multi-family like hermes: native env auth for the
+    # two vendors it speaks directly, a models.json custom provider for everything with a
+    # base_url. 'tokenrouter' on the runner again means "OpenAI/Anthropic-compatible, api picked
+    # by model family" — TokenRouter, Vercel and LLMTR all serve both shapes from one base_url.
+    ("anthropic", "pi"): "anthropic",          ("openai", "pi"): "openai",
+    ("azure-foundry", "pi"): "azure",
+    ("openrouter", "pi"): "openai-api",
+    ("tokenrouter", "pi"): "tokenrouter",      ("vercel", "pi"): "tokenrouter",
+    ("llmtr", "pi"): "tokenrouter",
+    # dsh (DeepSeek Harness) is multi-family via dsh-llm-pi-ai — pi's unified LLM library as
+    # a Cordis plugin — so its wiring mirrors pi's: 'deepseek' on the runner is the launch
+    # adapter for the deepseek family, 'tokenrouter' again means "OpenAI/Anthropic-compatible,
+    # api picked by model family" at the driver's relay. A first-party DeepSeek Platform
+    # integration is still NOT listed: nobody here holds a platform key; unprobed is unlisted.
+    ("anthropic", "dsh"): "anthropic",         ("openai", "dsh"): "openai",
+    ("azure-foundry", "dsh"): "azure",
+    ("openrouter", "dsh"): "openai-api",
+    ("tokenrouter", "dsh"): "tokenrouter",     ("vercel", "dsh"): "tokenrouter",
+    ("llmtr", "dsh"): "tokenrouter",
 }
 
 
@@ -893,6 +959,61 @@ async def _model_map_doc() -> dict:
         return doc if isinstance(doc, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+async def _media_policy_doc() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, _MEDIA_POLICY_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+        return doc if isinstance(doc, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def _media_policy_load() -> dict:
+    """Read it and hand it to the media plane. The plane holds one cached copy because it is read
+    on every resolve; this is the only thing that sets it."""
+    doc = await _media_policy_doc()
+    media_plane.set_policy(doc)
+    return doc
+
+
+async def _image_model_map_doc() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+        return doc if isinstance(doc, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _integration_image_models(integ: dict) -> dict[str, str]:
+    """Canonical → provider-native id for one integration's IMAGE models.
+
+    Same contract as _integration_models: the vendor table in source is the authority on what a
+    vendor can reach, and a stored entry may only CHANGE an id, never add a model. Deriving on
+    read is what keeps a shipped catalog change visible on instances that saved a form months ago.
+    """
+    models = dict(_IMAGE_VENDOR_MODELS.get(str(integ.get("provider") or "").lower(), {}))
+    for m in (integ.get("image_models") or []):
+        canonical = str(m.get("canonical") or "").strip()
+        pid = str(m.get("provider_id") or "").strip()
+        if canonical in models and pid:
+            models[canonical] = pid
+    return models
+
+
+async def _effective_image_model_map() -> dict[str, str]:
+    """Canonical image model → integration name. Explicit routes win; anything else is claimed by
+    the first integration that can serve it. A stored route to a model its integration cannot
+    serve is dropped, not honoured — same rule as chat, for the same reason."""
+    integrations = await _integrations_doc()
+    servable = {str(i.get("name") or ""): _integration_image_models(i) for i in integrations}
+    mm = {k: v for k, v in (await _image_model_map_doc()).items() if k in servable.get(v, {})}
+    for name, models in servable.items():
+        for canonical in models:
+            mm.setdefault(canonical, name)
+    return mm
 
 
 def _integration_models(integ: dict) -> dict[str, str]:
@@ -945,6 +1066,41 @@ async def _effective_model_map() -> dict[str, str]:
         for canonical in models:
             mm.setdefault(canonical, name)
     return mm
+
+
+async def _image_auth(sid: str, backend: str) -> dict | None:
+    """Broker credentials for image generation, or None when nothing can serve an image model.
+
+    Same shape as the chat auth: a per-turn credential and a base_url, never a provider key
+    (self-hosted owner mode is the declared exception, where the operator's own key is the point).
+
+    Resolved from the IMAGE model map, independently of the turn's chat connection, because they
+    are usually different providers: a Claude Code harness runs on Anthropic, which has no image
+    API, so reusing the turn's credential would relay /images/generations there and 404.
+    """
+    if not sid or (SANDBOX_TRUST != "owner" and not HR_BROKER_IMAGES):
+        return None
+    mm = await _effective_image_model_map()
+    if not mm:
+        return None
+    by_name = {str(i.get("name") or ""): i for i in await _integrations_doc()}
+    # Deterministic: sorted, so which model serves a turn never depends on dict insertion order.
+    # An operator who wants a specific one routes it in Integrations.
+    for canonical in sorted(mm):
+        integ = by_name.get(mm[canonical])
+        if not integ:
+            continue
+        vendor = (integ.get("provider") or "").strip().lower()
+        provider = _INTEGRATION_WIRING.get((vendor, backend)) or vendor
+        conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend,
+                "provider": provider,
+                **{k: v for k, v in (integ.get("config") or {}).items() if v not in (None, "")}}
+        auth = _auth_from_conn(conn, sid)
+        if auth and auth.get("base_url") and auth.get("api_key"):
+            pid = _integration_image_models(integ).get(canonical) or canonical
+            return {"base_url": auth["base_url"], "api_key": auth["api_key"], "model": pid,
+                    "models": sorted(m for m in mm if mm[m] == mm[canonical])}
+    return None
 
 
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
@@ -1197,6 +1353,18 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     await asyncio.gather(*[_trace_put(k, data) for k in keys])
 
 
+async def _prior_manifest(prefix: str) -> dict:
+    """The session's current manifest, or {}. Session CARDS are built from this blob, not from the
+    session vertex, so anything that must change what a list shows has to change this."""
+    if not prefix:
+        return {}
+    try:
+        pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
+        return json.loads(pm) if pm else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
     """The session's credits/usage totals as of the CURRENT manifest — the one durable source both
     the turn-accept placeholder write and _trace_finalize must agree on. Whichever one omits these
@@ -1225,6 +1393,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     them: an omitted field here is exactly what _trace_finalize's own accumulate would read back as
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
     prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "")
+    _pm = await _prior_manifest(tr.get("prefix") or "")
+    prior_title = str(_pm.get("title") or "") if str(_pm.get("title_custom") or "") == "1" else ""
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
         "member_id": tr.get("member") or member or "",
@@ -1232,7 +1402,12 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
         "workspace": tr.get("workspace") or "",
         "harness_name": tr.get("harness_name") or "",
         "backend": backend, "model": model,
-        "title": (user_text.strip().splitlines()[0][:120] if user_text.strip() else sid[:16]),
+        # A title the person set survives every later turn. Without this the card is renamed to
+        # the first line of whatever you last said — which is why decks ended up called
+        # "Change primary color to brown".
+        "title": (prior_title if prior_title
+                  else (user_text.strip().splitlines()[0][:120] if user_text.strip() else sid[:16])),
+        **({"title_custom": "1"} if prior_title else {}),
         "user_prompt": user_text[:1500], "status": "running",
         "trace_blob": tr.get("prefix"), "chunks": [],
         "finished_at": time.time(), "schema_version": 1,
@@ -2037,6 +2212,17 @@ async def _reconcile_sweep() -> int:
 
 
 @app.on_event("startup")
+async def _start_media_policy() -> None:
+    """The operator's media preference, published to the plane before the first turn can arrive.
+    Without this the order they chose applies only after something else happens to write it."""
+    try:
+        await _media_policy_load()
+    except Exception as e:  # noqa: BLE001 — a missing preference is not a reason not to start
+        print(f"[media] could not read the routing preference ({e}); using the catalog order",
+              flush=True)
+
+
+@app.on_event("startup")
 async def _start_bus() -> None:
     global _redis_out
     if REDIS_URL:
@@ -2110,17 +2296,98 @@ async def _harness_vertex(harness_id: str) -> dict | None:
     return await BACKING.graph.get(harness_id, label="Harness")
 
 
+# ── servers this gateway hosts itself, recognised by ADDRESS ──────────────────────────────────
+# A server is ours if its url is one of our own addresses. That is the one thing true of every
+# server we host and of no server we do not, so recognising them costs no field on the entry, no
+# kind registry and no client-visible flag — and a second first-party server later needs nothing
+# but a path under /v1/mcp/.
+_HOSTED_MCP_PREFIX = "/v1/mcp/"
+# What may follow that prefix: the server's name and nothing else — no second segment, no query,
+# no dot-dot. See _hosted_mcp_path.
+_HOSTED_MCP_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# Where a hosted server's own state lives. A namespace inside the secret store rather than a field
+# anywhere: PUT /v1/mcp-secrets/{ref} prefixes every key it writes with `harness-mcp-`, so no
+# caller can write into this one.
+_HOSTED_SECRET_PREFIX = "harness-hosted-"
+
+
+def _own_origins() -> list[str]:
+    """Every address a client could legitimately have stored for a server WE host.
+
+    Hosted, that is the public base URL a sandbox reaches us on. Self-hosted, the runner is a
+    process beside us and loopback is both correct and the only thing that resolves. Both are
+    listed, in preference order, because an instance that gains a public URL later must keep
+    serving the entries it wrote before it had one.
+    """
+    out = []
+    if PUBLIC_BASE_URL:
+        out.append(PUBLIC_BASE_URL)
+    local = os.environ.get("HARNESS_GATEWAY_URL", "").rstrip("/")
+    if local and _pool_is_local():
+        out.append(local)
+    return out
+
+
+def _hosted_mcp_path(url: str) -> str | None:
+    """The path of a server THIS GATEWAY HOSTS, or None for a server somewhere else."""
+    for origin in _own_origins():
+        if not url.startswith(origin + _HOSTED_MCP_PREFIX):
+            continue
+        name = url[len(origin) + len(_HOSTED_MCP_PREFIX):]
+        # A NAME under the prefix, not an arbitrary path. `/v1/mcp/../../v1/admin` starts with our
+        # prefix and is a different endpoint once any client normalises it — hosted is what earns
+        # a minted credential and a pass on _ssrf_check, and neither is owed to a string that only
+        # looks like one of our servers. Not ours → the ordinary remote path, which hands it no
+        # credential at all because _resolve_mcp_auth refuses this namespace.
+        return _HOSTED_MCP_PREFIX + name if _HOSTED_MCP_NAME.match(name) else None
+    return None
+
+
+def _vault_key(auth) -> str:
+    """The secret-store key an entry's auth references, or "" when it references none."""
+    return auth[len("vault:"):] if isinstance(auth, str) and auth.startswith("vault:") else ""
+
+
 async def _resolve_mcp_auth(org: str, auth: str) -> str:
     """Resolve an MCP server auth value. 'vault:<key>' → the secret from the org/global vault
     (token never sits in the graph). Anything else is treated as a literal bearer token."""
     if isinstance(auth, str) and auth.startswith("vault:"):
         key = auth[len("vault:"):]
+        if key.startswith(_HOSTED_SECRET_PREFIX):
+            # A record we hold for a server we host. It is not a bearer token for anybody, and
+            # this is the one place a stored secret becomes a literal on an outbound request — so
+            # refusing HERE is what makes "the connection string never leaves this process" true
+            # for callers that do not exist yet, including an entry that names this ref and points
+            # somewhere else on purpose.
+            print(f"[mcp] refusing to resolve {key} as a bearer token", flush=True)
+            return ""
         for tenant in _tenants_for(org):
             v = await _vault_get(tenant, key)
             if v:
                 return v
         return ""
     return auth or ""
+
+
+def _mcp_list(v: dict | None) -> list[dict]:
+    """Every MCP server on a harness vertex. THE ONE READER: _harness_plugins, _harness_out and
+    the $headers pre-scan all come through here, so a harness's tool list cannot mean one thing on
+    the page that lists capabilities and another in the turn."""
+    try:
+        a = json.loads((v or {}).get("mcp_servers") or "[]")
+    except Exception:  # noqa: BLE001
+        a = []
+    return [s for s in a if isinstance(s, dict)] if isinstance(a, list) else []
+
+
+_MCP_NAME_RE = re.compile(r"[^a-zA-Z0-9_]+")
+
+
+def _mcp_name(s: str) -> str:
+    """The identifier the agent's CLI will see for a server. The runner's _mcp_name, duplicated:
+    the gateway has to ask the same question the runner will answer, and asking it over HTTP is
+    not an option at config time."""
+    return _MCP_NAME_RE.sub("_", (s or "").strip()).strip("_") or "mcp"
 
 
 _HDR_REF = re.compile(r"\$headers\.([A-Za-z0-9_-]+)")
@@ -2137,17 +2404,24 @@ def _sub_headers(value: str, hdr_vals: dict[str, str]) -> str:
 
 
 async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] | None = None,
-                           hv: dict | None = None) -> tuple[list[dict], list[dict], list[str], list[str]]:
+                           hv: dict | None = None, sid: str = "") -> tuple[list[dict], list[dict], list[str], list[str]]:
     """Resolve a harness's ENABLED MCP servers + skills for a turn. MCP auth refs are resolved
     from the vault here so the runner never sees vault keys, only the live token (or none).
     `hv` (HR-INF-010): the already-read harness vertex — the SOLE caller (_resp_execute) always
     threads it, so we DON'T re-read. Using the same snapshot as agent_doc means both degrade
-    together if the read failed (hv is None → empty plugins), never inconsistently (review #5)."""
+    together if the read failed (hv is None → empty plugins), never inconsistently (review #5).
+    `sid`: the session this turn belongs to, used to scope the database tool's credential to it."""
     if not harness_id:
         return [], [], [], []
     v = hv
     if not v:
-        return [], [], [], []
+        # An out-of-box harness has no stored record — there is nothing to read, and that is
+        # normal, not a failure. It still gets the image's built-in skills: those are a property
+        # of the deployment rather than of a saved configuration. Returning nothing here is why
+        # the default harnesses, which is what most people actually use, had no image generation
+        # and no document skills while custom ones did.
+        return [], _builtin_default_skills(), [], []
+    v = await _mcp_migrate(org, harness_id, v)
 
     def _arr(prop):
         try:
@@ -2157,13 +2431,49 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             return []
 
     mcp_out: list[dict] = []
-    for s in _arr("mcp_servers"):
-        if not isinstance(s, dict) or str(s.get("enabled")) in ("False", "false", "0"):
+    for s in _mcp_list(v):
+        if str(s.get("enabled")) in ("False", "false", "0"):
             continue
         if not s.get("url"):
             continue
         _hvals = hdr_vals or {}   # (renamed from hv — that name is now the harness-vertex param)
-        entry = {"name": s.get("name") or s.get("id") or "mcp", "url": _sub_headers(s["url"], _hvals),
+        _url = _sub_headers(s["url"], _hvals)
+        hosted = _hosted_mcp_path(_url)
+
+        if hosted:
+            # A SERVER WE HOST. Two things follow, and neither is about what kind of server it is.
+            #
+            # The address is re-derived from the origin we serve on NOW, not the one stored: an
+            # operator who moves the gateway must not strand every entry written before the move.
+            # No _ssrf_check, because that rule's subject is a target a customer named, and a url
+            # that already equals one of our own origins is not one however it got typed.
+            #
+            # The credential is MINTED, not resolved. _resolve_mcp_auth returns a literal that the
+            # runner writes into .harness/mcp.json inside a container with bash — right for a
+            # third-party bearer token, and never right for a credential to one of our own
+            # services. That is the lesson of 2026-07-25, and it is a property of first-party
+            # servers rather than of databases. What the sandbox holds is a capability scoped to
+            # this harness, this session and the record this entry's auth names, and it expires.
+            key = _vault_key(s.get("auth"))
+            if not key.startswith(_HOSTED_SECRET_PREFIX):
+                print(f"[mcp] '{s.get('name')}' on {harness_id} points here but names no record "
+                      f"this server holds — not offered this turn.", flush=True)
+                continue
+            mcp_out.append({"name": s.get("name") or s.get("id") or "mcp",
+                            "url": _own_origins()[0] + hosted,
+                            "transport": s.get("transport") or "http",
+                            "auth": _mint_hosted_cred(harness_id, sid, key)})
+            continue
+
+        # Same rule the console's Test connection applies. Enforced here too, because this is the
+        # call that actually reaches the network: a URL the policy rejects must never be handed to
+        # a sandbox, whatever is stored on the harness.
+        _blocked = await _ssrf_check(_url)
+        if _blocked:
+            print(f"[mcp] refusing '{s.get('name') or 'mcp'}' for harness {harness_id}: {_blocked}",
+                  flush=True)
+            continue
+        entry = {"name": s.get("name") or s.get("id") or "mcp", "url": _url,
                  "transport": s.get("transport") or "http"}
         # $headers refs resolve BEFORE vault: an auth of "$headers.X-App-JWT" is the caller's
         # per-request token, not a vault key. Values are injected here, gateway-side, so the
@@ -2195,14 +2505,22 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
 
     skills_out: list[dict] = []
     suppressed: list[str] = []   # built-in skill names this harness disabled (runner skips mounting them)
+    builtins = _builtin_skills()
+    seen: set[str] = set()
     for sk in own + inherited:
         name = sk.get("name") or sk.get("id")
         if not name:
             continue
+        seen.add(name)
         if str(sk.get("enabled")) in ("False", "false", "0"):
             suppressed.append(name)   # present-and-disabled → suppress the inherited built-in of this name
             continue
         files = sk.get("files")
+        # An entry naming a built-in and carrying no files of its own is the harness switching that
+        # built-in ON (it is stored only when the answer differs from the image's default). Its
+        # content comes from the image, so a Harness never holds a stale copy of a bundled skill.
+        if not files and not sk.get("content") and not sk.get("blob") and name in builtins:
+            files = builtins[name]["files"]
         # Large skill bundles (the Agent Skills folders exceed the 64k vertex-prop cap) live in a
         # blob; the vertex prop carries only {name, enabled, blob}. Resolve the full files here.
         if not files and sk.get("blob"):
@@ -2215,6 +2533,11 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         if not (files or sk.get("content")):
             continue
         skills_out.append({"name": name, "files": files, "content": sk.get("content")})
+
+    # Built-ins the harness never mentions: on when the image says so. Implicit, so the set follows
+    # the image rather than whatever was true when the Harness was created.
+    skills_out += _builtin_default_skills(seen)
+
     disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
     return mcp_out, skills_out, suppressed, disabled_tools
 
@@ -2243,12 +2566,26 @@ _BROKER_ALLOWED_EXACT = {"messages", "messages/count_tokens", "responses", "chat
 _BROKER_ALLOWED_PREFIX = ("responses/", "models/", "messages/batches")
 HR_BROKER_PATHS = os.environ.get("HR_BROKER_PATHS", "enforce").strip().lower()
 
+# Image generation rides the same broker as chat, so a task never holds a provider key. It is a
+# SEPARATE switch because the money works differently: this relay does not meter, and image APIs
+# bill per image rather than per token, so a deployment spending its OWN key must count images
+# before opening this.
+#
+# Default OFF, and the self-hosted entrypoint turns it on. The other way round — on by default,
+# hosted sets 0 — fails OPEN: forget the variable in one environment and it quietly serves images
+# on our key with nothing metered. Bring-your-own-key is the case where nothing needs metering,
+# and that is exactly the case that opts in.
+_BROKER_IMAGE_PATHS = {"images/generations", "images/edits", "images/variations"}
+HR_BROKER_IMAGES = os.environ.get("HR_BROKER_IMAGES", "0").strip().lower() in ("1", "on", "true")
+
 
 def _broker_path_allowed(suffix: str) -> bool:
     """True if this upstream path is part of the inference surface."""
     s = (suffix or "").strip("/").lower()
     if not s or ".." in s:      # empty or traversal — never forward our credential
         return False
+    if s in _BROKER_IMAGE_PATHS:
+        return HR_BROKER_IMAGES
     return s in _BROKER_ALLOWED_EXACT or s.startswith(_BROKER_ALLOWED_PREFIX)
 
 
@@ -2392,6 +2729,118 @@ async def llm_broker(path: str, request: Request):
            if k.lower() not in ("content-length", "transfer-encoding", "connection")}
     return StreamingResponse(pump(), status_code=up.status_code, headers=out,
                              media_type=up.headers.get("content-type"))
+
+
+# ── Unified Harness Protocol: version, discovery, and the error envelope ────────────────
+# The protocol this server implements is specified in protocol/ — this section is the part of the
+# implementation the specification names directly. Writing the specification exposed three things
+# this server did not do, and all three were client-visible defects rather than cosmetic gaps:
+#
+#   1. Nothing told a client which contract a response was written to. Added UHP-Version on every
+#      response, and honoured on the way in.
+#   2. A client had no way to ask what this server supports; it had to guess, or learn from a 404.
+#      Added GET /v1/uhp.
+#   3. Failures returned a bare human string, so a client had to match on prose to decide whether to
+#      retry. Added the structured error envelope. The old `detail` string is still emitted beside
+#      it, because clients in the wild read it — it is documented as deprecated, not removed under
+#      them.
+UHP_VERSION = "2026-08-11"
+UHP_VERSIONS = [UHP_VERSION]
+
+# Capabilities are declared, not inferred, and the conformance suite checks each one against the
+# behaviour it promises. Reporting false is a supported answer; omitting a key is not, because a
+# client cannot tell an omission from an older server.
+UHP_CAPABILITIES = {
+    "streaming": True,
+    "sessions": True,
+    "cancellation": True,
+    "files_input": True,
+    "files_output": True,
+    "session_listing": True,
+    "harness_management": True,
+    "session_sharing": True,
+    "idempotency": True,
+}
+UHP_CONFORMANCE_CLASS = "full"
+
+# status -> (error type, fallback code) for raises that predate uhp_error() and carry only a string.
+# The type is always right because it follows from the status; the code is generic, which is honest:
+# a made-up specific code would be worse than one that says only as much as the status does.
+_UHP_STATUS_TYPE = {
+    400: ("invalid_request_error", "invalid_input"),
+    401: ("authentication_error", "invalid_credential"),
+    403: ("permission_error", "insufficient_scope"),
+    404: ("invalid_request_error", "not_found"),
+    409: ("invalid_request_error", "conflict"),
+    413: ("invalid_request_error", "file_too_large"),
+    422: ("invalid_request_error", "unprocessable"),
+    429: ("rate_limit_error", "rate_limited"),
+    500: ("server_error", "internal_error"),
+    501: ("server_error", "not_implemented"),
+    502: ("server_error", "upstream_error"),
+    503: ("server_error", "unavailable"),
+    504: ("server_error", "timeout"),
+}
+
+
+def uhp_error(status: int, code: str, message: str, param: str | None = None,
+              detail: dict | None = None) -> HTTPException:
+    """Raise a failure the protocol names. `raise uhp_error(404, "harness_not_found", ...)`.
+
+    Carries the structured fields through FastAPI's HTTPException.detail so the handler below can
+    emit them verbatim instead of guessing from the status.
+    """
+    etype = _UHP_STATUS_TYPE.get(status, ("server_error", "internal_error"))[0]
+    return HTTPException(status, {"__uhp__": True, "type": etype, "code": code,
+                                  "message": message, "param": param, "detail": detail})
+
+
+@app.exception_handler(HTTPException)
+async def _uhp_http_exception(request: Request, exc: HTTPException):
+    d = exc.detail
+    if isinstance(d, dict) and d.get("__uhp__"):
+        err = {k: d.get(k) for k in ("type", "code", "message", "param", "detail")}
+    else:
+        etype, code = _UHP_STATUS_TYPE.get(exc.status_code, ("server_error", "internal_error"))
+        err = {"type": etype, "code": code, "message": str(d) if d else "request failed",
+               "param": None, "detail": None}
+    body = {"error": err, "detail": err["message"]}   # `detail`: deprecated alias, see above
+    return JSONResponse(body, status_code=exc.status_code,
+                        headers={**(exc.headers or {}), "UHP-Version": UHP_VERSION})
+
+
+@app.middleware("http")
+async def _uhp_version(request: Request, call_next):
+    """Negotiate the protocol version, and state on every response which one was served.
+
+    A client that asks for a version this server cannot serve is refused. Serving it a different
+    version quietly would be worse: it would receive a body it may not be able to parse, with
+    nothing indicating why.
+    """
+    want = (request.headers.get("uhp-version") or "").strip()
+    if want and want not in UHP_VERSIONS:
+        return JSONResponse(
+            {"error": {"type": "invalid_request_error", "code": "unsupported_protocol_version",
+                       "message": f"This server does not implement UHP version '{want}'.",
+                       "param": "UHP-Version", "detail": {"supported": UHP_VERSIONS}},
+             "detail": f"This server does not implement UHP version '{want}'."},
+            status_code=400, headers={"UHP-Version": UHP_VERSION})
+    resp = await call_next(request)
+    resp.headers["UHP-Version"] = UHP_VERSION
+    return resp
+
+
+@app.get("/v1/uhp")
+def uhp_discovery() -> dict:
+    """Protocol discovery. Deliberately unauthenticated: a client has to be able to find out whether
+    this is a UHP server, and which versions it speaks, BEFORE it decides what credential to present.
+    Nothing here is principal-specific."""
+    return {"object": "uhp.discovery", "protocol": "uhp",
+            "versions": UHP_VERSIONS, "default_version": UHP_VERSION,
+            "conformance_class": UHP_CONFORMANCE_CLASS,
+            "capabilities": dict(UHP_CAPABILITIES),
+            "implementation": {"name": "HarnessRouter Community Edition",
+                               "version": os.environ.get("HR_VERSION", "0.3.0")}}
 
 
 @app.get("/healthz")
@@ -2554,7 +3003,7 @@ async def _owned_session(request: Request, sid: str) -> tuple[str, dict]:
     org = p.get("org", "")
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != org or str(v.get("status")) == "deleted":
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return org, v
 
 
@@ -2598,6 +3047,40 @@ async def _turn_cancelled(sid: str, org: str, resp_id: str, *, check_store: bool
     if check_store and control_store.enabled() and await control_store.resp_is_cancelled(org, resp_id):
         return True
     return False
+
+
+class SessionPatch(BaseModel):
+    """The parts of a session a person may edit. Only the title, for now."""
+    title: str | None = None
+
+
+@app.patch("/v1/sessions/{sid}")
+async def patch_session(sid: str, body: SessionPatch, request: Request) -> dict:
+    """Rename a session.
+
+    A conversation's title is auto-derived from its first message (see _TRACE_CARD_FIELDS), which
+    is a reasonable default and a poor permanent name — "A 4-slide deck: why onboarding drops off
+    at step 3, and the three fixes…" is not what anyone wants their deck called. An app built on a
+    Harness needs to be able to fix that, and until now there was no route to do it with: the
+    obvious PATCH did not exist, so a rename silently did nothing and reverted on the next load.
+    """
+    _org, _v = await _owned_session(request, sid)
+    title = (body.title or "").strip()
+    if not title:
+        raise uhp_error(400, "invalid_title", "A title is required.", "title")
+    title = title[:120]
+    # The vertex for anything reading the session directly, AND the trace manifest, because that
+    # blob is what every LIST renders. Writing only the vertex looks like it worked and reverts on
+    # the next load. `title_custom` is what stops the next turn regenerating it from your message.
+    await _vg_upsert("HarnessSession", sid, {"title": title})
+    base = await _trace_base(sid)
+    if base:
+        m = await _prior_manifest(base)
+        if m:
+            m["title"] = title
+            m["title_custom"] = "1"
+            await _index_manifest(base, m)
+    return {"id": sid, "object": "session", "title": title}
 
 
 @app.post("/v1/sessions/{sid}/cancel")
@@ -2819,8 +3302,9 @@ async def delete_trace(sid: str, request: Request) -> dict:
         # remove the flat index AND the per-harness/per-member mirrors (harness/member from the
         # manifest we just read; falls back to a bare flat-key delete if the manifest was unreadable)
         await _deindex_manifest(base, manifest)
-    # 2) durable session workspace tarball
+    # 2) durable session workspace tarball, and anything the media server holds for it
     await _blob_delete(_ws_blob(sid), kb=BLOB_KB)
+    await _media_session_purge(sid)
     # 3) tombstone the session vertex + drop in-process state
     try:
         # Mark deleted but DON'T blank trace_blob — a blank prefix silently disables the trace if the
@@ -2922,6 +3406,37 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
     },
+    "vercel": {
+        "label": "Vercel AI Gateway",
+        "base_url": "https://ai-gateway.vercel.sh/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "vck_…",
+    },
+    "llmtr": {
+        "label": "LLMTR",
+        "base_url": "https://llmtr.com/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "llmtr-…",
+    },
+    # Media only: it serves no chat model, so it carries no entry in _VENDOR_MODELS and shows no
+    # models on its row. It is HERE because the console validates every entry in the integrations
+    # document against this table on every write — so with ElevenLabs connected and absent from
+    # it, the whole document was refused with "integration needs a name and a known provider (got
+    # 'elevenlabs')" and NO integration could be added or edited on that instance again. Measured
+    # on the test box 2026-08-16, where an ElevenLabs connection added for the media plane had
+    # quietly locked the page.
+    "elevenlabs": {
+        "label": "ElevenLabs",
+        "base_url": "https://api.elevenlabs.io",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "sk_…",
+    },
     "azure-foundry": {
         "label": "Azure OpenAI",
         "base_url": None,          # one resource per customer — there is no default to know
@@ -2992,7 +3507,48 @@ def _integration_public(integ: dict) -> dict:
             cfg[k] = _SECRET_SENTINEL
     return {**integ, "config": cfg,
             "models": [{"canonical": c, "provider_id": v}
-                       for c, v in _integration_models(integ).items()]}
+                       for c, v in _integration_models(integ).items()],
+            "image_models": [{"canonical": c, "provider_id": v}
+                             for c, v in _integration_image_models(integ).items()]}
+
+
+async def _media_chains_public() -> list[dict]:
+    """Every media capability's chain, in the order it will actually be walked.
+
+    Read through media_plane.capability(), which is where the operator's preference is applied —
+    so what the console draws is the list the router uses, not a second reading of the file that
+    could drift from it.
+
+    The measured facts travel with each candidate because they are the reason for the order. An
+    operator moving a model to the top is choosing between "honours the duration you ask for" and
+    "ignores it and returns 6 s", and that choice cannot be made from a model name.
+    """
+    connected = set((await _media_providers()).keys())
+    out: list[dict] = []
+    for name in media_plane.capability_names():
+        cap = media_plane.capability(name)
+        cands = [c for c in (cap.get("candidates") or []) if isinstance(c, dict)]
+        rows = []
+        for c in cands:
+            model = str(c.get("model") or "")
+            provider = str(c.get("provider") or "")
+            rows.append({
+                "model": model,
+                "provider": provider,
+                "connected": provider in connected,
+                "off": bool(c.get("policy_off")),
+                # Why it is where it is, in the words the file recorded when it was called.
+                "resolution": c.get("resolution") or "",
+                "seconds": c.get("duration_observed_s"),
+                "duration_ignored": bool(c.get("duration_ignored")),
+                "accepts_input_image": c.get("accepts_input_image"),
+                "usd": c.get("usd"),
+                "verification": c.get("verification") or "",
+                # The clause the chain would use if this one were asked for right now.
+                "unavailable": media_plane.stood_down(c),
+            })
+        out.append({"capability": name, "unit": cap.get("unit") or "", "candidates": rows})
+    return out
 
 
 @app.get("/v1/admin/integrations")
@@ -3000,13 +3556,22 @@ async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
     return {"integrations": [_integration_public(i) for i in await _integrations_doc()],
             "model_map": await _effective_model_map(),
+            "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
-            "catalog": _provider_catalog_public()}
+            "catalog": _provider_catalog_public(),
+            "media_chains": await _media_chains_public(),
+            "media_policy": await _media_policy_doc()}
 
 
 class IntegrationsBody(BaseModel):
     integrations: list[dict]
     model_map: dict
+    # Optional: a console that predates image routing still saves without wiping the image map.
+    # Absent means "leave it alone", which is not the same as an empty dict meaning "clear it".
+    image_model_map: dict | None = None
+    # Same rule: absent leaves the media preference alone, {} clears it back to the catalog's own
+    # order. A console that does not know about media routing must not silently reset it.
+    media_policy: dict | None = None
 
 
 @app.put("/v1/admin/integrations")
@@ -3017,7 +3582,13 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     for i in body.integrations:
         name = str(i.get("name") or "").strip()
         provider = str(i.get("provider") or "").lower()
-        if not name or provider not in {p for p, _ in _INTEGRATION_WIRING}:
+        # Against the CATALOG, which is the list of providers this console offers, and not against
+        # _INTEGRATION_WIRING, which answers a different question: which agent backends can be
+        # driven by one. A media-only provider has no backend wiring by definition, so validating
+        # here against the wiring made ElevenLabs unsaveable — and because the console PUTs the
+        # WHOLE document, one such row already in the vault failed every subsequent write and no
+        # integration of any kind could be added to that instance again.
+        if not name or provider not in _PROVIDER_CATALOG:
             raise HTTPException(400, f"integration needs a name and a known provider (got '{provider}')")
         cfg = {k: v for k, v in (i.get("config") or {}).items() if v not in (None, "")}
         # The client never sees secrets (sentinel) — carry stored values through unchanged edits.
@@ -3053,6 +3624,13 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     for model, iname in mm.items():
         if iname not in names:
             raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
+    imm = None
+    if body.image_model_map is not None:
+        imm = {str(k).strip(): str(v).strip() for k, v in body.image_model_map.items()
+               if str(k).strip() and str(v).strip()}
+        for model, iname in imm.items():
+            if iname not in names:
+                raise HTTPException(400, f"image model '{model}' maps to unknown integration '{iname}'")
     # Only EXPLICIT routes are stored. Claiming every servable model here is what froze the map:
     # a model added to the source table afterwards had no entry and read as "no provider", while
     # the console showed a full list and no way to tell anything was missing. _effective_model_map
@@ -3068,12 +3646,37 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, prior)
         prior_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY)
         await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, prior_mm or "{}")
+        prior_imm = await _vault_get(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY)
+        await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_PREV_KEY, prior_imm or "{}")
     await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
+    if imm is not None:
+        await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY, json.dumps(imm))
+    if body.media_policy is not None:
+        # Only models this deployment actually HAS. A preference naming a model the catalog does
+        # not carry is silent dead weight: it survives every write, explains nothing, and reorders
+        # nothing — and the day that name appears in an upgraded catalog it takes effect without
+        # anyone choosing it.
+        known = {str(c.get("model")) for n in media_plane.capability_names()
+                 for c in (media_plane.capability(n).get("candidates") or [])
+                 if isinstance(c, dict)}
+        clean: dict = {}
+        for cap, pref in (body.media_policy or {}).items():
+            if not isinstance(pref, dict):
+                continue
+            order = [str(m) for m in (pref.get("order") or []) if str(m) in known]
+            off = [str(m) for m in (pref.get("disabled") or []) if str(m) in known]
+            if order or off:
+                clean[str(cap)] = {"order": order, "disabled": off}
+        await _vault_put(GLOBAL_TENANT, _MEDIA_POLICY_KEY, json.dumps(clean))
+        # The plane caches it, so the write must publish it. Otherwise the order takes effect on
+        # the next restart, which is indistinguishable from the control not working.
+        media_plane.set_policy(clean)
     # Answer with what will actually route, not with what was just filed away — the two differ by
     # every model claimed on read, and the console renders this straight into the picker.
     return {"ok": True, "integrations": [_integration_public(i) for i in out],
-            "model_map": await _effective_model_map()}
+            "model_map": await _effective_model_map(),
+            "image_model_map": await _effective_image_model_map()}
 
 
 @app.post("/v1/admin/integrations/restore")
@@ -3549,6 +4152,92 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
         "qwen3.7-flash":      "qwen/qwen3.7-flash",
     },
+    # LLMTR is a Turkey-hosted gateway: models running on its own infrastructure in Turkey
+    # beside the global frontier catalogue, behind one base_url and one key. Ids are
+    # vendor-qualified like OpenRouter's, so the canonical is the id with the vendor prefix
+    # removed — except where a canonical for that model already exists above (hunyuan-3 is
+    # tencent/hy3, nemotron-3-ultra is the 550b-a55b id), because one model arriving in the
+    # picker twice under two names is worse than a name that reads oddly.
+    #
+    # This table is deliberately the INTERSECTION with _MODEL_CATALOG rather than everything
+    # LLMTR serves: connecting the provider adds no name to any picker, it only makes models
+    # that are already there reachable through Turkey. Its published catalogue
+    # (GET https://llmtr.com/v1/models, which needs no key) was read and measured on
+    # 2026-08-19: of 245 published ids, 131 clear the agent-loop bar _MODEL_CATALOG states,
+    # and the 107 of those that only LLMTR serves — including the three Turkey-resident
+    # models, gemma-4, qwen3-6-35b and qwen3-5-4b — are proposed separately, once the
+    # capability test can check this catalogue the way it checks OpenRouter's. The rules
+    # they were measured by, so that follow-up can re-apply them rather than trust a number:
+    #
+    #   1. Text out and `tools` in supported_parameters — the same agent-loop bar
+    #      _MODEL_CATALOG states. 81 fail it: embedders, image/video/speech models, and the
+    #      small Turkish chat models (trendyol-asure-12b, magibu-11b-v8, medgemma-4b) that
+    #      serve no tools.
+    #   2. No dated snapshot of an id already listed (qwen-plus-2025-07-14 beside qwen-plus).
+    #      The snapshot is the same model under a pinned name; two picker rows for it help
+    #      nobody.
+    #   3. The transport has to be the one the runner will actually use for that id. Both ways
+    #      round, and 17 models fail it: gpt-5.4/5.2/5.1/5/o1/o3 and friends are published here
+    #      for /v1/chat/completions only while hermes drives every gpt-5*/o[1-4] id over
+    #      /v1/responses (_HERMES_RESPONSES_API_MODEL), and the grok ids are published for
+    #      /v1/responses only while hermes drives them over chat. Offering either is a picker
+    #      row that fails on send — the same broken promise _TOKENROUTER_NO_CHANNEL records.
+    #   4. It has to answer. Every id was called live on 2026-08-19 — max_tokens=4 on
+    #      /v1/chat/completions, max_output_tokens=16 on /v1/responses — and seven published as
+    #      available did not, twice: llmtr/muse-glimmer-30b-tr returns no bytes at all (45 s,
+    #      70 s and 120 s), publicai/apertus-8b-instruct 502s after about a minute,
+    #      llmtr/ornith-1-35b and anthropic/claude-opus-4.1 502 immediately, aion-labs/aion-2.5
+    #      and publicai/apertus-v1.5-8b 400, and openai/gpt-oss-120b 402 while the gpt-oss-20b
+    #      beside it answers. A catalogue entry is an advertisement; an answer is the product.
+    #
+    # A ping is not a long agentic turn, so the harnesses on the test box ran real ones, each
+    # completing without substitution: Claude Code over /v1/messages on claude-sonnet-4.6 and
+    # claude-opus-4.8, hermes over /v1/chat/completions on claude-haiku-4.5, and codex over
+    # /v1/responses on gpt-5.3-codex and gpt-5.5, both of which called the shell tool and came
+    # back with its real output. A model here that turns out to fail a real turn comes off this
+    # table the same way those seven did.
+    #
+    # One thing those runs turned up that is NOT this table's doing, recorded so the next person
+    # does not have to rediscover it: driven by CODEX, gpt-5.6-sol, gpt-5.6-terra and
+    # gpt-5.6-luna finish a turn but are never offered tools, so they cannot act — they answer
+    # that they have no shell and stop. This is the codex CLI, not the provider. Pointed at a
+    # local endpoint that records what it is sent, codex 0.148.0 emits the gpt-5.6-* request with
+    # NO `tools` and NO `instructions` field at all, while the same binary against the same
+    # endpoint sends 11 tools and a 21k-char instructions block for gpt-5.5. Nothing ever reaches
+    # the provider for it to drop. The family first tries wss://api.openai.com/v1/responses and
+    # its request carries x-codex-window-id, so it appears to expect the WebSocket session where
+    # tools and instructions are established on the connection; falling back to plain HTTPS
+    # against a configured provider, it sends neither. HERMES drives the same three ids over the
+    # same /v1/responses transport against the same base_url with tools intact. So it applies to
+    # every non-OpenAI provider, not this one: all three are already in _MODEL_CATALOG["codex"]
+    # and reachable through openrouter, tokenrouter and vercel. Left alone here rather than
+    # worked around in one vendor's table.
+    "llmtr": {
+        "gpt-5.6-sol":        "openai/gpt-5.6-sol",
+        "gpt-5.6-terra":      "openai/gpt-5.6-terra",
+        "gpt-5.6-luna":       "openai/gpt-5.6-luna",
+        "gpt-5.5":            "openai/gpt-5.5",
+        "gpt-5.3-codex":      "openai/gpt-5.3-codex",
+        "claude-opus-5":      "anthropic/claude-opus-5",
+        "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-opus-4.8":    "anthropic/claude-opus-4.8",
+        "claude-sonnet-5":    "anthropic/claude-sonnet-5",
+        "claude-opus-4.7":    "anthropic/claude-opus-4.7",
+        "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
+        "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
+        "gemini-3.6-flash":   "google/gemini-3.6-flash",
+        "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
+        "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
+        "kimi-k3":            "moonshot/kimi-k3",
+        "qwen3.7-max":        "qwen/qwen3.7-max",
+        "qwen3.8-max":        "qwen/qwen3.8-max",
+        "kimi-k2.7-code":     "moonshot/kimi-k2.7-code",
+        "step-3.7-flash":     "stepfun/step-3.7-flash",
+        "minimax-m3":         "minimax/minimax-m3",
+        "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
+        "hunyuan-3":          "tencent/hy3",
+        "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
+    },
 }
 
 # TokenRouter speaks OpenRouter's slugs, so it starts from that table rather than a second copy
@@ -3571,8 +4260,39 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
 }
+# Image models, kept OUT of _VENDOR_MODELS on purpose: those tables feed the chat model pickers
+# and the per-backend catalogs, and an image model offered as a chat model is a broken choice a
+# user can make. Canonical → provider id, same shape, resolved by _image_auth only.
+_IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
+    "openai": {"gpt-image-1": "gpt-image-1", "gpt-image-1-mini": "gpt-image-1-mini"},
+    "azure":  {"gpt-image-1": "gpt-image-1"},
+    "azure-foundry": {"gpt-image-1": "gpt-image-1"},
+    # Verified on the live gateway 2026-08-16: gpt-image-1-mini returned a 1,286,643 byte PNG at
+    # 1024x1024 through the ordinary /v1/images/generations path.
+    "vercel": {"gpt-image-1": "openai/gpt-image-1",
+               "gpt-image-1-mini": "openai/gpt-image-1-mini"},
+}
+
+
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
                                  if c not in _TOKENROUTER_NO_CHANNEL}
+
+# Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
+# OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
+# the two aggregators disagree about who publishes the model, not about which model it is.
+#
+# Checked against the gateway's own list (GET https://ai-gateway.vercel.sh/v1/models, which needs
+# no key) on 2026-08-15: 25 of the 29 resolve byte-identical, these 4 do not, and every one of the
+# 29 exists there under one name or the other. A slug that stops resolving belongs here or nowhere
+# — an aggregator that does not serve what the picker offers is the broken promise recorded above.
+_VERCEL_RESLUG = {
+    "qwen3.7-max":        "alibaba/qwen3.7-max",
+    "qwen3.8-max":        "alibaba/qwen3.8-max",
+    "qwen3.7-flash":      "alibaba/qwen3.7-flash",
+    "mistral-medium-3.5": "mistral/mistral-medium-3.5",
+}
+_VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
+                            for c, v in _VENDOR_MODELS["openrouter"].items()}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
@@ -3599,7 +4319,7 @@ def _map_model(conn: dict, friendly: str) -> str | None:
     table = _vendor_models(provider)
     if friendly and friendly in table:
         return table[friendly]
-    if backend == "claude" or (backend == "hermes" and provider in ("anthropic", "bedrock")):
+    if backend == "claude" or (backend in ("hermes", "pi", "dsh") and provider in ("anthropic", "bedrock")):
         # Older claude ids the catalog no longer lists still map, and a caller may pass a
         # provider-native id directly; _LEGACY_CLAUDE_IDS carries both, keyed bare (opus-4.5).
         legacy = _BEDROCK_CLAUDE if provider == "bedrock" else _ANTHROPIC_CLAUDE
@@ -3681,8 +4401,53 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash"]},
+    # pi (earendil-works pi coding agent) is multi-family the same way hermes is: the CLI's
+    # unified LLM layer runs either family natively and anything OpenAI/Anthropic-compatible
+    # through a custom provider. The list grew the same way hermes's did — a model is added when
+    # a real pi turn on the live provider has been checked for substitution:
+    #   2026-08-19: gpt + claude families through the product path (claude-haiku-4.5 and
+    #   gpt-5.4-mini, TokenRouter connection, trace checked for substitution).
+    #   2026-08-19: the frontier set below, each probed through the pi CLI on the TokenRouter
+    #   connection (openai-completions custom provider); every reply echoed exactly and every
+    #   response reported the requested model id. hunyuan-3, ling-3.0-flash, minimax-m3,
+    #   nemotron-3-ultra and qwen3.7-flash are NOT here: TokenRouter lists no channel for them,
+    #   hermes serves them via OpenRouter, and no OpenRouter credential was available to probe
+    #   pi with — unprobed is unlisted, per the bar at the top of this table.
+    # dsh (DeepSeek Harness) went multi-family once the single-provider phase the audit
+    # required had proven itself (deepseek family, full product path, 2026-08-20). The wider
+    # families ride dsh-llm-pi-ai — pi's LLM library as a dsh plugin — through the driver's
+    # relay, so the serving paths are the ones pi's rows already earned; each family below was
+    # re-verified through a real dsh turn on the TokenRouter connection, substitution-checked,
+    # and the frontier set was probed per-model through the dsh driver (2026-08-20).
+    "dsh": {"default": "deepseek-v4-pro",
+            "models": ["deepseek-v4-pro", "deepseek-v4-flash",
+                       "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                       "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                       "gemini-3.6-flash", "kimi-k3", "kimi-k2.7-code",
+                       "qwen3.7-max", "qwen3.8-max",
+                       "mistral-medium-3.5", "step-3.7-flash"]},
+    "pi": {"default": "gpt-5.4",
+           "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                      "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                      "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                      "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                      "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                      "mistral-medium-3.5", "step-3.7-flash"]},
 }
-_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes"}
+_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
+# Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
+# 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
+#   qwen3.7-max  -> 400 InvalidParameter "Unexpected item type in content"  (rejects the TYPE)
+#   qwen3.8-max  -> 400 about image DIMENSIONS (a 1x1 probe) — i.e. it accepts images
+#   gemini-3.6-flash, deepseek-v4-pro, kimi-k3, mistral-medium-3.5, step-3.7-flash -> all 200
+# Consumed by the pi backend: pi replays a session's image tool-results to the CURRENT model
+# (a cross-model conversation is one session), so a text-only channel turns every follow-up in
+# an image-bearing session into a hard 400. Declared text-only, pi drops the image instead —
+# a degraded answer beats a dead conversation.
+_TEXT_ONLY_INPUT = {"qwen3.7-max"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
 # values win), silently rejecting the us.anthropic.* ids this set exists to allow.
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
@@ -3717,6 +4482,10 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "claude"
     if base == "hermes":
         return "hermes"
+    if base == "pi":
+        return "pi"
+    if base in ("dsh", "deepseek-harness"):
+        return "dsh"
     return ""
 
 
@@ -3726,10 +4495,12 @@ def _model_authorized(requested: str, backend: str) -> bool:
         return False
     if r in {m.lower() for m in _MODEL_CATALOG.get(backend, {}).get("models", [])}:
         return True
-    if backend in ("claude", "hermes") and r in _PROVIDER_CLAUDE_IDS:
+    if backend in ("claude", "hermes", "pi", "dsh") and r in _PROVIDER_CLAUDE_IDS:
         return True   # power users may pass a provider-native claude id (claude-opus-4-8 / us.anthropic...)
-    if backend in ("codex", "hermes") and r.startswith("gpt-"):
+    if backend in ("codex", "hermes", "pi", "dsh") and r.startswith("gpt-"):
         return True   # gpt-* family; Azure deployment names vary
+    if backend == "dsh" and r.startswith(("deepseek", "deepseek/")):
+        return True   # deepseek family; aggregator slugs vary (deepseek/deepseek-v4-pro)
     return False
 
 
@@ -3873,6 +4644,22 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
         # Workspace sticks to the session: the vertex's stamp wins (set at creation/backfill);
         # the caller's workspace only fills the gap for pre-stamping sessions.
         tr["workspace"] = str((v or {}).get("workspace") or "") or tr.get("workspace") or workspace or ""
+        # The vertex names the harness the session belongs to, and every app route addressed to a
+        # harness refuses a session that names none — correctly, since an unnamed session cannot be
+        # proved to be this harness's. But the stamp is written at CREATION only, and this is the
+        # other moment the answer is known: a session made before the stamp existed, or made with no
+        # harness at all and later run on one, would name none forever and its canvas would 404 for
+        # good. So fill it in here — ONCE, and only into a blank.
+        #
+        # NEVER OVERWRITE. Re-pointing a session that already names a harness at whoever happened to
+        # run the next turn is exactly the cross-harness read those routes exist to refuse: two
+        # agents in one org, both legitimate callers, and the second one silently inherits the
+        # first's canvas, jobs and rendered bytes. `harness_id` is caller-supplied; a blank is the
+        # only state where nobody's claim is being taken away.
+        if harness_id and v is not None and not str(v.get("harness_id") or ""):
+            await _vertex_upsert(sid, {"harness_id": harness_id, "harness_name": harness_name or ""})
+            await _vg_edge("USES", sid, harness_id)   # same topology edge the create path stamps
+            v["harness_id"], v["harness_name"] = harness_id, harness_name or ""
         if not tr.get("prefix"):
             vv = v or await _vertex_get(sid)
             tr["prefix"] = _prefix_from_vertex(sid, vv)
@@ -3996,7 +4783,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # HR-INF-010: the caller (create_response) already read this harness's vertex — thread it in
     # instead of re-reading it twice more here. Beyond cutting reads, a same-request snapshot means
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
-    mcp_servers, skills, skills_suppressed, tools_disabled = await _harness_plugins(harness_id, org, hdr_vals, hv=hv)
+    mcp_servers, skills, skills_suppressed, tools_disabled = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
     if mcp_servers or skills or skills_suppressed or tools_disabled:
         rec["plugins"] = {"mcp": [m.get("name") for m in mcp_servers], "skills": [s.get("name") for s in skills],
                           "skills_off": skills_suppressed, "tools_off": tools_disabled}
@@ -4010,6 +4797,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     mapped_conn = await _mapped_integration_conn(backend, model_req)
     candidates: list[tuple[str, dict | None]] = ([(mapped_conn["name"], mapped_conn)] if mapped_conn else [])
     candidates += [(n, None) for n in chain]
+    # Independent of which chat connection wins below: images are usually a different provider.
+    image_auth = await _image_auth(sid, backend)
     for name, pre in candidates:
         conn, src = (pre, "integration") if pre is not None else await _get_connection(org, name)
         if not conn:
@@ -4039,11 +4828,16 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "agent_doc": agent_doc,
                 "skills_suppressed": skills_suppressed, "tools_disabled": tools_disabled,
+                # Image generation, when an integration can serve it. A per-turn credential for
+                # the broker, never a provider key — see _image_auth.
+                "image_auth": image_auth,
                 # idempotency: all _sandbox_json retries of THIS turn share the response id, so a
                 # lost/slow first reply that gets retried dedups to the same runner turn (no re-exec).
                 "idempotency_key": f"{translator.resp_id}:{name}",
                 # token-level streaming (claude): runner adds --include-partial-messages + emits deltas
                 "partial_messages": bool(partial_messages),
+                # pi: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
+                "vision": model_req.strip().lower() not in _TEXT_ONLY_INPUT,
                 # codex streaming: run via the app-server protocol (item/agentMessage/delta)
                 "codex_appserver": bool(codex_appserver)}
         # Stop requested while we were resolving the connection / provisioning the previous
@@ -4202,6 +4996,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         rec["usage"] = translator.usage
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _checkpoint(sid, rec)
+    # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
+    # media server wrote into it during the turn is gone. Re-project here — one line, one place,
+    # and the only ordering at which a hosted write survives.
+    if sid in _media_project_due:
+        await _media_project(sid)
     await _trace_finalize(sid, rec)
     # Release the session lease so a follow-up turn admits immediately (no TTL wait). Best-effort.
     if rec.get("lease_fence") and control_store.enabled():
@@ -4566,7 +5365,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # the marketplace model is exactly "callers run it, the owner pays infra". Until entitlements
     # land, the unguessable harness id is the run capability.
     if hv and str(hv.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -4585,7 +5384,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # explicitly selected — that's not a valid provider id. Treat it as "unset" and inherit, in order:
     #   previous round's model -> the harness default_model -> connection default (in _map_model).
     # This keeps a conversation on the user's chosen model and never ships the bare backend to Bedrock.
-    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", ""}
+    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", ""}
     if model_req.lower() in _BARE:
         inherited = ""
         if body.previous_response_id:
@@ -4635,7 +5434,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # had just added their own key was told there was no connection for the backend, which was
     # both wrong and unactionable. Only refuse when NOTHING can serve it.
     if not chain and not await _mapped_integration_conn(backend, model_req):
-        raise HTTPException(400, f"no provider configured for backend '{backend}' — add an "
+        raise HTTPException(400, f"no provider configured for backend '{backend}'. Add an "
                                  f"integration for a provider that serves '{model_req or backend}', "
                                  f"or configure a connection policy")
     # Additional Headers (app-level auth pass-through): the harness config declares header NAMES;
@@ -4659,8 +5458,9 @@ async def create_response(body: CreateResponseBody, request: Request):
     # request didn't supply that header, the tool call would fail opaquely (bad auth at the MCP).
     # Reject up-front instead, naming exactly what's missing and where it's needed.
     missing: list[str] = []
-    for _s in _hv_arr("mcp_servers"):
-        if not isinstance(_s, dict) or str(_s.get("enabled")) in ("False", "false", "0"):
+    # Through the one reader, so this scan sees exactly the servers the turn will get.
+    for _s in _mcp_list(hv):
+        if str(_s.get("enabled")) in ("False", "false", "0"):
             continue
         _blob = " ".join([str(_s.get("url") or ""), str(_s.get("auth") or ""),
                           " ".join(str(x) for x in (_s.get("headers") or {}).values())])
@@ -5120,11 +5920,11 @@ async def get_response(response_id: str, request: Request):
     principal = await _principal(request)
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Object-level ownership (LIVE-B): one org must not read another's response. 404 (not 403)
     # so a cross-org id probe can't confirm existence. Legacy records with no _org stay readable.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
@@ -5227,11 +6027,11 @@ async def delete_response(response_id: str, request: Request):
     principal = await _principal(request)
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # V1C02-004: object-level ownership — one org must not delete another's response. 404 (not
     # 403) so a cross-org id probe can't confirm existence. Legacy records with no _org stay owned.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     rec["_deleted"] = True
     try:
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
@@ -5322,7 +6122,7 @@ async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
     p = await _principal(request)
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return await _serve_workspace_path(sid, path)
 
 
@@ -5335,7 +6135,7 @@ async def set_session_share(sid: str, body: ShareBody, request: Request) -> dict
     p = await _principal(request)
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     if body.enabled:
         token = str(v.get("share_token") or "") or ("shr" + uuid.uuid4().hex)
         await _vertex_upsert(sid, {"share_token": token, "shared": "1",
@@ -5354,7 +6154,7 @@ async def get_session_share(sid: str, request: Request) -> dict:
     p = await _principal(request)
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
-        raise HTTPException(404, "session not found")
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return {"enabled": str(v.get("shared") or "") == "1", "token": str(v.get("share_token") or "")}
 
 
@@ -5432,9 +6232,9 @@ async def list_input_items(response_id: str, request: Request, limit: int = 20, 
     principal = await _principal(request)
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
-        raise HTTPException(404, "response not found")   # LIVE-B: object-level ownership
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # LIVE-B: object-level ownership
     data = list(rec.get("_input") or [])
     if order == "desc":
         data.reverse()
@@ -5452,11 +6252,11 @@ async def cancel_response(response_id: str, request: Request):
     org = principal.get("org", "")
     rec = await _resp_get(response_id)
     if not rec:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Ownership (LIVE-B): the resolved principal must own this response. 404 (not 403)
     # so a cross-org probe can't even confirm the id exists.
     if str(rec.get("_org") or "") != org:
-        raise HTTPException(404, "response not found")
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     sid = str(rec.get("_session_id") or "")
     # PRIMARY (safe, cross-replica): a durable per-RESPONSE monotonic terminal latch. The turn's
     # own loop checks resp_is_cancelled(its resp_id) at every stage and self-terminates within
@@ -5750,7 +6550,9 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
                 items = (json.loads(blob) or {}).get("files") or []
             except Exception:  # noqa: BLE001
                 items = []
-        files = [{"path": it["path"], "bytes": it.get("bytes"),
+        files = [{"object": "file", "id": it["file_id"], "container_id": sid,
+                  "filename": it["path"].rsplit("/", 1)[-1],
+                  "path": it["path"], "bytes": it.get("bytes"),
                   "media_type": mimetypes.guess_type(it["path"])[0] or "application/octet-stream",
                   "file_id": it["file_id"], "download_url": _file_url(sid, it["file_id"])}
                  for it in items if it.get("path") and it.get("file_id")]
@@ -5783,7 +6585,9 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
             if not _ws_visible(path):
                 continue
             fid = cfile_by_name.get(path) or _wf_id(path)
-            files.append({"path": path, "bytes": m.size,
+            files.append({"object": "file", "id": fid, "container_id": sid,
+                          "filename": path.rsplit("/", 1)[-1],
+                          "path": path, "bytes": m.size,
                           "media_type": mimetypes.guess_type(path)[0] or "application/octet-stream",
                           "file_id": fid,
                           "download_url": _file_url(sid, fid)})
@@ -5792,6 +6596,85 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
 
 
 _ARCHIVE_MAX_BYTES = 512 * 1024 * 1024   # in-memory zip cap; beyond this, download files singly
+
+
+class WorkspaceWrite(BaseModel):
+    content: str | None = None        # text
+    content_b64: str | None = None    # bytes
+
+
+@app.get("/v1/sessions/{sid}/files/{path:path}")
+async def read_session_file(sid: str, path: str, request: Request) -> Response:
+    """Read ONE file from a session's workspace, by path — the mirror of the PUT below.
+
+    This goes through BACKING.workspace, which is the whole point: self-hosted, that is the live
+    directory the agent is writing into RIGHT NOW, so an app sees a file the moment a tool call
+    creates it. The listing route next door reads the checkpoint tarball instead, which only
+    exists once a turn ENDS — and an app polling it for a file the agent had already written
+    minutes ago sits there showing a spinner for something that is on disk.
+
+    Unlike writing, reading during a turn is safe and is exactly what a live app wants: a
+    half-written deck is better than no deck, and the next read gets the rest.
+    """
+    await _owned_session(request, sid)
+    data = await BACKING.workspace.read(sid, path)
+    if data is None:
+        raise uhp_error(404, "file_not_found",
+                        f"No file '{path}' in this session's workspace.", "path")
+    media = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return Response(content=data, media_type=media,
+                    headers={"cache-control": "no-store"})
+
+
+@app.put("/v1/sessions/{sid}/files/{path:path}")
+async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request: Request) -> dict:
+    """Write or replace one file in a session's workspace.
+
+    This is what lets an app built on a Harness own state the agent also edits — the slides kit
+    keeps deck.json here, so the canvas and the agent read and write the same file rather than two
+    copies that drift.
+
+    Where that file physically lives differs completely by deployment, which is why it goes
+    through BACKING.workspace: a live directory on the data volume self-hosted, the checkpoint
+    tarball in blob storage hosted, where between turns that archive IS the workspace.
+
+    REFUSED WHILE A TURN IS RUNNING, and that is the whole conflict story. Hosted, the live
+    sandbox would overwrite this at its next checkpoint, so the write would appear to succeed and
+    then vanish. Self-hosted, the agent may be editing the same file. Blocking is honest; both
+    sides silently racing is not.
+    """
+    # The SAME ownership check every other session route uses. Hand-rolling a second one is how
+    # this shipped broken: it compared v["org"], but a session vertex carries the owner in
+    # `tenant`, so every write 404'd on a session the caller could plainly read.
+    _org, v = await _owned_session(request, sid)
+
+    live = {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}
+    if live:
+        raise uhp_error(409, "session_busy",
+                        "The agent is working on this session. Wait for the turn to finish "
+                        "before writing to its workspace.")
+
+    if body.content_b64 is not None:
+        try:
+            data = base64.b64decode(body.content_b64)
+        except Exception:  # noqa: BLE001
+            raise uhp_error(400, "invalid_request", "content_b64 is not valid base64.") from None
+    elif body.content is not None:
+        data = body.content.encode()
+    else:
+        raise uhp_error(400, "invalid_request", "Provide content or content_b64.")
+
+    if len(data) > _WS_WRITE_MAX:
+        raise uhp_error(413, "payload_too_large",
+                        f"A workspace file written this way is limited to {_WS_WRITE_MAX} bytes.")
+
+    ok = await BACKING.workspace.write(sid, path, data)
+    if not ok:
+        # The only ways to get here are a path that tried to leave the workspace and a storage
+        # failure. Both are the caller's problem to see, not something to swallow.
+        raise uhp_error(400, "write_failed",
+                        "Could not write that path. It must be inside the session workspace.")
+    return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
 
 
 @app.get("/v1/sessions/{sid}/files/archive")
@@ -6059,13 +6942,35 @@ def _parse_jsonrpc(text: str) -> dict:
     return {}
 
 
-def _ssrf_check(url: str) -> str | None:
-    """V1C02-006: gate a caller-supplied MCP URL before the server fetches it. HTTPS only;
-    resolve EVERY DNS answer and reject loopback / link-local / RFC1918 / IPv6 private / cloud
-    metadata (169.254.169.254 falls under link-local) so a hostname can't rebind to an internal
-    target. Returns an error string to reject, or None to allow."""
-    import ipaddress
-    import socket
+async def _ssrf_check(url: str) -> str | None:
+    """The ONE rule for whether this server may talk to an MCP endpoint.
+
+    V1C02-006: gate a caller-supplied MCP URL before the server fetches it. HTTPS only; resolve
+    EVERY DNS answer and reject loopback / link-local / CGNAT / RFC1918 / IPv6 private / cloud
+    metadata (169.254.169.254 falls under link-local). Returns an error string to reject, or None
+    to allow.
+
+    Applied at BOTH config time (the console's Test connection) and run time (_harness_plugins).
+    It used to run only on the test button, so the console refused a URL that a turn then connected
+    to anyway: the check was advisory, the operator got a red error and a working server, and on a
+    multi-tenant deployment the actual protection was absent. A test that does not predict run time
+    is worse than no test.
+
+    On a self-hosted instance the private-address rules are dropped, because there the "internal"
+    network is the operator's own laptop: a local MCP server on 127.0.0.1 is a legitimate and
+    common setup, the operator already has full access to that machine, and blocking it would
+    remove a real capability while protecting nobody from anybody.
+    """
+    if _pool_is_local():
+        from urllib.parse import urlparse
+        try:
+            u = urlparse(url)
+        except Exception:  # noqa: BLE001
+            return "invalid url"
+        if u.scheme not in ("http", "https"):
+            return "MCP endpoints must be http or https"
+        return None if u.hostname else "url has no host"
+
     from urllib.parse import urlparse
     try:
         u = urlparse(url)
@@ -6073,17 +6978,74 @@ def _ssrf_check(url: str) -> str | None:
         return "invalid url"
     if u.scheme != "https":
         return "only https MCP endpoints are allowed"
-    host = u.hostname or ""
-    if not host:
+    if not u.hostname:
         return "url has no host"
+    return await _internal_target(u.hostname, u.port or 443)
+
+
+# The internal ranges Python's own classifiers do not call internal. Named here rather than folded
+# into `not ip.is_global`, because that would also reject 192.0.0.0/24 and the documentation ranges
+# and nobody would know why.
+#
+#   100.64.0.0/10  carrier-grade NAT, and what a managed Kubernetes cluster hands its pods and its
+#                  nodes. Not RFC1918, so `is_private` is False: it was the one whole IPv4 range
+#                  this classifier let through, and a provider naming a pod address had this
+#                  server fetching from inside its own cluster.
+#   fec0::/10      IPv6 site-local. Deprecated by RFC 3879, which is exactly why Python answers
+#                  False to both `is_private` and `is_reserved` for it — the same hole as CGNAT,
+#                  for the same reason, on the other address family.
+_INTERNAL_NETS = (ipaddress.ip_network("100.64.0.0/10"),
+                  ipaddress.ip_network("::ffff:100.64.0.0/106"),
+                  ipaddress.ip_network("fec0::/10"))
+
+
+async def _internal_target(host: str, port: int) -> str | None:
+    """Does this hostname resolve somewhere a caller must not be able to point this server?
+
+    EVERY DNS answer is resolved and classified — loopback, link-local (which is where cloud
+    metadata lives), RFC1918, CGNAT, IPv6 private, reserved — so a name whose second A record is
+    internal is refused on the strength of that second record.
+
+    WHAT IT DOES NOT DO, because a comment claiming otherwise is worse than no comment: it does not
+    survive a DNS rebind. This resolves the name; httpx then resolves it AGAIN when it opens the
+    socket, so a TTL-0 name that answers 93.184.216.34 here can answer 10.0.0.5 a millisecond
+    later and this check will have passed. Closing that means pinning the address we classified
+    into the connection itself, which is a different piece of work and is not what this does. What
+    it buys is the multi-A case and every literal internal address, and that is the whole of it.
+
+    Shared by MCP URLs, database hosts and provider-supplied file URLs because it is one question,
+    not three: each is a target somebody else names and this server then opens a socket to. A
+    second copy of this rule would be a second thing to remember to fix.
+
+    A LOOKUP THAT DID NOT ANSWER IS NOT AN ANSWER. This used to take an `allow_unresolvable` flag,
+    on the reasoning that a name which does not resolve is not internal and cannot be reached
+    anyway — and its `except Exception` swallowed a resolver timeout, an EAI_AGAIN under load and
+    a resolver that was down along with the genuine NXDOMAIN. Our lookup failing says nothing
+    about what the socket does a millisecond later: the caller resolves again, from its own
+    resolver, in a cluster where `.svc` is a search domain. So there is no allow branch at all —
+    an address this server could not classify is one it does not open a socket to.
+
+    The two failures are still told apart, because the operator reading the log needs them apart:
+    one of them is a bad URL and the other is a broken resolver.
+
+    ASYNC BECAUSE getaddrinfo BLOCKS. It is a synchronous C call and it can sit for the resolver's
+    whole timeout; run on the event loop it stops the entire process, not one request. Measured: a
+    1.01 s lookup let ZERO other tasks run. Every provider file URL is classified on every poll, so
+    one relay naming a slow-resolving host froze the gateway for everybody, ten seconds apart.
+    """
+    loop = asyncio.get_running_loop()
     try:
-        infos = socket.getaddrinfo(host, u.port or 443, proto=socket.IPPROTO_TCP)
+        infos = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        no_such = {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
+        return "host does not resolve" if e.errno in no_such else "host could not be resolved"
     except Exception:  # noqa: BLE001
-        return "host does not resolve"
+        return "host could not be resolved"
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
+                or ip.is_multicast or ip.is_unspecified
+                or any(ip in net for net in _INTERNAL_NETS if ip.version == net.version)):
             return "target resolves to a disallowed (internal) address"
     return None
 
@@ -6092,7 +7054,7 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
     """Probe a remote MCP server: initialize → notifications/initialized → tools/list. Returns
     {ok, server, tools:[{name,description}]} or {ok:false, error}. Used by the config UI's
     'Test connection'. Token may be a literal bearer or a vault:<ref> (resolved by the caller)."""
-    ssrf = _ssrf_check(url)
+    ssrf = await _ssrf_check(url)
     if ssrf:
         return {"ok": False, "error": ssrf}
     headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
@@ -6183,7 +7145,3795 @@ async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
     return await _mcp_list_tools(body.url, token)
 
 
+# ── The database, an ordinary MCP server ──────────────────────────────────────────────────────
+# A customer's own database, connected to one Harness: the agent explores it to decide what a
+# dashboard should show, and the dashboard re-runs its queries when someone opens it.
+#
+# Its entry in `mcp_servers` is INDISTINGUISHABLE from a third-party one — {id, name, url,
+# transport, auth, enabled} and not one field more. Nothing stored says "this one is ours",
+# because nothing has to: a server is ours if its url is one of our own addresses
+# (_hosted_mcp_path), and that answer is already knowable.
+#
+# THE ENTRY AND THE CONNECTION LIVE IN DIFFERENT PLACES, on purpose:
+#   * The ENTRY is configuration. It rides the vertex read every turn already does, is listed,
+#     renamed, switched off and removed exactly as any other server, and holds nothing about
+#     which database it reads.
+#   * THE CONNECTION — engine, host, database, the DSN, how many sample rows may be read — is one
+#     encrypted record at the key the entry's `auth` references, owned BY THE SERVER. It goes
+#     through BACKING.secrets with require_encryption=True, so host and database are encrypted at
+#     rest alongside the credential. It is read here, inside the gateway, at the moment of use:
+#     the runner never receives it, the browser never receives it, and neither does the agent —
+#     an agent is given a tool that runs SELECTs, not a credential.
+#
+# The record names the server it is for and the harness it belongs to, and each endpoint refuses a
+# record not addressed to it (see _hosted_resolve). `auth` is a client-writable field on an
+# ordinary entry and harness ids are public, so that binding — not the shape of a key — is what
+# stops one harness pointing at another's connection.
+#
+# Everything a statement passes through — the read-only gate, the row cap, the timeout — is in
+# sql_plane.py, so the app's refresh and the agent's tool cannot diverge.
+
+# Both spellings of each engine, resolved once here so nothing downstream has to know that
+# "postgresql" and "postgres" are the same thing.
+_DB_ENGINE_ALIASES = {"postgres": "postgres", "postgresql": "postgres", "pg": "postgres",
+                      "mysql": "mysql", "mariadb": "mysql"}
+# The URL schemes each engine will accept. A MySQL string pasted into a Postgres connection is
+# caught here, with a sentence, rather than by a driver timing out twenty seconds later.
+_DB_SCHEMES = {"postgres": ("postgres", "postgresql"), "mysql": ("mysql", "mariadb")}
+# Rows per table the agent sees when sampling is ON. Enough to tell an id from a status string
+# and a cents column from a dollars one; not enough to be an export of anyone's customer list.
+_DB_SAMPLE_ROWS = 5
+# The cap on an agent's own SELECT. Far below the app's, because an agent is checking that a
+# query works before it writes it into a panel — 5000 rows of that is tokens, not information.
+_DB_AGENT_MAX_ROWS = 200
+
+
+def _db_engine(engine: str) -> str:
+    e = _DB_ENGINE_ALIASES.get((engine or "").strip().lower())
+    if not e:
+        raise uhp_error(400, "unsupported_engine",
+                        "This connects to PostgreSQL and MySQL databases.", "engine")
+    return e
+
+
+def _db_parse(engine: str, conn: str) -> tuple[str, str]:
+    """(host, database) from a connection string, with the string itself validated.
+
+    Parsed at attach time so a person can later confirm WHICH database is attached without the
+    credential ever being read back out of the secret store."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse((conn or "").strip())
+    except Exception as e:  # noqa: BLE001
+        raise uhp_error(400, "invalid_connection_string",
+                        "That does not parse as a connection string.", "connection_string") from e
+    if (u.scheme or "").lower() not in _DB_SCHEMES[engine]:
+        want = "postgresql://user:password@host:5432/database" if engine == "postgres" \
+            else "mysql://user:password@host:3306/database"
+        raise uhp_error(400, "invalid_connection_string",
+                        f"A {'PostgreSQL' if engine == 'postgres' else 'MySQL'} connection string "
+                        f"looks like {want}", "connection_string")
+    if not u.hostname:
+        raise uhp_error(400, "invalid_connection_string",
+                        "That connection string has no host.", "connection_string")
+    db = (u.path or "/").lstrip("/")
+    if not db:
+        raise uhp_error(400, "invalid_connection_string",
+                        "That connection string names no database — add /yourdatabase to the end.",
+                        "connection_string")
+    host = u.hostname + (f":{u.port}" if u.port else "")
+    return host, db
+
+
+def _hosted_secret_key(hid: str, entry_id: str) -> str:
+    """Where the record for one hosted server on one harness lives. Same charset rule as
+    harness-mcp-<ref>.
+
+    The harness id is in it so an operator reading the secret store can tell what a record belongs
+    to; the entry id is what allows MORE THAN ONE hosted server per harness — the "at most one
+    database" rule only ever existed because a key derived from the harness id alone made two of
+    them collide. The key is not a security boundary: the record names its own harness, and that
+    is (see _hosted_resolve).
+    """
+    def safe(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+    return f"{_HOSTED_SECRET_PREFIX}{safe(hid) or 'harness'}-{safe(entry_id) or 'server'}"
+
+
+async def _hosted_put_record(org: str, key: str, record: dict, *, secret: bool = True,
+                             param: str = "connection_string") -> None:
+    """Write a hosted server's record.
+
+    `secret=True` — the default, and the database's case — says the record holds a customer
+    credential: the connection string is in it, and so are the host and the database name, which
+    is strictly more than the vertex ever protected. A store that cannot encrypt must refuse
+    rather than write that in the clear.
+
+    `secret=False` is for a record that holds only a BINDING, {server, harness}, with no credential
+    in it at all — the media server's case, where the provider key belongs to this deployment's own
+    integrations and never becomes a per-harness secret. It is still written encrypted wherever
+    encryption is available; what changes is that an instance with no passphrase is not blocked
+    from a feature that has no secret to protect.
+    """
+    tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
+    try:
+        await BACKING.secrets.put(tenant, key, json.dumps(record), require_encryption=secret)
+    except backing.SecretsNotConfigured as e:
+        # 501 rather than 500: nothing is broken. This instance has not been given a key to
+        # encrypt with, and refusing is the correct behaviour — the message names the variable
+        # that fixes it, because a stack trace would not.
+        raise uhp_error(501, "secrets_not_configured", str(e), param) from e
+
+
+async def _hosted_record(org: str, key: str) -> dict | None:
+    """A hosted server's record, or None when there is nothing readable to serve from.
+
+    Deliberately NOT _resolve_mcp_auth: that helper falls back to treating a value as a literal
+    bearer token, and refuses this namespace outright for exactly that reason.
+    """
+    if not key:
+        return None
+    for tenant in _tenants_for(org):
+        raw = await _vault_get(tenant, key)
+        if raw:
+            try:
+                rec = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                return None
+            return rec if isinstance(rec, dict) else None
+    return None
+
+
+def _hosted_keys(servers: list[dict]) -> set[str]:
+    """The records a list of entries references. Read off the entries, because with a per-entry
+    key the entry is the only thing that knows where its record is."""
+    return {k for k in (_vault_key(s.get("auth")) for s in servers)
+            if k.startswith(_HOSTED_SECRET_PREFIX)}
+
+
+async def _hosted_scrub_removed(org: str, hid: str, before: list[dict], after: list[dict]) -> None:
+    """Overwrite the record behind every hosted entry this write removed.
+
+    Dropping the entry and leaving its connection string encrypted on disk would be a surprise of
+    the worst kind: removing the tool, or deleting the agent, is the most decisive thing the
+    surface offers. Shared by every write that can drop an entry, so they cannot promise
+    differently.
+
+    THE RECORD MUST BE THIS HARNESS'S — the same binding _hosted_resolve refuses a read on. `auth`
+    is a client-writable field and harness ids are public, so anyone may name another agent's ref
+    on an entry of their own; removing it would otherwise destroy a connection they were never
+    given. Losing a database is the louder of the two surprises, so the check belongs on both.
+    Positive evidence of foreign ownership is what skips the scrub: a record we cannot read is one
+    we overwrite, because leaving a connection string behind is the failure this function exists
+    to prevent.
+    """
+    gone = _hosted_keys(before) - _hosted_keys(after)
+    if not gone:
+        return
+    tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
+    scrubbed = 0
+    for key in sorted(gone):
+        rec = await _hosted_record(org, key)
+        if rec and str(rec.get("harness") or "") != hid:
+            print(f"[mcp] {hid}: not scrubbing {key} — that record belongs to another agent",
+                  flush=True)
+            continue
+        with contextlib.suppress(Exception):   # an unwritable store must not block the write
+            await BACKING.secrets.put(tenant, key, "", require_encryption=True)
+        scrubbed += 1
+    if scrubbed:
+        print(f"[sql] {hid}: disconnected ({scrubbed} record(s) scrubbed)", flush=True)
+
+
+async def _mcp_write(hid: str, servers: list[dict]) -> None:
+    """Write mcp_servers outside the config PUT — kit launch provisioning the server it needs."""
+    await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(servers),
+                                      "updated_at": str(int(time.time() * 1000))})
+
+
+def _connection_out(rec: dict) -> dict:
+    """What a caller may see of a connection: which database, and how much of it the agent reads.
+    Everything except the credential."""
+    return {"engine": str(rec.get("engine") or ""), "host": str(rec.get("host") or ""),
+            "database": str(rec.get("database") or ""),
+            "sampleRows": bool(rec.get("sample_rows"))}
+
+
+# What every refusal below says. One sentence, because from the caller's side "there is no such
+# entry", "its record is gone" and "that record is not yours" are the same fact: nothing here is
+# connected to read.
+_NOT_CONNECTED = "No database is connected to this agent yet."
+# Per hosted server, because "No database is connected" is a lie about a media server and a lie in
+# a refusal is worse than a vague one. Keyed by the server name _hosted_resolve was asked for, so
+# a server added later declares its own sentence here and nowhere else.
+_HOSTED_NOT_CONNECTED = {
+    "database": ("database_not_connected", _NOT_CONNECTED),
+    "media": ("media_not_connected", "No media tools are connected to this agent yet."),
+}
+
+
+async def _hosted_resolve(server: str, hid: str, org: str, servers: list[dict], *,
+                          key: str = "", entry_id: str = "",
+                          check_enabled: bool = False) -> tuple[dict, dict]:
+    """(entry, record) for one server this gateway hosts — the resolution EVERY hosted endpoint
+    shares, so the agent's tool and the app's data plane cannot answer differently.
+
+    THE ENTRY IS FOUND BY WHAT ADDRESSED IT: the record key a turn credential carries, or the
+    entry's own id from a route. Never by name, position or a flag — which is what makes renaming,
+    reordering and several hosted servers on one harness free.
+
+    THEN THE RECORD MUST BE ADDRESSED TO THIS SERVER AND THIS HARNESS. `auth` is a client-writable
+    field on an ordinary entry and harness ids are public, so without the second check a caller
+    could write another harness's ref onto their own entry and read a database they were never
+    given. One structural check, behind the credential, that survives any write path added later —
+    where a write-time validation would only cover the writes that exist today.
+
+    `check_enabled` is for a turn and not for the app: switching a server off is a statement about
+    what an AGENT is handed, and a dashboard refresh is not a turn. A token minted before the
+    switch stays valid for hours, so the refusal has to be here and not only where turns are built.
+    """
+    code, msg = _HOSTED_NOT_CONNECTED.get(server, ("server_not_connected",
+                                                   "That is not connected to this agent yet."))
+    if key:
+        entry = next((e for e in servers if _vault_key(e.get("auth")) == key), None)
+    elif entry_id:
+        entry = next((e for e in servers if str(e.get("id") or "") == entry_id), None)
+    else:
+        entry = None
+    if not entry:
+        raise uhp_error(404, code, msg, "harness_id")
+    if check_enabled and str(entry.get("enabled")) in ("False", "false", "0"):
+        raise uhp_error(404, code, msg, "harness_id")
+    rec = await _hosted_record(org, _vault_key(entry.get("auth")))
+    if not rec or rec.get("server") != server or rec.get("harness") != hid:
+        raise uhp_error(404, code, msg, "harness_id")
+    return entry, rec
+
+
+async def _harness_for_route(hid: str, org: str) -> dict:
+    """The harness a /servers/{sid} route is addressed to: owned by this org, not deleted, and
+    converted off any earlier shape first — which is the reason this is a helper rather than the
+    three inline lines every other route carries."""
+    v = await _vertex_get(hid)
+    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    return await _mcp_migrate(org, hid, v)
+
+
+# ── migration: two earlier shapes of "the harness's database" ─────────────────────────────────
+# Shape 0, everything deployed: a `datasource` prop on the vertex. Shape 1, the refactor this
+# replaces: an mcp_servers entry with `managed` and `config`. Both hold {engine, secret, host,
+# database, sample_rows, updated_at} beside a BARE DSN at harness-ds-<hid-safe>.
+#
+# The payload genuinely changes — bare string to a JSON record, at a new key — so this is a
+# CONVERTER and not a wrapper. A read-repair projection would force _hosted_record to understand
+# two secret shapes forever, which is the accretion the house style forbids.
+_DS_PROP_LEGACY = "datasource"
+
+
+def _legacy_db_config(c) -> dict | None:
+    """An earlier configuration block, or None. Fails closed: a block we cannot read has to mean
+    "not connected", and a `secret` that is not a reference is not a fallback to a literal."""
+    if not isinstance(c, dict) or c.get("engine") not in sql_plane.ENGINES:
+        return None
+    return c if str(c.get("secret") or "").startswith("vault:") else None
+
+
+async def _mcp_migrate(org: str, hid: str, v: dict | None) -> dict | None:
+    """Convert a database connected under either earlier shape into an ordinary hosted entry.
+
+    Once, in place, on the first read that needs it — there is no global harness scan, and a
+    customer connected before this change must not have a broken turn while an operator remembers
+    to run something. Prints one [migrate] line per harness, so the condition for deleting this
+    function is a number you can count rather than a guess.
+    """
+    if not v:
+        return v
+    # The HARNESS's org, not the caller's: this writes a record that belongs to the harness, and
+    # only the vertex knows whose tenant that is.
+    org = str(v.get("org") or org)
+    # Parsed ONCE. Two _mcp_list calls return two sets of dicts parsed from the same JSON, so the
+    # replacement below would match nothing and leave both entries on the harness.
+    servers = _mcp_list(v)
+    old_entry = next((e for e in servers if _legacy_db_config(e.get("config"))), None)
+    cfg = _legacy_db_config((old_entry or {}).get("config"))
+    if not cfg:
+        try:
+            cfg = _legacy_db_config(json.loads(v.get(_DS_PROP_LEGACY) or "null"))
+        except Exception:  # noqa: BLE001
+            cfg = None
+    if not cfg:
+        return v
+
+    origins = _own_origins()
+    if not origins:
+        print(f"[migrate] {hid}: no address to serve its database on — set "
+              f"HARNESS_PUBLIC_BASE_URL. Left as it was.", flush=True)
+        return v
+    old_key = cfg["secret"][len("vault:"):]
+    dsn = ""
+    for tenant in _tenants_for(org):
+        dsn = await _vault_get(tenant, old_key) or ""
+        if dsn:
+            break
+    if not dsn:
+        # A harness we cannot migrate must not be a harness we silently disconnect.
+        print(f"[migrate] {hid}: its stored credential could not be read — left as it was.",
+              flush=True)
+        return v
+
+    entry_id = "mcp.database"
+    key = _hosted_secret_key(hid, entry_id)
+    # Every field taken from the old configuration: nothing re-derived, nothing re-parsed.
+    await _hosted_put_record(org, key, {
+        "server": "database", "harness": hid, "engine": cfg["engine"], "dsn": dsn,
+        "host": cfg.get("host") or "", "database": cfg.get("database") or "",
+        "sample_rows": int(cfg.get("sample_rows") or 0),
+        "updated_at": int(cfg.get("updated_at") or 0)})
+    entry = {"id": entry_id, "name": str((old_entry or {}).get("name") or "database"),
+             "url": origins[0] + _HOSTED_MCP_PREFIX + "database", "transport": "http",
+             "auth": f"vault:{key}",
+             "enabled": str((old_entry or {}).get("enabled", True)) not in ("False", "false", "0")}
+    servers = [e for e in servers if e is not old_entry] + [entry]
+    await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(servers), _DS_PROP_LEGACY: ""})
+    with contextlib.suppress(Exception):   # an unwritable store must not strand the conversion
+        tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
+        await BACKING.secrets.put(tenant, old_key, "", require_encryption=True)
+    print(f"[migrate] {hid}: database is now an ordinary MCP server", flush=True)
+    return {**v, "mcp_servers": json.dumps(servers), _DS_PROP_LEGACY: ""}
+
+
+def _sql_http(e: Exception) -> HTTPException:
+    """One rule for turning a SQL failure into a response.
+
+    Refused means we stopped it before it reached the database — that is the caller's statement,
+    so 400. Anything else means the database itself answered with a failure, upstream of us, so
+    502. Both carry the sentence the caller can act on ('column "revenu" does not exist').
+    """
+    if isinstance(e, sql_plane.SqlRefused):
+        return uhp_error(400, "sql_refused", str(e), "sql")
+    return uhp_error(502, "sql_failed", str(e), "sql")
+
+
+class DatabaseTestBody(BaseModel):
+    engine: str
+    connection_string: str
+
+
+async def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
+    """(engine, connection string, host, database) — or the 400 that says what is wrong with it.
+
+    Provisions nothing, so kit launch can check what it was given BEFORE it provisions anything: a
+    typo in a connection string should not leave a half-configured Harness behind. It is not free,
+    though: classifying the host is a DNS lookup, which is why it is awaited."""
+    eng = _db_engine(engine)
+    c = (conn or "").strip()
+    if not c:
+        raise uhp_error(400, "invalid_connection_string",
+                        "A connection string is required.", "connection_string")
+    host, db = _db_parse(eng, c)
+    # A connection string is a target this server opens a socket to on a caller's say-so, which is
+    # the same thing an MCP URL is — so it passes the same check, for the same reason, with the
+    # same exemption: self-hosted, the "internal" network is the operator's own machine and a
+    # database on localhost is the normal case rather than an attack.
+    if not _pool_is_local():
+        hostname, _, port = host.partition(":")
+        blocked = await _internal_target(hostname, int(port) if port.isdigit() else
+                                         (5432 if eng == "postgres" else 3306))
+        if blocked:
+            raise uhp_error(400, "unreachable_host",
+                            f"This server cannot connect to {hostname}: {blocked}.",
+                            "connection_string")
+    return eng, c, host, db
+
+
+async def _hosted_db_entry(hid: str, v: dict | None, decl: dict) -> None:
+    """The database ENTRY, with no credential in it.
+
+    A kit that declares `launch.database` gets its database tool the moment it is launched, the
+    same way a kit that declares media gets its media tool — because the tool belongs to the KIT
+    DEFINITION, not to the credential. Tying the entry's existence to a connection string meant
+    a dashboard harness could sit there with the five built-in tools and no way to reach a
+    database, and nothing on the page explaining that the tool was missing rather than broken.
+
+    An entry with no record is honestly unconnected: the tool is listed, and asking it anything
+    says so. That is a better thing to hand someone than a tool that is not there at all, which
+    reads as "this kit cannot do that" rather than "this kit is not finished being set up".
+
+    Never overwrites a connected entry — reconnecting is _hosted_db_attach's job, and this runs
+    on every launch including the idempotent second press.
+    """
+    origins = _own_origins()
+    if not origins:
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set "
+                        "HARNESS_PUBLIC_BASE_URL.", "database")
+    cur = _mcp_list(v)
+    if any(str(e.get("id") or "") == decl["id"] for e in cur):
+        return                                   # already there, connected or not
+    entry = {"id": decl["id"], "name": decl["name"],
+             "url": origins[0] + _HOSTED_MCP_PREFIX + "database", "transport": "http",
+             "enabled": True}
+    await _mcp_write(hid, cur + [entry])
+    print(f"[sql] {hid}: database tool provisioned (no connection yet)", flush=True)
+
+
+async def _hosted_db_attach(org: str, hid: str, v: dict | None, decl: dict,
+                            checked: tuple[str, str, str, str], sample_rows: bool) -> None:
+    """Provision a database connection: one encrypted record, one ordinary entry.
+
+    THE ONLY THING THAT EVER WRITES A RECORD, and kit launch is its only caller — connecting a
+    database is something the kit that reads one drives, not something the tool list exposes.
+
+    Reconnecting after a password change replaces the record ON THE EXISTING ENTRY, reusing that
+    entry's key, so no record is left orphaned behind. `name` and `enabled` come from the entry
+    being replaced: they belong to whoever configured the harness, and reconnecting is a statement
+    about the credential and about nothing else.
+    """
+    engine, conn, host, db = checked
+    origins = _own_origins()
+    if not origins:
+        # An entry with no url is not an ordinary entry, so refusing beats storing a broken one.
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set "
+                        "HARNESS_PUBLIC_BASE_URL.", "database")
+    cur = _mcp_list(v)
+    prev = next((e for e in cur if str(e.get("id") or "") == decl["id"]), None) or {}
+    prev_key = _vault_key(prev.get("auth"))
+    key = prev_key if prev_key.startswith(_HOSTED_SECRET_PREFIX) else _hosted_secret_key(hid, decl["id"])
+    await _hosted_put_record(org, key, {
+        "server": "database", "harness": hid, "engine": engine, "dsn": conn,
+        "host": host, "database": db,
+        # Stored as the row COUNT introspection will take, not as a boolean, so the one place that
+        # decides how much data leaves the customer's database is this line.
+        "sample_rows": _DB_SAMPLE_ROWS if sample_rows else 0,
+        "updated_at": int(time.time() * 1000)})
+    entry = {"id": decl["id"], "name": str(prev.get("name") or decl["name"]),
+             "url": origins[0] + _HOSTED_MCP_PREFIX + "database", "transport": "http",
+             "auth": f"vault:{key}",
+             "enabled": str(prev.get("enabled", True)) not in ("False", "false", "0")}
+    await _mcp_write(hid, [e for e in cur if str(e.get("id") or "") != decl["id"]] + [entry])
+    # host and database only. The credential is not printed, here or anywhere.
+    print(f"[sql] {hid}: connected {engine} {host}/{db} "
+          f"(sample rows {'on' if sample_rows else 'off'})", flush=True)
+
+
+async def _db_probe(engine: str, conn: str) -> dict:
+    """Try a connection string, and say what went wrong if it fails.
+
+    Same shape as /v1/mcp-test: {ok:true, …} or {ok:false, error} with HTTP 200, because "your
+    password is wrong" is a successful test that reports a failure, not a failed request.
+    """
+    # Validated exactly as attaching would validate it, so a string this button accepts is a
+    # string the save accepts. A test that does not predict what happens next is worse than none.
+    engine, conn, host, db = await _db_validate(engine, conn)
+    try:
+        # Not SELECT 1: reaching the database proves the credential, and reading the catalog
+        # proves the account can see tables — which is the failure people actually hit when they
+        # follow the advice to use a read-only account and grant it nothing.
+        schema = await sql_plane.introspect(engine, conn, sample_rows=0, timeout=15.0)
+    except sql_plane.SqlError as e:
+        return {"ok": False, "engine": engine, "host": host, "database": db, "error": str(e)}
+    return {"ok": True, "engine": engine, "host": host, "database": db,
+            "tableCount": schema["table_count"],
+            "tables": [f"{t['schema']}.{t['name']}" for t in schema["tables"][:12]]}
+
+
+# Two probes rather than one because a DSN is not a URL: /v1/mcp-test takes {url, auth} and this
+# takes {engine, connection_string}, and a union body would be worse than two names. Both come in
+# an org-scoped and a public flavour so a console that tests either kind has one auth shape.
+@app.post("/v1/orgs/{org}/mcp-test/database")
+async def test_database(org: str, body: DatabaseTestBody, request: Request) -> dict:
+    await _owned_org(request, org)
+    return await _db_probe(body.engine, body.connection_string)
+
+
+@app.post("/v1/mcp-test/database")
+async def test_database_public(body: DatabaseTestBody, request: Request) -> dict:
+    await _pub_org_member(request)
+    return await _db_probe(body.engine, body.connection_string)
+
+
+class SqlQueryBody(BaseModel):
+    sql: str
+    max_rows: int | None = None
+
+
+# ── the app's data plane: one hosted server, addressed by the entry that names it ─────────────
+# A dashboard re-runs every panel's query when someone opens it, and doing that through the agent
+# would cost a turn per panel per page-load. Not a second mechanism for the same thing — a browser
+# is not an MCP client and must never hold a turn credential — and every statement still passes
+# the same read-only gate, row cap and timeout the agent's own tool does.
+#
+# Addressed by entry id rather than by harness, because "the harness's database" is the same
+# assumption that put connection state on the vertex: a harness may have several hosted servers,
+# and the caller has to be able to say which. The harness segment carries authorization; the
+# server segment names the server.
+
+@app.get("/v1/harnesses/{hid}/servers/{sid}")
+async def get_harness_server(hid: str, sid: str, request: Request) -> dict:
+    """One server this gateway hosts, describing itself — including what it is connected to.
+
+    The server that owns the connection is the one that names it, exactly as tools/list is a
+    third-party server describing itself. Connection state does not ride a harness read.
+    """
+    org, _ = await _pub_org_member(request)
+    v = await _harness_for_route(hid, org)
+    # WHICH server this is comes from the record, not from a field on the entry and not from the
+    # route. One route, because "the server describing itself" is one question — and the entry has
+    # nothing on it to branch on, which is the property this whole shape exists to keep.
+    entry, rec = await _hosted_resolve_any(hid, org, _mcp_list(v), entry_id=sid)
+    out = {"id": entry.get("id"), "name": entry.get("name"),
+           "enabled": str(entry.get("enabled", True)) not in ("False", "false", "0")}
+    if str(rec.get("server") or "") == _MEDIA_SERVER:
+        return {**out, **await _media_server_out()}
+    return {**out, "connection": _connection_out(rec)}
+
+
+def _hosted_server_name(entry: dict | None) -> str:
+    """Which server an entry SAYS it is, from its own url. "" for anything not ours.
+
+    The entry's url, and not the record it names: the url is the caller's own statement about what
+    they are addressing, so shaping a refusal with it tells them nothing they did not already say.
+    Reading the server name off a record they merely named would answer "that key is a database"
+    to anyone who guessed a key.
+    """
+    path = _hosted_mcp_path(str((entry or {}).get("url") or ""))
+    return path[len(_HOSTED_MCP_PREFIX):] if path else ""
+
+
+async def _hosted_resolve_any(hid: str, org: str, servers: list[dict], *,
+                              entry_id: str) -> tuple[dict, dict]:
+    """(entry, record) for whichever server this gateway hosts at that entry.
+
+    Not a second resolution — the same one, with the server name taken from the entry instead of
+    asserted by the caller. Used only where the question is "what is this", never where it is
+    "read this": every route that acts on a server still names the server it means.
+    """
+    entry = next((e for e in servers if str(e.get("id") or "") == entry_id), None)
+    return await _hosted_resolve(_hosted_server_name(entry), hid, org, servers, entry_id=entry_id)
+
+
+@app.post("/v1/harnesses/{hid}/servers/{sid}/query")
+async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Request) -> dict:
+    """Run one SELECT — what refreshing a dashboard panel does."""
+    org, _ = await _pub_org_member(request)
+    v = await _harness_for_route(hid, org)
+    _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
+    want = int(body.max_rows or sql_plane.DEFAULT_MAX_ROWS)
+    max_rows = max(1, min(want, sql_plane.DEFAULT_MAX_ROWS))
+    try:
+        return await sql_plane.run_query(rec["engine"], rec["dsn"], body.sql or "", max_rows=max_rows)
+    except sql_plane.SqlError as e:
+        raise _sql_http(e) from e
+
+
+@app.get("/v1/harnesses/{hid}/servers/{sid}/schema")
+async def get_server_schema(hid: str, sid: str, request: Request) -> dict:
+    """The shape of the connected database: tables, columns, types — and a few rows per table when
+    the person left sample rows on. `sampled` in the response says which they got."""
+    org, _ = await _pub_org_member(request)
+    v = await _harness_for_route(hid, org)
+    _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
+    try:
+        return await sql_plane.introspect(rec["engine"], rec["dsn"],
+                                          sample_rows=int(rec.get("sample_rows") or 0))
+    except sql_plane.SqlError as e:
+        raise _sql_http(e) from e
+
+
+# ── the agent's side: an MCP server this gateway hosts ────────────────────────────────────────
+# An agent designing a dashboard needs two things: the schema, and the ability to run a candidate
+# query and see rows or the error. It must never need the credential.
+#
+# This is a built-in MCP server rather than a built-in tool because THERE IS NO BUILT-IN TOOL
+# MECHANISM to use: every base runs a third-party CLI (Claude Code, Codex, hermes) with its own
+# fixed tool set, and the only channel this server has for adding a capability to all three is the
+# MCP config the runner already writes for each of them (_write_mcp_config_claude / _codex_mcp_toml
+# / _hermes_mcp_section). Hosting the server here rather than as a separate process is what keeps
+# the credential in the gateway: the sandbox is handed a URL and a per-turn token, resolves nothing
+# itself, and a token that leaks buys one session's read access to one database and expires with it.
+_DB_MCP_TOOLS = [
+    {"name": "schema",
+     "description": ("Tables and columns in the connected database, with types. Call this first: "
+                     "it is the only way to learn what can be charted."),
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "query",
+     "description": (f"Run one read-only SELECT and see the rows (up to {_DB_AGENT_MAX_ROWS}). "
+                     "Use it to check a query works before putting it in a dashboard panel. "
+                     "Only SELECT is accepted; anything that would modify data is refused."),
+     "inputSchema": {"type": "object", "required": ["sql"],
+                     "properties": {"sql": {"type": "string", "description": "One SELECT statement."}},
+                     "additionalProperties": False}},
+]
+
+
+def _mint_hosted_cred(hid: str, sid: str, key: str) -> str:
+    """Per-turn credential for a server this gateway hosts: harness.session.record.exp.hmac.
+
+    The same HMAC construction as the model broker's turn credential (_mint_turn_cred) and
+    deliberately a different prefix and a different claim set: this one authorises reading one
+    record on one harness and nothing else, so a token lifted out of a sandbox cannot be replayed
+    at the broker, and one lifted from the broker cannot read a database.
+    """
+    exp = str(int(time.time()) + _BROKER_TTL_S)
+    body = f"{hid}|{sid}|{key}|{exp}"
+    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"hrs_{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
+
+
+def _verify_hosted_cred(tok: str) -> tuple[str, str, str] | None:
+    """(harness_id, session_id, record key) for a valid unexpired token, else None."""
+    if not tok or not tok.startswith("hrs_"):
+        return None
+    try:
+        b64, sig = tok[4:].rsplit(".", 1)
+        body = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode()
+        hid, sid, key, exp = body.split("|")
+    except Exception:  # noqa: BLE001 — a malformed token is simply invalid
+        return None
+    good = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, good) or int(exp) < int(time.time()):
+        return None
+    return hid, sid, key
+
+
+def _jsonrpc_result(rid, result: dict) -> JSONResponse:
+    return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": result})
+
+
+def _tool_text(text: str, is_error: bool = False) -> dict:
+    return {"content": [{"type": "text", "text": text}], "isError": is_error}
+
+
+@app.post("/v1/mcp/database")
+async def database_mcp(request: Request):
+    """The MCP endpoint the agent's CLI talks to. Streamable HTTP, stateless.
+
+    Stateless — no mcp-session-id — because there is nothing to keep between calls: every request
+    carries the token that identifies the harness and the record, and the connection is opened and
+    closed per query. That also means any replica can serve any call.
+    """
+    claims = _verify_hosted_cred(_broker_token(request))
+    if not claims:
+        raise HTTPException(401, "invalid or expired turn credential")
+    hid, _sid, key = claims
+    try:
+        req = json.loads(await request.body() or b"{}")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "malformed JSON-RPC request") from None
+    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+
+    if method == "initialize":
+        return _jsonrpc_result(rid, {
+            # Echo the client's protocol version when it names one: every CLI in play speaks a
+            # different revision and this server's two tools are identical in all of them.
+            "protocolVersion": str(params.get("protocolVersion") or "2024-11-05"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "database", "version": "1"}})
+    if rid is None:            # a notification (notifications/initialized) — nothing to answer
+        return Response(status_code=202)
+    if method == "tools/list":
+        return _jsonrpc_result(rid, {"tools": _DB_MCP_TOOLS})
+    if method != "tools/call":
+        return JSONResponse({"jsonrpc": "2.0", "id": rid,
+                             "error": {"code": -32601, "message": f"method not found: {method}"}})
+
+    v = await _harness_vertex(hid)
+    if v and str(v.get("deleted")) in ("1", "true", "True"):
+        v = None                    # a token outlives the agent it was minted for; the agent's
+                                    # database access must not
+    org = str((v or {}).get("org") or "")
+    try:
+        _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v),
+                                            key=key, check_enabled=True)
+    except HTTPException:
+        # Every refusal, in the agent's terms. The last clause is load-bearing: without it a model
+        # spends the rest of the turn looking for a way to connect one itself.
+        return _jsonrpc_result(rid, _tool_text(
+            "No database is connected to this agent. Ask the person to connect one, then try "
+            "again — you cannot connect it yourself.", True))
+    name = params.get("name") or ""
+    args = params.get("arguments") or {}
+    try:
+        if name == "schema":
+            out = await sql_plane.introspect(rec["engine"], rec["dsn"],
+                                             sample_rows=int(rec.get("sample_rows") or 0))
+            # WHICH database this is, from the record that owns it. The kit's skill tells the agent
+            # to copy this into the dashboard it writes, and the agent has no other way to know.
+            out["connection"] = _connection_out(rec)
+            if not out.get("sampled"):
+                # Said plainly, because an agent that does not know sampling is off will read the
+                # absence of rows as an empty database and design a dashboard for one.
+                out["note"] = ("Sample rows are turned off for this connection, so you see the "
+                               "shape of the data and none of its values. Use the query tool to "
+                               "check a specific figure.")
+            return _jsonrpc_result(rid, _tool_text(json.dumps(out, ensure_ascii=False)))
+        if name == "query":
+            out = await sql_plane.run_query(rec["engine"], rec["dsn"], str(args.get("sql") or ""),
+                                            max_rows=_DB_AGENT_MAX_ROWS)
+            return _jsonrpc_result(rid, _tool_text(json.dumps(out, ensure_ascii=False)))
+    except sql_plane.SqlError as e:
+        # The database's own sentence, back to the agent as a tool error so it can fix the query
+        # itself. This is the loop that makes the tool worth having.
+        return _jsonrpc_result(rid, _tool_text(str(e), True))
+    except HTTPException as e:
+        return _jsonrpc_result(rid, _tool_text(_uhp_message(e), True))
+    return _jsonrpc_result(rid, _tool_text(f"No tool named {name!r} on this server.", True))
+
+
+def _uhp_message(e: HTTPException) -> str:
+    d = e.detail
+    return str(d.get("message")) if isinstance(d, dict) and d.get("__uhp__") else str(d)
+
+
+# ── Media, an ordinary MCP server ─────────────────────────────────────────────────────────────
+# Making a picture, a clip or a line of speech, and cutting the clips into one film. Same shape as
+# the database next door and for the same reasons: its entry in `mcp_servers` is INDISTINGUISHABLE
+# from a third-party one, a server is ours because its url is one of our own addresses, and the
+# record the entry's `auth` names is owned BY THE SERVER.
+#
+# WHAT IS DIFFERENT FROM THE DATABASE, and it is only this: nothing is collected from anyone. A
+# database record holds a customer's connection string; a media record holds only the binding
+# {server, harness}, because the provider credential is THIS DEPLOYMENT'S OWN INTEGRATION and must
+# never become a per-harness secret. The record with no secret in it is the whole trick — the
+# `harness-hosted-` prefix is still what makes the entry offerable, and `rec["harness"] == hid` is
+# still what stops one harness addressing another's canvas.
+#
+# THE AGENT NEVER NAMES A MODEL. It asks for a capability; media_plane walks that capability's
+# ordered candidate list and the tool reports which model actually ran. Four video models are
+# listed and two are broken, which is exactly why.
+#
+# THE CANVAS IS OWNED BY THIS SERVER, not by the session workspace. Hosted, the gateway cannot
+# durably write a live sandbox's workspace mid-turn — `_checkpoint` replaces the whole tarball from
+# the sandbox at turn end, so anything written into it in between is gone (which is why
+# PUT /v1/sessions/{sid}/files/{path} answers 409). So the scene lives in blob storage and is
+# PROJECTED into the workspace after every mutation and after every checkpoint, write-only, so
+# `scene.excalidraw` is still an ordinary artifact the console lists. Generated media are NOT
+# projected: the workspace is a tarball rewritten whole at every checkpoint, and a ten-clip project
+# would re-upload two hundred megabytes on every subsequent turn.
+
+_MEDIA_SERVER = "media"
+_MEDIA_SCENE_FILE = "scene.excalidraw"
+# How long a still is held when the cut does not say lives with the rest of that decision, in
+# media_plane.shot_window — a second copy here is how the total and the film came to disagree.
+# Candidates stood down after a BILLABLE failure. Per-replica and in memory on purpose: it is a
+# hint that saves money, not state anything depends on, and a replica that has not seen the
+# failure simply pays for one more attempt rather than serving a stale verdict for half an hour.
+_media_quarantine: dict[str, float] = {}
+# One lock per session, so read-modify-write of a scene is serialised and the canvas tools never
+# have to fail on concurrency.
+_media_scene_locks: dict[str, asyncio.Lock] = {}
+_media_job_locks: dict[str, asyncio.Lock] = {}
+# Sessions whose scene moved since the last projection. The sweeper drains this, so a job that
+# lands with no turn running still leaves an up-to-date artifact behind.
+_media_project_due: set[str] = set()
+
+# What each capability produces. The one place kind is decided, so a job, an element and a stored
+# file cannot disagree about whether a thing is a video.
+_MEDIA_KIND = {"text_to_video": "video", "image_to_video": "video",
+               "text_to_image": "image", "image_to_image": "image",
+               "text_to_speech": "audio", "text_to_music": "audio", "export": "film"}
+
+
+def _media_scene_lock(sid: str) -> asyncio.Lock:
+    lk = _media_scene_locks.get(sid)
+    if lk is None:
+        lk = _media_scene_locks[sid] = asyncio.Lock()
+    if len(_media_scene_locks) > 4000:          # bounded; an unheld lock is free to drop
+        for k in [k for k, v in list(_media_scene_locks.items()) if not v.locked()][:2000]:
+            _media_scene_locks.pop(k, None)
+    return lk
+
+
+def _media_job_lock(jid: str) -> asyncio.Lock:
+    """One advance per job at a time. The sweeper, the agent's check_jobs and the app's poll route
+    all advance jobs, and they run concurrently by design — so without this they each saw the same
+    SUCCESS, each downloaded the same clip and each stored it under a NEW media id. Measured: one
+    6 s clip landed three times, ~4 MB apiece, two of them orphaned the moment the third won the
+    vertex. Same shape and same bound as the scene lock, because it is the same problem.
+    """
+    lk = _media_job_locks.get(jid)
+    if lk is None:
+        lk = _media_job_locks[jid] = asyncio.Lock()
+    if len(_media_job_locks) > 4000:
+        for k in [k for k, v in list(_media_job_locks.items()) if not v.locked()][:2000]:
+            _media_job_locks.pop(k, None)
+    return lk
+
+
+def _media_client() -> httpx.AsyncClient:
+    """The client every provider call goes through. One seam, so a test can drive all five
+    adapters through a transport it controls without stubbing the adapters themselves."""
+    return _client()
+
+
+async def _media_providers() -> dict[str, dict]:
+    """{provider: {api_key, base_url, auth}} for every catalog provider this deployment can reach.
+
+    Read HERE, at the moment of use, from the integrations document — the same document the model
+    broker reads. The key is returned to this process and to nothing else: it is never written into
+    a record, never put on a vertex, never handed to the runner and never sent to a browser.
+    """
+    out: dict[str, dict] = {}
+    integrations = await _integrations_doc()
+    for pname, pmeta in (media_plane.catalog().get("providers") or {}).items():
+        want = str((pmeta or {}).get("integration_provider") or pname).strip().lower()
+        for integ in integrations:
+            if str(integ.get("provider") or "").strip().lower() != want:
+                continue
+            cfg = integ.get("config") or {}
+            key = str(cfg.get("api_key") or "").strip()
+            if not key:
+                continue
+            base = str(cfg.get("base_url") or (pmeta or {}).get("base_url") or "").rstrip("/")
+            if not base:
+                continue
+            # `auth` travels with the key, from the same entry that says where to send it. The
+            # call site then has one thing to hold and no reason to ask which provider this is.
+            out[pname] = {"api_key": key, "base_url": base,
+                          "auth": (pmeta or {}).get("auth")}
+            # The one place the key is resolved is the one place that can say what must never be
+            # relayed back. Every provider sentence this process produces is scrubbed of it —
+            # a 401 quotes the key it rejected, and that sentence reaches an agent, a vertex and
+            # a browser.
+            media_plane.remember_secret(key)
+            break
+    return out
+
+
+class _MediaNoModel(Exception):
+    """No candidate could serve this request. Carries the refusal the agent is shown and the
+    attempts that led to it.
+
+    Usually nothing was generated and nothing was charged. Not always: a candidate that answers
+    200 with nothing in it has billed, and a request may reach its billable ceiling before any
+    candidate delivers. The refusal says which of the two happened — see `_media_billed_out` —
+    because "nothing was charged" is the one sentence an agent must never be told wrongly.
+    """
+
+    def __init__(self, text: str, attempts: list[dict], billed_usd: float = 0.0):
+        super().__init__(text)
+        self.text, self.attempts, self.billed_usd = text, attempts, billed_usd
+
+
+def _media_doc(r: httpx.Response, body: bytes):
+    """One provider response, classified before it is read — the document, or the media itself.
+
+    The classification is `media_plane.response_doc`, beside the readers that consume it, because
+    "what did the provider send" and "what does it mean" are one question asked twice otherwise.
+    """
+    return media_plane.response_doc(r.headers.get("content-type", ""), body)
+
+
+# How many times ONE REQUEST may fall down its chain after a candidate has already billed. One.
+# Every advance is another full-price render, so a second one is the agent's decision, made with
+# the first one's cost in front of it.
+#
+# ONE BUDGET, TWO WALKS. A request can fall down the chain in two places — at SUBMIT, when a
+# candidate answers 200 with nothing in it, and later at POLL, when a render that billed comes
+# back failed — and they are the same event to whoever is paying. What the submit walk spent is
+# therefore written onto the job (`advances`), which is the only thing that outlives the tool call
+# and the only place the poll walk can read it from.
+_MEDIA_MAX_ADVANCES = 1
+
+# How many outbound submits ONE REQUEST may make AT ALL, whatever the provider answers to any of
+# them — where a request is one tool call, one browser poll or one sweep pass. Separate from the
+# budget above because it is a different fact: that one is about money and stops at the second
+# render bought; this one is about sockets. A candidate that answers 4xx costs nothing and IS
+# walked past — deliberately, because leaving a broken model in the chain
+# is what let the owner's preferred one start working again on its own — but "costs nothing" is
+# not "free": each submit carries the provider key out of this process, and a chain eleven long
+# meant one tool call could make eleven of them. Four is the measured outage (one broken model at
+# rank 1) with room, and a long way short of any chain in the catalog.
+#
+# WHERE IT IS CLAIMED, and why that is the whole of the fix: at `_media_call`, which is the only
+# place in this process that opens a socket to a provider. It used to be claimed at the top of
+# `_media_chain`'s loop, which counted the WALK — so `_media_job_resubmit`, which opens its own
+# submit and which a synchronous render reaches inside the very same tool call, made a fifth one
+# that no ceiling saw. Counting walks is what let four rounds of this bug each be "fixed" in the
+# branch beside the one that overspent. A ceiling written in submits has to be counted in submits.
+#
+# IT BOUNDS THE POLL ENTRIES TOO, which took a sixth round to become true. It used to bound a
+# SUBMIT WALK and nothing else: a poll pass built one budget per JOB out of `for_job`, which seeds
+# `billed` off the job and left `submits` at zero, so `claim()` could not refuse anything and what
+# actually stopped the walk was the `advances` check one branch over — a guard beside the socket,
+# which is the construction this whole series exists to delete. Measured: one check_jobs over six
+# failing jobs made six outbound submits, one _media_sweep() over five made five, and setting this
+# number to 1 changed neither count.
+#
+# NOT AN OVERSPEND, and the fix is not sold as one. Per job the money rule held throughout
+# (`advances` caps each job at `_MEDIA_MAX_ADVANCES + 1` renders) and the total across sweeps was
+# unchanged: it was a BURST — six full-price renders started by what the agent issued as a read —
+# and a ceiling that claims to bound a request while counting only a walk is how four rounds of
+# this survived. So `submits` now belongs to the REQUEST and `billed` to the job; see the class.
+#
+# WHAT THIS COSTS, so the next reader does not have to find out the hard way: a free refusal is
+# never quarantined, so every call starts the walk at rank 1 again. If the FIRST FOUR candidates
+# all answer 4xx, no call ever reaches the fifth and the capability is refused until one of the
+# four recovers. That is judged acceptable because the chains interleave providers on purpose —
+# the first four of text_to_image span three of them — so four consecutive refusals means the
+# relay itself is down, and the fifth candidate would not have answered either. If a chain ever
+# stacks one provider's models at the top, this number and that fact have to be looked at
+# together.
+#
+# AND ON THE POLL ENTRIES IT COSTS AN ADVANCE, not a delay — measured, because "the next pass will
+# pick it up" is the first thing a reader assumes and it is not what happens. A pass that refuses
+# a job's advance FAILS that job then and there, exactly as `_media_job_resubmit` has always done
+# when the submit walk runs out: five failing jobs in one sweep means four get their second
+# candidate and the fifth ends `failed` with the upstream error, for the agent to resubmit if it
+# still wants the shot. Softening that by leaving the job running so a later pass retries is the
+# tempting change and it is a re-buy: the render is banked and the model stood down BEFORE the
+# submit is refused, so a second visit banks it twice (test_v42c pins this). The ceiling costs a
+# retry, never a second charge.
+_MEDIA_MAX_SUBMITS = 4
+
+
+class _MediaBudget:
+    """What one request may buy and what it may try, and the ONE PLACE that decides it.
+
+    THE COUNT LIVES WHERE THE SOCKET IS, NOT WHERE THE EXITS ARE. This same overspend was closed
+    four times and found four times, each time in the branch beside the one that was patched: the
+    poll walk was capped and the submit walk was not; then `except MediaEmpty` was capped and
+    `except MediaError` was not; then the gate moved to the submit walk's loop and
+    `_media_job_resubmit` went on opening its own socket beside it. Every one of those fixes
+    counted a WALK. What costs money is a SUBMIT, so a submit is what is counted, and it is
+    claimed in `_media_call` — before the request goes out, in the one function that can send one.
+    The ceiling therefore holds for an answer nobody has imagined, for an exception type invented
+    next year, and for a caller that has never heard of this class.
+
+    A CLAIM IS BILLABLE UNTIL THE ANSWER SAYS OTHERWISE. `claim` counts the submit against the
+    money budget immediately and `free` gives it back only when the answer says nothing ran, which
+    is the only evidence there is. That ordering is also what makes the ceiling hold when an agent
+    fires four generate calls at once: the claim and the check happen with no await between them,
+    so two concurrent walks cannot both see the last slot.
+
+    TWO LIFETIMES, ONE OBJECT, BECAUSE THEY ARE TWO DIFFERENT FACTS. `billed` is money and
+    belongs to a JOB — it is seeded from what that job already bought and carries across the
+    minutes between the tool call and the poll. `submits` is sockets and belongs to a REQUEST —
+    nothing about one job says how many sockets the pass it is being polled in has opened. Keeping
+    them in one object with one lifetime is what made the ceiling decorative on the poll path:
+    `for_job` handed out a fresh count per job, so a request that polled six jobs made six
+    submits and `_MEDIA_MAX_SUBMITS` never said a word.
+    """
+
+    __slots__ = ("submits", "billed", "sharers", "walk")
+
+    def __init__(self, walk: "_MediaBudget | None" = None) -> None:
+        self.submits = 0
+        self.billed = 0
+        self.sharers = 0
+        # WHOSE SUBMIT COUNT THIS SPENDS. Itself, for the budget a request opens; the request's,
+        # for the per-job views `for_job` hands out below. A budget built with no argument starts
+        # a NEW REQUEST'S COUNT, which is why only the three entry points may build one.
+        self.walk = walk if walk is not None else self
+
+    def for_job(self, job: dict) -> "_MediaBudget":
+        """The money ceiling THIS JOB carries, spending THIS REQUEST'S submit count.
+
+        A poll happens minutes after the tool call that started the job, in some other request —
+        usually the sweeper's, with no agent anywhere near it — so that call's budget is long
+        gone. What survives is on the job: `advances` is what the submit walk and any earlier poll
+        already bought, and seeding it back here is what keeps the two walks sharing ONE money
+        ceiling instead of each keeping a private count of the same spend.
+
+        THE SUBMIT COUNT DOES NOT RESTART, and that is the whole of round 6. This used to be a
+        classmethod returning a budget with `submits` at zero, so a pass that polled N jobs made N
+        submits against a ceiling of four and moving the ceiling moved nothing. It is an instance
+        method now for exactly that reason: there is no way to ask for a job's money ceiling
+        without already holding the request's socket count.
+        """
+        b = _MediaBudget(self.walk)
+        b.billed = int(job.get("advances") or 0)
+        return b
+
+    def claim(self) -> str:
+        """"" if another outbound submit is allowed, else the clause saying why it is not."""
+        if self.billed > _MEDIA_MAX_ADVANCES:
+            return "billed"
+        if self.walk.submits >= _MEDIA_MAX_SUBMITS:
+            return "tried"
+        self.walk.submits += 1
+        self.billed += 1
+        return ""
+
+    def free(self) -> None:
+        """The answer said nothing ran, so the claim goes back."""
+        self.billed -= 1
+
+
+class _MediaSpent(media_plane.MediaError):
+    """The budget refused another outbound submit. Carries WHICH ceiling said no.
+
+    A MediaError deliberately. The two callers that know about the budget catch this first and say
+    something better; any caller that does not — including one written next year by somebody who
+    read none of this — still turns it into a sentence the agent can read rather than an HTTP 500.
+    """
+
+    def __init__(self, stopped: str):
+        super().__init__(
+            "this request has already bought every render one request may buy"
+            if stopped == "billed" else
+            f"this request has made the {_MEDIA_MAX_SUBMITS} attempts it is allowed")
+        self.stopped = stopped
+
+
+def _media_unusable(r: httpx.Response | None, e: Exception) -> media_plane.MediaError:
+    """Whatever a provider call raised that was not already a MediaError, said in the media
+    plane's own terms.
+
+    ONE QUESTION DECIDES IT, and it is the same one `_read_submit` asks: DID THE PROVIDER ANSWER?
+    No response at all is a refusal and nothing ran. A status of 400 or worse is a refusal too.
+    A 200 whose body this could not read is the expensive one — the provider answered, so it
+    billed — and it gets exactly what a 200 with no media in it gets: banked, and the model stood
+    down. That last case is what a relay renaming a field looks like from in here, which is the
+    single most common thing that happens to this code.
+    """
+    if r is None:
+        return media_plane.MediaRefused(f"the provider did not answer ({type(e).__name__})")
+    if r.status_code >= 400:
+        return media_plane.MediaRefused(media_plane.provider_message(None, r.status_code))
+    return media_plane.MediaEmpty(f"the provider answered 200 with a body this could not read "
+                                  f"({type(e).__name__}) — it billed and returned nothing usable")
+
+
+async def _media_call(cand: dict, prov: dict, params: dict,
+                      budget: _MediaBudget) -> tuple[str, object, dict]:
+    """One provider call: (task_id, payload, response doc). The ONLY blocking provider call, the
+    ONE place an outbound submit is made, and therefore the one place the budget is claimed.
+
+    A shape that hands back a task id returns in about a second. A synchronous shape renders
+    inside this call, which is why the timeout is the candidate's own measured latency with room
+    rather than one number for a four-second model and a ninety-second one.
+
+    THE CLAIM IS HERE BECAUSE THE SOCKET IS HERE. Every earlier cap belonged to a walk, and the
+    submit that overspent came from beside it — from `_media_job_resubmit`, which a synchronous
+    render reaches INSIDE THE SAME TOOL CALL. Anything that submits comes through here, so
+    anything that submits is counted, whether or not whoever wrote it knew there was a count.
+
+    THE ANSWER IS INTERPRETED INSIDE THE `try`, BODY AND ALL. `read_submit` used to be called one
+    line below it: a renamed provider field then raised AttributeError, which is outside the
+    MediaError tree, so it went past every handler above and left the route as an HTTP 500 —
+    nothing banked, nothing stood down, no sentence for the agent, and a render paid for. What
+    each kind of failure MEANS is `_media_unusable`'s job.
+    """
+    sub = media_plane.build_submit(cand, prov["base_url"], params)
+    # SIGNED IN THIS PROVIDER'S OWN STYLE, and the style came off the provider entry beside its
+    # base url — see media_plane.auth_of. There is no branch here on WHICH provider this is, and
+    # that is deliberate: this function is the one place every outbound submit passes through, and
+    # everything it has learnt to special-case has cost a round of the budget bug. It builds one
+    # header out of one dict; a provider with a third auth style is a catalog edit.
+    # The shape's own headers go UNDER the credential and the content type, never over them: a
+    # catalog entry names a model and a protocol version, and must not be able to name an
+    # `authorization` that would send the key somewhere this did not decide.
+    headers = {**sub.headers, **media_plane.auth_headers(prov),
+               "content-type": "application/json"}
+    cl = _media_client()
+    stopped = budget.claim()
+    if stopped:
+        raise _MediaSpent(stopped)
+    r = None
+    try:
+        if sub.stream:
+            # gpt-audio refuses without stream:true and then delivers audio in deltas.
+            chunks: list[str] = []
+            async with cl.stream(sub.method, sub.url, json=sub.body, headers=headers,
+                                 timeout=sub.timeout) as r:
+                if r.status_code >= 400:
+                    raise media_plane.MediaRefused(
+                        media_plane.provider_message(_media_doc(r, await r.aread()),
+                                                     r.status_code))
+                async for line in r.aiter_lines():
+                    chunks.append(line)
+            return "", media_plane.read_stream_audio(cand, chunks), {}
+        r = await cl.request(sub.method, sub.url, json=sub.body, headers=headers,
+                             timeout=sub.timeout)
+        doc = _media_doc(r, r.content)
+        task_id, payload = media_plane.read_submit(cand, r.status_code, doc)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — a refusal, a dead socket, or a body we cannot read
+        err = e if isinstance(e, media_plane.MediaError) else _media_unusable(r, e)
+        if not isinstance(err, media_plane.MediaEmpty):
+            # Nothing ran, so the claim goes back and the model stays in the chain — retrying it
+            # is free, and that is precisely what lets a model the relay has broken sit at rank 1
+            # and start working the day the mapping is fixed, with no code change and no cost.
+            budget.free()
+        elif err is not e:
+            # A 200 this code could not interpret is an OPERATIONAL event, not just a failed call:
+            # it is what a relay renaming a field looks like from in here, and it is now costing
+            # money one render at a time. The model is named so the operator can act on it; the
+            # body is not logged, because a provider document is not ours to write down.
+            print(f"[media] {cand.get('model')}: a 200 this could not read "
+                  f"({type(e).__name__})", flush=True)
+        if err is not e:
+            raise err from e
+        raise
+    return task_id, payload, doc if isinstance(doc, dict) else {}
+
+
+# One budget per agent tool call — SHARED WITH EVERY CALL THAT OVERLAPS IT ON THE SAME SESSION.
+_media_budgets: dict[str, _MediaBudget] = {}
+
+
+@contextlib.asynccontextmanager
+async def _media_budget_for(sid: str):
+    """The budget this tool call spends out of — a generation, or the check_jobs that polls it.
+
+    Per request rather than per session, because a session lives for hours and one budget for all
+    of it would refuse an agent that has been working correctly since. But an agent parallelises:
+    four generate_image calls issued in ONE turn each opened a private budget and bought the whole
+    chain between them. The rule this budget exists to enforce is that a second render is the
+    agent's DECISION, made with the first one's cost in front of it — and that is not true of a
+    call which was already in flight when the first one billed. So overlapping calls share one
+    budget, and the first call to arrive after they have all answered opens a fresh one: "the
+    agent has seen an answer" is exactly the boundary, and in-flight is exactly how to spell it.
+    """
+    b = _media_budgets.get(sid)
+    if b is None:
+        b = _media_budgets[sid] = _MediaBudget()
+    b.sharers += 1
+    try:
+        yield b
+    finally:
+        b.sharers -= 1
+        if b.sharers <= 0:
+            _media_budgets.pop(sid, None)
+
+
+def _media_billed_out(err: str, billed: int) -> str:
+    """What an agent is told when its request has spent the whole billable budget. ONE sentence
+    for both walks, because a second one would drift and only one of them would be true."""
+    what = "1 model has" if billed == 1 else f"{billed} models have"
+    return (f"{err} — {what} now billed for this one request and nothing further was bought. "
+            f"Ask again if you want another attempt.")
+
+
+def _media_walk_over(cap: str, reasons: list[str], billed: int, stopped: str,
+                     turn_billed: int) -> str:
+    """What the agent is told when a walk ended with no media. One builder for every way it can
+    end, so "nothing was charged" — the one sentence an agent must never be told wrongly —
+    survives on exactly the paths where it is true, and so does the advice that follows it.
+    """
+    if billed:
+        return _media_billed_out("; ".join(reasons), billed)
+    if stopped == "billed":
+        # This call bought nothing and a call issued ALONGSIDE it spent the shared budget. Its own
+        # sentence, because the two others would each be wrong here: `refusal` would tell the agent
+        # to go and ask somebody to connect a provider, and the billed-out sentence would charge
+        # this call for renders it did not make.
+        return (f"Another generation issued in the same turn has already bought the "
+                f"{turn_billed} renders one turn is allowed and none of them delivered. Nothing "
+                f"was generated here and nothing was charged for it. Ask again — one at a time — "
+                f"if you want another attempt.")
+    if stopped == "tried":
+        return (f"{'; '.join(reasons)} — this request has made the {_MEDIA_MAX_SUBMITS} attempts "
+                f"it is allowed and none of them produced anything. Nothing was generated and "
+                f"nothing was charged. Ask again if you want the remaining models tried.")
+    return media_plane.refusal(cap, reasons)
+
+
+async def _media_chain(cap: str, params: dict, providers: dict,
+                       budget: _MediaBudget) -> tuple[dict, str, object, dict, dict]:
+    """Walk the capability's chain until one candidate actually runs. Returns the tally of what
+    the walk cost along with what it produced, because the job that comes out of it has to carry
+    the spend forward.
+
+    THE WALK DOES NOT COUNT ITSELF. Whether another submit may be made is asked inside
+    `_media_call`, because that is where the socket is — a gate here would bound this loop and
+    nothing else, which is exactly how the last four rounds of this bug each survived their own
+    fix. This loop only says what the walk is TOLD: `_MediaSpent` means the request has spent
+    what a request may spend, and it ends the walk with the same refusal a chain that ran out of
+    candidates gets.
+
+    What the answer WAS decides only one thing here: a 200 that gave nothing billed, so it is
+    written down and the model is stood down. A status code billed nothing, so the model stays in
+    the chain — retrying it is free, and that is precisely what lets `dreamina-seedance-2-5-hc`
+    sit permanently at rank 1 and start working the day the relay's mapping is fixed, with no code
+    change and no cost. The money that goes with either answer is the budget's, in `_media_call`.
+    """
+    tally: dict = {"attempts": [], "billed_usd": 0.0}
+    tried: set[str] = set()
+    while True:
+        cand, skipped = media_plane.resolve(cap, params, set(providers), _media_quarantine,
+                                            exclude=tried)
+        if not cand:
+            stopped = "chain"
+            break
+        model = str(cand.get("model") or "")
+        tried.add(model)
+        try:
+            task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params,
+                                                      budget)
+        except _MediaSpent as e:
+            stopped = e.stopped
+            break
+        except media_plane.MediaError as e:
+            if isinstance(e, media_plane.MediaEmpty):
+                _media_billed(tally, model, media_plane.estimated_usd(cand) or 0.0, str(e))
+            else:
+                tally["attempts"].append({"model": model, "error": str(e)})
+            continue
+        return cand, task_id, payload, doc, tally
+    reasons = [f"{a['model']} — {a['error']}" for a in tally["attempts"]] + skipped
+    billed = sum(1 for a in tally["attempts"] if a.get("billed"))
+    raise _MediaNoModel(_media_walk_over(cap, reasons, billed, stopped, budget.billed),
+                        tally["attempts"], float(tally["billed_usd"]))
+
+
+# ── the job store ─────────────────────────────────────────────────────────────────────────────
+# One vertex per job. A vertex and not an in-memory dict because a job outlives the turn, the tab
+# and a gateway restart — a clip takes about four minutes and nobody watches it arrive.
+#
+# NOTE FOR A HOSTED DEPLOYMENT: the graph is closed-world on labels, so `MediaJob` has to be
+# registered there exactly as `HarnessSession` and `Harness` are, or every upsert silently no-ops.
+_MEDIA_JOB_LABEL = "MediaJob"
+_MEDIA_JOB_NUM = ("bytes", "width", "height", "next_poll_at", "poll_backoff_s", "created_at",
+                  "updated_at", "shots", "advances")
+_MEDIA_JOB_FLOAT = ("seconds", "usd", "quota", "planned_seconds", "billed_usd")
+
+
+def _media_job_props(job: dict) -> dict:
+    """A job as flat string props. The graph stores strings; keeping the conversion in one place
+    is what stops a job that reads back as the string "None".
+
+    `attempts` and `params` are stored ONCE, as their _json siblings. Writing both would be two
+    copies of the same fact, and the day they disagree is the day a job's history is a coin toss.
+    """
+    out = {}
+    for k, v in job.items():
+        if k in ("id", "attempts", "params"):
+            continue
+        out[k] = json.dumps(v) if isinstance(v, (dict, list)) else ("" if v is None else str(v))
+    return out
+
+
+def _media_job_out(v: dict | None) -> dict | None:
+    if not v:
+        return None
+    job = {"id": str(v.get("id") or "")}
+    for k, val in v.items():
+        if k in ("id", "pk", "label"):
+            continue
+        job[k] = val
+    for k in _MEDIA_JOB_NUM:
+        job[k] = int(float(job.get(k) or 0) or 0)
+    for k in _MEDIA_JOB_FLOAT:
+        job[k] = float(job.get(k) or 0) or 0.0
+    for k, empty in (("attempts", []), ("params", {})):
+        try:
+            job[k] = json.loads(job.get(k + "_json") or json.dumps(empty))
+        except Exception:  # noqa: BLE001
+            job[k] = empty
+    return job
+
+
+async def _media_job_save(job: dict) -> None:
+    job["updated_at"] = int(time.time() * 1000)
+    await _vg_upsert(_MEDIA_JOB_LABEL, job["id"], _media_job_props(job))
+
+
+async def _media_job_get(jid: str) -> dict | None:
+    if not jid or not jid.startswith("mjob_"):
+        return None
+    return _media_job_out(await BACKING.graph.get(jid, label=_MEDIA_JOB_LABEL))
+
+
+async def _media_jobs_of(sid: str) -> list[dict]:
+    rows = await BACKING.graph.find(_MEDIA_JOB_LABEL, {"session": sid})
+    return [j for j in (_media_job_out(r) for r in rows) if j and j.get("deleted") != "1"]
+
+
+async def _media_spend(sid: str) -> float:
+    """What this session has actually cost: the summed MEASURED usd of everything that billed.
+
+    A render that billed and then failed is money spent. Summing only the SUCCEEDED jobs is how a
+    session that burned six full-price renders read as $0.00 and the budget cap never fired —
+    `billed_usd` is what each failed candidate cost, banked as the chain moved off it.
+
+    Measured only. A session whose jobs reported no cost sums to nothing and the caller shows
+    nothing — never "$0.00", which reads as free rather than as unknown. Most candidates carry no
+    measured price, so this is a floor on what was spent and never an estimate of it.
+    """
+    jobs = await _media_jobs_of(sid)
+    return round(sum(float(j.get("usd") or 0.0) for j in jobs if j.get("status") == "succeeded")
+                 + sum(float(j.get("billed_usd") or 0.0) for j in jobs), 4)
+
+
+# ── the media store ───────────────────────────────────────────────────────────────────────────
+def _media_blob(sid: str, med: str, ext: str) -> str:
+    return f"media/{sid}/{med}.{ext}"
+
+
+def _media_url(hid: str, eid: str, sid: str, med: str) -> str:
+    """Where the app fetches these bytes. A PATH, not an absolute URL: an absolute one breaks the
+    moment the deployment moves, which is the same lesson `_harness_plugins` already encodes by
+    re-deriving hosted server addresses at turn time instead of trusting the stored one."""
+    return f"/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media/{med}"
+
+
+async def _media_store(sid: str, kind: str, data: bytes, meta: dict) -> dict:
+    """Verify these bytes really are that media, then keep our own copy.
+
+    THE PROVIDER URL IS NEVER STORED. Every one of them is signed or short-lived — happyhorse's
+    lasts a day — so a scene holding one is a scene that stops working tomorrow.
+    """
+    info = media_plane.verify(kind, data)
+    med = "med_" + uuid.uuid4().hex[:16]
+    ok = await _blob_put(_media_blob(sid, med, info["ext"]), data, kb=BLOB_KB)
+    if not ok:
+        raise media_plane.MediaError("the generated file could not be stored")
+    rec = {"media_id": med, "kind": kind, "ext": info["ext"], "mime": info["mime"],
+           "bytes": info["bytes"], "width": info.get("width") or 0,
+           "height": info.get("height") or 0, "seconds": info.get("seconds") or 0.0,
+           "created_at": int(time.time() * 1000), **meta}
+    await _blob_put(_media_blob(sid, med, info["ext"]) + ".meta",
+                    json.dumps(rec).encode(), kb=BLOB_KB)
+    return rec
+
+
+async def _media_meta(sid: str, med: str) -> dict | None:
+    """The record beside the bytes, found without knowing the extension."""
+    listing = await _blob_list_all(f"media/{sid}/{med}.", kb=BLOB_KB)
+    for it in listing:
+        fid = str(it.get("file_id") or "")
+        if fid.endswith(".meta"):
+            raw = await _blob_get(fid, kb=BLOB_KB)
+            if raw:
+                try:
+                    return json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    return None
+    return None
+
+
+async def _provider_url_check(url: str) -> str | None:
+    """Whether this server may fetch an address THE PROVIDER named. The rule _ssrf_check applies
+    to a customer's MCP endpoint, minus its self-hosted exemption.
+
+    That exemption exists because a local MCP server on 127.0.0.1 is one the OPERATOR typed on a
+    machine they already own. A result_url is chosen by a remote relay, so on a self-hosted box
+    the operator's own network is exactly what a hostile relay would reach for — the reasoning
+    that makes the exemption right there makes it wrong here.
+
+    Nor is there an exemption for a name that did not resolve. This is the one caller whose
+    address a REMOTE PARTY chose, and it is polled again and again — so "our lookup failed, allow
+    it" is not one gamble, it is a fresh roll on every poll until one of them lands.
+    """
+    from urllib.parse import urlparse
+    refused = "the finished file was offered from an address this will not fetch"
+    try:
+        u = urlparse(url)
+    except Exception:  # noqa: BLE001
+        return refused
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return refused
+    bad = await _internal_target(u.hostname, u.port or (443 if u.scheme == "https" else 80))
+    if not bad:
+        return None
+    # The host, in the log, where an operator can act on it — and only the host: a result_url
+    # carries a signature, and that is a credential like any other.
+    print(f"[media] refused a provider file address at {u.hostname}: {bad}", flush=True)
+    return refused
+
+
+async def _media_fetch(url: str) -> bytes:
+    """Pull a finished render off the provider, capped. Streamed rather than read whole, so a
+    provider that answers with a gigabyte is a refused job and not an out-of-memory.
+
+    The response's content-type is deliberately NOT returned: what the bytes are is decided by the
+    bytes (media_plane.verify), and a header is a claim.
+
+    WHERE it is pulled from is a claim too, and one the provider makes: a relay that answers a
+    poll with `result_url: http://169.254.169.254/…` had this server fetching cloud metadata and
+    storing the answer. No credential rides along and the body is never echoed, but a status and
+    a size still leak through `attempts`, and that is a probe of our own network either way.
+    """
+    refused = await _provider_url_check(url)
+    if refused:
+        raise media_plane.MediaEmpty(refused)
+    buf = bytearray()
+    try:
+        async with _media_client().stream("GET", url, timeout=300) as r:
+            if r.status_code >= 400:
+                raise media_plane.MediaEmpty(f"the finished file could not be fetched "
+                                             f"(HTTP {r.status_code})")
+            async for chunk in r.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > media_plane.MAX_BYTES:
+                    raise media_plane.MediaEmpty(
+                        f"the provider returned more than {media_plane.MAX_BYTES} bytes")
+    except media_plane.MediaError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        # EVERY WAY THIS FAILS IS A MediaError, which is this function's contract and not a
+        # courtesy. Its three callers all handle MediaError and none of them handles anything
+        # else, so an httpx.ConnectError — a CDN host that resolves and then refuses, resets or
+        # times out the socket — escaped the poll BEFORE the backoff was bumped and before the age
+        # check, and the blanket `except Exception` in the sweeper, in check_jobs and in the
+        # browser's jobs route each swallowed it in silence. The job stayed `running` for ever:
+        # one provider poll CARRYING THE KEY plus one CDN fetch every ten seconds, presenting to
+        # the person as a placeholder that never resolves and never errors. The same rule
+        # `_media_call` already holds for the submit — a network failure is a failure with a
+        # sentence, not a crash.
+        raise media_plane.MediaEmpty(
+            f"the finished file could not be fetched ({type(e).__name__})") from e
+    return bytes(buf)
+
+
+# ── the scene ─────────────────────────────────────────────────────────────────────────────────
+def _media_scene_key(sid: str) -> str:
+    return f"sessions/{sid}/{_MEDIA_SCENE_FILE}"
+
+
+async def _media_scene_read(sid: str) -> dict:
+    raw = await _blob_get(_media_scene_key(sid), kb=BLOB_KB)
+    if not raw:
+        return media_plane.new_scene()
+    try:
+        return media_plane.sanitize_scene(json.loads(raw))
+    except Exception:  # noqa: BLE001
+        return media_plane.new_scene()
+
+
+async def _media_scene_write(sid: str, scene: dict) -> int:
+    """Store the scene and bump its revision. The revision lives IN the document, so there is one
+    thing to read and one thing to write and they cannot disagree."""
+    scene = media_plane.sanitize_scene(scene)
+    meta = scene.get("meta") or {}
+    rev = int(float(meta.get("rev") or 0)) + 1
+    scene["meta"] = {**meta, "rev": rev}
+    (scene.get("timeline") or {})["updatedAt"] = int(time.time() * 1000)
+    await _blob_put(_media_scene_key(sid), json.dumps(scene).encode(), kb=BLOB_KB)
+    _media_project_due.add(sid)
+    await _media_project(sid, scene)
+    return rev
+
+
+async def _media_project(sid: str, scene: dict | None = None) -> None:
+    """Write the scene into the session's workspace, so it is an ordinary artifact.
+
+    WRITE-ONLY, store → workspace. Nothing ever reads it back as authority. Self-hosted it is
+    live; hosted it is up to one turn stale, because a live sandbox's tarball is replaced wholesale
+    at checkpoint — which is the same staleness the console already shows for every other kit
+    mid-turn. Best-effort: a projection that fails must never fail the generation it describes.
+    """
+    try:
+        doc = scene if scene is not None else await _media_scene_read(sid)
+        if not (doc.get("elements") or doc.get("timeline", {}).get("shots")):
+            _media_project_due.discard(sid)
+            return                       # nothing to project yet; don't create an empty artifact
+        ok = await BACKING.workspace.write(sid, _MEDIA_SCENE_FILE,
+                                           json.dumps(doc, indent=2).encode())
+        if ok:
+            _media_project_due.discard(sid)
+        else:
+            # Hosted, mid-turn, this is EXPECTED — the live sandbox owns the tarball and its own
+            # checkpoint will replace whatever we wrote. Leaving it queued is what makes the
+            # re-projection after `_checkpoint` land, so the artifact is at most one turn stale.
+            print(f"[media] projection of {sid} deferred to the next checkpoint", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[media] projection of {sid} deferred: {type(e).__name__}", flush=True)
+
+
+async def _media_scene_touch(sid: str, mutate) -> tuple[int, object]:
+    """Read-modify-write one scene under its lock. Every canvas tool comes through here, so the
+    agent's edits and a landing render cannot interleave into a broken document."""
+    async with _media_scene_lock(sid):
+        scene = await _media_scene_read(sid)
+        out = mutate(scene)
+        rev = await _media_scene_write(sid, scene)
+        return rev, out
+
+
+# ── running a job ─────────────────────────────────────────────────────────────────────────────
+async def _media_job_land(job: dict, data: bytes, transcript: str = "") -> dict:
+    """A finished render becomes our own file, and the element that was holding its place becomes
+    the clip. Verification first: a body that is not media is a failure, not a success."""
+    kind = _MEDIA_KIND.get(str(job.get("capability") or ""), "image")
+    rec = await _media_store(str(job["session"]), kind, data,
+                             {"model": job.get("model") or "", "capability": job.get("capability"),
+                              "job_id": job["id"], "prompt": (job.get("params") or {}).get("prompt") or ""})
+    job.update({"status": "succeeded", "media_id": rec["media_id"], "bytes": rec["bytes"],
+                "width": rec["width"], "height": rec["height"], "seconds": rec["seconds"],
+                "error": ""})
+    if transcript:
+        job["spoken_text"] = transcript
+    await _media_job_save(job)
+    await _media_element_ready(job, rec)
+    return job
+
+
+async def _media_element_ready(job: dict, rec: dict) -> None:
+    """Swap the placeholder for the real thing, server-side.
+
+    Server-side is the point: the scene is mutated in the store, not in a browser reacting to a
+    stream, so a clip cannot go missing because nobody had the canvas tab open when it landed.
+    """
+    eid = str(job.get("element_id") or "")
+    if not eid:
+        return
+    sid = str(job["session"])
+
+    def mutate(scene: dict):
+        for el in scene.get("elements") or []:
+            if el.get("id") != eid:
+                continue
+            m = media_plane.media_of(el)
+            m.update({"status": "ready", "mediaId": rec["media_id"], "model": job.get("model"),
+                      "seconds": rec.get("seconds") or None, "width": rec.get("width") or None,
+                      "height": rec.get("height") or None})
+            if el.get("type") == "image":
+                # A NEW fileId, equal to the new media id. Excalidraw's addFiles will not update a
+                # fileId that already exists, so reusing one leaves the placeholder on screen
+                # forever.
+                el["fileId"] = rec["media_id"]
+                el["status"] = "saved"
+                scene.setdefault("files", {})[rec["media_id"]] = media_plane.file_entry(
+                    rec["media_id"], rec["mime"],
+                    _media_url(str(job.get("harness") or ""), str(job.get("entry") or "mcp.media"),
+                               sid, rec["media_id"]))
+            else:
+                el["link"] = _media_url(str(job.get("harness") or ""),
+                                        str(job.get("entry") or "mcp.media"), sid,
+                                        rec["media_id"])
+            return None
+        return None
+
+    await _media_scene_touch(sid, mutate)
+
+
+async def _media_element_failed(job: dict) -> None:
+    eid = str(job.get("element_id") or "")
+    if not eid:
+        return
+
+    def mutate(scene: dict):
+        for el in scene.get("elements") or []:
+            if el.get("id") == eid:
+                media_plane.media_of(el).update({"status": "failed"})
+        return None
+
+    await _media_scene_touch(str(job["session"]), mutate)
+
+
+async def _media_job_live(job: dict) -> bool:
+    """May this job still spend? Asked before every poll it would pay for.
+
+    A running job IS money: each poll carries this deployment's provider key, and a poll that
+    reports SUCCESS downloads a file and stores it. So the question is not "does this job exist"
+    but "is the server that started it still connected and still switched on".
+
+    Asked here rather than in the sweeper because check_jobs and the app's jobs route advance jobs
+    too, and `check_enabled` only ever refused a TURN — a media server the owner switched off went
+    on polling and paying for everything earlier turns had started. Switching it back on resumes
+    the same job, which is the difference between this and deleting the agent (that buries them).
+    """
+    hid = str(job.get("harness") or "")
+    v = await _vertex_get(hid) if hid else None
+    if not v or str(v.get("deleted")) in ("1", "true", "True"):
+        return False
+    try:
+        await _hosted_resolve(_MEDIA_SERVER, hid, str(v.get("org") or ""), _mcp_list(v),
+                              entry_id=str(job.get("entry") or ""), check_enabled=True)
+    except HTTPException:
+        return False
+    return True
+
+
+async def _media_job_advance(job: dict, budget: _MediaBudget) -> dict:
+    """Move one job forward. THE one function that does — check_jobs, the app's poll route and the
+    sweeper all call it, so a job cannot mean one thing to a browser and another to an agent.
+
+    THE BUDGET IS THE PASS'S, not this job's. A poll that answers FAILURE advances the chain, and
+    advancing it opens a socket: every job this function is called for in one request therefore
+    counts against ONE `_MEDIA_MAX_SUBMITS`. It used to make its own per job, which is why six
+    failing jobs meant six outbound submits from a single check_jobs. `for_job` below takes the
+    money ceiling off the job and leaves the socket count where it is."""
+    if job.get("status") != "running" or not job.get("provider_task_id"):
+        return job
+    if float(job.get("next_poll_at") or 0) > time.time() * 1000:
+        return job
+    # Serialise from here: everything below can DOWNLOAD AND STORE, and those callers overlap.
+    async with _media_job_lock(str(job.get("id") or "")):
+        fresh = await _media_job_get(str(job.get("id") or "")) or job
+        # Re-check under the lock. A caller that queued behind the one that landed this job must
+        # return the landed answer, not fetch the same clip a second time.
+        if fresh.get("status") != "running" or not fresh.get("provider_task_id"):
+            return fresh
+        if float(fresh.get("next_poll_at") or 0) > time.time() * 1000:
+            return fresh
+        try:
+            # INSIDE the try, because the liveness check reads the backing store and the store is
+            # a thing that blips. It answered False for "switched off" and let a RuntimeError past
+            # for "could not tell" — and the caller could not tell those apart either, so the job
+            # kept its old `next_poll_at`, was due immediately, and was re-read on every sweep for
+            # as long as the gateway ran. Nothing spends on that path; it is graph churn and a
+            # placeholder that never resolves, which is why it sat there.
+            if not await _media_job_live(fresh):
+                return fresh
+            return await _media_job_poll(fresh, budget)
+        except Exception as e:  # noqa: BLE001
+            # THE INVARIANT OF THIS FUNCTION, and the reason it is stated once here rather than
+            # guarded at each raise inside the poll: a job this function looked at comes out of it
+            # either TERMINAL or DUE LATER — or untouched, when the answer was a definite "this
+            # deployment may not spend". `_media_job_poll` bumps the backoff on every path it
+            # returns by; if anything in here raised instead, nobody did — and every caller of
+            # this function (the sweeper, check_jobs, the browser's jobs route) swallows the
+            # exception. Whatever raised, the backoff still applies and JOB_MAX_S still ends it.
+            print(f"[media] poll of {fresh.get('id')} raised {type(e).__name__}: {e}", flush=True)
+            return await _media_job_stalled(fresh)
+
+
+async def _media_job_poll(job: dict, budget: _MediaBudget) -> dict:
+    """One poll of one job, under its lock. Split out so the locking above reads as one thought."""
+    now = time.time()
+    cand = _media_candidate(str(job.get("capability") or ""), str(job.get("model") or ""))
+    providers = await _media_providers()
+    prov = providers.get(str(job.get("provider") or ""))
+    if not cand or not prov:
+        job["next_poll_at"] = int((now + 60) * 1000)
+        await _media_job_save(job)
+        return job
+
+    poll = media_plane.build_poll(cand, prov["base_url"], str(job["provider_task_id"]))
+    try:
+        # Same rule as the submit: the shape's headers go UNDER the credential, so a catalog entry
+        # can name a model and a protocol version but never an `authorization`.
+        r = await _media_client().request(
+            poll.method, poll.url,
+            headers={**poll.headers, **media_plane.auth_headers(prov)},
+            json=poll.body if poll.body is not None else None,
+            timeout=media_plane.POLL_TIMEOUT_S)
+        status, payload, err, progress = media_plane.read_poll(cand, r.status_code,
+                                                               _media_doc(r, r.content))
+    except Exception:  # noqa: BLE001 — a poll that did not answer is unknown, never failed
+        status, payload, err, progress = "unknown", None, "", ""
+
+    job["progress"] = progress
+    if status == "succeeded" and payload is not None:
+        try:
+            data = await _media_fetch(payload.url)
+            return await _media_job_land(job, data)
+        except media_plane.MediaError as e:
+            status, err = "failed", str(e)
+
+    if status == "failed":
+        await _media_job_billable_failure(job, err, budget.for_job(job))
+        return job
+
+    # WHAT THE LAST POLL SAID, kept beside the status rather than in it. `unknown` is never a
+    # state a job is IN — it is what one answer was — so recording it here lets check_jobs tell the
+    # agent "ask again" without a poll that came back empty ever becoming terminal.
+    job["last_poll"] = status
+    return await _media_job_stalled(job, back_off=status == "unknown")
+
+
+async def _media_job_stalled(job: dict, back_off: bool = True) -> dict:
+    """A poll that told us nothing terminal: back the job off, or end it because it is too old.
+
+    THE ONE PLACE a job that did not finish is put down again, so "a polled job comes out either
+    terminal or due later" is a property of the poll loop and not of each way a poll can end. Its
+    other caller is `_media_job_advance`, for a poll that RAISED — every caller up there swallows
+    exceptions, so without this the job kept its old `next_poll_at`, was due immediately, and was
+    polled again on every sweep for as long as the gateway ran.
+    """
+    if back_off:
+        job["poll_backoff_s"] = min(60, int(job.get("poll_backoff_s") or 20) * 2)
+    age_s = (time.time() * 1000 - float(job.get("created_at") or 0)) / 1000.0
+    if age_s > media_plane.JOB_MAX_S:
+        # THE SAME ANSWER THE OTHER EXIT GIVES ABOUT THE SAME EVENT. This job has a provider task
+        # id, which means a submit came back 200 — and a 200 is the provider answering, which is
+        # the only evidence there is that it billed. A poll that answers FAILURE banks that money
+        # and stands the model down (`_media_job_billable_failure`); ageing out wrote `failed` and
+        # nothing else, so the session read $0.00 for a render it paid for and the model that
+        # never delivered was still at rank 1 for the next call — measured, three sequential
+        # generate_video calls bought the same dead model three times.
+        #
+        # It does NOT advance the chain, and that is the one place the two exits differ on
+        # purpose: this job has run out of the time a job gets, so a render started here has none
+        # left to land in. It would be a second full-price render bought at the moment we decided
+        # the first one was too late.
+        _media_billed(job, str(job.get("model") or ""), float(job.get("usd") or 0.0),
+                      "the provider never finished this render")
+        job.update({"status": "failed", "error": "The provider never finished this render."})
+        await _media_job_save(job)
+        await _media_element_failed(job)
+        return job
+    job["next_poll_at"] = int((time.time() + int(job.get("poll_backoff_s") or 20)) * 1000)
+    await _media_job_save(job)
+    return job
+
+
+def _media_candidate(cap: str, model: str) -> dict | None:
+    for c in media_plane.capability(cap).get("candidates") or []:
+        if isinstance(c, dict) and str(c.get("model") or "") == model:
+            return c
+    return None
+
+
+def _media_params_stored(params: dict) -> dict:
+    """What of a job's parameters is written down: everything except the image bytes."""
+    return {k: v for k, v in params.items() if k not in ("image", "image_mime")}
+
+
+async def _media_land_payload(job: dict, payload) -> bool:
+    """Turn a payload that is already in hand into our own file. True when it landed.
+
+    The ONE place a synchronous result lands, shared by the first submit and by a chain that
+    advanced — so "the file was verified before it was stored" cannot be true of one and not the
+    other. It records the reason and DECIDES NOTHING: whether a failure here advances the chain is
+    a policy the caller holds, which is what keeps the advance to exactly one.
+    """
+    try:
+        data = (payload.data if getattr(payload, "data", None)
+                else await _media_fetch(payload.url))
+        await _media_job_land(job, data, getattr(payload, "transcript", ""))
+        return True
+    except media_plane.MediaError as e:
+        job["error"] = str(e)
+        return False
+
+
+def _media_billed(job: dict, model: str, usd: float, err: str) -> None:
+    """Write down that a candidate BILLED and gave us nothing: the attempt, the stand-down, and
+    the money.
+
+    One function, because those three always go together and every place that did them by hand
+    got a different subset right. The advance that a chain then makes is NOT here: whether this
+    request may buy another render is the caller's decision, and keeping it there is what keeps
+    the count at one per request rather than one per place that noticed.
+    """
+    job.setdefault("attempts", []).append({"model": model, "error": err, "billed": True})
+    job["attempts_json"] = json.dumps(job["attempts"])
+    _media_quarantine[model] = time.time() + media_plane.QUARANTINE_S
+    # Banked BEFORE the next candidate overwrites `usd`. A render that billed and failed is money
+    # the session spent, and the job ends at `failed`, so the succeeded-sum never sees it.
+    job["billed_usd"] = round(float(job.get("billed_usd") or 0.0) + float(usd or 0.0), 6)
+
+
+async def _media_job_billable_failure(job: dict, err: str, budget: _MediaBudget) -> bool:
+    """A candidate that had already billed has failed. Record it, stand it down, count what it
+    cost, and advance the chain EXACTLY ONCE PER JOB.
+
+    Once per JOB, which is what this always said and never did: it advanced once per FAILURE, and
+    there is a poll after every advance, so a CDN briefly answering 503 on an otherwise-fine render
+    walked one generate_video down the entire six-model chain — six full-price renders, $1.96 of
+    list price, from one tool call. The count lives on the job because the job is what outlives
+    the poll that reads it.
+
+    Shared by the poll path and by a synchronous render whose file turned out not to be a file,
+    because they are the same event. `advances` may already be non-zero when this is first
+    reached: the submit walk spends out of the same budget and writes what it spent onto the job.
+
+    THE BUDGET IS PASSED IN, never made here. A synchronous render reaches this INSIDE the tool
+    call that started it, and the submit it then makes is one of that call's — it is how one
+    generate_image made five. The poll path is a different request and hands in the budget the
+    job carries (`budget.for_job`). Either way the submit itself is claimed in
+    `_media_call`; this only decides whether one is worth trying.
+    """
+    _media_billed(job, str(job.get("model") or ""), float(job.get("usd") or 0.0), err)
+    if int(job.get("advances") or 0) < _MEDIA_MAX_ADVANCES:
+        job["advances"] = int(job.get("advances") or 0) + 1
+        if await _media_job_resubmit(job, budget):
+            return True
+    else:
+        # advances + this one. NOT len(attempts): that also counts candidates that were refused
+        # at submit, which cost nothing — a count of what was spent has to be a count of what
+        # actually billed.
+        err = _media_billed_out(err, int(job.get("advances") or 0) + 1)
+    job.update({"status": "failed", "error": err or "the render failed upstream"})
+    await _media_job_save(job)
+    await _media_element_failed(job)
+    return False
+
+
+async def _media_job_resubmit(job: dict, budget: _MediaBudget) -> bool:
+    """After a billable failure, try the next candidate — once. True when one took the job.
+
+    The budget is the caller's request's, and the submit below is claimed out of it in
+    `_media_call` like every other. This function opening its own socket without asking anyone is
+    what made one tool call's fifth submit.
+    """
+    providers = await _media_providers()
+    tried = {str(a.get("model") or "") for a in job.get("attempts") or []}
+    tried.add(str(job.get("model") or ""))
+    params = dict(job.get("params") or {})
+    if params.get("from_media") and not params.get("image"):
+        # Read back from OUR copy, not from the provider's expiring one — and this is also what
+        # makes a chain advance work after a restart, when the job came back off a vertex.
+        try:
+            params["image"], params["image_mime"] = await _media_read_image(
+                str(job["session"]), str(params["from_media"]))
+        except media_plane.MediaError as e:
+            job.setdefault("attempts", []).append({"model": "", "error": str(e)})
+            job["attempts_json"] = json.dumps(job["attempts"])
+            return False
+    cand, _skipped = media_plane.resolve(str(job["capability"]), params, set(providers),
+                                         _media_quarantine, exclude=tried)
+    if not cand:
+        return False
+    model = str(cand.get("model") or "")
+    usd = media_plane.estimated_usd(cand) or 0.0
+    try:
+        task_id, payload, doc = await _media_call(cand, providers[cand["provider"]], params,
+                                                  budget)
+    except _MediaSpent:
+        # This request has spent what a request may spend. No submit was made, so there is nothing
+        # to write down about a candidate — the job fails with the failure that brought us here.
+        return False
+    except media_plane.MediaError as e:
+        # ONE BRANCH, asking the same question `_media_chain` asks, in the same words. This is the
+        # place round 2 found doing this bookkeeping by hand, and a hand-written copy of a rule is
+        # a copy that gets a different subset of it right: a second render that answered 200 with
+        # nothing was neither banked nor stood down here, so the next request bought it again.
+        if isinstance(e, media_plane.MediaEmpty):
+            _media_billed(job, model, usd, str(e))
+        else:
+            job.setdefault("attempts", []).append({"model": model, "error": str(e)})
+            job["attempts_json"] = json.dumps(job["attempts"])
+        return False
+    job.update({"model": model, "provider": str(cand.get("provider") or ""), "usd": usd})
+    if task_id:
+        job.update({"provider_task_id": task_id, "status": "running",
+                    "next_poll_at": int((time.time() + 20) * 1000)})
+        await _media_job_save(job)
+        return True
+    if payload is None:
+        return False
+    if await _media_land_payload(job, payload):
+        return True
+    _media_billed(job, model, usd, str(job.get("error") or ""))
+    return False
+
+
+async def _media_generate(cap: str, params: dict, hid: str, sid: str, org: str,
+                          entry_id: str, budget: _MediaBudget, shot: str = "") -> dict:
+    """Resolve the chain, start the work, and record a job. A refusal leaves no vertex behind when
+    nothing ran — but a walk that BOUGHT renders and delivered none of them is not nothing, and
+    what it spent is written down before the refusal goes back.
+
+    `shot` is the canvas label the agent gave this render, and it is a JOB field rather than a
+    provider parameter: no model is told about it, and the job is the only thing that survives the
+    four minutes between the submit and the `place` call that puts the clip on the board.
+    """
+    providers = await _media_providers()
+    try:
+        cand, task_id, payload, doc, tally = await _media_chain(cap, params, providers, budget)
+    except _MediaNoModel as e:
+        await _media_walk_spend(cap, params, hid, sid, org, entry_id, e)
+        raise
+    attempts = tally["attempts"]
+    now = int(time.time() * 1000)
+    job = {"id": "mjob_" + uuid.uuid4().hex[:16], "org": org, "harness": hid, "session": sid,
+           "entry": entry_id, "capability": cap,
+           # WITHOUT the input image. A vertex property has a size cap and a base64 frame is
+           # megabytes; the media id is kept instead and the bytes are re-read from our own store
+           # if the chain has to advance (see _media_job_resubmit).
+           "params_json": json.dumps(_media_params_stored(params)),
+           "params": params, "status": "running", "shot": shot,
+           "model": str(cand.get("model") or ""), "provider": str(cand.get("provider") or ""),
+           "provider_task_id": task_id, "attempts_json": json.dumps(attempts),
+           "attempts": attempts, "next_poll_at": now + 20_000, "poll_backoff_s": 20,
+           "media_id": "", "bytes": 0, "width": 0, "height": 0, "seconds": 0.0,
+           "quota": float(cand.get("quota") or 0), "usd": media_plane.estimated_usd(cand) or 0.0,
+           # WHAT THE SUBMIT WALK ALREADY SPENT, carried onto the job so the poll walk reads the
+           # same budget rather than opening a second one. Without this, a request that billed
+           # getting here bills again on its first failed poll — the two walks are one request.
+           "advances": sum(1 for a in attempts if a.get("billed")),
+           "billed_usd": tally["billed_usd"],
+           "element_id": "", "error": "", "created_at": now, "updated_at": now}
+    inline_usd = media_plane.usage_usd(doc)
+    if inline_usd is not None:
+        job["usd"] = inline_usd          # a cost the provider reported itself; measured, so used
+    # SAVED BEFORE THE FILE IS FETCHED, always. A synchronous shape has already billed by the time
+    # we get here, so a fetch that then fails must leave a job that says so rather than no record
+    # at all — an untraceable charge is worse than a visible failure.
+    await _media_job_save(job)
+    if task_id:
+        return job
+    # A synchronous shape rendered inside the submit. Reporting it as "running" would be a lie the
+    # very next call exposes, so the job carries the truth and the agent's loop is unchanged.
+    if not await _media_land_payload(job, payload):
+        await _media_job_billable_failure(job, str(job.get("error") or ""), budget)
+    return job
+
+
+async def _media_walk_spend(cap: str, params: dict, hid: str, sid: str, org: str, entry_id: str,
+                            e: _MediaNoModel) -> None:
+    """A submit walk that bought renders and delivered nothing still leaves the money where the
+    session can see it.
+
+    Same rule the job store already states one function up — an untraceable charge is worse than a
+    visible failure — applied to the one path that had no job to write it on. A generate_video
+    whose candidates each answered 200 and handed back nothing bought up to the whole chain, and
+    because the refusal never reached `_media_job_save`, `_media_spend` read $0.00 and the session
+    budget that exists to stop a runaway never saw a cent of it.
+
+    Nothing is written when nothing billed: a refusal for a capability nobody has connected is
+    still not an event, and a failed job for it would be noise on the person's canvas.
+    """
+    billed = [a for a in (e.attempts or []) if a.get("billed")]
+    if not billed:
+        return
+    now = int(time.time() * 1000)
+    await _media_job_save({
+        "id": "mjob_" + uuid.uuid4().hex[:16], "org": org, "harness": hid, "session": sid,
+        "entry": entry_id, "capability": cap, "status": "failed", "error": e.text,
+        "params_json": json.dumps(_media_params_stored(params)), "params": params,
+        "model": str(billed[-1].get("model") or ""), "provider": "", "provider_task_id": "",
+        "attempts_json": json.dumps(e.attempts), "attempts": e.attempts,
+        "next_poll_at": 0, "poll_backoff_s": 20, "media_id": "", "bytes": 0, "width": 0,
+        "height": 0, "seconds": 0.0, "quota": 0.0, "usd": 0.0,
+        "advances": len(billed), "billed_usd": float(e.billed_usd or 0.0),
+        "element_id": "", "created_at": now, "updated_at": now})
+
+
+# ── the sweeper ───────────────────────────────────────────────────────────────────────────────
+_MEDIA_SWEEP_EVERY_S = int(os.environ.get("HR_MEDIA_SWEEP_S", "10"))
+
+
+async def _media_sweep() -> int:
+    """Advance every job nobody is watching.
+
+    Not an optimisation. Without it a job whose turn ended and whose tab is closed never completes,
+    and its provider URL expires — happyhorse's in a day, every kling and seedream URL signed. This
+    is what makes "generation outlives the session being watched" true rather than aspirational.
+    """
+    rows = await BACKING.graph.find(_MEDIA_JOB_LABEL, {"status": "running"})
+    now_ms = time.time() * 1000
+    moved = 0
+    # ONE PASS IS ONE REQUEST. A poll that answers FAILURE advances the chain and that costs a
+    # socket, so a sweep that finds fifty dead jobs may not fire fifty submits between two ticks
+    # of a ten-second timer — the ones it refuses are simply advanced by the next pass. Per pass
+    # rather than per session because the sweeper is not anybody's session: it is one job of work
+    # this process does, and `_MEDIA_MAX_SUBMITS` is how much of it may leave the process at once.
+    budget = _MediaBudget()
+    for r in rows:
+        job = _media_job_out(r)
+        if not job or float(job.get("next_poll_at") or 0) > now_ms:
+            continue
+        try:
+            before = job.get("status")
+            job = await _media_job_advance(job, budget)
+            moved += int(job.get("status") != before)
+        except Exception as e:  # noqa: BLE001 — one bad job must not stop the sweep
+            print(f"[media] sweep: {job.get('id')} {type(e).__name__}", flush=True)
+    for sid in list(_media_project_due)[:20]:
+        await _media_project(sid)
+    return moved
+
+
+@app.on_event("startup")
+async def _start_media_sweep() -> None:
+    async def loop() -> None:
+        while True:
+            try:
+                run_it = True
+                if control_store.enabled():
+                    try:
+                        run_it = await control_store.try_lock("media-sweep",
+                                                              _MEDIA_SWEEP_EVERY_S - 2)
+                    except Exception:  # noqa: BLE001 — store down: sweep anyway. A duplicate GET
+                        run_it = True   # poll is idempotent and free, and a stalled job is not.
+                if run_it:
+                    await _media_sweep()
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(_MEDIA_SWEEP_EVERY_S)
+    asyncio.create_task(loop())
+
+
+# ── the agent's tools ─────────────────────────────────────────────────────────────────────────
+# Thirteen. Not eighteen: there is no concatenate_audio, no select_background_music and no
+# mix_audio_with_bgm, because set_timeline + export_timeline express all three — and a matcher that
+# cannot report "no match" is how a silent-substitution bug ships.
+_MEDIA_MCP_TOOLS = [
+    {"name": "list_capabilities",
+     "description": ("What can actually be made right now, which model each capability resolves "
+                     "to, and roughly what a unit costs. CALL THIS FIRST, before planning "
+                     "anything expensive — it is free and it is the only way to know that a model "
+                     "is broken today. A capability with no model returns a plain refusal: "
+                     "believe it."),
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+
+    {"name": "generate_video",
+     "description": ("Start one shot rendering. Returns a job id immediately — a clip takes about "
+                     "four minutes. Submit every shot you have planned, place them all straight "
+                     "away, then call check_jobs once. Never submit one clip and wait for it."),
+     "inputSchema": {"type": "object", "required": ["prompt", "seconds"],
+                     "additionalProperties": False,
+                     "properties": {
+                         "prompt": {"type": "string", "maxLength": 2000,
+                                    "description": "What the shot shows. One shot, not a script."},
+                         "seconds": {"type": "number", "minimum": 1, "maximum": 15,
+                                     "description": ("REQUIRED. Every model bills by length and "
+                                                     "one of them defaults to 15 s.")},
+                         "from_image": {"type": "string",
+                                        "description": ("A media id (med_…) or job id (mjob_…) to "
+                                                        "start from, instead of generating from "
+                                                        "text alone. An IMAGE becomes this shot's "
+                                                        "first frame. A CLIP means 'carry on from "
+                                                        "where that one ended' — its last frame "
+                                                        "is used, which is how two shots join "
+                                                        "without a visible jump. Only some models "
+                                                        "can do this and the tool says which one "
+                                                        "it used.")},
+                         "aspect": {"enum": ["16:9", "9:16", "1:1"]},
+                         "allow_watermark": {"type": "boolean", "default": False},
+                         "shot": {"type": "string", "maxLength": 60,
+                                  "description": ("A label, e.g. 'Shot 3'. Groups the clip with "
+                                                  "its caption on the canvas.")}}}},
+
+    {"name": "generate_image",
+     "description": ("Make one still. Seconds and cents, where a clip is minutes and dollars — "
+                     "generate every frame first and show them before you render anything. Use "
+                     "from_image to keep a character the same across shots."),
+     "inputSchema": {"type": "object", "required": ["prompt"], "additionalProperties": False,
+                     "properties": {
+                         "prompt": {"type": "string", "maxLength": 2000},
+                         "size": {"type": "string", "pattern": "^[0-9]{3,5}x[0-9]{3,5}$",
+                                  "default": "1024x1024"},
+                         "from_image": {"type": "string",
+                                        "description": ("A media id or job id to edit or restyle. "
+                                                        "Use this to keep a character consistent "
+                                                        "across shots rather than re-generating "
+                                                        "them.")},
+                         "shot": {"type": "string", "maxLength": 60}}}},
+
+    {"name": "generate_speech",
+     "description": ("Speak a line. The result names the model and the voice that read it — and "
+                     "if the model that ran answers prompts instead of reading them, it says so "
+                     "and returns what was actually said."),
+     "inputSchema": {"type": "object", "required": ["text"], "additionalProperties": False,
+                     "properties": {"text": {"type": "string", "maxLength": 4000},
+                                    "voice": {"type": "string",
+                                              "description": ("A voice name from "
+                                                              "list_capabilities. Leave it out "
+                                                              "and the model that runs uses its "
+                                                              "own default; naming one picks the "
+                                                              "model that has it.")},
+                                    "shot": {"type": "string", "maxLength": 60}}}},
+
+    {"name": "generate_music",
+     "description": ("Scored music for a film. Says plainly what is missing if it cannot be made "
+                     "— a speech model is not a substitute and will not be used."),
+     "inputSchema": {"type": "object", "required": ["prompt"], "additionalProperties": False,
+                     "properties": {"prompt": {"type": "string", "maxLength": 2000},
+                                    "seconds": {"type": "number", "minimum": 1, "maximum": 300}}}},
+
+    {"name": "check_jobs",
+     "description": ("Status for jobs you started. `unknown` is NOT a failure — it is a poll that "
+                     "came back empty, and it means ask again. A job that succeeded reports the "
+                     "model that actually ran and what it cost."),
+     "inputSchema": {"type": "object", "required": ["job_ids"], "additionalProperties": False,
+                     "properties": {"job_ids": {"type": "array", "maxItems": 50,
+                                                "items": {"type": "string"}}}}},
+
+    {"name": "describe_canvas",
+     "description": ("What is on the canvas: every element, where it is, whether it is ready, and "
+                     "where the next thing would land. This is your ONLY read of it — never open "
+                     "or edit the scene file."),
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+
+    {"name": "place",
+     "description": ("Put media, a running job or a caption on the canvas. Place a job the moment "
+                     "you submit it: a placeholder appears now and becomes the clip when the "
+                     "render lands, so the person watches the film arrive."),
+     "inputSchema": {"type": "object", "required": ["items"], "additionalProperties": False,
+                     "properties": {
+                         "items": {"type": "array", "minItems": 1, "maxItems": 20,
+                                   "items": {"type": "object", "additionalProperties": False,
+                                             "properties": {
+                                                 "job_id": {"type": "string"},
+                                                 "media_id": {"type": "string"},
+                                                 "text": {"type": "string", "maxLength": 280},
+                                                 "x": {"type": "number"}, "y": {"type": "number"},
+                                                 "w": {"type": "number"}, "h": {"type": "number"},
+                                                 "caption": {"type": "string", "maxLength": 280},
+                                                 "shot": {"type": "string", "maxLength": 60}}}},
+                         "arrange": {"enum": ["auto", "none"], "default": "auto"}}}},
+
+    {"name": "move",
+     "description": "Move or resize elements. Moving one inside a shot moves the shot with it.",
+     "inputSchema": {"type": "object", "required": ["moves"], "additionalProperties": False,
+                     "properties": {"moves": {"type": "array", "minItems": 1, "maxItems": 50,
+                                              "items": {"type": "object",
+                                                        "required": ["element_id"],
+                                                        "additionalProperties": False,
+                                                        "properties": {
+                                                            "element_id": {"type": "string"},
+                                                            "x": {"type": "number"},
+                                                            "y": {"type": "number"},
+                                                            "w": {"type": "number"},
+                                                            "h": {"type": "number"}}}}}}},
+
+    {"name": "arrange",
+     "description": ("Lay the canvas out. Use storyboard after every batch — one row per shot, "
+                     "caption beneath — rather than computing coordinates by hand."),
+     "inputSchema": {"type": "object", "additionalProperties": False,
+                     "properties": {
+                         "layout": {"enum": ["grid", "row", "column", "storyboard"],
+                                    "default": "grid"},
+                         "element_ids": {"type": "array", "items": {"type": "string"}},
+                         "columns": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
+                         "gutter": {"type": "integer", "minimum": 0, "maximum": 200,
+                                    "default": 24},
+                         "origin": {"type": "object", "additionalProperties": False,
+                                    "properties": {"x": {"type": "number"},
+                                                   "y": {"type": "number"}}}}}},
+
+    {"name": "remove",
+     "description": ("Take elements off the canvas. This never deletes media — the file stays and "
+                     "can be placed again, so tidying a canvas is safe."),
+     "inputSchema": {"type": "object", "required": ["element_ids"], "additionalProperties": False,
+                     "properties": {"element_ids": {"type": "array", "minItems": 1, "maxItems": 50,
+                                                    "items": {"type": "string"}}}}},
+
+    {"name": "set_timeline",
+     "description": ("The cut: which shots, in what order, at what length. ARRAY ORDER IS THE CUT "
+                     "ORDER — it is never inferred from where things sit on the canvas. "
+                     "`overlays` are layers above the cut: each names the second of the film it "
+                     "appears at, so adding one never moves the shots underneath. A layer fills "
+                     "the frame unless given a smaller `scale`, and the film stays as long as "
+                     "its shots — a layer running past the end is trimmed."),
+     "inputSchema": {"type": "object", "required": ["shots"], "additionalProperties": False,
+                     "properties": {
+                         "shots": {"type": "array", "minItems": 1, "maxItems": 40,
+                                   "items": {"type": "object", "required": ["element_id"],
+                                             "additionalProperties": False,
+                                             "properties": {"element_id": {"type": "string"},
+                                                            "in_s": {"type": "number",
+                                                                     "minimum": 0},
+                                                            "out_s": {"type": "number",
+                                                                      "minimum": 0}}}},
+                         "audio": {"type": "array", "maxItems": 8,
+                                   "items": {"type": "object", "required": ["element_id"],
+                                             "additionalProperties": False,
+                                             "properties": {"element_id": {"type": "string"},
+                                                            "start_s": {"type": "number",
+                                                                        "minimum": 0,
+                                                                        "default": 0},
+                                                            "gain_db": {"type": "number",
+                                                                        "minimum": -40,
+                                                                        "maximum": 6,
+                                                                        "default": 0}}}},
+                         "overlays": {"type": "array", "maxItems": 12,
+                                      "items": {"type": "object",
+                                                "required": ["element_id", "start_s"],
+                                                "additionalProperties": False,
+                                                "properties": {
+                                                    "element_id": {"type": "string"},
+                                                    "start_s": {"type": "number", "minimum": 0},
+                                                    "in_s": {"type": "number", "minimum": 0},
+                                                    "out_s": {"type": "number", "minimum": 0},
+                                                    "layer": {"type": "integer", "minimum": 1,
+                                                              "maximum": 8, "default": 1},
+                                                    "scale": {"type": "number", "minimum": 0.05,
+                                                              "maximum": 1, "default": 1},
+                                                    "position": {"enum": ["full", "tl", "tr",
+                                                                          "bl", "br", "center"],
+                                                                 "default": "full"}}}},
+                         "fps": {"enum": [24, 25, 30], "default": 30},
+                         "resolution": {"enum": ["1920x1080", "1080x1920", "1080x1080"],
+                                        "default": "1920x1080"}}}},
+
+    {"name": "export_timeline",
+     "description": ("Assemble the timeline into one video. Refuses while any shot is still "
+                     "rendering. Progress is reported as a real count of shots, never an ETA."),
+     "inputSchema": {"type": "object", "additionalProperties": False,
+                     "properties": {"filename": {"type": "string", "maxLength": 120}}}},
+]
+
+# The refusal a tool gives when the credential carries no session. There is nowhere to put media,
+# so saying so beats generating something that lands nowhere.
+_MEDIA_NO_SESSION = ("This agent has no workspace, so there is nowhere to place media. "
+                     "Nothing was generated.")
+
+
+def _media_json_text(obj) -> dict:
+    return _tool_text(json.dumps(obj, ensure_ascii=False))
+
+
+# ── the schemas above, enforced ───────────────────────────────────────────────────────────────
+# Every tool declares its arguments and NOTHING CHECKED THEM. The bodies coerced by hand and
+# assumed the declaration had held: `float(args["seconds"])` is a ValueError on the string "six"
+# and a TypeError on {"n": 6}; `for j in args["job_ids"]` is a TypeError on a bare 5; a mistyped
+# argument name read as "that argument was not sent". None of those are in the MediaError tree, so
+# each one left the agent with an HTTP 500 — and a model writing "six" where a number goes is an
+# ordinary turn, not an attack. The schema was already written; this makes it true.
+_MCP_TYPES = {"string": str, "array": list, "object": dict}
+_MCP_TYPE_WORDS = {"string": "a string", "number": "a number", "integer": "a whole number",
+                   "boolean": "true or false", "array": "a list", "object": "an object"}
+
+
+def _mcp_kind(v) -> str:
+    """What a value IS, in the same words a refusal asks for."""
+    if v is None:
+        return "nothing"
+    if isinstance(v, bool):
+        return "true or false"
+    if isinstance(v, (int, float)):
+        return "a number"
+    return {str: "a string", list: "a list"}.get(type(v), "an object")
+
+
+def _mcp_type_ok(want: str, v) -> bool:
+    """Does `v` match a declared `type`? `True` is an int in Python and is not a number in JSON."""
+    if want in ("number", "integer"):
+        return (not isinstance(v, bool)
+                and isinstance(v, int if want == "integer" else (int, float)))
+    if want == "boolean":
+        return isinstance(v, bool)
+    py = _MCP_TYPES.get(want)
+    return py is None or isinstance(v, py)
+
+
+def _mcp_argument_refusal(schema: dict, value, where: str = "") -> str:
+    """The first way `value` does not match `schema`, said to the agent — "" when it does.
+
+    THE PART OF THE SCHEMA THAT IS ABOUT SHAPE, and deliberately not the rest. `type`, `required`,
+    `enum` and `additionalProperties` are what a tool body assumes before it touches an argument,
+    and a wrong shape is what raises. `minimum`, `maxLength` and `pattern` are NOT enforced here:
+    those are value limits that the tool bodies and the media plane already answer for themselves,
+    and a second opinion on a limit, kept in step by hand, is the exact thing this file keeps
+    finding. One rule, one place.
+    """
+    at = f" for {where}" if where else ""
+    if "enum" in schema and value not in schema["enum"]:
+        return (f"{where or 'that'} has to be one of "
+                f"{', '.join(json.dumps(e) for e in schema['enum'])}; "
+                f"{json.dumps(value)[:60]} was sent.")
+    want = str(schema.get("type") or "")
+    if want and not _mcp_type_ok(want, value):
+        return (f"{where or 'that argument'} has to be {_MCP_TYPE_WORDS.get(want, want)}; "
+                f"{_mcp_kind(value)} was sent.")
+    if isinstance(value, dict):
+        props = schema.get("properties") or {}
+        for req in schema.get("required") or []:
+            if req not in value:
+                return f"{req} is required{at} and was not sent."
+        if schema.get("additionalProperties") is False:
+            for k in value:
+                if k not in props:
+                    return (f"there is no argument called {k}{at} — the ones it takes are "
+                            f"{', '.join(sorted(props)) or 'none'}.")
+        for k, v in value.items():
+            bad = _mcp_argument_refusal(props[k], v, f"{where}.{k}" if where else k) \
+                if k in props else ""
+            if bad:
+                return bad
+    elif isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for i, v in enumerate(value):
+            bad = _mcp_argument_refusal(schema["items"], v, f"{where}[{i}]")
+            if bad:
+                return bad
+    return ""
+
+
+async def _media_read_image(sid: str, med: str) -> tuple[str, str]:
+    """(base64, mime) for one image OUT OF OUR OWN STORE. Never out of a provider URL: those
+    expire, and a continuity frame that stops resolving is a different character in shot four."""
+    meta = await _media_meta(sid, med)
+    if not meta:
+        raise media_plane.MediaError(f"There is no media with the id {med} in this session.")
+    data = await _blob_get(_media_blob(sid, med, str(meta.get("ext") or "png")), kb=BLOB_KB)
+    if not data:
+        raise media_plane.MediaError(f"The file behind {med} is no longer readable.")
+    return base64.b64encode(data).decode(), str(meta.get("mime") or "image/png")
+
+
+async def _media_resolve_input_image(sid: str, ref: str) -> tuple[str, str, str]:
+    """(media id, base64, mime) for a media id or job id the agent named as the input to a render.
+
+    The id comes back too: it is what gets written down, so a chain that has to advance can
+    re-read the frame instead of carrying megabytes of base64 on a graph vertex.
+    """
+    med = ref
+    if ref.startswith("mjob_"):
+        job = await _media_job_get(ref)
+        if not job or str(job.get("session") or "") != sid:
+            raise media_plane.MediaError(f"No job with the id {ref} in this session.")
+        if not job.get("media_id"):
+            raise media_plane.MediaError(f"Job {ref} has produced nothing to work from yet.")
+        med = str(job["media_id"])
+
+    # NAMING A CLIP MEANS "CARRY ON FROM WHERE THAT ONE ENDED", and the frame it ended on is the
+    # only thing that can express it: the still that seeded a shot is where the shot BEGAN, and
+    # five seconds of movement later the world has moved on. Handing the mp4 over as though it
+    # were an image is what happened before — a video sent to an image input, paid for, refused.
+    meta = await _media_meta(sid, med) or {}
+    if str(meta.get("mime") or "").startswith("video/") or str(meta.get("ext") or "") == "mp4":
+        data = await _blob_get(_media_blob(sid, med, str(meta.get("ext") or "mp4")), kb=BLOB_KB)
+        if not data:
+            raise media_plane.MediaError(f"The clip behind {med} is no longer readable.")
+        tmp = tempfile.mkdtemp(prefix="hr-frame-")
+        try:
+            path = os.path.join(tmp, f"clip.{meta.get('ext') or 'mp4'}")
+            pathlib.Path(path).write_bytes(data)
+            frame = await media_plane.to_thread(media_plane.grab_frame, path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return med, base64.b64encode(frame).decode(), "image/jpeg"
+
+    b64, mime = await _media_read_image(sid, med)
+    return med, b64, mime
+
+
+async def _media_tool_call(name: str, args: dict, hid: str, sid: str, org: str,
+                           entry_id: str) -> dict:
+    """One tool. Every failure is a TOOL RESULT and never an HTTP error, because an agent can read
+    a sentence and cannot read a 500."""
+    # ---- what can be made ----
+    if name == "list_capabilities":
+        providers = await _media_providers()
+        out = []
+        for cap_name in media_plane.capability_names():
+            cap = media_plane.capability(cap_name)
+            if cap.get("local"):
+                ok = media_plane.have_ffmpeg()
+                out.append({"name": cap_name, "available": ok, "model": None,
+                            "limits": {"max_shots": cap.get("max_shots"),
+                                       "max_total_s": cap.get("max_total_s")},
+                            **({} if ok else {"reason": "This deployment cannot assemble video — "
+                                                        "ffmpeg is not installed."})})
+                continue
+            probe = {"seconds": 6} if cap_name.endswith("_video") else {}
+            if cap_name.startswith("image_to"):
+                probe["image"] = "probe"
+            cand, skipped = media_plane.resolve(cap_name, probe, set(providers),
+                                                _media_quarantine)
+            row = {"name": cap_name, "available": bool(cand),
+                   "model": str(cand.get("model")) if cand else None,
+                   "limits": media_plane.limits_of(cand) if cand else {}}
+            usd = media_plane.estimated_usd(cand) if cand else None
+            if usd is not None:
+                row["estimated_usd_per_unit"] = usd
+            if not cand:
+                # The first thing the chain skipped, which is the most specific reason there is.
+                # A capability-level refusal string used to win here; it was a second answer to
+                # the same question, kept in step with the candidates by hand.
+                row["reason"] = skipped[0] if skipped else "No connected provider serves it."
+            if skipped:
+                row["skipped"] = [{"reason": s} for s in skipped[:6]]
+            out.append(row)
+        return _media_json_text({"capabilities": out})
+
+    # ---- generation ----
+    if name in ("generate_video", "generate_image", "generate_speech", "generate_music"):
+        if not sid:
+            return _tool_text(_MEDIA_NO_SESSION, True)
+        spent = await _media_spend(sid)
+        if spent >= media_plane.SESSION_BUDGET_USD:
+            return _tool_text(
+                f"This video has already cost ${spent:.2f}, which is the ${media_plane.SESSION_BUDGET_USD:.2f} "
+                f"limit for one session. Nothing was generated. Ask the person whether to carry "
+                f"on — you cannot raise the limit yourself.", True)
+        params: dict = {}
+        notes: list[str] = []
+        if name == "generate_video":
+            params = {"prompt": str(args.get("prompt") or ""),
+                      "seconds": float(args.get("seconds") or 0),
+                      "allow_watermark": bool(args.get("allow_watermark"))}
+            if args.get("aspect"):
+                # CARRIED, not dropped. It goes into `params` and therefore onto the job, which is
+                # what makes it hold on the poll walk too: a chain that advances re-resolves out
+                # of the same params, so the second candidate is filtered by the same rule as the
+                # first and cannot quietly hand back a landscape clip.
+                params["aspect"] = str(args["aspect"])
+            cap = "text_to_video"
+        elif name == "generate_image":
+            size = str(args.get("size") or "1024x1024")
+            params = {"prompt": str(args.get("prompt") or ""), "size": size}
+            cap = "text_to_image"
+        elif name == "generate_music":
+            # The same path as every other generation, so the refusal is the chain's own answer
+            # rather than a second sentence kept in step by hand. It exists as a tool at all so
+            # that "no music model" is a stated fact and not a missing tool a model works around
+            # by reaching for speech.
+            params = {"prompt": str(args.get("prompt") or "")}
+            if args.get("seconds"):
+                params["seconds"] = float(args["seconds"])
+            cap = "text_to_music"
+        else:
+            # THE LINE, AS ASKED FOR. What each model has to be TOLD to make it read that line is
+            # the model's own business and is applied per candidate in `build_submit` — this used
+            # to wrap it in "Read this aloud exactly as written…" here, before any model had been
+            # chosen, which is an instruction about gpt-audio handed to whatever ran. A real
+            # reader reads it out.
+            params = {"prompt": str(args.get("text") or "")}
+            if args.get("voice"):
+                # ONLY WHEN THE CALLER NAMED ONE. A default written here would be one provider's
+                # voice name applied to every provider — `alloy` was, and it skipped the model
+                # that reads on every call that named no voice, because it has no voice by that
+                # name and `can_serve` correctly said so.
+                params["voice"] = str(args["voice"])
+            cap = "text_to_speech"
+        if args.get("from_image"):
+            try:
+                med, b64, mime = await _media_resolve_input_image(sid, str(args["from_image"]))
+            except media_plane.MediaError as e:
+                return _tool_text(str(e), True)
+            params.update({"image": b64, "image_mime": mime, "from_media": med})
+            cap = "image_to_video" if name == "generate_video" else "image_to_image"
+        try:
+            # The budget is opened HERE, around the whole generation, because it belongs to the
+            # call and not to the walk: the synchronous shapes bill inside `_media_generate` too.
+            async with _media_budget_for(sid) as budget:
+                job = await _media_generate(cap, params, hid, sid, org, entry_id, budget,
+                                            shot=str(args.get("shot") or ""))
+        except _MediaNoModel as e:
+            return _tool_text(e.text, True)
+        except media_plane.MediaError as e:
+            return _tool_text(str(e), True)
+        cand = _media_candidate(cap, str(job["model"])) or {}
+        out = {"job_id": job["id"], "capability": cap, "model": job["model"],
+               "status": job["status"]}
+        if name == "generate_video":
+            out["seconds"] = params["seconds"]
+            allowed = cand.get("durations_s")
+            if allowed:
+                notes.append(f"This model renders {' and '.join(str(a) for a in allowed)} s only; "
+                             f"{params['seconds']:g} s was requested and accepted.")
+            elif cand.get("duration_ignored"):
+                # Measured: it takes the duration and returns whatever length it likes. Anything
+                # that needs an exact length has to read the one that actually landed.
+                obs = cand.get("duration_observed_s")
+                notes.append("This model does not honour a requested duration"
+                             + (f" — the clip measured came back {float(obs):g} s" if obs else "")
+                             + ". check_jobs reports the real length once it lands; cut from that "
+                               "rather than from the seconds you asked for.")
+        # THE SHAPE THAT WAS ACTUALLY SECURED, on the same footing as the model that ran. It can
+        # only be the one asked for — a candidate that could not hold it was skipped — so what is
+        # worth saying is HOW, because "it was told" and "it is only ever that" are different
+        # promises and only one of them survives the model being swapped.
+        if params.get("aspect"):
+            out["aspect"] = params["aspect"]
+            told = media_plane.aspect_size(cand, params["aspect"])
+            if told:
+                notes.append(f"{cand['model']} was asked for a {told} frame.")
+            elif cand.get("resolution"):
+                notes.append(f"{cand['model']} renders {cand['resolution']} and nothing else, "
+                             f"which is {params['aspect']}.")
+        if name == "generate_image":
+            # ONLY WHAT THE PROVIDER WAS ACTUALLY TOLD. This used to echo the requested size on
+            # every call, including the rank-1 gemini models whose params are ["prompt"] and which
+            # are never sent one — a number printed beside the model that never received it.
+            told = media_plane.size_for(cand, params)
+            if told:
+                out["size"] = told
+            else:
+                notes.append("This model cannot be told a frame size, so the one you asked for "
+                             "was not sent. check_jobs reports the size that actually landed.")
+        if job.get("usd"):
+            out["estimated_usd"] = round(float(job["usd"]), 4)
+        if job.get("attempts"):
+            out["attempts"] = job["attempts"]
+        if job.get("media_id"):
+            out["media_id"] = job["media_id"]
+        if name == "generate_speech":
+            # THE VOICE THAT WAS ACTUALLY SENT, on the same footing as the model — computed by the
+            # one function the submit is built from, so the two cannot disagree. Absent where the
+            # model has no voices to be told about.
+            told = media_plane.voice_for(cand, params)
+            if told:
+                out["voice"] = told
+            if cand.get("answers_prompts"):
+                # ABOUT THE MODEL THAT RAN, not about the capability. This sentence used to be on
+                # every result, including the ones from a model that reads what it is given —
+                # where it is a warning about a defect the caller does not have, and an
+                # instruction to compare a transcript that does not exist.
+                out["warning"] = ("This model answers prompts rather than reading them. check_jobs "
+                                  "returns spoken_text — compare it with what you asked for before "
+                                  "you use the audio.")
+            if job.get("spoken_text"):
+                out["spoken_text"] = job["spoken_text"]
+                out["verbatim"] = media_plane.levenshtein_ratio(
+                    params.get("prompt") or "", str(job["spoken_text"])) >= 0.9
+        if notes:
+            out["note"] = " ".join(notes)
+        return _media_json_text(out)
+
+    if name == "check_jobs":
+        ids = [str(j) for j in (args.get("job_ids") or [])][:50]
+        rows = []
+        # ONE BUDGET FOR THE WHOLE CALL, not one per job. A poll that answers FAILURE advances
+        # the chain, and an advance is an outbound submit — so six failing jobs in one check_jobs
+        # meant six of them, from what the agent issued as a READ. The same budget a generate
+        # call opens, for the same reason: overlapping work on one session shares one ceiling.
+        async with _media_budget_for(sid) as budget:
+            for jid in ids:
+                job = await _media_job_get(jid)
+                if not job or str(job.get("session") or "") != sid:
+                    # NEVER omitted: a missing row reads as "still running".
+                    rows.append({"job_id": jid, "status": "failed",
+                                 "error": "No job with that id in this session."})
+                    continue
+                try:
+                    job = await _media_job_advance(job, budget)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[media] advance {jid}: {type(e).__name__}", flush=True)
+                row = {"job_id": jid, "status": job.get("status"),
+                       "capability": job.get("capability"), "model": job.get("model")}
+                if job.get("status") == "running" and job.get("last_poll") == "unknown":
+                    # The known background-response race. Said plainly, because a model
+                    # that reads an empty record as failure throws away a render that is
+                    # about to land.
+                    row["status"] = "unknown"
+                    row["note"] = ("The provider returned an empty record. This is transient "
+                                   "— ask again.")
+                if job.get("status") == "succeeded":
+                    row.update({"media_id": job.get("media_id"),
+                                "kind": _MEDIA_KIND.get(str(job.get("capability")), "image"),
+                                "seconds": job.get("seconds") or None,
+                                "width": job.get("width") or None,
+                                "height": job.get("height") or None,
+                                "bytes": job.get("bytes") or None})
+                    if job.get("usd"):
+                        row["usd"] = round(float(job["usd"]), 4)
+                    if job.get("spoken_text"):
+                        row["spoken_text"] = job["spoken_text"]
+                        row["verbatim"] = media_plane.levenshtein_ratio(
+                            (job.get("params") or {}).get("prompt") or "",
+                            str(job["spoken_text"])) >= 0.9
+                elif job.get("status") == "failed":
+                    row["error"] = job.get("error") or "the render failed"
+                    if job.get("attempts"):
+                        row["attempts"] = job["attempts"]
+                elif job.get("progress"):
+                    row["progress"] = job["progress"]
+                if job.get("element_id"):
+                    row["element_id"] = job["element_id"]
+                rows.append(row)
+        # `unknown` never appears as a terminal state here; it is a poll that came back empty and
+        # the tool description says to ask again.
+        return _media_json_text({"jobs": rows})
+
+    # ---- the canvas ----
+    if not sid:
+        return _tool_text(_MEDIA_NO_SESSION, True)
+
+    if name == "describe_canvas":
+        scene = await _media_scene_read(sid)
+        els = [e for e in scene.get("elements") or [] if not e.get("isDeleted")]
+        tl = scene.get("timeline") or {}
+        shots = {}
+        for e in els:
+            label = ((e.get("customData") or {}).get("shot") or "")
+            if label:
+                shots.setdefault(label, []).append(e.get("id"))
+        x, y = media_plane.next_free(els)
+        return _media_json_text({
+            "scene_rev": int(float((scene.get("meta") or {}).get("rev") or 0)),
+            "bounds": media_plane.scene_bounds(els),
+            "elements": [media_plane.element_summary(e) for e in els],
+            "shots": [{"name": k, "element_ids": v} for k, v in shots.items()],
+            "timeline": {"shots": len(tl.get("shots") or []),
+                         "total_seconds": media_plane.timeline_total(scene),
+                         "fps": tl.get("fps"), "resolution": tl.get("resolution")},
+            "free_space": {"x": x, "y": y}})
+
+    if name == "place":
+        items = args.get("items") or []
+        for i, it in enumerate(items, 1):
+            named = [k for k in ("job_id", "media_id", "text") if it.get(k)]
+            if len(named) != 1:
+                return _tool_text(f"An item must name a job, a media id or text — item {i} named "
+                                  f"{'both' if len(named) > 1 else 'neither'}.", True)
+        placed: list[dict] = []
+        # "auto" packs anything you gave no coordinates for into the next free row. "none" means
+        # exactly that: an item with no coordinates lands at the canvas origin and moving it is
+        # yours to do. A parameter whose two values behave identically is a lie in a schema.
+        auto = str(args.get("arrange") or "auto") == "auto"
+
+        prepared = []
+        for it in items:
+            if it.get("job_id"):
+                job = await _media_job_get(str(it["job_id"]))
+                if not job or str(job.get("session") or "") != sid:
+                    return _tool_text(f"No job with the id {it['job_id']} in this session.", True)
+                prepared.append((it, job, None))
+            elif it.get("media_id"):
+                meta = await _media_meta(sid, str(it["media_id"]))
+                if not meta:
+                    return _tool_text(f"There is no media with the id {it['media_id']} in this "
+                                      f"session.", True)
+                prepared.append((it, None, meta))
+            else:
+                prepared.append((it, None, None))
+
+        def mutate(scene: dict):
+            els = scene.get("elements") or []
+            for it, job, meta in prepared:
+                x, y = it.get("x"), it.get("y")
+                if x is None or y is None:
+                    x, y = (media_plane.next_free([e for e in els if not e.get("isDeleted")])
+                            if auto else (0.0, 0.0))
+                w = float(it.get("w") or media_plane.TILE_W)
+                h = float(it.get("h") or media_plane.TILE_H)
+                # The job's own label is the default, and a label named here overrides it: an
+                # agent that renames a shot while placing it means the rename. Without the
+                # fallback, the `shot` argument on the generate tools promised a grouping that
+                # only happened if the agent typed the same label a second time.
+                shot = str(it.get("shot") or (job or {}).get("shot") or "")
+                if it.get("text"):
+                    # `h` only when it was actually asked for. A caption's height is CAPTION_H and
+                    # not the tile default, so passing the computed `h` unconditionally would make
+                    # every caption a tile tall — but ignoring an `h` the caller DID send is the
+                    # same declared-and-unread defect as the two this commit is about.
+                    el = media_plane.text_element(str(it["text"]), x=x, y=y, w=w,
+                                                  **({"h": float(it["h"])} if it.get("h") else {}))
+                else:
+                    kind = (_MEDIA_KIND.get(str((job or {}).get("capability")), "image")
+                            if job else str((meta or {}).get("kind") or "image"))
+                    med = str((job or {}).get("media_id") or (meta or {}).get("media_id") or "")
+                    ready = bool(med)
+                    el = media_plane.media_element(
+                        kind, x=x, y=y, w=w, h=h, media_id=med,
+                        job_id=str((job or {}).get("id") or ""),
+                        status="ready" if ready else str((job or {}).get("status") or "running"),
+                        model=str((job or {}).get("model") or (meta or {}).get("model") or ""),
+                        cap=str((job or {}).get("capability") or (meta or {}).get("capability") or ""),
+                        seconds=float((job or {}).get("seconds") or (meta or {}).get("seconds") or 0),
+                        width=int((job or {}).get("width") or (meta or {}).get("width") or 0),
+                        height=int((job or {}).get("height") or (meta or {}).get("height") or 0),
+                        prompt=str(((job or {}).get("params") or {}).get("prompt")
+                                   or (meta or {}).get("prompt") or ""),
+                        label=shot,
+                        media_url=_media_url(hid, entry_id, sid, med) if med else "")
+                    if kind == "image" and med:
+                        scene.setdefault("files", {})[med] = media_plane.file_entry(
+                            med, str((meta or {}).get("mime") or "image/png"),
+                            _media_url(hid, entry_id, sid, med))
+                    if job:
+                        job["element_id"] = el["id"]
+                if shot:
+                    el.setdefault("customData", {})["shot"] = shot
+                els.append(el)
+                placed.append({"element_id": el["id"], "kind": media_plane.media_of(el).get("kind")
+                               or "text", "status": media_plane.media_of(el).get("status"),
+                               "x": el["x"], "y": el["y"], "w": el["width"], "h": el["height"],
+                               **({"job_id": it["job_id"]} if it.get("job_id") else {}),
+                               **({"media_id": it["media_id"]} if it.get("media_id") else {})})
+                if it.get("caption"):
+                    cap_el = media_plane.text_element(str(it["caption"]), x=el["x"],
+                                                      y=el["y"] + el["height"] + 8, w=el["width"])
+                    if shot:
+                        cap_el.setdefault("customData", {})["shot"] = shot
+                    els.append(cap_el)
+                    placed.append({"element_id": cap_el["id"], "kind": "text",
+                                   "x": cap_el["x"], "y": cap_el["y"], "w": cap_el["width"],
+                                   "h": cap_el["height"]})
+            scene["elements"] = els
+            return None
+
+        rev, _ = await _media_scene_touch(sid, mutate)
+        for _it, job, _meta in prepared:
+            if job and job.get("element_id"):
+                await _media_job_save(job)
+        return _media_json_text({"scene_rev": rev, "placed": placed})
+
+    if name == "move":
+        moves = {str(m.get("element_id")): m for m in (args.get("moves") or [])}
+        moved: list[str] = []
+        missing: list[str] = []
+
+        def mutate(scene: dict):
+            by_id = {e.get("id"): e for e in scene.get("elements") or []}
+            for eid, m in moves.items():
+                el = by_id.get(eid)
+                if not el:
+                    missing.append(eid)
+                    continue
+                dx = float(m["x"]) - float(el.get("x") or 0) if m.get("x") is not None else 0.0
+                dy = float(m["y"]) - float(el.get("y") or 0) if m.get("y") is not None else 0.0
+                for key, src in (("x", "x"), ("y", "y"), ("width", "w"), ("height", "h")):
+                    if m.get(src) is not None:
+                        el[key] = float(m[src])
+                moved.append(eid)
+                shot = (el.get("customData") or {}).get("shot")
+                if shot and (dx or dy):
+                    # Moving one element of a shot moves the shot: a caption left behind is a
+                    # caption under the wrong clip.
+                    for other in scene.get("elements") or []:
+                        if other is el or (other.get("customData") or {}).get("shot") != shot:
+                            continue
+                        other["x"] = float(other.get("x") or 0) + dx
+                        other["y"] = float(other.get("y") or 0) + dy
+            return None
+
+        rev, _ = await _media_scene_touch(sid, mutate)
+        return _media_json_text({"scene_rev": rev, "moved": moved, "not_found": missing})
+
+    if name == "arrange":
+        layout = str(args.get("layout") or "grid")
+        want = {str(e) for e in (args.get("element_ids") or [])}
+        columns = int(args.get("columns") or 4)
+        gutter = int(args.get("gutter") if args.get("gutter") is not None else media_plane.GUTTER)
+        origin = args.get("origin") or {}
+        ox = float(origin.get("x", 40)); oy = float(origin.get("y", 40))
+        positions: list[dict] = []
+
+        def mutate(scene: dict):
+            positions.clear()          # mutate may be re-run; positions is the caller's answer
+            els = [e for e in scene.get("elements") or [] if not e.get("isDeleted")]
+            # Named ids, or every media element when none were named. A named set that matches
+            # nothing arranges NOTHING — falling back to "everything" would rearrange a board the
+            # caller was trying to leave alone.
+            chosen = ([e for e in els if e.get("id") in want] if want
+                      else [e for e in els if media_plane.is_media(e)])
+            if layout == "storyboard":
+                items = media_plane.storyboard_items(els, chosen)
+            else:
+                items = [{"id": e.get("id"),
+                          "w": float(e.get("width") or media_plane.TILE_W),
+                          "h": float(e.get("height") or media_plane.TILE_H)} for e in chosen]
+            positions.extend(media_plane.layout_positions(items, layout, columns=columns,
+                                                          gutter=gutter, origin=(ox, oy)))
+            by_id = {e.get("id"): e for e in els}
+            for p in positions:
+                el = by_id.get(p["element_id"])
+                if el:
+                    el["x"], el["y"] = float(p["x"]), float(p["y"])
+            return None
+
+        rev, _ = await _media_scene_touch(sid, mutate)
+        return _media_json_text({"scene_rev": rev, "positions": positions})
+
+    if name == "remove":
+        ids = {str(e) for e in (args.get("element_ids") or [])}
+        removed: list[str] = []
+        missing: list[str] = []
+
+        def mutate(scene: dict):
+            keep = []
+            found = set()
+            for el in scene.get("elements") or []:
+                if el.get("id") in ids:
+                    found.add(el.get("id"))
+                    continue
+                keep.append(el)
+            scene["elements"] = keep
+            removed.extend(sorted(found))
+            missing.extend(sorted(ids - found))
+            tl = scene.get("timeline") or {}
+            tl["shots"] = [s for s in tl.get("shots") or [] if s.get("elementId") not in ids]
+            tl["audio"] = [a for a in tl.get("audio") or [] if a.get("elementId") not in ids]
+            return None
+
+        rev, _ = await _media_scene_touch(sid, mutate)
+        # Said in the return, because an agent that believes remove is destructive will not tidy.
+        return _media_json_text({"scene_rev": rev, "removed": removed, "not_found": missing,
+                                 "media_kept": True})
+
+    if name == "set_timeline":
+        shots_in = args.get("shots") or []
+        audio_in = args.get("audio") or []
+        overlays_in = args.get("overlays") or []
+        cap = media_plane.capability("export")
+        max_shots = int(cap.get("max_shots") or 40)
+        if len(shots_in) > max_shots:
+            return _tool_text(f"A timeline holds at most {max_shots} shots; this one has "
+                              f"{len(shots_in)}.", True)
+        warnings: list[str] = []
+        # NAMING SOMETHING THAT IS NOT THERE IS A MISTAKE, NOT A NOTE IN THE MARGIN. Skipping it
+        # and reporting a warning wrote a cut that quietly lacked what was asked for: a real run
+        # lost its whole music bed that way — the ids had gone stale, every entry was dropped,
+        # the film exported without a note of music in it and nothing failed. A warning the
+        # caller is free to ignore is not a guard when the result is silence.
+        bad: list[str] = []
+        result: dict = {}
+
+        def mutate(scene: dict):
+            by_id = {e.get("id"): e for e in scene.get("elements") or []}
+            shots = []
+            for i, s in enumerate(shots_in, 1):
+                eid = str(s.get("element_id") or "")
+                el = by_id.get(eid)
+                if not el:
+                    bad.append(f"Shot {i} names {eid}, which is not on the canvas.")
+                    continue
+                m = media_plane.media_of(el)
+                if m.get("status") != "ready":
+                    warnings.append(f"Shot {i} ({eid}) is still rendering — export will refuse "
+                                    f"until it lands.")
+                w, h = int(m.get("width") or 0), int(m.get("height") or 0)
+                res = str(args.get("resolution") or "1920x1080")
+                rw, rh = media_plane.parse_size(res)
+                if w and h and rw and rh and abs(w / h - rw / rh) > 0.02:
+                    warnings.append(f"Shot {i} is {w}x{h} and will be letterboxed into {res}.")
+                # Normalised on the way IN, so what is stored is what will be filmed. Written
+                # raw, a still the agent placed without a duration was stored as outS 0 — in the
+                # cut, absent from the film, and nothing anywhere said why.
+                a, b, _ = media_plane.shot_window(
+                    {"inS": s.get("in_s"), "outS": s.get("out_s")}, m)
+                shots.append({"elementId": eid, "inS": a, "outS": b})
+            # CHECKED THE SAME WAY THE SHOTS ARE. Written blind, a bed naming an element that
+            # is gone — an id that changed when the clip was placed again — stayed in the
+            # document, was dropped without a word at export, and the film came out silent.
+            audio = []
+            for i, a in enumerate(audio_in, 1):
+                eid = str(a.get("element_id") or "")
+                m = media_plane.media_of(by_id.get(eid) or {})
+                if not m:
+                    bad.append(f"Sound {i} names {eid}, which is not on the canvas.")
+                    continue
+                if m.get("kind") != "audio":
+                    bad.append(f"Sound {i} names {eid}, which is a {m.get('kind')} rather than a "
+                              f"sound. Put it in `shots` or `overlays`.")
+                    continue
+                if m.get("status") != "ready":
+                    warnings.append(f"Sound {i} ({eid}) is still rendering — export will refuse "
+                                    f"until it lands.")
+                audio.append({"elementId": eid, "startS": float(a.get("start_s") or 0.0),
+                              "gainDb": float(a.get("gain_db") or 0.0)})
+            # A LAYER IS PLACED, NOT QUEUED. An overlay names the moment on the film's clock
+            # where it appears, so adding one never moves the shots underneath it.
+            overlays = []
+            for i, o in enumerate(overlays_in, 1):
+                eid = str(o.get("element_id") or "")
+                el = by_id.get(eid)
+                if not el:
+                    bad.append(f"Layer {i} names {eid}, which is not on the canvas.")
+                    continue
+                m = media_plane.media_of(el)
+                a, b, _ = media_plane.shot_window(
+                    {"inS": o.get("in_s"), "outS": o.get("out_s")}, m)
+                pos = str(o.get("position") or "full")
+                if pos not in media_plane.OVERLAY_POS:
+                    warnings.append(f"Layer {i} asks to sit {pos!r}; it will fill the frame.")
+                    pos = "full"
+                overlays.append({"elementId": eid, "layer": max(1, int(o.get("layer") or 1)),
+                                 "startS": max(0.0, float(o.get("start_s") or 0.0)),
+                                 "inS": a, "outS": b, "position": pos,
+                                 "scale": min(1.0, max(0.05, float(o.get("scale") or 1.0)))})
+            scene["timeline"] = {"v": 1, "fps": int(args.get("fps") or 30),
+                                 "resolution": str(args.get("resolution") or "1920x1080"),
+                                 # ARRAY ORDER IS THE CUT ORDER. Never derived from canvas
+                                 # position: dragging a card would silently re-cut the film.
+                                 "shots": shots, "audio": audio, "overlays": overlays,
+                                 "updatedAt": int(time.time() * 1000)}
+            result["total"] = media_plane.timeline_total(scene)
+            result["ready"] = bool(shots) and all(
+                media_plane.media_of(by_id.get(s["elementId"], {})).get("status") == "ready"
+                for s in shots)
+            result["n"] = len(shots)
+            result["layers"] = len(overlays)
+            return None
+
+        # Checked against the canvas BEFORE anything is written, so a refusal leaves the cut
+        # exactly as it was rather than half-replaced.
+        probe = await _media_scene_read(sid)
+        by_id = {e.get("id"): e for e in probe.get("elements") or []}
+        check_bad: list[str] = []
+        for i, s_in in enumerate(shots_in, 1):
+            if str(s_in.get("element_id") or "") not in by_id:
+                check_bad.append(f"Shot {i} names {s_in.get('element_id')}, which is not on the "
+                                 f"canvas.")
+        for i, a_in in enumerate(audio_in, 1):
+            m = media_plane.media_of(by_id.get(str(a_in.get("element_id") or "")) or {})
+            if not m:
+                check_bad.append(f"Sound {i} names {a_in.get('element_id')}, which is not on the "
+                                 f"canvas.")
+            elif m.get("kind") != "audio":
+                check_bad.append(f"Sound {i} names {a_in.get('element_id')}, which is a "
+                                 f"{m.get('kind')} rather than a sound.")
+        for i, o_in in enumerate(overlays_in, 1):
+            if str(o_in.get("element_id") or "") not in by_id:
+                check_bad.append(f"Layer {i} names {o_in.get('element_id')}, which is not on the "
+                                 f"canvas.")
+        if check_bad:
+            return _tool_text(" ".join(check_bad) + " Nothing was changed — call describe_canvas "
+                              "for the ids that exist now.", True)
+
+        rev, _ = await _media_scene_touch(sid, mutate)
+        out = {"scene_rev": rev,
+               "timeline": {"shots": result.get("n", 0), "layers": result.get("layers", 0),
+                            "fps": int(args.get("fps") or 30),
+                            "resolution": str(args.get("resolution") or "1920x1080")},
+               "total_seconds": result.get("total", 0.0), "ready": bool(result.get("ready"))}
+        if warnings:
+            out["warnings"] = warnings
+        return _media_json_text(out)
+
+    if name == "export_timeline":
+        if not media_plane.have_ffmpeg():
+            return _tool_text("This deployment cannot assemble video — ffmpeg is not installed. "
+                              "The clips are all still here to download individually.", True)
+        try:
+            job = await _media_export_start(hid, sid, org, entry_id,
+                                            str(args.get("filename") or ""))
+        except media_plane.MediaError as e:
+            return _tool_text(str(e), True)
+        return _media_json_text({"job_id": job["id"], "capability": "export",
+                                 "shots": int(job.get("shots") or 0),
+                                 "total_seconds": float(job.get("planned_seconds") or 0.0),
+                                 "status": job["status"]})
+
+    return _tool_text(f"No tool named {name!r} on this server.", True)
+
+
+# ── export ────────────────────────────────────────────────────────────────────────────────────
+async def _media_export_start(hid: str, sid: str, org: str, entry_id: str,
+                              filename: str) -> dict:
+    """Check the cut is assemblable, then run ffmpeg off the event loop as an ordinary job."""
+    scene = await _media_scene_read(sid)
+    tl = scene.get("timeline") or {}
+    shots = tl.get("shots") or []
+    if not shots:
+        raise media_plane.ExportRefused("There is nothing in the timeline to export. Use "
+                                        "set_timeline first.")
+    cap = media_plane.capability("export")
+    if len(shots) > int(cap.get("max_shots") or 40):
+        raise media_plane.ExportRefused(f"A film here is at most {cap.get('max_shots')} shots.")
+    running = [j for j in await _media_jobs_of(sid)
+               if j.get("capability") == "export" and j.get("status") == "running"]
+    if running:
+        raise media_plane.ExportRefused("An export of this video is already running.")
+    by_id = {e.get("id"): e for e in scene.get("elements") or []}
+    plan: list[dict] = []
+    for i, s in enumerate(shots, 1):
+        m = media_plane.media_of(by_id.get(s.get("elementId")) or {})
+        if m.get("status") != "ready" or not m.get("mediaId"):
+            raise media_plane.ExportRefused(
+                f"Shot {i} is still rendering. Every shot has to have landed before the film can "
+                f"be cut.")
+        # What window of the clip this shot shows — asked of the one function that answers it, so
+        # the film, the planned total and the preview cannot come to different conclusions.
+        in_s, out_s, still = media_plane.shot_window(s, m)
+        plan.append({"media_id": str(m["mediaId"]), "in_s": in_s, "out_s": out_s, "still": still})
+    total = media_plane.timeline_total(scene)
+    if total > float(cap.get("max_total_s") or 600):
+        raise media_plane.ExportRefused(
+            f"That film is {total:.0f}s and the limit here is {cap.get('max_total_s')}s.")
+    # The sound under the film. Refused rather than dropped, for the same reason a shot is: a
+    # film delivered without the music somebody asked for is not the film, and the silent version
+    # used to report success.
+    audio_plan: list[dict] = []
+    for i, a in enumerate(tl.get("audio") or [], 1):
+        m = media_plane.media_of(by_id.get(a.get("elementId")) or {})
+        if not m:
+            raise media_plane.ExportRefused(
+                f"Sound {i} is no longer on the canvas. Take it off the timeline, or put the "
+                f"clip back, before the film is cut.")
+        if m.get("status") != "ready" or not m.get("mediaId"):
+            raise media_plane.ExportRefused(
+                f"Sound {i} is still rendering. Everything in the film has to have landed "
+                f"before it can be cut.")
+        audio_plan.append({"media_id": str(m["mediaId"]),
+                           "start_s": float(a.get("startS") or 0.0),
+                           "gain_db": float(a.get("gainDb") or 0.0)})
+
+    # The layers above the cut. A layer whose clip has not landed is refused for the same reason
+    # a shot is: half a film is not a film, and the alternative is exporting it silently missing.
+    overlay_plan: list[dict] = []
+    for i, o in enumerate(tl.get("overlays") or [], 1):
+        m = media_plane.media_of(by_id.get(o.get("elementId")) or {})
+        if not m:
+            continue                       # the layer names something that is not a clip
+        # STATUS FIRST. Asking for the media id first skipped every layer that had not landed
+        # yet — the export ran, succeeded, and quietly did not contain them.
+        if m.get("status") != "ready" or not m.get("mediaId"):
+            raise media_plane.ExportRefused(
+                f"Layer {i} is still rendering. Every layer has to have landed before the film "
+                f"can be cut.")
+        o_in, o_out, still = media_plane.shot_window(o, m)
+        overlay_plan.append({"media_id": str(m["mediaId"]), "in_s": o_in, "out_s": o_out,
+                             "still": still, "start_s": max(0.0, float(o.get("startS") or 0.0)),
+                             "layer": max(1, int(o.get("layer") or 1)),
+                             "pos": str(o.get("position") or "full"),
+                             "scale": float(o.get("scale") or 1.0)})
+
+    now = int(time.time() * 1000)
+    job = {"id": "mjob_" + uuid.uuid4().hex[:16], "org": org, "harness": hid, "session": sid,
+           "entry": entry_id, "capability": "export", "params_json": json.dumps({}), "params": {},
+           "status": "running", "model": "", "provider": "local", "provider_task_id": "",
+           "attempts_json": "[]", "attempts": [], "next_poll_at": 0, "poll_backoff_s": 0,
+           "media_id": "", "bytes": 0, "width": 0, "height": 0, "seconds": 0.0, "quota": 0.0,
+           "usd": 0.0, "element_id": "", "error": "", "created_at": now, "updated_at": now,
+           "shots": len(plan), "planned_seconds": total,
+           "progress": f"0/{len(plan)} shots", "filename": filename or "film.mp4"}
+    await _media_job_save(job)
+    asyncio.create_task(_media_export_run(job, plan, audio_plan, overlay_plan,
+                                          int(tl.get("fps") or 30),
+                                          str(tl.get("resolution") or "1920x1080")))
+    return job
+
+
+async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
+                            overlay_plan: list[dict], fps: int, resolution: str) -> None:
+    sid = str(job["session"])
+    tmp = tempfile.mkdtemp(prefix="hr-media-")
+    try:
+        shots = []
+        for i, s in enumerate(plan):
+            meta = await _media_meta(sid, s["media_id"]) or {}
+            data = await _blob_get(_media_blob(sid, s["media_id"], str(meta.get("ext") or "mp4")),
+                                   kb=BLOB_KB)
+            if not data:
+                raise media_plane.ExportRefused(f"Shot {i + 1} is no longer readable.")
+            path = os.path.join(tmp, f"shot{i}.{meta.get('ext') or 'mp4'}")
+            pathlib.Path(path).write_bytes(data)
+            shots.append({"path": path, "in_s": s["in_s"], "out_s": s["out_s"],
+                          "still": s["still"]})
+            job["progress"] = f"{i + 1}/{len(plan)} shots"
+            await _media_job_save(job)
+        tracks = []
+        for j, a in enumerate(audio_plan):
+            meta = await _media_meta(sid, a["media_id"]) or {}
+            data = await _blob_get(_media_blob(sid, a["media_id"], str(meta.get("ext") or "wav")),
+                                   kb=BLOB_KB)
+            if not data:
+                continue
+            path = os.path.join(tmp, f"track{j}.{meta.get('ext') or 'wav'}")
+            pathlib.Path(path).write_bytes(data)
+            tracks.append({"path": path, "start_s": a["start_s"], "gain_db": a["gain_db"]})
+        layers = []
+        for j, o in enumerate(overlay_plan):
+            meta = await _media_meta(sid, o["media_id"]) or {}
+            data = await _blob_get(_media_blob(sid, o["media_id"], str(meta.get("ext") or "mp4")),
+                                   kb=BLOB_KB)
+            if not data:
+                raise media_plane.ExportRefused(f"Layer {j + 1} is no longer readable.")
+            path = os.path.join(tmp, f"layer{j}.{meta.get('ext') or 'mp4'}")
+            pathlib.Path(path).write_bytes(data)
+            layers.append({**o, "path": path,
+                           "has_audio": bool(media_plane.probe_file(path).get("has_audio"))})
+        out_path = os.path.join(tmp, "film.mp4")
+        info = await media_plane.to_thread(media_plane.assemble, shots, tracks, fps=fps,
+                                           resolution=resolution, out_path=out_path,
+                                           overlays=layers)
+        data = pathlib.Path(out_path).read_bytes()
+        await _media_job_land(job, data)
+        print(f"[media] {sid}: exported {len(shots)} shots"
+              f"{f' + {len(layers)} layers' if layers else ''}, {info['seconds']}s", flush=True)
+    except Exception as e:  # noqa: BLE001
+        job.update({"status": "failed", "error": str(e)})
+        await _media_job_save(job)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── the MCP endpoint ──────────────────────────────────────────────────────────────────────────
+@app.post("/v1/mcp/media")
+async def media_mcp(request: Request):
+    """The MCP endpoint the agent's CLI talks to. The database server's twin: streamable HTTP,
+    stateless, `initialize` echoes the client's protocol version, a notification is a 202.
+
+    THE SESSION COMES FROM THE CREDENTIAL. No tool takes one as an argument and every schema is
+    `additionalProperties: false`, so an agent cannot address another session's canvas — it cannot
+    mint another session's token.
+
+    EVERY FAILURE IS A TOOL RESULT AND NEVER AN HTTP ERROR, and below it is finally STRUCTURAL
+    rather than a list of exception types. `except MediaError` / `except HTTPException` covered
+    the failures somebody had thought of, so a ValueError from parsing an argument, a KeyError
+    from building a submit and anything the store raised all left as a 500 — a status code an
+    agent cannot read, on a path a well-behaved model reaches by writing "six" where a number
+    goes. The two named handlers stay, because each says something better than the last one can.
+    """
+    claims = _verify_hosted_cred(_broker_token(request))
+    if not claims:
+        raise HTTPException(401, "invalid or expired turn credential")
+    hid, sid, key = claims
+    try:
+        req = json.loads(await request.body() or b"{}")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "malformed JSON-RPC request") from None
+    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+
+    if method == "initialize":
+        return _jsonrpc_result(rid, {
+            "protocolVersion": str(params.get("protocolVersion") or "2024-11-05"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "media", "version": "1"}})
+    if rid is None:
+        return Response(status_code=202)
+    if method == "tools/list":
+        return _jsonrpc_result(rid, {"tools": _MEDIA_MCP_TOOLS})
+    if method != "tools/call":
+        return JSONResponse({"jsonrpc": "2.0", "id": rid,
+                             "error": {"code": -32601, "message": f"method not found: {method}"}})
+
+    v = await _harness_vertex(hid)
+    if v and str(v.get("deleted")) in ("1", "true", "True"):
+        v = None            # a token outlives the agent it was minted for; its tools must not
+    org = str((v or {}).get("org") or "")
+    try:
+        entry, _rec = await _hosted_resolve(_MEDIA_SERVER, hid, org, _mcp_list(v),
+                                            key=key, check_enabled=True)
+    except HTTPException:
+        return _jsonrpc_result(rid, _tool_text(
+            "This agent cannot make media — no media tools are connected to it. Ask the person to "
+            "add them, then try again — you cannot connect them yourself.", True))
+    name, args = str(params.get("name") or ""), params.get("arguments") or {}
+    schema = next((t["inputSchema"] for t in _MEDIA_MCP_TOOLS if t["name"] == name), None)
+    # CHECKED AGAINST THE DECLARATION, before any body assumes it held. An unknown tool is not
+    # checked — `_media_tool_call` has a better sentence for that than "no schema".
+    bad = _mcp_argument_refusal(schema, args) if schema is not None else ""
+    if bad:
+        return _jsonrpc_result(rid, _tool_text(
+            f"{name} was not run, because {bad} Nothing happened; correct the call and repeat it.",
+            True))
+    try:
+        out = await _media_tool_call(name, args, hid, sid, org,
+                                     str(entry.get("id") or "mcp.media"))
+    except media_plane.MediaError as e:
+        return _jsonrpc_result(rid, _tool_text(str(e), True))
+    except HTTPException as e:
+        return _jsonrpc_result(rid, _tool_text(_uhp_message(e), True))
+    except Exception as e:  # noqa: BLE001 — the promise, made structural: see this route's note
+        # Named for the operator, not for the agent: what raised is ours to fix and not something
+        # a model can act on, and a stack trace is not a sentence.
+        print(f"[media] {name}: {type(e).__name__}: {e}", flush=True)
+        return _jsonrpc_result(rid, _tool_text(
+            f"{name} did not finish — something went wrong on this side, not in the way you "
+            f"called it. Try it once more; if it fails the same way, tell the person rather than "
+            f"working around it.", True))
+    return _jsonrpc_result(rid, out)
+
+
+# ── the app's data plane ──────────────────────────────────────────────────────────────────────
+# A browser is not an MCP client and must never hold a turn credential, so the app reaches the same
+# store through routes that carry the harness (which binds the entry) and the session (which owns
+# the document) explicitly. Every one: member of the org → the harness → the session → the entry.
+
+async def _media_server_out() -> dict:
+    """What the media server says about itself: what can be made right now, which model each
+    capability resolves to, and whether this deployment can assemble a film.
+
+    Derived at read time, never stored. A model breaks or a provider is connected and the answer
+    changes with no form re-saved — the same rule the integration model list already follows.
+    """
+    providers = await _media_providers()
+    caps = []
+    for cap_name in media_plane.capability_names():
+        cap = media_plane.capability(cap_name)
+        if cap.get("local"):
+            caps.append({"name": cap_name, "available": media_plane.have_ffmpeg(), "model": None})
+            continue
+        probe = {"seconds": 6} if cap_name.endswith("_video") else {}
+        if cap_name.startswith("image_to"):
+            probe["image"] = "probe"
+        cand, _sk = media_plane.resolve(cap_name, probe, set(providers), _media_quarantine)
+        row = {"name": cap_name, "available": bool(cand),
+               "model": str(cand.get("model")) if cand else None}
+        usd = media_plane.estimated_usd(cand) if cand else None
+        if usd is not None:
+            row["estimatedUsdPerUnit"] = usd
+        caps.append(row)
+    return {"capabilities": caps, "export": {"available": media_plane.have_ffmpeg()}}
+
+
+async def _media_route(hid: str, sid: str, eid: str, request: Request) -> tuple[str, dict, dict]:
+    """(org, entry, session vertex) — the FOUR binds every app route to this server shares.
+
+    Member of the org → the harness → the entry on that harness → AND THE SESSION ON THAT
+    HARNESS. The fourth was missing and each of the first three looks like it covers it: the entry
+    is bound to the harness, the session is bound to the org, so a second agent in the same org
+    presenting its OWN media entry and this session's id was served this session's jobs, this
+    session's canvas and the bytes of its renders. Harness ids and session ids are both public.
+
+    The session vertex has said which harness it belongs to since it was created (`harness_id`,
+    stamped by the session-create path, and filled in by _resp_resolve_session's continue branch for
+    a session that reached a harness without one); it was written and never read. A session that
+    names no harness cannot be proved to belong to this one, so it is refused rather than assumed —
+    the routes are always addressed to a harness, so a session with no harness has no business here.
+
+    Refusing is right and it is also a dead end: the person is holding a link to something the list
+    still offers them. The app that owns that screen has to say so and offer the way back, which is
+    why the kit renders this 404 as a video that cannot be opened rather than as a bare canvas.
+    """
+    org, _ = await _pub_org_member(request)
+    v = await _harness_for_route(hid, org)
+    entry, _rec = await _hosted_resolve(_MEDIA_SERVER, hid, org, _mcp_list(v), entry_id=eid)
+    sv: dict = {}
+    if sid:
+        _o, sv = await _owned_session(request, sid)
+        if str(sv.get("harness_id") or "") != hid:
+            raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    return org, entry, sv
+
+
+class SceneWrite(BaseModel):
+    scene: dict
+
+
+@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene")
+async def get_media_scene(hid: str, eid: str, sid: str, request: Request) -> dict:
+    await _media_route(hid, sid, eid, request)
+    scene = await _media_scene_read(sid)
+    return {"rev": int(float((scene.get("meta") or {}).get("rev") or 0)), "scene": scene}
+
+
+@app.put("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene")
+async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
+                          request: Request) -> dict:
+    """The app's write, with the whole conflict story in three status codes.
+
+    409 while a turn is running — the agent owns the document during a turn, the same rule
+    write_session_file holds for the same reason. 412 when the revision has moved, so a stale tab
+    merges rather than clobbers. 422 when the write would add or delete a generated media element:
+    a browser bug must not be able to orphan a rendered clip or resurrect a deleted one.
+    """
+    _org, _entry, v = await _media_route(hid, sid, eid, request)
+    live = {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}
+    if live:
+        raise uhp_error(409, "session_busy",
+                        "The agent is working on this video. Wait for the turn to finish before "
+                        "saving.")
+    want = request.headers.get("if-match") or ""
+    async with _media_scene_lock(sid):
+        cur = await _media_scene_read(sid)
+        rev = int(float((cur.get("meta") or {}).get("rev") or 0))
+        if want and want.strip('"') != str(rev):
+            raise uhp_error(412, "scene_moved",
+                            "This canvas changed while you were editing it.", "If-Match",
+                            {"rev": rev})
+        incoming = media_plane.sanitize_scene(body.scene)
+        before = {e.get("id") for e in cur.get("elements") or [] if media_plane.is_media(e)}
+        after = {e.get("id") for e in incoming.get("elements") or [] if media_plane.is_media(e)}
+        if before != after:
+            raise uhp_error(422, "media_elements_are_the_agents",
+                            "Media elements are placed and removed by the agent.")
+        incoming["meta"] = {**(incoming.get("meta") or {}), "rev": rev}
+        new_rev = await _media_scene_write(sid, incoming)
+    return {"rev": new_rev}
+
+
+@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/jobs")
+async def get_media_jobs(hid: str, eid: str, sid: str, request: Request,
+                         ids: str = "") -> dict:
+    """The same _media_job_advance path the agent's check_jobs takes, so a browser and an agent
+    cannot see a job differently.
+
+    EVERY job in the session, deliberately — a listing that dropped rows past a limit would be a
+    canvas with clips missing from it. What is capped is not how many jobs are LISTED but how many
+    outbound submits one tick of this may cause, and that is the budget below: a browser sitting
+    on a session where several renders have failed used to fire one submit per failed job per
+    tick, which is the same burst check_jobs made and from something the person did not ask for.
+
+    ITS OWN BUDGET, not the session's shared one. `_media_budget_for` exists so that generate
+    calls an agent issued in one turn share a ceiling — "a second render is the agent's decision,
+    made with the first one's cost in front of it". A browser tick is not the agent's decision and
+    is not part of that turn, so joining it there would let a person watching the canvas spend a
+    ceiling the agent then gets refused against, with a sentence about "this request" that would
+    be about somebody else's. One request, one budget; these are two requests.
+    """
+    await _media_route(hid, sid, eid, request)
+    wanted = {i.strip() for i in (ids or "").split(",") if i.strip()}
+    out = []
+    budget = _MediaBudget()
+    for job in await _media_jobs_of(sid):
+        if wanted and job["id"] not in wanted:
+            continue
+        try:
+            job = await _media_job_advance(job, budget)
+        except Exception:  # noqa: BLE001
+            pass
+        out.append({"job_id": job["id"], "status": job.get("status"),
+                    # WHEN it was submitted. Without it a caller holding several exports cannot
+                    # tell which one is the latest, and the app followed whichever came first.
+                    "created_at": job.get("created_at") or 0,
+                    "capability": job.get("capability"), "model": job.get("model"),
+                    "media_id": job.get("media_id") or None,
+                    "element_id": job.get("element_id") or None,
+                    "seconds": job.get("seconds") or None, "progress": job.get("progress") or None,
+                    "error": job.get("error") or None,
+                    **({"usd": round(float(job["usd"]), 4)} if job.get("usd") else {})})
+    return {"jobs": out, "spend_usd": await _media_spend(sid)}
+
+
+@app.post("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/export")
+async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> dict:
+    org, entry, _sv = await _media_route(hid, sid, eid, request)
+    if not media_plane.have_ffmpeg():
+        raise uhp_error(501, "export_unavailable",
+                        "This deployment cannot assemble video — ffmpeg is not installed. The "
+                        "clips are all still here to download individually.")
+    try:
+        job = await _media_export_start(hid, sid, org, str(entry.get("id") or eid), "")
+    except media_plane.MediaError as e:
+        raise uhp_error(400, "export_refused", str(e)) from e
+    return {"job_id": job["id"], "shots": job.get("shots"),
+            "total_seconds": job.get("planned_seconds"), "status": job["status"]}
+
+
+@app.post("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media")
+async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> dict:
+    """Put a picture the person already has into this video, as media the agent can work from.
+
+    EVERYTHING ELSE IN A SESSION ARRIVED BY BEING RENDERED, which meant a reference image — the
+    frame a template starts from, a photograph of the actual product — had nowhere to live. It
+    could be shown in the app and never used, which is decoration, or not offered at all.
+
+    It goes through the same door a render does: `_media_store` verifies the bytes really are
+    what they claim before anything is kept, so an import cannot put a file into a timeline that
+    the exporter will later refuse. The kind is read from the bytes, not from what the caller
+    says they sent.
+    """
+    org, entry, _sv = await _media_route(hid, sid, eid, request)
+    data = await request.body()
+    if not data:
+        raise uhp_error(400, "empty_upload", "There were no bytes in that upload.")
+    if len(data) > media_plane.MAX_BYTES:
+        raise uhp_error(413, "too_large",
+                        f"That file is {len(data)} bytes and the limit here is "
+                        f"{media_plane.MAX_BYTES}.")
+    mime, _ext = media_plane.sniff(data)
+    kind = {"image": "image", "video": "video", "audio": "audio"}.get(
+        str(mime or "").split("/")[0] or "", "")
+    if not kind:
+        raise uhp_error(415, "not_media",
+                        "That file is not a picture, a clip or a sound this can read.")
+    label = (request.headers.get("x-media-label") or "")[:200]
+    try:
+        rec = await _media_store(sid, kind, data, {
+            "model": "", "capability": "import", "job_id": "", "prompt": label})
+    except media_plane.MediaError as e:
+        raise uhp_error(400, "import_refused", str(e)) from e
+
+    # ON THE CANVAS, IN THE SAME CALL. Media that is only in the store is invisible: the agent's
+    # one view of a video is describe_canvas, and it said so itself when a reference was imported
+    # and not placed — "it exists as media but was never put on the board". Doing it here also
+    # removes a race the browser could not win, since the agent reads the canvas within seconds
+    # of the session existing. `?place=0` for a caller that wants the bytes and nothing else.
+    element_id = ""
+    if str(request.query_params.get("place") or "1") not in ("0", "false", "no"):
+        med = rec["media_id"]
+
+        def mutate(scene: dict) -> None:
+            els = scene.get("elements") or []
+            x, y = media_plane.next_free([e for e in els if not e.get("isDeleted")])
+            el = media_plane.media_element(
+                rec["kind"], x=x, y=y, w=media_plane.TILE_W, h=media_plane.TILE_H,
+                media_id=med, status="ready", cap="import", label=label,
+                seconds=float(rec.get("seconds") or 0),
+                width=int(rec.get("width") or 0), height=int(rec.get("height") or 0),
+                media_url=_media_url(hid, str(entry.get("id") or eid), sid, med))
+            if rec["kind"] == "image":
+                scene.setdefault("files", {})[med] = media_plane.file_entry(
+                    med, str(rec.get("mime") or "image/png"),
+                    _media_url(hid, str(entry.get("id") or eid), sid, med))
+            els.append(el)
+            scene["elements"] = els
+            return el["id"]
+
+        _rev, element_id = await _media_scene_touch(sid, mutate)
+
+    return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
+            "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],
+            "seconds": rec["seconds"], "element_id": element_id or None}
+
+
+@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media/{med}")
+async def get_media_bytes(hid: str, eid: str, sid: str, med: str, request: Request) -> Response:
+    """The bytes, with Range support.
+
+    Range is not a nicety: without it Safari refuses to play at all and a timeline cannot scrub.
+    The media id is immutable, so it is its own ETag and may be cached forever.
+    """
+    await _media_route(hid, sid, eid, request)
+    meta = await _media_meta(sid, med)
+    if not meta:
+        raise uhp_error(404, "media_not_found", "No media with that id in this video.", "med")
+    data = await _blob_get(_media_blob(sid, med, str(meta.get("ext") or "bin")), kb=BLOB_KB)
+    if data is None:
+        raise uhp_error(404, "media_not_found", "No media with that id in this video.", "med")
+    mime = str(meta.get("mime") or "application/octet-stream")
+    headers = {"accept-ranges": "bytes", "etag": f'"{med}"',
+               "cache-control": "private, max-age=31536000, immutable"}
+    rng = request.headers.get("range") or ""
+    m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip()) if rng else None
+    if m and (m.group(1) or m.group(2)):
+        total = len(data)
+        if m.group(1):
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else total - 1
+        else:                                   # bytes=-N — the last N bytes
+            start, end = max(0, total - int(m.group(2))), total - 1
+        if start >= total:
+            return Response(status_code=416, headers={**headers,
+                                                      "content-range": f"bytes */{total}"})
+        end = min(end, total - 1)
+        return Response(content=data[start:end + 1], status_code=206, media_type=mime,
+                        headers={**headers, "content-range": f"bytes {start}-{end}/{total}",
+                                 "content-length": str(end - start + 1)})
+    return Response(content=data, media_type=mime, headers=headers)
+
+
+# ── what launch provisions ────────────────────────────────────────────────────────────────────
+def _kit_launch_media(kit: dict) -> dict | None:
+    """What this kit needs provisioned at launch: an entry pointing at the media server we host.
+
+    Unlike a database this collects NOTHING from the person. The provider credential is this
+    deployment's own integration and must never become a per-harness secret — so the record holds
+    only the binding, which is what _hosted_resolve checks, and holds no secret at all.
+    """
+    d = ((kit.get("harness") or {}).get("launch") or {}).get("media")
+    if not isinstance(d, dict):
+        return None
+    return {"name": str(d.get("name") or "media"), "id": str(d.get("id") or "mcp.media")}
+
+
+async def _hosted_media_attach(org: str, hid: str, v: dict | None, decl: dict) -> None:
+    origins = _own_origins()
+    if not origins:
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set "
+                        "HARNESS_PUBLIC_BASE_URL.", "media")
+    cur = _mcp_list(v)
+    prev = next((e for e in cur if str(e.get("id") or "") == decl["id"]), None) or {}
+    prev_key = _vault_key(prev.get("auth"))
+    key = (prev_key if prev_key.startswith(_HOSTED_SECRET_PREFIX)
+           else _hosted_secret_key(hid, decl["id"]))
+    # No secret in it, so no passphrase is demanded to write it: this record is a binding and
+    # nothing else, and the provider key it does NOT contain lives in the integrations document.
+    await _hosted_put_record(org, key, {"server": _MEDIA_SERVER, "harness": hid,
+                                        "updated_at": int(time.time() * 1000)},
+                             secret=False, param="media")
+    entry = {"id": decl["id"], "name": str(prev.get("name") or decl["name"]),
+             "url": origins[0] + _HOSTED_MCP_PREFIX + _MEDIA_SERVER, "transport": "http",
+             "auth": f"vault:{key}",
+             "enabled": str(prev.get("enabled", True)) not in ("False", "false", "0")}
+    await _mcp_write(hid, [e for e in cur if str(e.get("id") or "") != decl["id"]] + [entry])
+    print(f"[media] {hid}: media tools attached", flush=True)
+
+
+async def _media_harness_purge(hid: str) -> None:
+    """Deleting the agent stops the jobs it started. Called from the one place that deletes a
+    harness, so there is no second answer to 'is it gone'.
+
+    The same method _media_session_purge already uses, because it is the same problem: the sweeper
+    finds work by STATUS, so the only thing that stops a job is no longer being running. Without
+    it, DELETE returned 200 and the sweeper carried on — provider calls carrying the key, and a
+    finished file written into the store, for an agent that no longer existed.
+
+    Only the jobs still running. A finished one is the record of a clip that is still in the
+    session's canvas, and the sessions outlive the agent that made them.
+    """
+    with contextlib.suppress(Exception):
+        for row in await BACKING.graph.find(_MEDIA_JOB_LABEL, {"harness": hid,
+                                                               "status": "running"}):
+            job = _media_job_out(row) or {}
+            if not job.get("id"):
+                continue
+            await _vg_upsert(_MEDIA_JOB_LABEL, job["id"], {"deleted": "1", "status": "deleted"})
+            # A placeholder that spins forever is a lie the canvas keeps telling.
+            with contextlib.suppress(Exception):
+                await _media_element_failed(job)
+
+
+async def _media_session_purge(sid: str) -> None:
+    """Deleting the video deletes its media and tombstones its jobs. Called from the one place
+    that deletes a session, so there is no second answer to 'is it gone'."""
+    with contextlib.suppress(Exception):
+        for it in await _blob_list_all(f"media/{sid}/", kb=BLOB_KB):
+            await _blob_delete(str(it.get("file_id") or ""), kb=BLOB_KB)
+    with contextlib.suppress(Exception):
+        await _blob_delete(_media_scene_key(sid), kb=BLOB_KB)
+    with contextlib.suppress(Exception):
+        for job in await _media_jobs_of(sid):
+            await _vg_upsert(_MEDIA_JOB_LABEL, job["id"], {"deleted": "1", "status": "deleted"})
+
+
+# ── Starter Kits ──────────────────────────────────────────────────────────────────────────────
+# A kit is a whole product in a folder: the Harness it needs, and a UI that talks to that Harness
+# as its backend. Both are baked into the image from HarnessRouter/starter-kit (see
+# docker/install-kits.sh), so launching one provisions a Harness and opens an app that is already
+# here — there is no service to deploy and no database to configure.
+#
+# Read from disk for the same reason skills are: a catalog compiled into source goes stale the
+# moment the kit repo moves, and nothing says so.
+_KITS_DIR = os.environ.get("HR_KITS_DIR", "/opt/harnessrouter/kits")
+
+
+@functools.lru_cache(maxsize=1)
+def _kits() -> dict:
+    """{id: kit.json}, empty when the image was built without kits (a supported build)."""
+    root = pathlib.Path(_KITS_DIR)
+    manifest = root / "manifest.json"
+    if not manifest.is_file():
+        return {}
+    try:
+        ids = json.loads(manifest.read_text()).get("kits", [])
+    except Exception:  # noqa: BLE001
+        print(f"[kits] unreadable manifest at {manifest}", flush=True)
+        return {}
+    out: dict = {}
+    for kid in ids:
+        f = root / str(kid) / "kit.json"
+        if not f.is_file():
+            print(f"[kits] {kid} in manifest but not on disk — skipped", flush=True)
+            continue
+        try:
+            out[str(kid)] = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            print(f"[kits] {kid}/kit.json is not valid JSON — skipped", flush=True)
+    if out:
+        print(f"[kits] {len(out)} available: {', '.join(out)}", flush=True)
+    return out
+
+
+def _kit_skills(kit: dict) -> list[dict]:
+    """A kit's own skills, read from its folder. Self-contained by design: a kit carries the
+    skills its Harness needs rather than depending on what the image happens to bundle."""
+    root = pathlib.Path(_KITS_DIR) / str(kit.get("id") or "")
+    out: list[dict] = []
+    for name in (kit.get("harness") or {}).get("skills") or []:
+        folder = root / "skills" / str(name)
+        if not (folder / "SKILL.md").is_file():
+            print(f"[kits] {kit.get('id')}: skill {name} is declared but not on disk", flush=True)
+            continue
+        files = []
+        for f in sorted(folder.rglob("*")):
+            if not f.is_file() or f.stat().st_size > _SKILL_FILE_MAX:
+                continue
+            rel = f.relative_to(folder).as_posix()
+            raw = f.read_bytes()
+            try:
+                files.append({"path": rel, "content": raw.decode()})
+            except UnicodeDecodeError:
+                files.append({"path": rel, "content_b64": base64.b64encode(raw).decode()})
+        if files:
+            out.append({"name": str(name), "enabled": True, "files": files})
+    return out
+
+
+# What to run a kit's Harness on, in preference order. A kit declares its own list in kit.json
+# (`harness.recommended`), because the right pairing is a property of the work: a deck designer and
+# a log analyser do not want the same agent or the same model.
+#
+# This is only the fallback for a kit that declares none. Note it is a preference ORDER, not a
+# pin — which one is used depends on what the person actually connected, since pinning one base
+# strands the common case: someone who wired only DeepSeek launching a kit that says "claude-code"
+# would get a Harness that cannot run a single turn.
+_KIT_BASE_PREFERENCE: tuple[tuple[str, str], ...] = (
+    ("hermes", "deepseek-v4-pro"),
+    ("codex", "gpt-5.6-sol"),
+    ("claude-code", "claude-opus-5"),
+)
+
+
+def _kit_launch_database(kit: dict) -> dict | None:
+    """What this kit's LAUNCH DIALOG must collect, from its own kit.json (`harness.launch`).
+
+    A statement about launch, not an mcp_servers entry: a kit that reads a database is asked for
+    one before anything is provisioned, because every panel it builds would otherwise have nothing
+    to read. Declaring it is what makes it required, so there is no `required` field to disagree
+    with. `engines` narrows the picker and is a list rather than a flag, so adding a warehouse
+    later is a change to this server and to a kit's manifest and to nothing else.
+    """
+    d = ((kit.get("harness") or {}).get("launch") or {}).get("database")
+    if not isinstance(d, dict):
+        return None
+    declared = [e for e in (d.get("engines") or []) if e in sql_plane.ENGINES]
+    return {"engines": declared or list(sql_plane.ENGINES),
+            "name": str(d.get("name") or "database"),
+            "id": str(d.get("id") or "mcp.database")}
+
+
+def _kit_preference(kit: dict) -> list[tuple[str, str]]:
+    """A kit's recommended pairings, or the default order when it names none."""
+    out: list[tuple[str, str]] = []
+    for r in (kit.get("harness") or {}).get("recommended") or []:
+        base, model = str(r.get("base") or ""), str(r.get("model") or "")
+        if base in _BASE_CATALOG:
+            out.append((base, model))
+        else:
+            print(f"[kits] {kit.get('id')}: recommended base {base!r} is not a base — ignored",
+                  flush=True)
+    return out or list(_KIT_BASE_PREFERENCE)
+
+
+async def _base_serves(org: str, base: str, model: str) -> bool:
+    """Can this org actually run `model` on `base` right now?
+
+    `_servable_models` returning None means a policy chain is in play, which is provider-level
+    rather than per-model — the backend may attempt its whole catalog, so anything in that
+    catalog counts as available.
+    """
+    b = _BASE_CATALOG.get(base)
+    if not b:
+        return False
+    if model and model not in (_MODEL_CATALOG.get(b["backend"], {}).get("models") or []):
+        return False
+    servable = await _servable_models(org, b["backend"])
+    return servable is None or not model or model in servable
+
+
+async def _kit_choices(org: str, kit: dict) -> list[dict]:
+    """This kit's recommended pairings, each with whether this org can run it.
+
+    Unavailable options are returned rather than filtered out: "Claude Code — connect Anthropic to
+    use this" tells someone what to do next, where a short list just looks like the product only
+    supports two agents.
+    """
+    out: list[dict] = []
+    picked = False
+    for base, model in _kit_preference(kit):
+        b = _BASE_CATALOG.get(base) or {}
+        available = await _base_serves(org, base, model)
+        recommended = available and not picked
+        picked = picked or available
+        out.append({"base": base, "model": model,
+                    "baseLabel": b.get("label") or base,
+                    "available": available, "recommended": recommended})
+    return out
+
+
+async def _kit_base(org: str, kit: dict) -> tuple[str, str]:
+    """What a launch runs on when the caller expressed no preference: the recommended pairing.
+
+    Falling through every option means nothing is wired up yet. The kit's own base is the last
+    word then, so a launch still produces something coherent to look at rather than failing.
+    """
+    for c in await _kit_choices(org, kit):
+        if c["recommended"]:
+            print(f"[kits] {kit.get('id')}: base {c['base']} ({c['model']})", flush=True)
+            return c["base"], c["model"]
+    spec = kit.get("harness") or {}
+    fallback = str(spec.get("base") or "claude-code")
+    print(f"[kits] {kit.get('id')}: no connected provider serves a preferred model — "
+          f"falling back to {fallback}", flush=True)
+    return fallback, str(spec.get("default_model") or "")
+
+
+# ── Built-in skills ───────────────────────────────────────────────────────────────────────────
+# Baked into the image from HarnessRouter/skills (see docker/install-skills.sh). Read from disk,
+# never hard-coded: the console used to carry its own list of four "built-in skills" that existed
+# nowhere, with Replace and Disable buttons beside them acting on nothing.
+#
+# A built-in is implicit — a Harness stores nothing to use one. It stores an entry only to turn a
+# default-off skill ON, or a default-on skill OFF. So changing what the image ships changes every
+# Harness at once, and no Harness carries a stale copy of a skill's files.
+_BUILTIN_SKILLS_DIR = os.environ.get("HR_BUILTIN_SKILLS_DIR", "/opt/harnessrouter/skills")
+_SKILL_FILE_MAX = 2 * 1024 * 1024   # per file; a skill is instructions, not a data set
+
+
+@functools.lru_cache(maxsize=1)
+def _builtin_skills() -> dict:
+    """{name: {"title","description","default_enabled","origin","files":[{path,content|content_b64}]}}
+
+    Empty when the image was built without them (WITH_BUILTIN_SKILLS=0), which is a supported
+    build, not an error — callers must render that honestly rather than as "none configured"."""
+    root = pathlib.Path(_BUILTIN_SKILLS_DIR)
+    manifest = root / "manifest.json"
+    if not manifest.is_file():
+        return {}
+    try:
+        entries = json.loads(manifest.read_text()).get("skills", [])
+    except Exception:  # noqa: BLE001 — a corrupt manifest must not take the gateway down
+        print(f"[skills] unreadable manifest at {manifest}", flush=True)
+        return {}
+
+    out: dict = {}
+    for e in entries:
+        name = (e.get("name") or "").strip()
+        folder = root / name
+        if not name or not (folder / "SKILL.md").is_file():
+            print(f"[skills] {name or '(unnamed)'} in manifest but not on disk — skipped", flush=True)
+            continue
+        files: list[dict] = []
+        for f in sorted(folder.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(folder).as_posix()
+            raw = f.read_bytes()
+            if len(raw) > _SKILL_FILE_MAX:
+                print(f"[skills] {name}/{rel} exceeds {_SKILL_FILE_MAX} bytes — skipped", flush=True)
+                continue
+            try:                      # text where possible, so the stored form stays readable
+                files.append({"path": rel, "content": raw.decode()})
+            except UnicodeDecodeError:
+                files.append({"path": rel, "content_b64": base64.b64encode(raw).decode()})
+        if not files:
+            continue
+        out[name] = {"title": e.get("title") or name, "description": e.get("description") or "",
+                     "default_enabled": bool(e.get("default_enabled")),
+                     "origin": e.get("origin") or "", "files": files}
+    if out:
+        print(f"[skills] {len(out)} built-in: {', '.join(sorted(out))}", flush=True)
+    return out
+
+
+def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
+    """Built-ins that are on by default, minus any the harness has its own entry for.
+
+    `seen` is what a stored harness has an opinion about — an override, or an explicit disable.
+    An out-of-box harness has no stored record at all, so it passes nothing and gets the lot."""
+    skip = seen or set()
+    return [{"name": n, "files": m["files"], "content": None}
+            for n, m in sorted(_builtin_skills().items())
+            if n not in skip and m["default_enabled"]]
+
+
 # ── custom harnesses (per-org, server-persisted; replaces the client localStorage seam) ───────
+# ── base harness catalog ─────────────────────────────────────────────────────────────────
+# What each base IS. The console used to carry its own copy of this — models, tools, skills and
+# system prompts hard-coded in the frontend — which drifted from what the server actually runs: it
+# advertised four built-in skills (docx/pdf/pptx/xlsx) that exist nowhere, and a model list that
+# went stale the moment the catalog here changed. Anything a user sees about a base is served from
+# this table plus the live model catalog, so there is one answer and it is the running one.
+#
+# `tools` carries BOTH the real name and how far disabling it actually goes, because those differ by
+# runtime and the console must not imply a guarantee the runtime cannot keep (see the protocol's
+# harnesses.md §4.3):
+#   hard        — the CLI enforces it (claude: --disallowedTools takes these exact names).
+#   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
+_BASE_CATALOG: dict[str, dict] = {
+    "codex": {
+        "label": "Codex", "backend": "codex", "status": "ready",
+        "system_prompt": ("You are Codex, an autonomous software-engineering agent. You operate on "
+                          "a real git workspace with shell access, reading and editing files and "
+                          "running commands to complete the task, returning reviewable diffs and "
+                          "results."),
+        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("git", "Git")],
+        "tool_enforcement": "instruction",
+    },
+    "claude-code": {
+        "label": "Claude Code", "backend": "claude", "status": "ready",
+        "system_prompt": ("You are Claude Code, an agentic coding assistant. You work on a real "
+                          "local git working tree with bash, edit files, run tests, and use "
+                          "sub-agents to complete engineering tasks end to end."),
+        # These are the names Claude Code's --disallowedTools accepts. They are the real thing, not
+        # display labels: a label with a suffix would silently fail to match and disable nothing.
+        "tools": [("Bash", "Bash"), ("Read", "Read"), ("Edit", "Edit"), ("Write", "Write"),
+                  ("Grep", "Grep"), ("Glob", "Glob"), ("WebFetch", "WebFetch"),
+                  ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
+        "tool_enforcement": "hard",
+    },
+    "hermes": {
+        "label": "Hermes", "backend": "hermes", "status": "ready",
+        "system_prompt": ("You are Hermes, a self-improving autonomous agent. You work on a real "
+                          "project workspace with shell and file access, complete tasks end to end, "
+                          "and build a persistent memory and skill library from what you learn."),
+        "tools": [("terminal", "Terminal"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("patch", "Patch"), ("search_files", "Search"), ("web_search", "Web Search"),
+                  ("web_extract", "Web Extract")],
+        "tool_enforcement": "instruction",
+    },
+    "pi": {
+        "label": "Pi", "backend": "pi", "status": "ready",
+        "system_prompt": ("You are Pi, a minimal autonomous coding agent. You operate on a real "
+                          "git workspace, reading, writing and editing files and running bash "
+                          "to complete the task end to end."),
+        # Pi's four built-in tools, by their real names — -xt enforces these hard, so a disabled
+        # tool is genuinely absent, not merely requested (see _build_pi in the runner).
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit")],
+        "tool_enforcement": "hard",
+    },
+    "dsh": {
+        "label": "DeepSeek Harness", "backend": "dsh", "status": "ready",
+        # MCP note: the pinned runtime wheel (0.1.0rc7) does not bundle dsh's MCP client yet,
+        # so configured MCP servers are announced-and-skipped per turn (see dsh_driver.py).
+        # The runner flips DSH_RUNTIME_HAS_MCP when the pin moves to a build that ships it.
+        "system_prompt": ("You are DeepSeek Harness, an autonomous coding agent. You work on a "
+                          "real git workspace, running shell commands and editing files to "
+                          "complete the task end to end."),
+        # The bundled runtime's model-facing tools. No per-tool switch exists on the wire, so
+        # disabling is an instruction to the model, the same standing as codex/hermes.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("todo_write", "Todo"), ("subagent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
+}
+
+# Bases this server can execute. Derived from the catalog above so the two cannot disagree —
+# `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
+_SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
+
+
+def _require_supported_base(base: str) -> str:
+    b = (base or "").strip().lower()
+    if b not in _SUPPORTED_BASES:
+        raise uhp_error(422, "unsupported_base",
+                        f"This server cannot run the harness base '{base}'.", "base",
+                        {"supported": list(_SUPPORTED_BASES)})
+    return b
+
+
 class HarnessBody(BaseModel):
     name: str
     base: str
@@ -6210,10 +10960,15 @@ def _harness_out(v: dict) -> dict:
     except Exception:  # noqa: BLE001
         created = 0
     return {"id": v.get("id"), "name": v.get("name"), "base": v.get("base"),
+            # The starter kit that provisioned this Harness, when one did. The kit's app uses it
+            # to find its own Harness instead of asking the user to choose from a list.
+            "kit": v.get("kit") or None,
             "baseLabel": v.get("base_label") or v.get("base"),
             "defaultModel": v.get("default_model") or "",
             "systemPrompt": v.get("system_prompt") or "",
-            "mcpServers": _parse(v.get("mcp_servers")), "skills": _parse(v.get("skills")),
+            # Verbatim: what a client reads is what is stored, for every entry, which is the
+            # ordinary contract and the only one there now is.
+            "mcpServers": _mcp_list(v), "skills": _parse(v.get("skills")),
             "disabledTools": [t for t in _parse(v.get("disabled_tools")) if isinstance(t, str)],
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
@@ -6226,7 +10981,8 @@ async def _vg_list_by_org(label: str, org: str) -> list[dict]:
 
 
 def _harness_props(body: HarnessBody) -> dict:
-    return {"name": body.name, "base": body.base, "base_label": body.base_label or body.base,
+    base = _require_supported_base(body.base)   # refuse at create, not at the first task
+    return {"name": body.name, "base": base, "base_label": body.base_label or base,
             "default_model": body.default_model or "", "system_prompt": body.system_prompt or "",
             "mcp_servers": json.dumps(body.mcp_servers or []), "skills": json.dumps(body.skills or []),
             "disabled_tools": json.dumps(body.disabled_tools or []),
@@ -6236,7 +10992,38 @@ def _harness_props(body: HarnessBody) -> dict:
             "timeout_seconds": str(body.timeout_seconds) if body.timeout_seconds else ""}
 
 
+_WS_WRITE_MAX = 4 * 1024 * 1024   # an app writing its own state, not an upload path
 _SKILL_INLINE_MAX = 48_000   # keep the vertex `skills` prop safely under the 64k value cap
+
+
+def _mcp_servers_prepare(incoming: list | None) -> list[dict]:
+    """Normalise mcp_servers at config time (the same bar _skills_prepare holds skills to).
+
+    ONE RULE FOR EVERY ENTRY, including the ones this gateway hosts itself. An entry the caller
+    did not send is gone — there is no keep-if-omitted exemption, because keeping one requires
+    knowing which entries are special, which is the parallel path this replaced. The record behind
+    a removed entry is scrubbed rather than orphaned (see _hosted_scrub_removed); a stale tab's
+    Save can therefore disconnect a database, and the fix for that is optimistic concurrency for
+    ALL entries rather than an exemption for one.
+    """
+    out: list[dict] = []
+    for i, s in enumerate(incoming or []):
+        if not isinstance(s, dict):
+            raise uhp_error(400, "invalid_mcp_server", f"mcp_servers[{i}]: must be an object.", "mcp_servers")
+        if not s.get("url"):
+            raise uhp_error(400, "invalid_mcp_server", f"mcp_servers[{i}]: url required.", "mcp_servers")
+        out.append(s)
+    # Two servers with the same sanitised name are ONE server to every backend — the runner keys
+    # them by name and the last wins, so half the tool list would vanish with no error.
+    names: dict[str, str] = {}
+    for e in out:
+        nm = _mcp_name(str(e.get("name") or "mcp"))
+        if nm in names:
+            raise uhp_error(400, "duplicate_server_name",
+                            f"'{e.get('name')}' and '{names[nm]}' are the same server to an agent "
+                            f"— give one of them a different name.", "mcp_servers")
+        names[nm] = str(e.get("name") or "")
+    return out
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -6310,6 +11097,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     p = await _owned_org(request, org)
     member = p.get("member") or request.headers.get("x-harness-member", "")
     workspace = request.headers.get("x-harness-workspace", "")
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -6330,7 +11118,7 @@ async def list_harnesses(org: str, request: Request,
     workspace (Space id); `workspace_default=1` lets unstamped legacy records through."""
     await _owned_org(request, org)
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(r) for r in rows
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     if workspace:
         items = [i for i in items if _workspace_keep(i.get("workspace") or "", workspace, bool(workspace_default))]
@@ -6343,8 +11131,8 @@ async def get_harness(org: str, hid: str, request: Request) -> dict:
     await _owned_org(request, org)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
-    return _harness_out(v)
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    return _harness_out(await _mcp_migrate(org, hid, v))
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}/models")
@@ -6354,7 +11142,7 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     await _owned_org(request, org)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
@@ -6367,7 +11155,7 @@ async def get_harness_skill_files(org: str, hid: str, skill_id: str, request: Re
     await _owned_org(request, org)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -6386,10 +11174,15 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     # V1C02-005: bind the mutation to the caller's org — a foreign harness id must not be editable.
     cur = await _vertex_get(hid)
     if not cur or str(cur.get("org") or "") != org or str(cur.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    cur = await _mcp_migrate(org, hid, cur)
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write: _harness_props can still refuse this save (an unsupported base), and a
+    # refused save that had already scrubbed a record would disconnect a database nobody removed.
+    await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
     v = await _vertex_get(hid)
     return _harness_out(v or {"id": hid})
 
@@ -6400,8 +11193,13 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     # V1C02-005: only delete a harness that belongs to the caller's org.
     cur = await _vertex_get(hid)
     if not cur or str(cur.get("org") or "") != org:
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    cur = await _mcp_migrate(org, hid, cur)
     await _vg_upsert("Harness", hid, {"deleted": "1"})
+    # a deleted agent must not still be holding a database password, and must not still be
+    # spending at a provider
+    await _hosted_scrub_removed(org, hid, _mcp_list(cur), [])
+    await _media_harness_purge(hid)
     return {"id": hid, "deleted": True}
 
 
@@ -6411,7 +11209,7 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
     p = await _principal(request)
     org = p.get("org", "")
     if not org:
-        raise HTTPException(401, "invalid or missing HarnessRouter API key")
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     return org, p.get("member", "")
 
 
@@ -6420,7 +11218,8 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     p = await _principal(request)
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
-        raise HTTPException(401, "invalid or missing HarnessRouter API key")
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -6431,17 +11230,206 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     return _harness_out({"id": hid, **props})
 
 
+@app.get("/v1/kits")
+async def list_kits(request: Request) -> dict:
+    """The kit catalog, with each kit's launched Harness when it has one.
+
+    `launched` is what makes the tab honest: a kit is either something you can start or something
+    you already run, and the card should not offer to "Launch" a thing that is already there."""
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    rows = await _vg_list_by_org("Harness", org)
+    by_kit = {str(r.get("kit") or ""): r for r in rows if str(r.get("deleted") or "0") != "1"}
+    out = []
+    # Manifest order, NOT alphabetical. kits.json lists the kits in the order the catalogue wants
+    # them shown, install-kits.sh bundles them in that order, and _kits() builds its dict by
+    # walking the manifest — so the intent survives all the way here and sorting threw it away.
+    # A catalogue that cannot decide what a newcomer sees first is a catalogue in name only, and
+    # "add a second file to specify the order" would be a second source of truth for something
+    # kits.json already says.
+    for kid, kit in _kits().items():
+        h = by_kit.get(kid)
+        row = {"id": kid, "object": "kit",
+                    "title": kit.get("title") or kid,
+                    "tagline": kit.get("tagline") or "",
+                    "description": kit.get("description") or "",
+                    "icon": kit.get("icon") or "", "accent": kit.get("accent") or "",
+                    # The kit's own mark, when it ships one (install-kits.sh puts it beside the
+                    # app). Reported as a URL rather than inlined: it is an image, the route that
+                    # serves the kit's app serves it already, and inlining markup from a file into
+                    # a page is a habit worth not having. `icon` remains the fallback.
+                    "iconUrl": (f"/kits/{kid}/icon.svg"
+                                if (pathlib.Path(_KITS_DIR) / kid / "app" / "icon.svg").is_file()
+                                else ""),
+                    "route": (kit.get("app") or {}).get("route") or "",
+                    "launched": bool(h),
+                    "harnessId": (h or {}).get("id") or None,
+                    # What the kit actually installs, from its own config — so the card can say
+                    # what you get instead of asking you to take it on trust.
+                    "skills": [str(n) for n in ((kit.get("harness") or {}).get("skills") or [])],
+                    # What a LAUNCHED kit is really running on. Not the same thing as the
+                    # recommendation: the person may have chosen differently at launch, or changed
+                    # it since. Showing the recommendation for a running kit would state something
+                    # about their setup that is not true.
+                    "runningOn": ({"base": str(h.get("base") or ""),
+                                   "model": str(h.get("default_model") or "")} if h else None),
+                    # What to run it on: this kit's own recommended pairings, each marked with
+                    # whether the caller's integrations can serve it. The launch dialog renders
+                    # these directly and preselects the one flagged `recommended`.
+                    "choices": await _kit_choices(org, kit)}
+        # Two facts, both about the KIT: that it reads a database, and which engines it takes. What
+        # a launched one is pointed AT is deliberately absent — nobody reads their data on this
+        # page, and the surface where they do names it from the server that owns the connection.
+        decl = _kit_launch_database(kit)
+        if decl:
+            row["database"] = {"engines": decl["engines"]}
+        out.append(row)
+    return {"kits": out}
+
+
+class KitDatabaseBody(BaseModel):
+    """The connection a kit that reads a database is launched with. `sample_rows` defaults ON:
+    with it on the agent sees a few real rows per table and can tell a status column from a
+    category one; with it off it sees names and types and not one row of business data."""
+    engine: str
+    connection_string: str
+    sample_rows: bool = True
+
+
+class KitLaunchBody(BaseModel):
+    """What to run the kit on, and what it runs against.
+
+    A kit that declares `harness.launch.database` collects the connection HERE, at launch, so the
+    first thing the person sees is their own data — and so that connecting a database is something
+    the kit that reads one drives rather than something the tool list exposes. Relaunching with a
+    connection string is how you reconnect after a password change.
+    """
+    base: str = ""
+    model: str = ""
+    database: KitDatabaseBody | None = None
+
+
+@app.post("/v1/kits/{kit_id}/launch")
+async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | None = None) -> dict:
+    """Provision this kit's Harness, or hand back the one that already exists.
+
+    Idempotent on purpose. Launch is a button someone presses twice — because the first press
+    seemed slow, or because they came back a week later — and the second press must not leave
+    them with two Harnesses and their decks split across both."""
+    p = await _principal(request)
+    org, member = p.get("org", ""), p.get("member", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    kit = _kits().get(kit_id)
+    if not kit:
+        raise uhp_error(404, "kit_not_found", f"No starter kit '{kit_id}' in this build.")
+
+    decl = _kit_launch_database(kit)
+    media_decl = _kit_launch_media(kit)
+    db_in = body_in.database if body_in else None
+    if db_in and not decl:
+        raise uhp_error(400, "connection_not_used",
+                        f"The '{kit_id}' kit does not read a database.", "database")
+    # Checked before anything is provisioned: a typo in a connection string should cost the person
+    # a corrected form, not a half-configured Harness to find and fix.
+    checked = await _db_validate(db_in.engine, db_in.connection_string) if db_in else None
+
+    existing = next((r for r in await _vg_list_by_org("Harness", org)
+                     if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"),
+                    None)
+    if decl and not db_in and not existing:
+        # Declaring launch.database is what makes it required: every panel this kit builds would
+        # have nothing to read, so a launch without a connection is not a partial success.
+        raise uhp_error(400, "connection_required",
+                        "This kit reads a database. Give it a connection string to launch it.",
+                        "database")
+
+    if existing:
+        hid0 = str(existing.get("id") or "")
+        # Someone who typed a connection string and pressed Launch means "connect this", whether
+        # or not the Harness already existed — which is also how you reconnect after a password
+        # change. Without one the existing connection is left alone.
+        if decl:
+            # The tool comes from the kit definition, so a harness launched before this existed —
+            # or one whose connection never landed — gets it on the next press of Launch.
+            existing = await _mcp_migrate(org, hid0, existing) or existing
+            await _hosted_db_entry(hid0, existing, decl)
+            existing = await _vertex_get(hid0) or existing
+        if db_in:
+            await _hosted_db_attach(org, hid0, existing, decl, checked, db_in.sample_rows)
+            existing = await _vertex_get(hid0) or existing
+        if media_decl:
+            # Idempotent, like the database one: pressing Launch twice must leave one entry and
+            # one record, not two of each.
+            await _hosted_media_attach(org, hid0, existing, media_decl)
+            existing = await _vertex_get(hid0) or existing
+        return {"kit": kit_id, "harnessId": hid0,
+                "route": (kit.get("app") or {}).get("route") or "", "created": False,
+                "harness": _harness_out(existing)}
+
+    spec = kit.get("harness") or {}
+    # An explicit choice from the launch dialog wins; no choice means take the recommendation.
+    # It is validated rather than trusted: a pairing nothing can serve produces a Harness whose
+    # every turn fails, and the failure would surface far from the launch that caused it.
+    want_base = (body_in.base if body_in else "").strip()
+    want_model = (body_in.model if body_in else "").strip()
+    if want_base:
+        if want_base not in _BASE_CATALOG:
+            raise uhp_error(400, "invalid_base", f"No base harness '{want_base}'.", "base")
+        if not await _base_serves(org, want_base, want_model):
+            raise uhp_error(400, "model_unavailable",
+                            f"Nothing you have connected can run {want_model or 'that model'} "
+                            f"on {want_base}.", "model")
+        base, model = want_base, want_model
+    else:
+        base, model = await _kit_base(org, kit)
+    body = HarnessBody(name=spec.get("name") or kit.get("title") or kit_id,
+                       base=base,
+                       default_model=model,
+                       system_prompt=spec.get("system_prompt") or "",
+                       skills=_kit_skills(kit),
+                       mcp_servers=spec.get("mcp_servers") or [],
+                       disabled_tools=spec.get("disabled_tools") or [])
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
+    body.skills = await _skills_prepare(body.skills)
+    hid = _rid("chrn")
+    now = str(int(time.time() * 1000))
+    props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
+             **_harness_props(body),
+             # The kit that made it. This is what keeps launch idempotent and what lets the app
+             # find its own Harness without the user picking one from a list.
+             "kit": kit_id,
+             "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
+    await _vg_upsert("Harness", hid, props)
+    v = {"id": hid, **props}
+    if decl:
+        await _hosted_db_entry(hid, v, decl)
+        v = await _vertex_get(hid) or v
+    if db_in:
+        await _hosted_db_attach(org, hid, v, decl, checked, db_in.sample_rows)
+        v = await _vertex_get(hid) or v
+    if media_decl:
+        await _hosted_media_attach(org, hid, v, media_decl)
+        v = await _vertex_get(hid) or v
+    print(f"[kits] launched {kit_id} -> {hid}", flush=True)
+    return {"kit": kit_id, "harnessId": hid,
+            "route": (kit.get("app") or {}).get("route") or "", "created": True,
+            "harness": _harness_out(v)}
+
+
 @app.get("/v1/harnesses")
 async def list_harnesses_public(request: Request) -> dict:
     p = await _principal(request)
     org = p.get("org", "")
     if not org:
-        raise HTTPException(401, "invalid or missing HarnessRouter API key")
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     # Org-scoped, member-agnostic (see list_harnesses): an API key sees every harness in its
     # org — narrowed to its workspace when the key is workspace-scoped — exactly like the
     # console, so both surfaces always agree.
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(r) for r in rows
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     ws = str(p.get("workspace") or "")
     if ws:
@@ -6455,8 +11443,46 @@ async def get_harness_public(hid: str, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
-    return _harness_out(v)
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    return _harness_out(await _mcp_migrate(org, hid, v))
+
+
+@app.get("/v1/bases")
+async def list_bases(request: Request) -> dict:
+    """What each base harness is, and what it can actually do here.
+
+    The console renders bases entirely from this: models with live availability, the real tool names
+    and how far disabling one goes, and the built-in skills — which is an EMPTY list, deliberately.
+    Codex, Claude Code and Hermes each discover their own bundled skills at run time and expose no
+    way to enumerate them from outside a turn, so this server does not know them. It says so rather
+    than listing plausible names: the console previously showed four (docx, pdf, pptx, xlsx) that
+    exist nowhere, and every control next to them — Replace, Disable — acted on nothing.
+    """
+    org, _ = await _pub_org_member(request)
+    out = []
+    for bid, b in _BASE_CATALOG.items():
+        backend = b["backend"]
+        cat = _MODEL_CATALOG.get(backend, {})
+        servable = await _servable_models(org, backend)
+        ok = (lambda m: True) if servable is None else (lambda m: m in servable)
+        out.append({
+            "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
+            "status": b["status"], "systemPrompt": b["system_prompt"],
+            "defaultModel": cat.get("default", ""),
+            "models": [{"id": m, "available": ok(m), "default": m == cat.get("default")}
+                       for m in cat.get("models", [])],
+            "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
+                      for n, lbl in b["tools"]],
+            # Skills bundled into the image, which every base can use. A base ALSO discovers
+            # skills of its own at run time that nothing outside a turn can enumerate, so
+            # `builtinSkillsEnumerable` stays False: the console must say "and it brings its own"
+            # rather than presenting this list as everything the agent has.
+            "builtinSkills": [{"name": n, "title": b2["title"], "description": b2["description"],
+                               "defaultEnabled": b2["default_enabled"], "origin": b2["origin"]}
+                              for n, b2 in sorted(_builtin_skills().items())],
+            "builtinSkillsEnumerable": False,
+        })
+    return {"bases": out}
 
 
 @app.get("/v1/models")
@@ -6483,7 +11509,7 @@ async def get_harness_models_public(hid: str, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
@@ -6497,7 +11523,7 @@ async def get_harness_skill_files_public(hid: str, skill_id: str, request: Reque
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -6515,9 +11541,13 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _mcp_migrate(org, hid, v)
+    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write: see update_harness.
+    await _hosted_scrub_removed(org, hid, _mcp_list(v), body.mcp_servers)
     return _harness_out(await _vertex_get(hid) or {"id": hid})
 
 
@@ -6526,6 +11556,11 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org:
-        raise HTTPException(404, "harness not found")
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _mcp_migrate(org, hid, v)
     await _vg_upsert("Harness", hid, {"deleted": "1"})
+    # a deleted agent must not still be holding a database password, and must not still be
+    # spending at a provider
+    await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
+    await _media_harness_purge(hid)
     return {"id": hid, "deleted": True}

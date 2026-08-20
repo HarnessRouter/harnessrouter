@@ -1,0 +1,71 @@
+# Move `latest` to an already-published version, without rebuilding it.
+#
+# WHY THIS IS NOT PART OF THE RELEASE WORKFLOW
+#
+# Rebuilding in order to move a pointer is how one version number comes to mean two different
+# images: the second build picks up a newer base layer, a dependency that floated, a different
+# timestamp, and now `0.4.2` is not the `0.4.2` anyone already pulled. `imagetools create` copies
+# the manifest, so `latest` and the version resolve to the SAME digest, byte for byte, and the
+# job proves it before it finishes.
+#
+# It is deliberately manual. `latest` is what an unpinned `docker run` gets, so moving it is a
+# decision about what strangers receive, not a step that should follow automatically from a build.
+name: retag-latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published version to point latest at, without the v (e.g. 0.4.2)'
+        required: true
+
+env:
+  IMAGE: harnessrouter/harnessrouter
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the version is a real published tag
+        run: |
+          set -euo pipefail
+          V='${{ inputs.version }}'
+          case "$V" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$V' is not a semver version"; exit 1 ;;
+          esac
+          T=$(curl -sf "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${IMAGE}:pull" | jq -r .token)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
+            "https://registry-1.docker.io/v2/${IMAGE}/manifests/$V")
+          [ "$code" = 200 ] || { echo "::error::${IMAGE}:$V is not published (HTTP $code)"; exit 1; }
+          echo "$V is published"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Point latest at it
+        run: docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${{ inputs.version }}"
+
+      # Read it back from the registry rather than trusting the command's exit code: the whole
+      # promise of this job is that the two tags are the same bytes.
+      - name: Prove the two tags are one image
+        run: |
+          set -euo pipefail
+          T=$(curl -sf "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${IMAGE}:pull" | jq -r .token)
+          dig() {
+            curl -s -o /dev/null -D - -H "Authorization: Bearer $T" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
+              "https://registry-1.docker.io/v2/${IMAGE}/manifests/$1" \
+              | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}'
+          }
+          A=$(dig "${{ inputs.version }}"); B=$(dig latest)
+          echo "${{ inputs.version }} = $A"
+          echo "latest = $B"
+          [ -n "$A" ] && [ "$A" = "$B" ] || { echo "::error::latest does not match ${{ inputs.version }}"; exit 1; }
+          echo "### latest now serves ${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$A\`" >> "$GITHUB_STEP_SUMMARY"

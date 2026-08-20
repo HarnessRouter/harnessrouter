@@ -753,10 +753,23 @@
     .tag { display: inline-flex; align-items: center; min-height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-subtle); color: #4d4d57; font-size: 11.5px; }
     .section-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
     .section-actions strong { font-size: 12px; }
-    .capability-list { display: grid; gap: 8px; }
+    .capability-list { display: grid; gap: 8px; container-type: inline-size; }
     .capability-row { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; gap: 10px; align-items: center; min-height: 48px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    /* The row sits in a column narrower than the viewport — at 768 the settings form still spends
+       210px on its label, leaving the row about 270px — so the viewport is the wrong thing to ask.
+       Ask the row's own container, and put the actions under the copy before three buttons crush
+       what a tool says about itself into one word per line. */
+    @container (max-width: 420px) {
+      .capability-row { grid-template-columns: 30px minmax(0,1fr); }
+      .capability-actions { grid-column: 2; justify-content: flex-start; }
+    }
     .capability-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: var(--surface-subtle); color: var(--muted); }
     .capability-copy strong, .capability-copy span { display: block; }
+    /* A server's name and its endpoint are both single unbreakable tokens, and the second one is
+       long. Without this they spill out of the row rather than wrapping inside it, which is what
+       a narrow column does to any url. Break anywhere: a wrapped url is readable, a clipped one
+       is not, and truncating would hide the very thing this line exists to show. */
+    .capability-copy strong, .capability-copy span { overflow-wrap: anywhere; }
     .capability-copy strong { font-size: 12.5px; }
     .capability-copy span { margin-top: 3px; color: var(--muted); font-size: 10.5px; }
     .capability-actions { display: flex; align-items: center; gap: 6px; }
@@ -1359,8 +1372,6 @@
       .run-detail { padding: 0; }
       .task-detail-shell, .conversation { padding-left: 16px; padding-right: 16px; }
       .composer { padding-left: 16px; padding-right: 16px; }
-      .capability-row { grid-template-columns: 30px minmax(0,1fr); }
-      .capability-actions { grid-column: 2; justify-content: flex-start; }
       .header-row { grid-template-columns: 1fr; }
       .session-detail-head, .inspector-head { align-items: stretch; flex-direction: column; }
       .run-inspector { padding: 18px 16px; }

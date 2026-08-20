@@ -1,0 +1,477 @@
+// Starter Kits — a whole product in a folder.
+//
+// A kit is a configured Harness plus a UI that talks to it as its backend. Both are baked into
+// the image (docker/install-kits.sh), so Launch provisions the Harness and opens an app that is
+// already here — nothing is deployed and nothing is configured.
+//
+// Launch asks one question first: what to run it on. The kit declares which pairings suit its
+// work (kit.json `harness.recommended`) and the server marks which of those the caller's
+// integrations can actually serve, so the dialog offers real choices and preselects the best
+// available one. "Choose a different one" opens the full catalog as two cascading selects.
+//
+// Launch is idempotent server-side, so this page does not have to guard against a second click:
+// the second one returns the Harness the first one made.
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { authHeaders } from '@/lib/chat';
+import { harnessFetch } from '@/lib/hfetch';
+import { testDatabase } from '@/lib/harness';
+
+interface Choice {
+  base: string; model: string; baseLabel: string;
+  available: boolean; recommended: boolean;
+}
+interface Kit {
+  id: string; title: string; tagline: string; description: string;
+  icon: string; accent: string; route: string;
+  /** The kit's own mark, served from its directory. Empty when it ships none — then `icon` (an
+   *  iconify name) is what the card draws instead. */
+  iconUrl: string;
+  launched: boolean; harnessId: string | null;
+  skills: string[];
+  runningOn: { base: string; model: string } | null;
+  choices: Choice[];
+  /** Present when the kit reads a database, absent when it does not — declaring it IS the
+   *  requirement, so there is no separate "required" flag. `engines` narrows the picker to what
+   *  this kit can actually read. Nothing here describes a database already connected: which one a
+   *  launched kit reads is the kit app's business, and it names it in its own title bar. */
+  database?: { engines: string[] };
+}
+
+interface BaseModel { id: string; available: boolean }
+interface Base { id: string; label: string; models: BaseModel[] }
+
+/** What the card should say about the runtime.
+ *
+ *  A LAUNCHED kit reports what its Harness is really running — the person may have chosen
+ *  something other than the recommendation at launch, or changed it since, and showing the
+ *  recommendation instead would state something about their setup that is not true. Only a kit
+ *  that has never been launched shows a recommendation, and says so.
+ */
+function runtimeOf(kit: Kit): { label: string; model: string; suggested: boolean } | null {
+  if (kit.launched && kit.runningOn?.base) {
+    const c = kit.choices?.find((x) => x.base === kit.runningOn!.base);
+    return { label: c?.baseLabel || kit.runningOn.base, model: kit.runningOn.model, suggested: false };
+  }
+  const rec = kit.choices?.find((c) => c.recommended);
+  return rec ? { label: rec.baseLabel, model: rec.model, suggested: true } : null;
+}
+
+export default function KitsPage() {
+  const [kits, setKits] = useState<Kit[] | null>(null);
+  const [bases, setBases] = useState<Base[]>([]);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState('');
+  const [picking, setPicking] = useState<Kit | null>(null);
+
+  const reload = useCallback(() => {
+    harnessFetch('/api/harness/v1/kits', { headers: authHeaders(), cache: 'no-store' })
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
+        setKits((await r.json()).kits || []);
+      })
+      .catch((e) => setErr(e instanceof Error ? e.message : 'load failed'));
+  }, []);
+  useEffect(() => reload(), [reload]);
+
+  // Only needed by the "choose a different one" path, but it is one small request and having it
+  // already loaded means that panel opens instantly instead of flashing empty selects.
+  useEffect(() => {
+    harnessFetch('/api/harness/v1/bases', { headers: authHeaders(), cache: 'no-store' })
+      .then(async (r) => (r.ok ? setBases((await r.json()).bases || []) : undefined))
+      .catch(() => {});
+  }, []);
+
+  /** A kit app runs outside this Next app, so it gets its own tab. */
+  function openApp(route: string) {
+    window.open(route, '_blank', 'noopener,noreferrer');
+  }
+
+  async function launch(kit: Kit, base?: string, model?: string, database?: DbDraft) {
+    // Open the tab NOW, on the click, and navigate it when the launch returns. Opening it after
+    // the await is a popup the browser is entitled to block, because by then it is no longer a
+    // user gesture.
+    const tab = window.open('', '_blank', 'noopener,noreferrer');
+    setBusy(kit.id); setErr('');
+    try {
+      const r = await harnessFetch(`/api/harness/v1/kits/${kit.id}/launch`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          ...(base ? { base, model: model || '' } : {}),
+          // Sent only when a connection string was actually typed: launching a kit that already
+          // has one, without touching this field, must leave what it reads alone. The string
+          // goes straight to the server on this one request and is held nowhere else.
+          ...(database?.connectionString.trim()
+            ? { database: { engine: database.engine,
+                            connection_string: database.connectionString.trim(),
+                            sample_rows: database.sampleRows } }
+            : {}),
+        }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
+      const { route } = await r.json();
+      const url = route || `/kits/${kit.id}`;
+      if (tab) tab.location.href = url; else openApp(url);
+      setPicking(null); setBusy('');
+      reload();
+    } catch (e) {
+      tab?.close();
+      setErr(e instanceof Error ? e.message : 'launch failed');
+      setBusy(''); setPicking(null);
+    }
+  }
+
+  return (
+    // Same chrome as every other collection page (Harnesses, Integrations, Keys…). This page
+    // used `page-head`, which is styled nowhere — that is why its heading and spacing did not
+    // match the rest of the console.
+    <section className="view is-active collection-view" id="view-kits"><div className="page">
+      <div className="page-header">
+        <div>
+          <h1>Starter Kits</h1>
+          <p>A working product in one click: each kit provisions the Harness it needs and opens
+            its own app, with everything it uses included.</p>
+        </div>
+      </div>
+
+      {err && <div className="hr-error" role="alert">{err}</div>}
+
+      {kits === null && !err && <div className="kit-grid">
+        {[0, 1].map((i) => <div key={i} className="kit-card"><span className="sk" style={{ height: 236 }} /></div>)}
+      </div>}
+
+      {kits !== null && kits.length === 0 && (
+        <div className="session-empty">
+          This build ships no starter kits. They come from the starter-kit repository at image
+          build time — a build with <code>WITH_STARTER_KITS=0</code> has none.
+        </div>
+      )}
+
+      {kits !== null && kits.length > 0 && (
+        <div className="kit-grid">
+          {kits.map((k) => {
+            const run = runtimeOf(k);
+            return (
+              <article key={k.id} className="kit-card">
+                {/* A wash of the kit's own accent, so a card reads as the product it opens. */}
+                <span className="kit-wash" style={k.accent ? { background: k.accent } : undefined} />
+
+                <header className="kit-head">
+                  {/* The kit's own product mark when it ships one — the same drawing its app puts
+                      in its own title bar, so the card and the thing it opens are recognisably one
+                      product. A kit without a mark keeps the icon name from its manifest, tinted
+                      with its accent; the mark supplies its own colour and needs no tile. */}
+                  {k.iconUrl ? (
+                    <span className="kit-icon is-mark">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={k.iconUrl} alt="" width={40} height={40} />
+                    </span>
+                  ) : (
+                    <span className="kit-icon" style={k.accent ? { background: k.accent } : undefined}>
+                      <iconify-icon icon={k.icon || 'tabler:box'}></iconify-icon>
+                    </span>
+                  )}
+                  <div className="kit-titles">
+                    <h2>{k.title}</h2>
+                    <p className="kit-tagline">{k.tagline}</p>
+                  </div>
+                  {k.launched && <span className="kit-live" title="This kit is already running">Running</span>}
+                </header>
+
+                <p className="kit-desc">{k.description}</p>
+
+                {/* Everything here is a fact from the kit's own config or the server's view of
+                    this org's integrations — never a guess about what the kit might do. */}
+                <ul className="kit-facts">
+                  {run && (
+                    <li>
+                      <iconify-icon icon="tabler:cpu"></iconify-icon>
+                      {run.suggested ? 'Will run on ' : 'Running on '}{run.label}
+                      <span className="kit-fact-dim"> · {run.model}</span>
+                    </li>
+                  )}
+                  {!run && (
+                    <li className="kit-fact-warn">
+                      <iconify-icon icon="tabler:plug-connected-x"></iconify-icon>
+                      No connected provider can run this yet
+                    </li>
+                  )}
+                  {k.skills.length > 0 && (
+                    <li>
+                      <iconify-icon icon="tabler:sparkles"></iconify-icon>
+                      Installs {k.skills.join(', ')}
+                    </li>
+                  )}
+                  {/* What the kit reads, from its own declaration — not which database a launched
+                      one is pointed at. That belongs to the kit's app, which shows it where the
+                      data is actually being looked at. */}
+                  {k.database && (
+                    <li>
+                      <iconify-icon icon="tabler:database"></iconify-icon>
+                      Reads your {k.database.engines.map((e) => ENGINE_LABEL[e] || e).join(' or ')} database
+                    </li>
+                  )}
+                </ul>
+
+                <footer className="kit-actions">
+                  {k.launched && k.harnessId && (
+                    <a className="kit-link" href={`/harnesses/${k.harnessId}`}>Harness settings</a>
+                  )}
+                  {/* Reconnect. Launch is idempotent, and a connection string sent to a kit that
+                    already exists means "connect this": that is how you move a kit to another
+                    database, or recover from a password change. Without this the dialog is
+                    unreachable the moment a kit is running, because the button turns into Open
+                    and the kit's own app points at "this kit's settings", which was a place that
+                    did not exist. Only for kits that read a database. */}
+                {k.launched && k.database && (
+                  <button className="kit-link kit-link-button" type="button"
+                          onClick={() => setPicking(k)}>Reconnect database</button>
+                )}
+                <span className="kit-actions-spacer" />
+                  <button className="button primary" type="button" disabled={busy === k.id}
+                    onClick={() => (k.launched ? openApp(k.route || `/kits/${k.id}`) : setPicking(k))}>
+                    {busy === k.id ? 'Launching…' : k.launched ? 'Open' : 'Launch'}
+                    <iconify-icon icon={k.launched ? 'tabler:external-link' : 'tabler:arrow-right'}></iconify-icon>
+                  </button>
+                </footer>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {picking && (
+        <LaunchDialog
+          kit={picking} bases={bases} busy={busy === picking.id}
+          onClose={() => setPicking(null)}
+          onLaunch={(base, model, database) => void launch(picking, base, model, database)}
+        />
+      )}
+    </div></section>
+  );
+}
+
+function LaunchDialog({ kit, bases, busy, onClose, onLaunch }: {
+  kit: Kit; bases: Base[]; busy: boolean;
+  onClose: () => void; onLaunch: (base: string, model: string, database: DbDraft) => void;
+}) {
+  const recommended = kit.choices.find((c) => c.recommended) || null;
+  const [sel, setSel] = useState<string>(recommended ? `${recommended.base}/${recommended.model}` : '');
+  const [custom, setCustom] = useState(false);
+  const [cBase, setCBase] = useState(bases[0]?.id || '');
+  const [cModel, setCModel] = useState('');
+  // Sampling defaults on: the agent designs better when it can see what a column actually
+  // contains. Off is one click away, and it is a real switch — off means the agent receives table
+  // and column names and not one value.
+  const [db, setDb] = useState<DbDraft>(() =>
+    ({ engine: kit.database?.engines[0] || 'postgres', connectionString: '', sampleRows: true }));
+
+  // Models are per base, so changing the agent has to re-pick the model rather than keep one the
+  // new agent cannot run. First available, not first listed — an unavailable default is a trap.
+  const baseModels = bases.find((b) => b.id === cBase)?.models || [];
+  useEffect(() => {
+    if (!baseModels.some((m) => m.id === cModel && m.available)) {
+      setCModel(baseModels.find((m) => m.available)?.id || '');
+    }
+  }, [cBase, baseModels, cModel]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const nothingAvailable = !kit.choices.some((c) => c.available);
+  // A kit that reads a database cannot be launched the first time without one — every panel it
+  // builds would have nothing to read. Relaunching keeps what it already reads, so a blank field
+  // is fine once it has been launched.
+  const missing = Boolean(kit.database) && !kit.launched && !db.connectionString.trim();
+  // Reconnecting does not choose a runtime: the server keeps the harness it already made and
+  // applies only the connection, so requiring a choice here would disable the button behind a
+  // picker that is deliberately not on screen.
+  const canLaunch = kit.launched
+    ? Boolean(db.connectionString.trim())
+    : (custom ? Boolean(cBase && cModel) : Boolean(sel)) && !missing;
+
+  function go() {
+    if (custom) { onLaunch(cBase, cModel, db); return; }
+    const [base, ...rest] = sel.split('/');
+    onLaunch(base, rest.join('/'), db);
+  }
+
+  return (
+    <div className="kit-overlay" role="dialog" aria-modal="true" aria-labelledby="kit-launch-title"
+         onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="kit-dialog">
+        <button className="kit-dialog-x" type="button" onClick={onClose} aria-label="Close">
+          <iconify-icon icon="tabler:x"></iconify-icon>
+        </button>
+        <h2 id="kit-launch-title">{kit.launched ? `Reconnect ${kit.title}` : `Launch ${kit.title}`}</h2>
+        <p className="kit-dialog-sub">{kit.launched
+          ? 'Point it at a different database, or give it a new password for the one it already reads.'
+          : 'Choose what it runs on. You can change this later in the Harness settings.'}</p>
+
+        {!kit.launched && nothingAvailable && !custom && (
+          <div className="hr-error" role="alert">
+            None of these can run yet — connect a provider on the Integrations page first.
+          </div>
+        )}
+
+        {!kit.launched && !custom && (
+          <div className="kit-choices">
+            {kit.choices.map((c) => {
+              const id = `${c.base}/${c.model}`;
+              return (
+                <label key={id} className={`kit-choice${c.available ? '' : ' is-off'}`}>
+                  <input type="radio" name="kit-choice" value={id} checked={sel === id}
+                         disabled={!c.available} onChange={() => setSel(id)} />
+                  <span className="kit-choice-body">
+                    <span className="kit-choice-top">
+                      <strong>{c.baseLabel}</strong>
+                      {c.recommended && <span className="kit-badge">Recommended</span>}
+                    </span>
+                    <span className="kit-choice-model">{c.model}</span>
+                    {!c.available && (
+                      <span className="kit-choice-why">Not connected — add a provider that serves
+                        this model to use it.</span>
+                    )}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+
+        {custom && (
+          <div className="kit-custom">
+            <label className="kit-field">
+              <span>Harness</span>
+              <select value={cBase} onChange={(e) => setCBase(e.target.value)}>
+                {bases.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+              </select>
+            </label>
+            <label className="kit-field">
+              <span>Model</span>
+              <select value={cModel} onChange={(e) => setCModel(e.target.value)}>
+                {baseModels.length === 0 && <option value="">No models</option>}
+                {baseModels.map((m) => (
+                  <option key={m.id} value={m.id} disabled={!m.available}>
+                    {m.id}{m.available ? '' : ' — not connected'}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {cBase && !baseModels.some((m) => m.available) && (
+              <p className="kit-choice-why">Nothing you have connected can run this harness.</p>
+            )}
+          </div>
+        )}
+
+        {/* The one surface that collects a connection string, and it is here because the KIT says
+            it needs one — nothing about a database is special anywhere else. Relaunching with the
+            field filled in is also how a changed password gets fixed. */}
+        {kit.database && (
+          <div className="kit-db">
+            <h3 className="kit-db-title">
+              {kit.launched ? 'Change the database it reads' : 'Connect your database'}
+            </h3>
+            {kit.launched && (
+              <p className="kit-choice-why">Leave this blank to keep reading what it reads today.</p>
+            )}
+            <DatabaseFields engines={kit.database.engines} value={db} onChange={setDb} />
+          </div>
+        )}
+
+        <div className="kit-dialog-actions">
+          <button className="button ghost" type="button" onClick={() => setCustom((v) => !v)}>
+            {custom ? 'Back to recommended' : 'Choose a different one'}
+          </button>
+          <span className="kit-dialog-spacer" />
+          <button className="button" type="button" onClick={onClose}>Cancel</button>
+          <button className="button primary" type="button" disabled={busy || !canLaunch} onClick={go}>
+            {busy ? (kit.launched ? 'Connecting…' : 'Launching…') : (kit.launched ? 'Reconnect' : 'Launch')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Connecting a database ─────────────────────────────────────────────────────────────────────
+// Local to this page, not shared: a kit's launch dialog is the only place a connection string is
+// ever typed. It used to be shared with the Harness tool modal, back when a database was a kind
+// of tool you could add there — it is not, so there is one caller and it lives with it.
+
+/** What to call each kind of database in front of a person. */
+const ENGINE_LABEL: Record<string, string> = {
+  postgres: 'PostgreSQL',
+  mysql: 'MySQL / MariaDB',
+};
+
+/** Placeholder for a connection string, per kind — the format is the question people ask. */
+const ENGINE_EXAMPLE: Record<string, string> = {
+  postgres: 'postgresql://user:password@host:5432/database',
+  mysql: 'mysql://user:password@host:3306/database',
+};
+
+type DbDraft = { engine: string; connectionString: string; sampleRows: boolean };
+
+/** The fields that connect a database.
+ *
+ *  The connection string is held nowhere but this component's state and the request that carries
+ *  it: it is not put in the URL, not put in local storage, and nothing ever sends it back.
+ */
+function DatabaseFields({ engines, value, onChange }: {
+  engines: string[]; value: DbDraft; onChange: (d: DbDraft) => void;
+}) {
+  const [test, setTest] = useState<null | { busy?: boolean; ok?: boolean; message?: string }>(null);
+  // Any edit invalidates the last answer: a status line about a string that is no longer in the
+  // box is worse than no status line.
+  const set = (p: Partial<DbDraft>) => { onChange({ ...value, ...p }); setTest(null); };
+  const kinds = engines.length ? engines : Object.keys(ENGINE_LABEL);
+
+  async function runTest() {
+    setTest({ busy: true });
+    const r = await testDatabase(value.engine, value.connectionString.trim());
+    // The table count is the server's own answer, and it is the number that tells someone whether
+    // the account they typed can actually see their data.
+    setTest(r.ok ? { ok: true, message: `${r.database} · ${r.tableCount} tables` }
+                 : { ok: false, message: r.error || 'could not connect' });
+  }
+
+  return (
+    <>
+      {kinds.length > 1 && (
+        <div className="hr-field"><label>Type</label>
+          <select value={value.engine} onChange={(e) => set({ engine: e.target.value })}>
+            {kinds.map((e) => <option key={e} value={e}>{ENGINE_LABEL[e] || e}</option>)}
+          </select></div>
+      )}
+      <div className="hr-field"><label>Connection string</label>
+        <input type="text" value={value.connectionString} spellCheck={false} autoComplete="off"
+          className="db-conn" placeholder={ENGINE_EXAMPLE[value.engine] || ''}
+          onChange={(e) => set({ connectionString: e.target.value })} />
+        <span className="hr-meta">Use an account that can only read. Your connection is stored securely and is never shown again.</span>
+      </div>
+      <div className="mcp-test-row">
+        <button className="hr-btn" type="button"
+          disabled={!value.connectionString.trim() || test?.busy} onClick={() => void runTest()}>
+          {test?.busy ? 'Testing…' : 'Test connection'}</button>
+        {test && !test.busy && (test.ok
+          ? <span className="mcp-test-status ok"><span className="mcp-dot" />Connected · {test.message}</span>
+          : <span className="mcp-test-status err"><span className="mcp-dot" />{test.message}</span>)}
+      </div>
+      <label className="db-sample">
+        <input type="checkbox" checked={value.sampleRows}
+          onChange={(e) => onChange({ ...value, sampleRows: e.target.checked })} />
+        <span>
+          <strong>Let it see a few example rows</strong>
+          <em>With this on the agent reads a handful of rows per table, so it can tell what a
+            column holds. With it off it sees table and column names and no values at all.</em>
+        </span>
+      </label>
+    </>
+  );
+}

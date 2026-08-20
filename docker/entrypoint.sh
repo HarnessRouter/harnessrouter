@@ -40,6 +40,10 @@ export HR_POOL_AUTH="${HR_POOL_AUTH:-none}"
 # to the runner directly instead of being brokered. See _auth_from_conn in gateway/app.py for
 # why this is an explicit mode and never a fallback.
 export HR_SANDBOX_TRUST="${HR_SANDBOX_TRUST:-owner}"
+# Image generation through the broker. Safe to default on HERE and nowhere else: self-hosted is
+# bring-your-own-key, so the images an agent makes are billed to the operator's own provider
+# account and there is nothing for us to meter.
+export HR_BROKER_IMAGES="${HR_BROKER_IMAGES:-1}"
 
 # The gateway signs its own internal calls. Generated per container if not supplied, so a
 # default install has no shared secret and nothing to leak; it never leaves this process tree.
@@ -99,6 +103,15 @@ elif [ "$HR_AUTH_PASSWORD" = "harnessrouter" ]; then
   echo "[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance."
 fi
 export PORT="${PORT:-3000}"
+# Next binds to $HOSTNAME, and Docker sets that to the container id, which resolves to ONE of the
+# container's addresses. That is fine with a single network and silently fatal with two: connect
+# this container to a user-defined network — which is exactly what the README tells you to do to
+# reach a database — and after the next restart Next comes up on that network's address while the
+# published port still forwards to the bridge one. Nothing is listening where the port lands, so
+# the console answers 502 while the container reports healthy and the log says "Ready".
+# Measured on the test box 2026-08-16: LISTEN 172.18.0.5:3000, published 127.0.0.1:3000 -> the
+# bridge ip. Binding every interface is the only answer that survives a second network.
+export HOSTNAME=0.0.0.0
 
 # ── agent CLIs: installed here, not shipped in the image ──────────────────────
 # Claude Code is distributed under Anthropic's own terms and hermes-agent declares no license,
@@ -111,7 +124,7 @@ export PORT="${PORT:-3000}"
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -122,7 +135,26 @@ backend_bin() {
     claude) echo "$TOOLS/bin/claude" ;;
     codex)  echo "$TOOLS/bin/codex" ;;
     hermes) echo "$TOOLS/venv/bin/hermes" ;;
+    pi)     echo "$TOOLS/bin/pi" ;;
+    dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
   esac
+}
+
+# Run an install and, if it fails, SAY WHY.
+#
+# This was `>/dev/null 2>&1 || true`, and the silence cost a day of someone's life: a root-owned
+# npm cache baked into the image made every `npm install` fail with EACCES, and the only trace was
+# the "requested but not installed" line further down — which reads like a configuration choice,
+# not a broken install. An optional step may fail without stopping start-up; it may not fail
+# without leaving the reason where the person looking will find it.
+try_install() {
+  label="$1"; shift
+  log="$(mktemp)"
+  if "$@" >"$log" 2>&1; then rm -f "$log"; return 0; fi
+  echo "[harnessrouter] WARN: could not install $label — it will not be available:"
+  tail -n 12 "$log" | sed 's/^/[harnessrouter]   /'
+  rm -f "$log"
+  return 1
 }
 
 install_backends() {
@@ -132,24 +164,87 @@ install_backends() {
   # entry point, which npm reports as success.
   if wanted claude && [ ! -x "$(backend_bin claude)" ]; then
     echo "[harnessrouter] installing Claude Code (Anthropic's terms apply)…"
-    npm install -g --prefix "$TOOLS" --no-audit --no-fund @anthropic-ai/claude-code >/dev/null 2>&1 || true
+    try_install "Claude Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund @anthropic-ai/claude-code || true
   fi
 
   if wanted codex && [ ! -x "$(backend_bin codex)" ]; then
     echo "[harnessrouter] installing Codex (Apache-2.0)…"
-    npm install -g --prefix "$TOOLS" --no-audit --no-fund @openai/codex >/dev/null 2>&1 || true
+    try_install "Codex" npm install -g --prefix "$TOOLS" --no-audit --no-fund @openai/codex || true
+  fi
+
+  if wanted pi && [ ! -x "$(backend_bin pi)" ]; then
+    echo "[harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…"
+    # --ignore-scripts is pi's own documented install form. The MCP adapter is a pi extension
+    # (github.com/nicobailon/pi-mcp-adapter): pi deliberately ships without MCP, and the runner
+    # mounts this adapter via -e only on turns that actually configure MCP servers.
+    try_install "Pi" npm install -g --prefix "$TOOLS" --no-audit --no-fund --ignore-scripts \
+        @earendil-works/pi-coding-agent pi-mcp-adapter || true
+  fi
+
+  if wanted dsh && [ ! -x "$(backend_bin dsh)" ]; then
+    echo "[harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…"
+    # Pinned EXACTLY, not 'latest': upstream is a developer preview that warns of breaking
+    # changes, and the runner's driver/normalizer are written against these bytes. An upgrade
+    # is an adapter-compatibility change that lands through a PR, never through a fresh volume
+    # pulling a newer wheel. Own venv: its dependency tree must not fight hermes's.
+    try_install "DeepSeek Harness" sh -c "\"$PY\" -m venv \"$TOOLS/dsh-venv\" \
+        && \"$TOOLS/dsh-venv/bin/pip\" install --no-cache-dir -q \
+             'deepseek-harness-sdk==0.1.0rc7' 'deepseek-harness-runtime-bin==0.1.0rc7' pyyaml \
+        && \"$TOOLS/dsh-venv/bin/python\" -c 'import deepseek_harness, deepseek_harness_runtime, yaml; deepseek_harness_runtime.bundled_runtime_path()' \
+        && printf '#!/bin/sh\nexit 0\n' > \"$TOOLS/dsh-venv/bin/dsh-ready\" \
+        && chmod +x \"$TOOLS/dsh-venv/bin/dsh-ready\"" || true
+    # dsh-ready exists ONLY after the import check proved the runtime executable resolves —
+    # a venv whose pip half-failed must not report the backend as available.
   fi
 
   if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
-    { "$PY" -m venv "$TOOLS/venv" \
-        && "$TOOLS/venv/bin/pip" install --no-cache-dir -q "hermes-agent==0.19.0" anthropic mcp; } \
-      >/dev/null 2>&1 || true
+    try_install "Hermes" sh -c "\"$PY\" -m venv \"$TOOLS/venv\" \
+        && \"$TOOLS/venv/bin/pip\" install --no-cache-dir -q \
+             'hermes-agent==0.19.0' anthropic '$HERMES_MCP_PIN'" || true
   fi
 
   [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"
   # Hermes otherwise tries to install its own dependencies mid-turn.
   export HERMES_DISABLE_LAZY_INSTALLS=1
+  # `wanted hermes && verify_hermes_mcp` looks equivalent and is not: as the LAST command in the
+  # function it becomes the function's exit status, so under `set -e` an instance that did not ask
+  # for hermes aborted the whole entrypoint — exit 1, no message, the log ending on an install line
+  # so it read as if the install had killed it. HR_BACKENDS=claude, =codex and =claude,codex were
+  # all unusable, which is exactly the choice the licence note above asks people to make.
+  # Where the runner finds the MCP extension to mount (-e) on pi turns with MCP servers.
+  [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ] && export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
+  [ -x "$TOOLS/dsh-venv/bin/python" ] && export HR_DSH_PYTHON="$TOOLS/dsh-venv/bin/python"
+  if wanted hermes; then verify_hermes_mcp; fi
+}
+
+# hermes 0.19.0 gates HTTP MCP on importing `streamablehttp_client`, the name the mcp SDK
+# deprecated and REMOVED in 2.0.0. With an unpinned `mcp`, pip resolves 2.0.0, that import fails,
+# and hermes disables HTTP MCP entirely — every remote MCP server a user configures is dropped with
+# only a line in a log file inside the workspace. The agent then answers "I can't access that tool",
+# which reads as a model refusal rather than a broken install.
+#
+# So the SDK is pinned below 2.0, and the pin is VERIFIED rather than assumed: lazy installs are
+# sealed, so hermes cannot repair this itself, and a volume provisioned before the pin still has
+# the broken version. Checking the exact symbol hermes checks turns a silent capability loss into
+# one line on start-up — and repairs it in place.
+HERMES_MCP_PIN="${HERMES_MCP_PIN:-mcp>=1.9,<2}"
+
+verify_hermes_mcp() {
+  [ -x "$TOOLS/venv/bin/python" ] || return 0
+  "$TOOLS/venv/bin/python" - <<'PYEOF' && return 0
+try:
+    from mcp.client.streamable_http import streamablehttp_client  # noqa: F401
+except Exception:
+    raise SystemExit(1)
+PYEOF
+  echo "[harnessrouter] repairing Hermes MCP support (installed mcp SDK lacks the transport it needs)…"
+  "$TOOLS/venv/bin/pip" install --no-cache-dir -q "$HERMES_MCP_PIN" >/dev/null 2>&1 || true
+  if "$TOOLS/venv/bin/python" -c "from mcp.client.streamable_http import streamablehttp_client" 2>/dev/null; then
+    echo "[harnessrouter] Hermes MCP support restored"
+  else
+    echo "[harnessrouter] WARNING: Hermes cannot use HTTP MCP servers — remote tools will be unavailable on that backend"
+  fi
 }
 
 install_backends
@@ -159,7 +254,7 @@ cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null |
 trap cleanup TERM INT EXIT
 
 avail=""; missing=""
-for b in claude codex hermes; do
+for b in claude codex hermes pi dsh; do
   wanted "$b" || continue
   if [ -x "$(backend_bin "$b")" ]; then avail="$avail $b"; else missing="$missing $b"; fi
 done
