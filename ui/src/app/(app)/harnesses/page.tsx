@@ -54,6 +54,7 @@ export default function HarnessesPage() {
       // 'pi' must be an exact-ish match: substring would also catch every base that merely
       // contains the letters (nothing today, but 'claude' teaches the lesson cheaply).
       if (baseFlt === 'pi') return b === 'pi' || b.startsWith('pi ');
+      if (baseFlt === 'dsh') return b === 'dsh' || b.includes('deepseek');
       return b.includes('claude');
     })
     .filter((r) => healthFlt === 'all' || (healthFlt === 'review') === isDegraded(r));
@@ -87,6 +88,7 @@ export default function HarnessesPage() {
               <option value="codex">Codex</option>
               <option value="claude">Claude Code</option>
               <option value="pi">Pi</option>
+              <option value="dsh">DeepSeek Harness</option>
               <option value="hermes">Hermes</option>
             </select>
             <select className="select" aria-label="Filter Harnesses by health" value={healthFlt} onChange={(e) => setHealthFlt(e.target.value)}>
@@ -158,7 +160,9 @@ export default function HarnessesPage() {
                               ? 'Self-improving agent that builds memory and skills across Tasks, best for evolving, long-running work.'
                               : o.id === 'pi'
                                 ? 'Minimal, steerable harness with four core tools, best when you want a lean agent you can shape.'
-                                : 'Best for long-context analysis, document workflows, and structured review.'}</span></span>
+                                : o.id === 'dsh'
+                                  ? 'DeepSeek\u2019s own agent runtime, best for deep-reasoning work on the DeepSeek model family.'
+                                  : 'Best for long-context analysis, document workflows, and structured review.'}</span></span>
                         <span className="base-choice-models">{oobDefaultModel(o)} default</span>
                       </label>
                     ))}
