@@ -61,15 +61,15 @@ export const OOB: OobHarness[] = [
     models: ['claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5'], defaultModel: 'claude-opus-4.8', moreModels: 0,
     systemPrompt: 'You are Claude Code, an agentic coding assistant. You work on a real local git working tree with bash, edit files, run tests, and use sub-agents to complete engineering tasks end to end.',
     tools: [], skills: [] },
-  { id: 'pi', name: 'Pi', version: 'v0.84.2', backend: 'pi', status: 'ready',
-    // Multi-family like Hermes: the gpt + claude catalogs (placeholder until /v1/models lands).
-    models: ['gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'gpt-5.4', moreModels: 0,
-    systemPrompt: 'You are Pi, a minimal autonomous coding agent. You operate on a real git workspace, reading, writing and editing files and running bash to complete the task end to end.',
-    tools: [], skills: [] },
   { id: 'hermes', name: 'Hermes', version: 'v0.19.0', backend: 'hermes', status: 'ready',
     // Multi-family: Hermes runs any frontier model, the gpt + claude catalogs, default gpt-5.5.
     models: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'kimi-k3', 'glm-5.2', 'qwen3.7-max'], defaultModel: 'gpt-5.5', moreModels: 0,
     systemPrompt: 'You are Hermes, a self-improving autonomous agent. You work on a real project workspace with shell and file access, complete tasks end to end, and build a persistent memory and skill library from what you learn, getting more capable the longer you run.',
+    tools: [], skills: [] },
+  { id: 'pi', name: 'Pi', version: 'v0.84.2', backend: 'pi', status: 'ready',
+    // Multi-family like Hermes: the gpt + claude catalogs (placeholder until /v1/models lands).
+    models: ['gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are Pi, a minimal autonomous coding agent. You operate on a real git workspace, reading, writing and editing files and running bash to complete the task end to end.',
     tools: [], skills: [] },
 ];
 
