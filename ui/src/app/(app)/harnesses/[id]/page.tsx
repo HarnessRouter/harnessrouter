@@ -7,12 +7,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { SkelPage } from '@/components/Skel';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
+  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
   modelAvailable,
-  type CustomHarness, type OobHarness } from '@/lib/harness';
+  type CustomHarness, type McpServer, type OobHarness } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
-import { SkillEditor, McpModal, type McpServer } from '@/components/HarnessEditors';
+import { SkillEditor, McpModal, McpRow } from '@/components/HarnessEditors';
 import { fetchTraceWindow, statsFor, p95Of, avgCreditsOf, type TraceCard } from '@/lib/revamp-data';
 import { SELF_HOSTED } from '@/lib/edition';
 
@@ -52,6 +52,11 @@ export default function HarnessSettingsPage() {
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
   useModelCatalog();   // model list comes from the gateway, not a local copy
   const base = oob || oobById(draft?.base || '') || null;
+  // Capabilities come from the server, never from the static table: it once advertised four
+  // built-in skills that existed nowhere, with controls beside them that acted on nothing.
+  const bases = useBases();
+  const srvBase = bases?.[base?.id || draft?.base || ''] || null;
+  const baseTools = srvBase?.tools || [];
   const models = oobModels(base);
   const upd = (p: Partial<CustomHarness>) => setDraft((d) => (d ? { ...d, ...p } : d));
 
@@ -88,7 +93,9 @@ export default function HarnessSettingsPage() {
   const readOnly = Boolean(oob);
   const skills = draft?.skills || [];
   const ownSkills = skills.map((s, idx) => ({ s, idx })).filter(({ s }) => isOwnSkill(s));
-  const baseSkillNames = (base?.skills || []).filter((n) => !ownSkills.some(({ s }) => s.name === n));
+  // Built-ins the harness has not replaced with one of its own. A built-in is implicit: the
+  // harness stores an entry only when its answer differs from the image's default.
+  const baseSkills = (srvBase?.builtinSkills || []).filter((b) => !ownSkills.some(({ s }) => s.name === b.name));
   const disabledTools = new Set(draft?.disabledTools || []);
 
   const stats = statsFor(cards);
@@ -107,19 +114,6 @@ export default function HarnessSettingsPage() {
               <div className="detail-title"><h1>{name}</h1>
                 <p><span className={'status ' + (degraded ? 'warning' : 'healthy')}>{degraded ? 'Needs review' : 'Connected and healthy'}</span> · Base Harness: {base?.name || draft?.baseLabel}{readOnly ? ' · built-in' : ''}</p></div>
             </div>
-          </div>
-          <div className="header-actions">
-            {readOnly && (
-              <button className="button" type="button" disabled={busy} onClick={async () => {
-                setBusy(true);
-                try {
-                  const c = await createCustom({ name: `${oob!.name} (custom)`, base: oob!.id, defaultModel: oobDefaultModel(oob), systemPrompt: oob!.systemPrompt });
-                  router.push(`/harnesses/${encodeURIComponent(c.id)}`);
-                } finally { setBusy(false); }
-              }}><iconify-icon icon="tabler:git-fork"></iconify-icon>Fork and Customize</button>
-            )}
-            <button className="button primary" type="button" onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
-              <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
           </div>
         </div>
 
@@ -172,7 +166,7 @@ export default function HarnessSettingsPage() {
           <section className="form-section">
             <div><h3>Agent instructions</h3><p>Persistent role, conventions, constraints, and output contract loaded on every Task.</p></div>
             <div className="field-stack">
-              <div className="field"><label htmlFor="hsInstructions">{['codex', 'hermes'].includes(base?.id || draft?.base || '') ? 'AGENTS.md' : 'CLAUDE.md'}</label>
+              <div className="field"><label htmlFor="hsInstructions">{['codex', 'hermes', 'pi', 'dsh'].includes(base?.id || draft?.base || '') ? 'AGENTS.md' : 'CLAUDE.md'}</label>
                 <textarea id="hsInstructions" rows={7} disabled={readOnly}
                   value={oob ? oob.systemPrompt : (draft?.systemPrompt || '')}
                   onChange={(e) => upd({ systemPrompt: e.target.value })} />
@@ -183,32 +177,31 @@ export default function HarnessSettingsPage() {
           <section className="form-section">
             <div><h3>Tools</h3><p>Control inherited tools and add MCP servers for external capabilities.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{(base?.tools?.length || 0) + (draft?.mcpServers?.length || 0)} configured tools</strong>
-                {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add MCP</button>}</div>
+              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0)} configured tools</strong>
+                {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add tool</button>}</div>
               <div className="capability-list">
-                {(base?.tools || []).map((t) => (
-                  <div key={t} className="capability-row">
+                {baseTools.map((t) => (
+                  <div key={t.name} className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:plug"></iconify-icon></span>
-                    <div className="capability-copy"><strong>{t}</strong><span>Inherited from {base?.name}</span></div>
+                    <div className="capability-copy"><strong>{t.label}</strong>
+                      <span>Built into {base?.name}
+                        {t.enforcement === 'instruction' && ' · disabling asks the agent not to use it'}</span></div>
                     <div className="capability-actions">
-                      <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={!disabledTools.has(t)}
-                        onClick={() => upd({ disabledTools: disabledTools.has(t) ? (draft?.disabledTools || []).filter((x) => x !== t) : [...(draft?.disabledTools || []), t] })}>
-                        {disabledTools.has(t) ? 'Disabled' : 'Enabled'}</button>
+                      <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={!disabledTools.has(t.name)}
+                        onClick={() => upd({ disabledTools: disabledTools.has(t.name) ? (draft?.disabledTools || []).filter((x) => x !== t.name) : [...(draft?.disabledTools || []), t.name] })}>
+                        {disabledTools.has(t.name) ? 'Disabled' : 'Enabled'}</button>
                     </div>
                   </div>
                 ))}
+                {/* Every MCP server this Harness has, one row each and no exceptions — a database
+                    a kit connected is one of them. It has to appear here: a capability nobody can
+                    see on the page that lists capabilities is a capability nobody can audit, and
+                    reviewing an agent has to reveal that it can read a production database. */}
                 {(draft?.mcpServers || []).map((m, idx) => (
-                  <div key={m.id || idx} className="capability-row">
-                    <span className="capability-icon"><iconify-icon icon="tabler:world-www"></iconify-icon></span>
-                    <div className="capability-copy"><strong>{m.name}</strong><span>Custom MCP · {m.url || 'endpoint'}</span></div>
-                    <div className="capability-actions">
-                      <button className="button quiet small" type="button" onClick={() => setMcpModal({ idx })}>Edit</button>
-                      <button className="button quiet small" type="button" onClick={() => upd({ mcpServers: (draft?.mcpServers || []).filter((_, k) => k !== idx) })}>Delete</button>
-                      <button className="toggle-button" type="button" aria-pressed={m.enabled !== false}
-                        onClick={() => upd({ mcpServers: (draft?.mcpServers || []).map((x, k) => (k === idx ? { ...x, enabled: !(x.enabled !== false) } : x)) })}>
-                        {m.enabled !== false ? 'Enabled' : 'Disabled'}</button>
-                    </div>
-                  </div>
+                  <McpRow key={m.id || idx} server={m} busy={busy}
+                    onEdit={() => setMcpModal({ idx })}
+                    onDelete={() => upd({ mcpServers: (draft?.mcpServers || []).filter((_, k) => k !== idx) })}
+                    onToggle={() => upd({ mcpServers: (draft?.mcpServers || []).map((x, k) => (k === idx ? { ...x, enabled: !(x.enabled !== false) } : x)) })} />
                 ))}
               </div>
             </div>
@@ -217,7 +210,7 @@ export default function HarnessSettingsPage() {
           <section className="form-section">
             <div><h3>Skills</h3><p>Add Harness-specific workflows, replace inherited Skills, or disable capabilities this agent should not use.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{ownSkills.length + baseSkillNames.length} configured Skills</strong>
+              <div className="section-actions"><strong>{ownSkills.length + baseSkills.length} configured Skills</strong>
                 {!readOnly && <button className="button small" type="button" onClick={() => setNewSkill({ name: '' })}>
                   <iconify-icon icon="tabler:plus"></iconify-icon>Add Skill</button>}</div>
               <div className="capability-list">
@@ -234,12 +227,16 @@ export default function HarnessSettingsPage() {
                     </div>
                   </div>
                 ))}
-                {baseSkillNames.map((n) => {
-                  const off = skills.some((s) => s.name === n && s.enabled === false && !isOwnSkill(s));
+                {baseSkills.map((b) => {
+                  const n = b.name;
+                  const stored = skills.find((s) => s.name === n && !isOwnSkill(s));
+                  // No stored entry means the image's default applies.
+                  const off = stored ? stored.enabled === false : !b.defaultEnabled;
                   return (
                     <div key={'inh-' + n} className="capability-row">
                       <span className="capability-icon"><iconify-icon icon="tabler:bulb"></iconify-icon></span>
-                      <div className="capability-copy"><strong>{n}</strong><span>Inherited from {base?.name}</span></div>
+                      <div className="capability-copy"><strong>{b.title || n}</strong>
+                        <span>{b.description || 'Built in'}</span></div>
                       <div className="capability-actions">
                         {!readOnly && <button className="button quiet small" type="button" onClick={() => {
                           if (!draft) return;
@@ -250,12 +247,29 @@ export default function HarnessSettingsPage() {
                           setEditSkillIdx(rest.length);
                         }}>Replace</button>}
                         <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={!off}
-                          onClick={() => upd({ skills: off ? skills.filter((s) => !(s.name === n && s.enabled === false)) : [...skills, { id: 'skl_' + crypto.randomUUID().replace(/-/g, ''), name: n, enabled: false }] })}>
+                          onClick={() => {
+                            const rest = skills.filter((s) => !(s.name === n && !isOwnSkill(s)));
+                            // Store an entry only when the harness disagrees with the image's
+                            // default; agreeing with it stores nothing, so the harness keeps
+                            // following the image as the bundled set changes.
+                            const want = off;   // clicking flips it to this
+                            upd({ skills: want === b.defaultEnabled ? rest
+                              : [...rest, { id: 'skl_' + crypto.randomUUID().replace(/-/g, ''), name: n, enabled: want }] });
+                          }}>
                           {off ? 'Disabled' : 'Enabled'}</button>
                       </div>
                     </div>
                   );
                 })}
+                {ownSkills.length === 0 && baseSkills.length === 0 && (
+                  <div className="capability-row">
+                    <span className="capability-icon"><iconify-icon icon="tabler:bulb"></iconify-icon></span>
+                    <div className="capability-copy"><strong>No Skills added yet</strong>
+                      <span>{srvBase && !srvBase.builtinSkillsEnumerable
+                        ? `${base?.name} brings its own Skills and discovers them when it runs, so they can't be listed here. Add a Skill to give this Harness something of your own.`
+                        : 'Add a Skill to give this Harness a workflow of your own.'}</span></div>
+                  </div>
+                )}
               </div>
             </div>
           </section>
@@ -307,7 +321,30 @@ export default function HarnessSettingsPage() {
               {dirty && (
                 <button className="button" type="button" disabled={busy} onClick={() => setDraft(saved)}>Discard Changes</button>
               )}
-              <button className="button primary" type="submit" disabled={!dirty || busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
+              {dirty ? (
+                <button className="button primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
+              ) : (
+                <button className="button primary" type="button"
+                  onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
+                  <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
+              )}
+            </div>
+          )}
+          {/* Built-ins have nothing to save, but they still need somewhere to act — same bar,
+              same corner, so the action never moves depending on which harness you opened. */}
+          {readOnly && (
+            <div className="settings-form-footer settings-footer-sticky">
+              <span className="settings-footer-spacer" />
+              <button className="button" type="button" disabled={busy} onClick={async () => {
+                setBusy(true);
+                try {
+                  const c = await createCustom({ name: `${oob!.name} (custom)`, base: oob!.id, defaultModel: oobDefaultModel(oob), systemPrompt: oob!.systemPrompt });
+                  router.push(`/harnesses/${encodeURIComponent(c.id)}`);
+                } finally { setBusy(false); }
+              }}><iconify-icon icon="tabler:git-fork"></iconify-icon>Fork and Customize</button>
+              <button className="button primary" type="button"
+                onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
+                <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
             </div>
           )}
         </form>
@@ -351,11 +388,14 @@ export default function HarnessSettingsPage() {
       {confirmDelete && draft && (
         <div className="modal-backdrop">
           <section className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header"><div><h2>Delete {draft.name}?</h2><p>Removes this Harness configuration. Existing task history stays readable.</p></div></div>
+            <div className="modal-header"><div>
+              <h2>Delete {draft.name}?</h2>
+              <p>Removes this Harness configuration. Existing task history stays readable.</p>
+            </div></div>
             <div className="modal-body">
               <div className="modal-actions">
                 <button className="button" type="button" onClick={() => setConfirmDelete(false)}>Cancel</button>
-                <button className="button primary" type="button" style={{ background: 'var(--red)', borderColor: 'var(--red)' }}
+                <button className="button primary" type="button" disabled={busy} style={{ background: 'var(--red)', borderColor: 'var(--red)' }}
                   onClick={async () => { await deleteCustom(draft.id); router.push('/harnesses'); }}>Delete</button>
               </div>
             </div>
