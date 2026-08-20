@@ -72,8 +72,8 @@ export const OOB: OobHarness[] = [
     systemPrompt: 'You are Pi, a minimal autonomous coding agent. You operate on a real git workspace, reading, writing and editing files and running bash to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'dsh', name: 'DeepSeek Harness', version: 'v0.1.0-rc.7', backend: 'dsh', status: 'ready',
-    // Single-family by design in this phase (see gateway _MODEL_CATALOG).
-    models: ['deepseek-v4-pro', 'deepseek-v4-flash'], defaultModel: 'deepseek-v4-pro', moreModels: 0,
+    // Multi-family via dsh-llm-pi-ai (pi's LLM library as a dsh plugin); placeholder until /v1/models lands.
+    models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'deepseek-v4-pro', moreModels: 0,
     systemPrompt: 'You are DeepSeek Harness, an autonomous coding agent. You work on a real git workspace, running shell commands and editing files to complete the task end to end.',
     tools: [], skills: [] },
 ];

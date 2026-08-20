@@ -54,15 +54,19 @@ class _Relay(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         body = self.rfile.read(int(self.headers.get("content-length") or 0))
-        # DEEPSEEK_BASE_URL carries /v1 and the adapter appends /chat/completions, so the
-        # incoming path is /v1/...; the upstream base also ends in /v1 — join without doubling.
+        # The adapters' base URLs point at this relay and they append their own API paths
+        # (/v1/chat/completions, /v1/responses, /v1/messages); the upstream base ends in /v1 —
+        # join without doubling.
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
-        req = urllib.request.Request(
-            UPSTREAM_BASE.rstrip("/") + tail,
-            data=body, method="POST",
-            headers={"content-type": self.headers.get("content-type") or "application/json",
-                     "authorization": f"Bearer {UPSTREAM_KEY}",
-                     "accept": self.headers.get("accept") or "*/*"})
+        # Forward protocol headers (anthropic-version et al) verbatim; strip hop/auth/length.
+        drop = {"host", "content-length", "authorization", "x-api-key", "connection",
+                "accept-encoding", "transfer-encoding"}
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
+        headers["authorization"] = f"Bearer {UPSTREAM_KEY}"
+        headers["x-api-key"] = UPSTREAM_KEY   # the anthropic-messages spelling; harmless elsewhere
+        headers.setdefault("accept", "*/*")
+        req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
+                                     data=body, method="POST", headers=headers)
         try:
             resp = urllib.request.urlopen(req, timeout=600)
         except urllib.error.HTTPError as e:  # pass provider errors through verbatim
@@ -74,6 +78,9 @@ class _Relay(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         ctype = resp.headers.get("content-type") or ""
+        # The empty-string id/name quirk is a chat-completions stream shape; other protocols
+        # (anthropic-messages, openai-responses) pass through byte-faithful.
+        rewrite = self.path.endswith("/chat/completions")
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
         if "text/event-stream" in ctype:
@@ -87,11 +94,11 @@ class _Relay(http.server.BaseHTTPRequestHandler):
                 buf += chunk
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    out = _rewrite_sse_line(line.rstrip(b"\r")) + b"\n"
+                    out = (_rewrite_sse_line(line.rstrip(b"\r")) if rewrite else line.rstrip(b"\r")) + b"\n"
                     self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
                 self.wfile.flush()
             if buf:
-                out = _rewrite_sse_line(buf)
+                out = _rewrite_sse_line(buf) if rewrite else buf
                 self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
         else:
@@ -117,7 +124,8 @@ def _emit(method: str, payload) -> None:
 DSH_RUNTIME_HAS_MCP = False
 
 
-def _compose_cordis(home: pathlib.Path, servers: list[dict]) -> str:
+def _compose_cordis(home: pathlib.Path, servers: list[dict], llm: dict | None = None,
+                    relay_port: int = 0, model: str = "") -> str:
     """Our runtime composition: the wheel's bundled default, with the SDK server entry swapped
     for the resume-or-create subclass (see hr_dsh_server.cjs — packaged-bin loads
     configuration-relative plugins), plus one dsh-mcp-client entry per enabled MCP server."""
@@ -145,6 +153,23 @@ def _compose_cordis(home: pathlib.Path, servers: list[dict]) -> str:
         if hdrs:
             entry["config"]["headers"] = hdrs
         blocks.append(entry)
+    if llm:
+        # Non-deepseek families ride dsh's OWN multi-provider layer, dsh-llm-pi-ai — which is
+        # pi's unified LLM library wrapped as a Cordis plugin, so the api-by-family choices are
+        # literally the ones the pi backend already proved. The route points at the loopback
+        # relay; apiKeyEnv resolves a placeholder, and the relay injects the real credential
+        # upstream — same isolation as the deepseek path.
+        api = llm.get("api") or "openai-completions"
+        base_url = f"http://127.0.0.1:{relay_port}/v1"
+        blocks.append({"id": "hr-llm", "name": "@deepseek-ai/dsh-llm-pi-ai", "config": {
+            "providers": {"hr": {
+                "displayName": "HR Gateway",
+                "apiKeyEnv": "HR_RELAY_TOKEN",
+                "api": api,
+                "baseURL": base_url,
+                "models": [{"id": model, "contextWindow": 200000, "maxTokens": 32000,
+                            "input": (["text", "image"] if llm.get("vision", True) else ["text"])}],
+            }}}})
     path = home / ".dsh" / "cordis.yml"
     path.parent.mkdir(parents=True, exist_ok=True)
     import shutil
@@ -174,6 +199,7 @@ def main() -> int:
 
     from deepseek_harness import DeepSeekHarness
 
+    os.environ["HR_RELAY_TOKEN"] = "hr-relay"   # the placeholder the pi-ai route resolves
     mcp = job.get("mcp_servers") or []
     if mcp and not DSH_RUNTIME_HAS_MCP:
         # The pi precedent: a capability the harness asked for but this build cannot provide is
@@ -182,9 +208,11 @@ def main() -> int:
               "runtime (0.1.0rc7) does not bundle its MCP client yet — this turn runs without "
               "them. The next runtime pin restores them.", flush=True)
         mcp = []
-    kwargs = dict(provider="deepseek-official", model=job["model"],
+    llm = job.get("llm")   # None => the verified deepseek-official path
+    kwargs = dict(provider=("hr" if llm else "deepseek-official"), model=job["model"],
                   cwd=cwd, session_root=str(sessions),
-                  cordis=_compose_cordis(home, mcp),
+                  cordis=_compose_cordis(home, mcp, llm=llm,
+                                         relay_port=srv.server_address[1], model=job["model"]),
                   # A runtime whose plugin tree failed stays alive with a mute stdout; without a
                   # bound the initialize request waits forever and the turn reads as a hang.
                   request_timeout_seconds=180.0)
