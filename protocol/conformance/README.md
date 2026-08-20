@@ -81,6 +81,18 @@ A few of them are worth calling out, because they catch things a schema check ne
 verified, because a suite that hides unrun checks behind a green summary is how a suite starts
 lying about the thing it exists to establish.
 
+The JSON report holds itself to the same rule, because it is the artifact published as evidence
+for a conformance claim and its reader is frequently not the person who ran it:
+
+- `conformant` is `true` only when every check ran and none failed or errored. A single skip
+  makes it `false`.
+- `conformant_with_skips` is `true` when nothing failed or errored — the checks that ran are
+  clean, and the ones that didn't are enumerated in `skipped_not_verified` by id, so the report
+  says exactly what it did not establish.
+- `suite_version` and `generated_at` (UTC) tie the report to the suite revision and the moment
+  that produced it. A report without these fields predates suite `2026.8.11.post1`; the
+  checked-in reports from earlier runs are of that older shape.
+
 ## Reference implementation results
 
 HarnessRouter Community Edition 0.3.0, the reference implementation in this repository, run against
