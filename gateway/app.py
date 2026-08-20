@@ -930,6 +930,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "pi"): "openai-api",
     ("tokenrouter", "pi"): "tokenrouter",      ("vercel", "pi"): "tokenrouter",
     ("llmtr", "pi"): "tokenrouter",
+    # dsh (DeepSeek Harness) runs the deepseek family over any OpenAI-compatible endpoint —
+    # 'deepseek' on the runner means exactly that (base_url + key; the driver's relay
+    # normalizes aggregator stream quirks). A first-party DeepSeek Platform integration is
+    # NOT listed yet: nobody here holds a platform.deepseek.com key, and unprobed is unlisted.
+    ("tokenrouter", "dsh"): "deepseek",        ("openrouter", "dsh"): "deepseek",
+    ("vercel", "dsh"): "deepseek",             ("llmtr", "dsh"): "deepseek",
 }
 
 
@@ -4403,6 +4409,13 @@ _MODEL_CATALOG: dict[str, dict] = {
     #   nemotron-3-ultra and qwen3.7-flash are NOT here: TokenRouter lists no channel for them,
     #   hermes serves them via OpenRouter, and no OpenRouter credential was available to probe
     #   pi with — unprobed is unlisted, per the bar at the top of this table.
+    # dsh (DeepSeek Harness) is single-family BY DESIGN in this first phase: the audit that
+    # scoped this backend (2026-08-13, harnessrouter-management) defers multi-provider
+    # composition until one provider path has proven model/usage/tool/error consistency.
+    # Both models probe-verified through the full product path on the TokenRouter connection
+    # (2026-08-20), substitution-checked.
+    "dsh": {"default": "deepseek-v4-pro",
+            "models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4412,7 +4425,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash"]},
 }
-_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi"}
+_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
 #   qwen3.7-max  -> 400 InvalidParameter "Unexpected item type in content"  (rejects the TYPE)
@@ -4459,6 +4472,8 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "hermes"
     if base == "pi":
         return "pi"
+    if base in ("dsh", "deepseek-harness"):
+        return "dsh"
     return ""
 
 
@@ -4472,6 +4487,8 @@ def _model_authorized(requested: str, backend: str) -> bool:
         return True   # power users may pass a provider-native claude id (claude-opus-4-8 / us.anthropic...)
     if backend in ("codex", "hermes", "pi") and r.startswith("gpt-"):
         return True   # gpt-* family; Azure deployment names vary
+    if backend == "dsh" and r.startswith(("deepseek", "deepseek/")):
+        return True   # deepseek family; aggregator slugs vary (deepseek/deepseek-v4-pro)
     return False
 
 
@@ -5355,7 +5372,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # explicitly selected — that's not a valid provider id. Treat it as "unset" and inherit, in order:
     #   previous round's model -> the harness default_model -> connection default (in _map_model).
     # This keeps a conversation on the user's chosen model and never ships the bare backend to Bedrock.
-    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", ""}
+    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", ""}
     if model_req.lower() in _BARE:
         inherited = ""
         if body.previous_response_id:
@@ -10874,6 +10891,17 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
                   ("edit", "Edit")],
         "tool_enforcement": "hard",
+    },
+    "dsh": {
+        "label": "DeepSeek Harness", "backend": "dsh", "status": "ready",
+        "system_prompt": ("You are DeepSeek Harness, an autonomous coding agent. You work on a "
+                          "real git workspace, running shell commands and editing files to "
+                          "complete the task end to end."),
+        # The bundled runtime's model-facing tools. No per-tool switch exists on the wire, so
+        # disabling is an instruction to the model, the same standing as codex/hermes.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("todo_write", "Todo"), ("subagent", "Subagent")],
+        "tool_enforcement": "instruction",
     },
 }
 
