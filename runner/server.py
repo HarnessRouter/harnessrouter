@@ -1269,10 +1269,17 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
         if full:
             state["final"] = full
         if full and full != streamed:
-            # self-healing tail: with no deltas the tail is the whole text; a non-prefix
-            # revision re-emits in full (duplicate beats missing)
-            tail = full[len(streamed):] if streamed and full.startswith(streamed) else full
-            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": tail}]}}]
+            if not streamed:
+                # no deltas arrived — emit the whole text once (the no-streaming path)
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full}]}}]
+            if full.startswith(streamed):
+                # normal self-healing: emit only the un-streamed tail
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full[len(streamed):]}]}}]
+            # Non-prefix revision (seen live: a kimi channel whose deltas and final text
+            # disagree). The streamed text is already on the user's screen — re-emitting the
+            # full text painted the whole answer twice. Emit nothing: the result event and
+            # state["final"] already carry the authoritative text.
+            return []
         return []
     if t == "tool_execution_start":
         return [{"type": "assistant", "message": {"content": [
