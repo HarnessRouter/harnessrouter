@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.server
 import json
 import mimetypes
 import os
@@ -57,6 +58,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 import yaml
@@ -1544,6 +1547,141 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
     return out
 
 
+# ── hermes loopback relay (openai-api path) ─────────────────────────────────────────────────
+# hermes emits OpenAI-LEGAL messages that aggregator translators reject: a tool-call assistant
+# message may carry `content: ""`, and TokenRouter's OpenAI→Anthropic translation forwards that
+# as an empty text content block, which Anthropic refuses — 'HTTP 400: messages: text content
+# blocks must be non-empty', captured 2026-08-20 by conformance X-05 on claude-haiku-4.5, and
+# intermittent because whether a given tool-call message carries empty content is up to the
+# model (issue #12). Nothing sat between hermes and the provider to repair it, and the failure
+# killed the turn: a 400 is never retried, and re-running on the next chain connection re-runs
+# the whole task. So the openai-api path now routes through the same kind of loopback relay the
+# dsh backend already has (runner/dsh_driver.py): requests are normalized BEFORE the provider
+# sees them — prevention, not retry — and as with dsh, the real credential stays in this
+# process; hermes gets a placeholder token the relay resolves per request, so the key never
+# enters the CLI's env, its state.db, or anything it could checkpoint.
+#
+# One shared server, routes resolved from the placeholder bearer token: hermes is spawned per
+# turn with a fresh env, so each turn registers its upstream and the entry simply outlives the
+# turn (a few dozen bytes per turn, process lifetime — the sandbox recycles long before this
+# matters).
+_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock()}
+
+
+def _normalize_openai_chat_body(body: bytes) -> bytes:
+    """Repair OpenAI-legal-but-translator-fatal message shapes in one chat-completions body.
+
+    Surgical, matched to what was captured live: an assistant tool-call message whose `content`
+    is the empty string becomes `content: null` (equally legal, and translators emit no text
+    block for it), and empty `{"type": "text", "text": ""}` parts are dropped from list-shaped
+    content (if that empties a tool-call message's list, it becomes null too). Anything else —
+    other roles, non-empty text, unparseable bodies — passes through byte-identical."""
+    try:
+        obj = json.loads(body)
+        if not isinstance(obj, dict) or not isinstance(obj.get("messages"), list):
+            return body
+        changed = False
+        for m in obj["messages"]:
+            if not isinstance(m, dict):
+                continue
+            content = m.get("content")
+            if isinstance(content, list):
+                kept = [p for p in content
+                        if not (isinstance(p, dict) and p.get("type") == "text"
+                                and p.get("text") == "")]
+                if len(kept) != len(content):
+                    m["content"] = kept if kept or not m.get("tool_calls") else None
+                    changed = True
+            elif content == "" and m.get("tool_calls"):
+                m["content"] = None
+                changed = True
+        if not changed:
+            return body
+        return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        return body
+
+
+class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def _upstream(self) -> tuple[str, str] | None:
+        tok = (self.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+        return _HERMES_RELAY["routes"].get(tok)
+
+    def _forward(self, body: bytes | None) -> None:
+        route = self._upstream()
+        if not route:
+            self.send_response(401)
+            data = b'{"error": "unknown relay token"}'
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        base, key = route
+        tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
+        drop = {"host", "content-length", "authorization", "connection",
+                "accept-encoding", "transfer-encoding"}
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
+        headers["authorization"] = f"Bearer {key}"
+        headers.setdefault("accept", "*/*")
+        if body is not None and self.path.endswith("/chat/completions"):
+            body = _normalize_openai_chat_body(body)
+            headers["content-length"] = str(len(body))
+        req = urllib.request.Request(base.rstrip("/") + tail, data=body,
+                                     method=self.command, headers=headers)
+        try:
+            resp = urllib.request.urlopen(req, timeout=600)
+        except urllib.error.HTTPError as e:  # pass provider errors through verbatim
+            data = e.read()
+            self.send_response(e.code)
+            self.send_header("content-type", e.headers.get("content-type") or "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        ctype = resp.headers.get("content-type") or ""
+        self.send_response(resp.status)
+        self.send_header("content-type", ctype)
+        if "text/event-stream" in ctype:   # responses stream through untouched — the fix is request-side
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+            while True:
+                chunk = resp.read(4096)
+                if not chunk:
+                    break
+                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+        else:
+            data = resp.read()
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    def do_POST(self):  # noqa: N802
+        self._forward(self.rfile.read(int(self.headers.get("content-length") or 0)))
+
+    def do_GET(self):   # noqa: N802 — model listings and the like
+        self._forward(None)
+
+    def log_message(self, *a):  # diagnostics belong on stderr, never stdout
+        pass
+
+
+def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
+    """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI)."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = (base_url, api_key)
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
                         mcp_servers: list[dict] | None = None) -> list[str]:
@@ -1588,9 +1726,15 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         if auth.base_url:
             env["OPENROUTER_BASE_URL"] = auth.base_url
     elif p == "openai-api":  # any OpenAI-compatible endpoint (OpenAI official, TokenRouter, ...)
-        if auth.api_key:
+        if auth.api_key and auth.base_url:
+            # Through the loopback relay (see _HermesRelayHandler above): request shapes that
+            # are OpenAI-legal but fatal to aggregator translation are repaired before the
+            # provider sees them, and the real key never enters the CLI's environment.
+            env["OPENAI_BASE_URL"], env["OPENAI_API_KEY"] = _hermes_relay_route(
+                auth.base_url, auth.api_key)
+        elif auth.api_key:
             env["OPENAI_API_KEY"] = auth.api_key
-        if auth.base_url:
+        elif auth.base_url:
             env["OPENAI_BASE_URL"] = auth.base_url
     else:  # bedrock — bearer-token (Bedrock API key) or the standard AWS credential chain
         region = auth.aws_region or "us-east-1"
