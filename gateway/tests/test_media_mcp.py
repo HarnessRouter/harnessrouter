@@ -2840,12 +2840,15 @@ def test_deleting_the_agent_stops_and_buries_its_jobs(api, client, kit, provider
     provider.video_bytes = _mp4(1.0)
     jid = _ok(_call(client, _cred(hid, sid), "generate_video",
                     {"prompt": "a", "seconds": 6}))["job_id"]
+    task = asyncio.run(app._media_job_get(jid))["provider_task_id"]
     assert api.delete(f"/v1/harnesses/{hid}").status_code == 200
 
     _due(jid)
     _calls.clear()
     asyncio.run(app._media_sweep())
-    assert [c["url"] for c in _calls if "/video/generations/" in c["url"]] == []
+    # Scoped to THIS job's task: on a slow runner an earlier test's still-live job can come due
+    # mid-sweep, and its poll is correct behaviour, not the regression this test guards.
+    assert [c["url"] for c in _calls if f"/video/generations/{task}" in c["url"]] == []
     job = asyncio.run(app._media_job_get(jid))
     assert job["status"] != "succeeded" and not job.get("media_id")
     assert asyncio.run(app._blob_list_all(f"media/{sid}/", kb=app.BLOB_KB)) == []
@@ -2866,11 +2869,12 @@ def test_switching_the_media_server_off_stops_its_jobs_and_switching_it_on_resum
     jid = _ok(_call(client, _cred(hid, sid), "generate_video",
                     {"prompt": "a", "seconds": 6}))["job_id"]
 
+    task = asyncio.run(app._media_job_get(jid))["provider_task_id"]
     assert _save_config(api, hid, [{**_entry_of(hid), "enabled": False}]).status_code == 200
     _due(jid)
     _calls.clear()
     asyncio.run(app._media_sweep())
-    assert [c["url"] for c in _calls if "/video/generations/" in c["url"]] == []
+    assert [c["url"] for c in _calls if f"/video/generations/{task}" in c["url"]] == []
     assert asyncio.run(app._media_job_get(jid))["status"] == "running"
 
     assert _save_config(api, hid, [{**_entry_of(hid), "enabled": True}]).status_code == 200
