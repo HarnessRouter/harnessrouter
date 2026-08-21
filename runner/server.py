@@ -484,27 +484,38 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
     """Compose the agent's instruction file from (1) the harness's user-authored doc and (2) a managed
-    'Available skills' block surfacing installed skills. The user doc is the base; the skills block is
-    appended inside HTML-comment markers so it's regenerated each turn without duplicating. Source of
-    truth is the harness config + enabled skills, so this OVERWRITES any stale file each turn. With no
-    user doc and no skills, the file is removed so the CLI runs on its own default system prompt."""
+    block: the workspace contract, always, plus an 'Available skills' section when skills are
+    installed. The user doc is the base; the managed block is appended inside HTML-comment markers.
+    Source of truth is the harness config, so this OVERWRITES any stale file each turn.
+
+    THE WORKSPACE CONTRACT IS ALWAYS PRESENT, so the file now always exists. Produced files are
+    collected from the session directory only (/produced runs git status in _ws), so a deliverable
+    written to an absolute path outside it — the workspace parent, /tmp, /app, $HOME — is invisible
+    to the user and is not even checkpointed. Nothing ever told the model that: four backends write
+    relative paths by habit, and the first dsh deck task (deepseek-v4-pro, 2026-08-21) saved to the
+    workspace PARENT, the user saw an empty turn, and three turns went to copying files into view.
+    An instruction is the right mechanism here: writes cannot be walled in a sandbox whose point is
+    real bash, and widening collection would ship every scratch file as a deliverable."""
     p = _agent_doc_path(cwd, backend)
     base = (agent_doc or "").strip()
-    block = ""
+    lines = [_AGENTS_BEGIN, "## Workspace", "",
+             "Your working directory is this task's workspace and the ONLY place the user can see "
+             "files. Save every deliverable (documents, decks, code, exports) to a relative path "
+             "under it. Never write output to an absolute path outside it (/tmp, /app, the "
+             "workspace parent directory, or your home directory): those files are not collected, "
+             "and the user will never see them.", ""]
     if skills_meta:
-        lines = [_AGENTS_BEGIN, "## Available skills", "",
-                 "These skills are installed in this workspace. When a task matches one, read its "
-                 "SKILL.md first and follow its instructions and bundled scripts.", ""]
+        lines += ["## Available skills", "",
+                  "These skills are installed in this workspace. When a task matches one, read its "
+                  "SKILL.md first and follow its instructions and bundled scripts.", ""]
         for s in skills_meta:
             d = f" — {s['desc']}" if s.get("desc") else ""
             lines.append(f"- **{s['name']}**{d} (`{s['entry']}`)")
-        block = "\n".join(lines) + "\n" + _AGENTS_END + "\n"
-    body = ((base + "\n\n") if base else "") + block if block else base
+        lines.append("")
+    block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
+    body = ((base + "\n\n") if base else "") + block
     try:
-        if body.strip():
-            p.write_text(body if body.endswith("\n") else body + "\n")
-        elif p.exists():
-            p.unlink()
+        p.write_text(body if body.endswith("\n") else body + "\n")
     except Exception:  # noqa: BLE001
         pass
 
