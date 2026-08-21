@@ -2500,11 +2500,44 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Respo
         raise
 
 
+def _adopt_stray_root_files(ws: str) -> None:
+    """Move files the agent left at WORKSPACE_ROOT itself into the session workspace.
+
+    The sandbox is single-session, so a file at the workspace PARENT was written by this
+    session's agent — but it sits outside the git tree, so collection, the checkpoint and the
+    console cannot see it, and it silently dies with the sandbox. This is not hypothetical:
+    both live incidents (2026-08-21, deepseek family on dsh) answered "saved to
+    /workspace/X.pptx" with the deliverable exactly there, ONCE DESPITE the AGENTS.md
+    workspace contract — an instruction binds only models that follow instructions. So the
+    collection boundary is made mechanical instead: adopt top-level regular files (never
+    directories — session workspaces live here; never dotfiles — internal by convention)
+    into the session dir before git status runs. A name that already exists in the workspace
+    is left alone: the copy the agent placed correctly is authoritative."""
+    try:
+        entries = list(os.scandir(WORKSPACE_ROOT))
+    except OSError:
+        return
+    for e in entries:
+        try:
+            if not e.is_file(follow_symlinks=False) or e.name.startswith("."):
+                continue
+            if e.name in _PRODUCED_EXCLUDE_NAMES or _is_produced_noise(e.name):
+                continue
+            dest = os.path.join(ws, e.name)
+            if os.path.exists(dest):
+                continue
+            shutil.move(e.path, dest)
+            print(f"[produced] adopted stray {e.name} from the workspace root", flush=True)
+        except OSError:
+            continue
+
+
 @app.get("/produced")
 def produced(identifier: str = "") -> dict:
     """Files created/modified during the current turn (uncommitted vs the hydrated checkpoint).
     Call BEFORE /checkpoint commits them. Excludes internal state / scratch / secrets / vcs."""
     ws = _ws(identifier)
+    _adopt_stray_root_files(ws)
     _git_ensure(ws)
     p = _git(ws, "status", "--porcelain", "-uall")
     out = []
