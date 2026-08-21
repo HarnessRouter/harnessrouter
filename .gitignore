@@ -12,3 +12,4 @@ __pycache__/
 protocol/site/dist/
 
 protocol/site/dist/
+*.egg-info/
