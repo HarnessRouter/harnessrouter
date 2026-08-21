@@ -31,7 +31,9 @@ jobs:
       # regression would ride a green run. Installing it makes them actually run here.
       - name: Install ffmpeg for the media fixtures
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-      - run: pip install -r gateway/requirements.txt pytest
+      # jsonschema is test-only: test_response_error_envelope.py validates failed Responses
+      # against the spec schema. It stays out of requirements.txt so it never ships in the image.
+      - run: pip install -r gateway/requirements.txt pytest jsonschema
       - run: python -m pytest gateway/tests -q
 
   runner:
