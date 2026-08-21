@@ -3978,9 +3978,14 @@ class _RespTranslator:
         return evs
 
     def fail(self, message: str) -> list[dict]:
-        self.error = {"code": "harness_error", "message": message}
+        # The spec's Error object (schema.json §Error) requires `type` from the closed enum,
+        # with `code` left for the SPECIFIC condition — emitting the type in `code` and no
+        # `type` at all made every failed Response fail schema validation, which conformance
+        # T-01/S-03/S-07 caught the first time a run actually failed (issue #7's suite, run
+        # 2026-08-20). The error EVENT mirrors error.code, so the two never disagree.
+        self.error = {"type": "harness_error", "code": "turn_failed", "message": message}
         evs = self._close_cur()
-        evs.append(self._ev("error", code="harness_error", message=message, param=None))
+        evs.append(self._ev("error", code="turn_failed", message=message, param=None))
         evs.append(self._ev("response.failed", response=self._response_obj("failed")))
         return evs
 
@@ -5608,7 +5613,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
                     if status == "failed":
-                        tr.error = {"code": "harness_error",
+                        tr.error = {"type": "harness_error", "code": "connections_exhausted",
                                     "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
                     for ev in tr.complete(status, produced):
                         await bus_emit_bg(ev)
@@ -5658,7 +5663,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
                         if status == "failed":
-                            tr.error = {"code": "harness_error",
+                            tr.error = {"type": "harness_error", "code": "connections_exhausted",
                                         "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
                         for ev in tr.complete(status, produced):
                             await emit(ev)
@@ -5717,13 +5722,13 @@ async def create_response(body: CreateResponseBody, request: Request):
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
             if status == "failed":
-                tr.error = {"code": "harness_error",
+                tr.error = {"type": "harness_error", "code": "connections_exhausted",
                             "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
             for ev in tr.complete(status, produced):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
-        tr.error = {"code": "harness_error", "message": str(e)[:300]}
+        tr.error = {"type": "server_error", "code": "unhandled_exception", "message": str(e)[:300]}
         obj = tr._response_obj("failed")
         status = "failed"
     await persist(status)
