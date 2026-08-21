@@ -11203,6 +11203,109 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     return {"id": hid, "deleted": True}
 
 
+# ── workspaces: the DIRECTORY, server-side (fix for the localStorage split-brain) ──────
+# Harnesses, tasks and keys were always stamped with a workspace id in the store — but the
+# REGISTRY of workspaces (id, name, description) had no server-side home on self-host: the
+# console served it from each browser's localStorage. Two laptops on one instance therefore
+# saw two different workspace lists, and records stamped with a workspace one browser had
+# never minted were unreachable from it. The registry now lives with the stamps. Hosted keeps
+# its Spaces service; these routes are what the console's existing /v1/hr/workspaces calls
+# expect, same shapes, so the provider and switcher are unchanged.
+_WORKSPACE_DEFAULT_ID = "default"
+
+
+def _workspace_slug(name: str, taken: set[str]) -> str:
+    """Same minting rules the localStorage store used, so ids stay stable across the migration
+    (a browser-minted 'research' and a server-minted 'research' must be the same workspace)."""
+    base = re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower())) or "workspace"
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    return f"{base}-{n}"
+
+
+def _workspace_out(v: dict) -> dict:
+    return {"id": str(v.get("ws_id") or ""), "name": str(v.get("name") or "Untitled"),
+            "description": str(v.get("description") or "")}
+
+
+async def _workspace_rows(org: str) -> list[dict]:
+    rows = [v for v in await _vg_list_by_org("Workspace", org)
+            if str(v.get("deleted") or "0") != "1"]
+    rows.sort(key=lambda v: (str(v.get("ws_id")) != _WORKSPACE_DEFAULT_ID,
+                             str(v.get("created_at") or "")))
+    return rows
+
+
+@app.get("/v1/hr/workspaces")
+async def workspaces_list(request: Request) -> dict:
+    org, member = await _pub_org_member(request)
+    rows = await _workspace_rows(org)
+    if not any(str(v.get("ws_id")) == _WORKSPACE_DEFAULT_ID for v in rows):
+        # Ensured idempotently on read, exactly as the hosted engine does — which also lazily
+        # backfills instances that predate server-side workspaces.
+        props = {"kind": "workspace", "org": org, "member": member,
+                 "ws_id": _WORKSPACE_DEFAULT_ID, "name": "Default Workspace",
+                 "description": "All harnesses and tasks on this instance.",
+                 "created_at": str(int(time.time() * 1000)), "deleted": "0"}
+        await _vg_upsert("Workspace", f"ws.{org}.{_WORKSPACE_DEFAULT_ID}", props)
+        rows = [props] + rows
+    return {"workspaces": [_workspace_out(v) for v in rows],
+            "default_workspace_id": _WORKSPACE_DEFAULT_ID}
+
+
+class WorkspaceBody(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    id: str | None = None   # migration only: adopt a browser-minted id verbatim
+
+
+@app.post("/v1/hr/workspaces")
+async def workspaces_create(body: WorkspaceBody, request: Request) -> dict:
+    org, member = await _pub_org_member(request)
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "a workspace needs a name")
+    rows = await _workspace_rows(org)
+    taken = {str(v.get("ws_id")) for v in rows} | {_WORKSPACE_DEFAULT_ID}
+    if body.id:
+        # Migration path: the console pushes localStorage-era workspaces up with their exact
+        # browser-minted ids so existing stamped records reattach. An id that is already here
+        # is simply that workspace (idempotent merge), never a duplicate.
+        wid = re.sub(r"[^a-z0-9-]", "", body.id.strip().lower())[:64]
+        if not wid:
+            raise HTTPException(400, "invalid workspace id")
+        if wid in taken:
+            existing = next((v for v in rows if str(v.get("ws_id")) == wid), None)
+            if existing is not None:
+                return _workspace_out(existing)
+            return {"id": wid, "name": "Default Workspace", "description": ""}
+    else:
+        wid = _workspace_slug(name, taken)
+    props = {"kind": "workspace", "org": org, "member": member, "ws_id": wid, "name": name,
+             "description": (body.description or "").strip(),
+             "created_at": str(int(time.time() * 1000)), "deleted": "0"}
+    await _vg_upsert("Workspace", f"ws.{org}.{wid}", props, raise_on_fail=True)
+    return _workspace_out(props)
+
+
+@app.patch("/v1/hr/workspaces/{wid}")
+async def workspaces_update(wid: str, body: WorkspaceBody, request: Request) -> dict:
+    org, _member = await _pub_org_member(request)
+    rows = await _workspace_rows(org)
+    v = next((r for r in rows if str(r.get("ws_id")) == wid), None)
+    if v is None:
+        raise HTTPException(404, "workspace not found")
+    if body.name is not None and body.name.strip():
+        v["name"] = body.name.strip()
+    if body.description is not None:
+        v["description"] = body.description.strip()
+    await _vg_upsert("Workspace", f"ws.{org}.{wid}", v, raise_on_fail=True)
+    return _workspace_out(v)
+
+
 # ── PUBLIC harness CRUD (Bearer sk-hr-... API key; org resolved from the key) ──────────
 # This is what a vibe coder's agent (driven by AGENTS.md) calls — no org id, no internal header.
 async def _pub_org_member(request: Request) -> tuple[str, str]:
