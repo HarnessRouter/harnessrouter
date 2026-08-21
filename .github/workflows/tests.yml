@@ -1,0 +1,83 @@
+# Run every test suite the repository carries, on every pull request and every push to main.
+#
+# This exists because until now nothing did: `release.yml` gates what ships, but the tests in
+# gateway/tests, runner/tests, protocol/conformance/tests and ui only ran when someone remembered
+# to run them — which is how a green-looking PR carries a red suite. CONTRIBUTING.md's
+# "Development checks" section tells contributors which commands to run; this workflow runs the
+# same commands, so the two cannot drift apart without this file changing.
+#
+# One job per suite, because they fail for unrelated reasons and a contributor should see WHICH
+# area broke without reading logs: a gateway failure is not a console failure. No job depends on
+# another; they all run in parallel and each is a required signal on its own.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: gateway/requirements.txt
+      # The media tests build real fixtures (a one-second mp4, an mp3 with a readable duration)
+      # and gate themselves on `have_ffmpeg()` — without ffmpeg they silently skip, and a media
+      # regression would ride a green run. Installing it makes them actually run here.
+      - name: Install ffmpeg for the media fixtures
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      # jsonschema is test-only: test_response_error_envelope.py validates failed Responses
+      # against the spec schema. It stays out of requirements.txt so it never ships in the image.
+      - run: pip install -r gateway/requirements.txt pytest jsonschema
+      - run: python -m pytest gateway/tests -q
+
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runner/requirements.txt
+      - run: pip install -r runner/requirements.txt pytest
+      - run: python -m pytest runner/tests -q
+
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: protocol/conformance/pyproject.toml
+      - run: pip install -e protocol/conformance pytest
+      - run: python -m pytest protocol/conformance/tests -q
+
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      # Mirrors the Dockerfile's install: .npmrc carries legacy-peer-deps, without which npm
+      # refuses the tree (several deps still declare React 18 peers while the app runs 19).
+      - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      - run: npm run type-check
+      # The console has no jest tests yet, and bare `jest` exits 1 on "No tests found" — which
+      # would read as a test failure when the truth is an empty suite. The flag makes an empty
+      # suite pass and a failing test still fail; the first real test file makes it moot.
+      - run: npm test -- --passWithNoTests
+      - run: npm run build
