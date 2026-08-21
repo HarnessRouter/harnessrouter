@@ -10,11 +10,38 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { authFetch, getSession } from '@/lib/auth';
 import { SELF_HOSTED } from '@/lib/edition';
-import { localWorkspaceFetch } from '@/lib/workspace-local';
 
-/** Where workspaces live. Hosted, that's the Spaces service behind the engine; self-hosted,
- *  localStorage — same requests, same shapes, so everything below is unchanged either way. */
-const wsFetch = SELF_HOSTED ? localWorkspaceFetch : authFetch;
+/** Where workspaces live. Hosted, the Spaces service behind the engine; self-hosted, the
+ *  gateway's own store via the BFF — same requests, same shapes. The registry used to be
+ *  localStorage on self-host, which meant every browser had its own workspace list while the
+ *  records those workspaces scoped sat server-side: two laptops on one instance disagreed
+ *  about what existed. The directory now lives with the data it scopes. */
+const selfhostWsFetch = (path: string, init?: RequestInit) =>
+  fetch('/api/harness' + path, { ...init, cache: 'no-store' });
+const wsFetch = SELF_HOSTED ? selfhostWsFetch : authFetch;
+
+/** One-time migration: push any localStorage-era workspaces up to the server WITH their
+ *  browser-minted ids, so records stamped by them reattach. Idempotent server-side (an id
+ *  that already exists is that workspace), so racing tabs are harmless. The key is left in
+ *  place after a marker is set — recovery data beats tidiness until a release later. */
+const LS_LEGACY = 'hr.selfhost.workspaces';
+const LS_MIGRATED = 'hr.selfhost.workspaces.migrated';
+async function migrateLegacyWorkspaces(): Promise<void> {
+  if (!SELF_HOSTED || typeof window === 'undefined') return;
+  try {
+    if (localStorage.getItem(LS_MIGRATED)) return;
+    const rows = JSON.parse(localStorage.getItem(LS_LEGACY) || '[]') as
+      { id?: string; name?: string; description?: string }[];
+    for (const w of Array.isArray(rows) ? rows : []) {
+      if (!w?.id || w.id === 'default' || !w.name) continue;
+      await selfhostWsFetch('/v1/hr/workspaces', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: w.id, name: w.name, description: w.description || '' }),
+      }).catch(() => undefined);
+    }
+    localStorage.setItem(LS_MIGRATED, '1');
+  } catch { /* private mode: nothing stored, nothing to migrate */ }
+}
 
 export interface Workspace {
   id: string;
@@ -87,6 +114,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const org = getSession()?.orgId;
     if (!org) { setLoading(false); return; }
     try {
+      await migrateLegacyWorkspaces();
       const wanted = getCurrentWorkspaceRef()?.id || '';
       let rows: Workspace[] = [];
       let def = '';
