@@ -97,3 +97,34 @@ def test_turn_refuses_a_caller_chosen_cwd_behind_the_wall(monkeypatch, tmp_path)
     r = c.post("/turn?identifier=sA", json={"prompt": "x", "backend": "claude", "cwd": str(tmp_path)})
     assert r.status_code == 400
     assert "identifier" in r.text
+
+
+def test_hermes_vision_auth_is_its_own_route(tmp_path, monkeypatch):
+    """The model hermes asks about images is the one the gateway resolved, never the writing
+    model; the credential rides the loopback relay (OpenAI-compatible) and the environment, and
+    is not written into config.yaml (which is checkpointed with the workspace)."""
+    import yaml
+    env = {"HOME": str(tmp_path)}
+    monkeypatch.setattr(server, "_hermes_relay_route",
+                        lambda base, key: ("http://127.0.0.1:1/v1", "hr-relay-placeholder"))
+    server._hermes_prepare_env("openai-api", server.Auth(api_key="k-chat", base_url="https://x/v1"),
+                               str(tmp_path), env, model="qwen/qwen3.8-max",
+                               vision_auth={"provider": "openai-api", "model": "gpt-5.4-mini",
+                                            "base_url": "https://vision.example/v1", "api_key": "k-vision"})
+    cfg = yaml.safe_load((tmp_path / ".hermes" / "config.yaml").read_text())
+    assert cfg["model"]["default"] == "qwen/qwen3.8-max"            # writing model untouched
+    v = cfg["auxiliary"]["vision"]
+    assert v["model"] == "gpt-5.4-mini" and v["provider"] == "openai-api"
+    assert v["base_url"] == "http://127.0.0.1:1/v1"                 # relay, not the endpoint
+    assert v["key_env"] == "HR_VISION_API_KEY" and "api_key" not in v
+    assert env["HR_VISION_API_KEY"] == "hr-relay-placeholder"       # placeholder, never the key
+    assert "k-vision" not in (tmp_path / ".hermes" / "config.yaml").read_text()
+
+
+def test_hermes_without_vision_auth_keeps_its_default(tmp_path):
+    import yaml
+    env = {"HOME": str(tmp_path)}
+    server._hermes_prepare_env("anthropic", server.Auth(api_key="k"), str(tmp_path), env,
+                               model="claude-sonnet-5", vision_auth=None)
+    cfg = yaml.safe_load((tmp_path / ".hermes" / "config.yaml").read_text())
+    assert "auxiliary" not in cfg

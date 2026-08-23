@@ -1864,7 +1864,8 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
 
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
-                        mcp_servers: list[dict] | None = None) -> list[str]:
+                        mcp_servers: list[dict] | None = None,
+                        vision_auth: dict | None = None) -> list[str]:
     """Point HERMES_HOME inside the checkpointed workspace home (CODEX_HOME precedent) so the
     conversation state (state.db) survives sandbox recycling, and inject provider creds as env.
     Writes config.yaml fresh each turn (harness config is the source of truth, like the agent doc).
@@ -1889,6 +1890,31 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     if max_turns:
         # hermes 0.19.0 has no --max-turns CLI flag; agent.max_turns in config.yaml is the knob.
         cfg["agent"] = {"max_turns": int(max_turns)}
+    if vision_auth and vision_auth.get("model"):
+        # hermes asks its image questions separately from the conversation (vision_analyze, the
+        # browser tools) and, left alone, asks the model the harness writes with. That made a
+        # capability we list as supported depend on which model the operator picked: one that is
+        # slow or unwilling with images returns "Request timed out" after the tool's 120 second
+        # ceiling, and the agent re-renders and asks again. The gateway resolved which integration
+        # on this instance answers image questions (any integration, not only the turn's) and
+        # hands it over whole: provider, model, endpoint, credential. hermes' auxiliary router
+        # takes exactly that per task, so only the question about the picture goes elsewhere.
+        #
+        # The credential takes the same road as the chat one. For an OpenAI-compatible endpoint
+        # that is the loopback relay: the CLI sees a placeholder bearer, never the key.
+        vp = str(vision_auth.get("provider") or "").lower()
+        vision: dict = {"provider": vp, "model": str(vision_auth["model"])}
+        vkey, vbase = vision_auth.get("api_key") or "", vision_auth.get("base_url") or ""
+        if vp == "openai-api" and vkey and vbase:
+            vbase, vkey = _hermes_relay_route(vbase, vkey)
+        if vbase:
+            vision["base_url"] = vbase
+        if vkey:
+            # Through the environment, not the file: config.yaml is checkpointed with the
+            # workspace and a credential in it would travel in the tarball.
+            env["HR_VISION_API_KEY"] = vkey
+            vision["key_env"] = "HR_VISION_API_KEY"
+        cfg["auxiliary"] = {"vision": vision}
     # Provider credentials as env — the CLI resolves them at call time.
     if p == "anthropic":
         if auth.api_key:
@@ -2783,6 +2809,7 @@ class TurnReq(BaseModel):
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
     vision: bool = True                    # pi: whether the model's channel accepts image input
+    vision_auth: dict | None = None        # hermes: {provider, model, base_url, api_key} for its image questions
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
 
 
@@ -2888,7 +2915,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or HERMES_DEFAULT_MODEL
         hermes_provider = (req.provider or "bedrock").lower()
         hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
-                                         max_turns=req.max_turns, mcp_servers=req.mcp_servers)
+                                         max_turns=req.max_turns, mcp_servers=req.mcp_servers,
+                                         vision_auth=req.vision_auth)
     elif backend == "dsh":
         model = model or DSH_DEFAULT_MODEL
         cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
