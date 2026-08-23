@@ -31,7 +31,6 @@ import secrets as secrets_mod
 import io
 import json
 import os
-import pathlib
 import posixpath
 import re
 import sqlite3
@@ -40,6 +39,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Protocol
+
+import httpx
 
 
 # ── interfaces ────────────────────────────────────────────────────────────────────
@@ -369,49 +370,52 @@ def _safe_member(path: str) -> str | None:
     return p
 
 
-class LocalWorkspaceFiles:
-    """Self-hosted: the workspace is a live directory on the data volume, shared with the runner
-    in this container. Writes land where the agent will read them on its next turn."""
+class RunnerWorkspaceFiles:
+    """Self-hosted: a session's workspace is a live directory on the data volume, and the RUNNER is
+    the only principal that touches it. Behind the write-wall each session directory belongs to that
+    session's own uid and the product deliberately cannot read or write there (see _isolate_session
+    in the runner), so a live read or write goes through the runner, which acts as the session,
+    rather than through this process's own filesystem access. One door, whether the wall is up or
+    not: the runner is beside the gateway in every self-hosted deployment.
 
-    def __init__(self, root: str):
-        self.root = root
+    Live, unlike the checkpoint the listing route reads: an app sees a file the moment a tool call
+    creates it, rather than when the turn ends."""
 
-    def _path(self, sid: str, path: str) -> str | None:
-        member = _safe_member(path)
-        if not member or not sid or "/" in sid or sid in (".", ".."):
-            return None
-        base = os.path.realpath(os.path.join(self.root, sid))
-        full = os.path.realpath(os.path.join(base, member))
-        # Resolve first, then prove containment: checking the input for '..' misses symlinks.
-        return full if full == base or full.startswith(base + os.sep) else None
+    def __init__(self, endpoint: str, key: str):
+        self.endpoint = (endpoint or "").rstrip("/")
+        self.key = key
+        self._client: httpx.AsyncClient | None = None
+
+    def _c(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+        return self._client
+
+    def _headers(self) -> dict:
+        return {"X-Harness-Internal": self.key} if self.key else {}
 
     async def read(self, sid: str, path: str) -> bytes | None:
-        full = self._path(sid, path)
-        if not full:
+        member = _safe_member(path)
+        if not member or not self.endpoint:
             return None
         try:
-            return await asyncio.to_thread(pathlib.Path(full).read_bytes)
-        except OSError:
+            r = await self._c().get(f"{self.endpoint}/file", params={"identifier": sid, "path": member},
+                                    headers=self._headers())
+        except Exception:      # noqa: BLE001 — a runner that is down reads as "no file", never a 500
             return None
+        return r.content if r.status_code == 200 else None
 
     async def write(self, sid: str, path: str, data: bytes) -> bool:
-        full = self._path(sid, path)
-        if not full:
+        member = _safe_member(path)
+        if not member or not self.endpoint:
             return False
-
-        def _put() -> bool:
-            try:
-                os.makedirs(os.path.dirname(full), exist_ok=True)
-                # Write beside, then rename: a reader (the agent, mid-turn) sees either the old
-                # file or the new one, never a half-written one.
-                tmp = f"{full}.tmp-{uuid.uuid4().hex[:8]}"
-                with open(tmp, "wb") as fh:
-                    fh.write(data)
-                os.replace(tmp, full)
-                return True
-            except OSError:
-                return False
-        return await asyncio.to_thread(_put)
+        try:
+            r = await self._c().put(f"{self.endpoint}/file", params={"identifier": sid, "path": member},
+                                    headers={**self._headers(), "content-type": "application/octet-stream"},
+                                    content=data)
+        except Exception:      # noqa: BLE001
+            return False
+        return r.status_code == 200
 
 
 class CheckpointWorkspaceFiles:
@@ -488,9 +492,8 @@ def make_backing(*, client_getter, vg_url: str, vg_key: str, vg_tenant: str,
     configured (production), local otherwise (a laptop clone works with zero env)."""
     mode = os.environ.get("HR_BACKING", "").strip().lower() or ("vg" if vg_url else "local")
     # Where a session's workspace actually lives, which is the one thing that differs most between
-    # the two deployments: a live directory this container shares with the runner, or a checkpoint
-    # tarball that is the only copy between turns.
-    ws_root = os.environ.get("HARNESS_WORKSPACE", "/data/workspaces")
+    # the two deployments: a live directory the runner owns and serves, or a checkpoint tarball
+    # that is the only copy between turns.
     ws_key = lambda sid: f"sessions/{sid}/workspace.tgz"   # noqa: E731 — matches gateway._ws_blob
     if mode == "vg":
         from backing_vg import VgBlobStore, VgGraphStore, VaultSecretStore
@@ -507,4 +510,5 @@ def make_backing(*, client_getter, vg_url: str, vg_key: str, vg_tenant: str,
         blob=FileBlobStore(os.path.join(data, "blobs")),
         secrets=FileSecretStore(os.path.join(data, "secrets")),
         mode="local",
-        workspace=LocalWorkspaceFiles(ws_root))
+        workspace=RunnerWorkspaceFiles(os.environ.get("POOL_MGMT_ENDPOINT", "http://127.0.0.1:8081"),
+                                       os.environ.get("HARNESS_INTERNAL_KEY", "")))

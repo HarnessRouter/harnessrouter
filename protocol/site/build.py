@@ -61,6 +61,12 @@ NAV = [
     ]),
 ]
 
+# Pages reachable by link but not listed in the sidebar: background and context that should not sit
+# above the specification. They are still built, sitemapped, and citable, just not in the nav.
+EXTRA = [
+    ("naming.html", "The Naming of the Unified Harness Protocol", ROOT / "naming.md"),
+]
+
 # HarnessRouter's docs palette and type, so the two properties read as one family.
 CSS = """
 :root{
@@ -372,11 +378,20 @@ def build() -> int:
         (DIST / path).write_text(page(path, title, body, depth, hero))
         built += 1
 
+    for path, title, src in EXTRA:
+        if not src.exists():
+            print(f"  !! missing source: {src}")
+            return 1
+        depth = path.count("/")
+        body = rewrite_links(render_markdown(src.read_text()), depth)
+        (DIST / path).write_text(page(path, title, body, depth))
+        built += 1
+
     # Publishing metadata: a protocol site that cannot be crawled is a protocol nobody finds.
     (DIST / "robots.txt").write_text(
         f"User-agent: *\nAllow: /\nSitemap: https://{SITE}/sitemap.xml\n")
     urls = "".join(f"  <url><loc>https://{SITE}/{url_for(p).lstrip('./')}</loc></url>\n"
-                   for p, _, _ in flat_pages())
+                   for p, _, _ in flat_pages() + EXTRA)
     (DIST / "sitemap.xml").write_text(
         f'<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}</urlset>\n')

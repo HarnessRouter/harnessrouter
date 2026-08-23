@@ -56,6 +56,9 @@ import socket
 import sqlite3
 import subprocess
 import tempfile
+import hmac
+import pwd
+import stat
 import threading
 import time
 import urllib.error
@@ -64,7 +67,7 @@ import uuid
 
 import yaml
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="harness-runner")
@@ -81,6 +84,38 @@ _SID_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 # all-in-one container runs ONE runner for ALL sessions, where these behaviors would break
 # session isolation. See _ws() and _reap_workspaces().
 _SANDBOX_PER_SESSION = os.environ.get("HR_SANDBOX_PER_SESSION", "").strip().lower() in ("1", "true", "on")
+
+# THE SESSION WRITE-WALL, the second deployment invariant, declared by the self-hosted entrypoint
+# (HR_SESSION_UIDS=1). One runner serves every session there, so "the session workspace" cannot be
+# a sandbox boundary the way it is on a per-session sandbox; it has to be a permission boundary.
+# The runner runs as root and every process that acts for a session (the agent CLI, its sidecar,
+# git, tar) runs as that session's OWN uid, which owns its session directory and nothing else:
+# the workspace root, the data volume, the product's processes and the shared scratch directories
+# belong to other uids. A deliverable written to "/tmp/X", to the workspace parent or into another
+# session's directory is then not lost and not stolen: it fails with EACCES at the write, the one
+# moment the model is still there to pick the right path. Not an instruction (2026-08-21: an
+# instruction binds only models that follow instructions), not a post-hoc adoption pass (on a shared
+# root a stray file's name, content and mtime are attacker-controlled). A path the process cannot
+# materialise is a path it cannot use.
+#
+# Mutually exclusive with the per-session sandbox: there the root IS the workspace and one uid is
+# correct. Fails CLOSED: declared but not root means the wall cannot be built, and the runner
+# refuses to start rather than quietly sharing one uid across sessions.
+_SESSION_UIDS = os.environ.get("HR_SESSION_UIDS", "").strip().lower() in ("1", "true", "on")
+_SESSION_UID_BASE = int(os.environ.get("HR_SESSION_UID_BASE", "20000") or 20000)
+_SESSION_UID_SPAN = 40000
+if _SESSION_UIDS and _SANDBOX_PER_SESSION:
+    raise RuntimeError("HR_SESSION_UIDS and HR_SANDBOX_PER_SESSION are mutually exclusive: "
+                       "a per-session sandbox needs no per-session uid")
+if _SESSION_UIDS and os.geteuid() != 0:
+    raise RuntimeError("HR_SESSION_UIDS=1 requires the runner to run as root (it switches to a "
+                       "per-session uid for every agent process); refusing to start on a shared uid")
+# Names an agent process must never inherit from the runner's environment. The turn sets the
+# credential it needs explicitly (see turn()); everything else secret-shaped is the product's.
+_SECRET_ENV = re.compile(r"^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$"
+                         r"|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD", re.I)
+_INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
+_uid_lock = threading.Lock()
 
 # How long an untouched session workspace is kept. Sessions are resumable from their checkpoint,
 # so a reaped directory costs a rehydrate, not the work — but keeping every one forever fills the
@@ -152,6 +187,113 @@ def _ws(identifier: str = "") -> str:
         return WORKSPACE_ROOT
     sid = _SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default"
     return os.path.join(WORKSPACE_ROOT, sid)
+def _session_uid(ws: str) -> int | None:
+    """The uid this session's processes run as, or None when the write-wall is off or the
+    directory has not been isolated yet. The directory's owner IS the record: nothing to keep in
+    sync, and it survives a restart because ownership lives on the volume."""
+    if not _SESSION_UIDS:
+        return None
+    try:
+        uid = os.stat(ws).st_uid
+    except OSError:
+        return None
+    return uid if _SESSION_UID_BASE <= uid < _SESSION_UID_BASE + _SESSION_UID_SPAN else None
+
+
+def _as_session(ws: str) -> dict:
+    """Popen/run keyword arguments that make a child act as this session. Empty when the wall is
+    off, so every spawn site reads the same with or without it."""
+    uid = _session_uid(ws)
+    return {"user": uid, "group": uid, "extra_groups": []} if uid is not None else {}
+
+
+def _ensure_passwd(uid: int, home: str) -> None:
+    """A passwd entry for the session uid. The CLIs run without one (verified: all five start as
+    an unlisted uid), but os.userInfo()-style lookups throw, and the entry costs nothing."""
+    try:
+        pwd.getpwuid(uid)
+        return
+    except KeyError:
+        pass
+    name = f"hs{uid}"
+    try:
+        subprocess.run(["groupadd", "-g", str(uid), name], capture_output=True)
+        subprocess.run(["useradd", "-M", "-u", str(uid), "-g", str(uid), "-s", "/bin/bash",
+                        "-d", home, name], capture_output=True)
+    except OSError:
+        pass
+
+
+def _own_tree(root: str, uid: int, from_uids: set[int]) -> None:
+    """chown everything under root that currently belongs to one of from_uids. Only those: a
+    session can plant a hard link to a file it does not own, and chowning by position rather
+    than by current owner would hand it that file. Symlinks are re-owned as links, never
+    followed."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames + filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(path)
+                if st.st_uid in from_uids and not (stat.S_ISREG(st.st_mode) and st.st_nlink > 1):
+                    os.lchown(path, uid, uid)
+            except OSError:
+                continue
+
+
+def _isolate_session(ws: str) -> None:
+    """Make the session directory the one place its uid can write, and make everything in it
+    that uid's. Allocation happens once, under a lock, from the owners of the directories that
+    exist: a uid is free when no session directory carries it, so two sessions can never share
+    one, and a reaped directory returns its uid. Every call after that re-owns what the runner
+    wrote into the directory as root since the last one (agent doc, skills, input files, MCP
+    configuration, the restored checkpoint)."""
+    if not _SESSION_UIDS:
+        return
+    uid = _session_uid(ws)
+    previous: set[int] = {0}
+    if uid is None:
+        with _uid_lock:
+            uid = _session_uid(ws)
+            if uid is None:
+                used: set[int] = set()
+                try:
+                    for e in os.scandir(WORKSPACE_ROOT):
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                used.add(e.stat(follow_symlinks=False).st_uid)
+                        except OSError:
+                            continue
+                except OSError:
+                    pass
+                uid = next((u for u in range(_SESSION_UID_BASE, _SESSION_UID_BASE + _SESSION_UID_SPAN)
+                            if u not in used), None)
+                if uid is None:
+                    raise HTTPException(503, "no free session uid")
+                previous.add(os.stat(ws).st_uid)   # a legacy directory: re-own its files too
+                _ensure_passwd(uid, os.path.join(ws, HARNESS_STATE, "home"))
+                os.chown(ws, uid, uid)
+    os.chmod(ws, 0o700)
+    _own_tree(ws, uid, previous)
+
+
+def _child_env() -> dict:
+    """The environment an agent process starts from: the runner's, minus anything secret-shaped.
+    On the self-hosted box the runner's environment is the container's, and that carried the
+    console password, the internal key and the secret-store key into every agent process."""
+    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
+
+
+@app.middleware("http")
+async def _internal_callers_only(request: Request, call_next):
+    """Behind the write-wall the runner is reachable from every agent process on loopback, and its
+    routes address any session by identifier. The gateway presents the internal key (which
+    _child_env strips from agent processes); nothing else may drive this API."""
+    if _SESSION_UIDS and _INTERNAL_KEY and request.url.path != "/healthz":
+        if not hmac.compare_digest(request.headers.get("x-harness-internal", ""), _INTERNAL_KEY):
+            return JSONResponse({"error": "internal key required"}, status_code=401)
+    return await call_next(request)
+
+
 # Where checkpoint/hydrate tarballs spool to disk (HR-INF-015 — never a RAM buffer). MUST be
 # OUTSIDE the workspace (so a leftover temp file can never be caught by a later `git add -A` or
 # re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
@@ -259,7 +401,7 @@ def _start_sidecar(sid: str, collab_url: str, room: str, token: str = "") -> Non
                    "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
             logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
             entry.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=ws, env=env,
-                                               stdout=logf, stderr=logf),
+                                               stdout=logf, stderr=logf, **_as_session(ws)),
                          room=room, error=None)
         except Exception as e:  # noqa: BLE001
             entry.update(proc=None, room=None, error=str(e)[:200])
@@ -281,7 +423,7 @@ def _ver(cmd: list[str]) -> str:
 # ── git-backed workspace (hydrate at turn start, checkpoint at turn end) ───────────
 def _git(ws: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True,
-                          env={**os.environ, **_GIT_ENV}, check=check)
+                          env={**os.environ, **_GIT_ENV}, check=check, **_as_session(ws))
 
 
 def _git_ensure(ws: str) -> None:
@@ -1801,7 +1943,8 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
 
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
-                        mcp_servers: list[dict] | None = None) -> list[str]:
+                        mcp_servers: list[dict] | None = None,
+                        vision_auth: dict | None = None) -> list[str]:
     """Point HERMES_HOME inside the checkpointed workspace home (CODEX_HOME precedent) so the
     conversation state (state.db) survives sandbox recycling, and inject provider creds as env.
     Writes config.yaml fresh each turn (harness config is the source of truth, like the agent doc).
@@ -1826,6 +1969,31 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     if max_turns:
         # hermes 0.19.0 has no --max-turns CLI flag; agent.max_turns in config.yaml is the knob.
         cfg["agent"] = {"max_turns": int(max_turns)}
+    if vision_auth and vision_auth.get("model"):
+        # hermes asks its image questions separately from the conversation (vision_analyze, the
+        # browser tools) and, left alone, asks the model the harness writes with. That made a
+        # capability we list as supported depend on which model the operator picked: one that is
+        # slow or unwilling with images returns "Request timed out" after the tool's 120 second
+        # ceiling, and the agent re-renders and asks again. The gateway resolved which integration
+        # on this instance answers image questions (any integration, not only the turn's) and
+        # hands it over whole: provider, model, endpoint, credential. hermes' auxiliary router
+        # takes exactly that per task, so only the question about the picture goes elsewhere.
+        #
+        # The credential takes the same road as the chat one. For an OpenAI-compatible endpoint
+        # that is the loopback relay: the CLI sees a placeholder bearer, never the key.
+        vp = str(vision_auth.get("provider") or "").lower()
+        vision: dict = {"provider": vp, "model": str(vision_auth["model"])}
+        vkey, vbase = vision_auth.get("api_key") or "", vision_auth.get("base_url") or ""
+        if vp == "openai-api" and vkey and vbase:
+            vbase, vkey = _hermes_relay_route(vbase, vkey)
+        if vbase:
+            vision["base_url"] = vbase
+        if vkey:
+            # Through the environment, not the file: config.yaml is checkpointed with the
+            # workspace and a credential in it would travel in the tarball.
+            env["HR_VISION_API_KEY"] = vkey
+            vision["key_env"] = "HR_VISION_API_KEY"
+        cfg["auxiliary"] = {"vision": vision}
     # Provider credentials as env — the CLI resolves them at call time.
     if p == "anthropic":
         if auth.api_key:
@@ -1928,7 +2096,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+                                start_new_session=True, **_as_session(cwd))
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return
@@ -2009,7 +2177,7 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     try:
         proc = subprocess.Popen(["codex", "app-server"], cwd=cwd, env=env, text=True, bufsize=1,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+                                start_new_session=True, **_as_session(cwd))
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn app-server: {e}"[:500], done=True)
         return
@@ -2298,7 +2466,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                start_new_session=True)
+                                start_new_session=True, **_as_session(cwd))
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return
@@ -2494,6 +2662,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
     ws = _ws(identifier)
     ws_path = pathlib.Path(ws)
     ws_path.mkdir(parents=True, exist_ok=True)
+    _isolate_session(ws)
     fd, spool_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     h = hashlib.sha256()
     nbytes = 0
@@ -2540,7 +2709,8 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         restored = False
         if nbytes:
             with open(spool_path, "rb") as tar_in:
-                proc = subprocess.run(["tar", "xzf", "-", "-C", ws], stdin=tar_in, capture_output=True)
+                proc = subprocess.run(["tar", "xzf", "-", "-C", ws], stdin=tar_in, capture_output=True,
+                                      **_as_session(ws))
             if proc.returncode != 0:
                 raise HTTPException(500, f"untar failed: {proc.stderr.decode(errors='replace')[:300]}")
             restored = True
@@ -2641,6 +2811,47 @@ def get_file(path: str, identifier: str = "") -> Response:
     return Response(content=dest.read_bytes(), media_type=media)
 
 
+@app.put("/file")
+async def put_file(request: Request, path: str, identifier: str = "") -> dict:
+    """Write ONE file into a session's workspace, as that session.
+
+    The runner is the only process that acts for a session, and behind the write-wall it is the
+    only one that CAN: the session directory belongs to the session's own uid, so the product
+    cannot reach into it (that is the point). A live app writing a file into a workspace comes
+    through here instead. Written beside and renamed, so a reader mid-turn sees the old file or
+    the new one, never a half-written one."""
+    ws = _ws(identifier)
+    dest = _safe_join(ws, path)
+    if dest is None:
+        raise HTTPException(400, "path escapes the workspace")
+    data = await request.body()
+    pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
+    _isolate_session(ws)
+    uid = _session_uid(ws)
+    missing: list[pathlib.Path] = []
+    probe = dest.parent
+    while not probe.exists():
+        missing.append(probe)
+        probe = probe.parent
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".hr-put-{uuid.uuid4().hex[:8]}"
+    try:
+        tmp.write_bytes(data)
+        os.chmod(tmp, 0o644)
+        if uid is not None:
+            for d in missing:
+                os.chown(d, uid, uid)
+            os.chown(tmp, uid, uid)
+        os.replace(tmp, dest)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise HTTPException(500, f"write failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(dest.relative_to(ws)), "bytes": len(data)}
+
+
 @app.get("/capabilities")
 def capabilities(identifier: str = "") -> dict:
     _wsdir = _ws(identifier)
@@ -2678,6 +2889,7 @@ class TurnReq(BaseModel):
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
     vision: bool = True                    # pi: whether the model's channel accepts image input
+    vision_auth: dict | None = None        # hermes: {provider, model, base_url, api_key} for its image questions
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
 
 
@@ -2704,6 +2916,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     if not spec:
         raise HTTPException(400, f"unknown backend '{backend}' (one of {sorted(BACKENDS)})")
     cwd = req.cwd or _ws(identifier)
+    if _SESSION_UIDS and req.cwd and os.path.realpath(req.cwd) != os.path.realpath(_ws(identifier)):
+        # Behind the wall the directory decides which uid a turn runs as; a caller-chosen one
+        # would be a turn in another session's identity.
+        raise HTTPException(400, "cwd is decided by the session identifier")
     os.makedirs(cwd, exist_ok=True)
     _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
     # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
@@ -2734,7 +2950,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
                 f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
     _write_agent_doc(cwd, backend, agent_doc, installed_skills)
-    env = os.environ.copy()
+    env = _child_env()
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can
     # only carry one credential. The imagegen skill's wrapper reads these and passes them to the
@@ -2754,6 +2970,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     home = os.path.join(cwd, ".harness", "home")
     os.makedirs(home, exist_ok=True)
     env["HOME"] = home
+    if _SESSION_UIDS:
+        # The shared scratch directories are closed to session uids, so the session's own scratch
+        # (checkpoint- and collection-excluded by design) is what tempfile, os.tmpdir() and the
+        # CLIs' temp files use.
+        scratch = os.path.join(cwd, "tmp")
+        os.makedirs(scratch, exist_ok=True)
+        env["TMPDIR"] = env["TMP"] = env["TEMP"] = scratch
     auth = req.auth or Auth()
     model = req.model or spec["default_model"]
     use_appserver = backend == "codex" and bool(req.codex_appserver)
@@ -2772,7 +2995,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or HERMES_DEFAULT_MODEL
         hermes_provider = (req.provider or "bedrock").lower()
         hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
-                                         max_turns=req.max_turns, mcp_servers=req.mcp_servers)
+                                         max_turns=req.max_turns, mcp_servers=req.mcp_servers,
+                                         vision_auth=req.vision_auth)
     elif backend == "dsh":
         model = model or DSH_DEFAULT_MODEL
         cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
@@ -2790,6 +3014,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                             resume_session_id=req.resume_session_id, mcp_config=mcp_config,
                             disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages),
                             plugin_dirs=plugin_dirs)
+    _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex
     with _turns_lock:
         # Double-check under the lock: a concurrent retry with the same key may have raced past the
