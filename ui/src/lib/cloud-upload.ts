@@ -4,7 +4,7 @@
 // upload; the browser never holds them after save. Self-hosted only.
 import { gw } from '@/lib/harness';
 
-export interface CloudTarget { id: string; base_url: string; key_hint: string; member: string; workspace_name: string; label: string }
+export interface CloudTarget { id: string; base_url: string; key_hint: string; member: string; workspace_name: string; revoked: boolean; label: string }
 export interface CloudStatus { uploaded: boolean; uploaded_at?: number; target?: string; changed?: boolean }
 export interface UploadRow { id: string; ok: boolean; action: 'create' | 'replace' | 'skip'; name?: string; remote_id?: string; error?: string }
 
