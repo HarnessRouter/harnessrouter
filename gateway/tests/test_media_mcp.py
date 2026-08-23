@@ -32,6 +32,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from fs_workspace import FsWorkspaceFiles
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Set BEFORE importing app: the backing, the internal key and the encryption passphrase are all
@@ -383,7 +385,7 @@ def integration(api):
     # Self-hosted, a workspace is a live directory, and its root is read at import time from
     # HARNESS_WORKSPACE. Bound here to THIS file's temp dir so the projection is real wherever the
     # process happened to start — a projection that silently lands nowhere asserts nothing.
-    app.BACKING.workspace = app.backing.LocalWorkspaceFiles(os.path.join(_DATA, "workspaces"))
+    app.BACKING.workspace = FsWorkspaceFiles(os.path.join(_DATA, "workspaces"))
     return True
 
 
