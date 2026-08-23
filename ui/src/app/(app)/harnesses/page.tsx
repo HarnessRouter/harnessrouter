@@ -10,6 +10,8 @@ import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
 import { fetchHarnessRows, groupByHarness, timeAgo, p95Of, avgCreditsOf, type HarnessRow, type TraceCard } from '@/lib/revamp-data';
 import { SELF_HOSTED } from '@/lib/edition';
+import { CloudUploadDialog } from '@/components/CloudUploadDialog';
+import { statusAll, type CloudStatus } from '@/lib/cloud-upload';
 
 export default function HarnessesPage() {
   useModelCatalog();   // model list comes from the gateway, not a local copy
@@ -20,6 +22,12 @@ export default function HarnessesPage() {
   const [baseFlt, setBaseFlt] = useState('all');
   const [healthFlt, setHealthFlt] = useState('all');
   const [adding, setAdding] = useState(false);
+  // Select mode: checkboxes appear, a bar follows the selection, nothing else changes.
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [uploading, setUploading] = useState(false);
+  const [cloud, setCloud] = useState<Record<string, CloudStatus>>({});
+  useEffect(() => { if (SELF_HOSTED) statusAll().then((r) => setCloud(r.harnesses || {})).catch(() => null); }, [uploading]);
   const [name, setName] = useState('');
   const [base, setBase] = useState('codex');
   const [model, setModel] = useState('');
@@ -77,7 +85,13 @@ export default function HarnessesPage() {
       <div className="page">
         <div className="page-header">
           <div><h1>Harnesses</h1><p>Create, monitor, and configure the reusable agents in this Workspace.</p></div>
-          <button className="button primary" type="button" onClick={() => { setName(''); setAdding(true); }}><iconify-icon icon="tabler:plus"></iconify-icon>Add Harness</button>
+          <div className="header-actions">
+            {SELF_HOSTED && (
+              <button className="button" type="button" aria-pressed={selecting}
+                onClick={() => { setSelecting(!selecting); setPicked(new Set()); }}>{selecting ? 'Done' : 'Select'}</button>
+            )}
+            <button className="button primary" type="button" onClick={() => { setName(''); setAdding(true); }}><iconify-icon icon="tabler:plus"></iconify-icon>Add Harness</button>
+          </div>
         </div>
         <div className="toolbar">
           <div className="collection-tools">
@@ -101,17 +115,35 @@ export default function HarnessesPage() {
         </div>
         <div className="table-wrap">
           <table className="harness-inventory-table">
-            <thead><tr><th>Harness</th><th className="harness-desktop-col">Harness ID</th><th>Health</th><th className="harness-desktop-col">Base Harness</th><th className="harness-desktop-col">Tasks (7d)</th><th className="harness-desktop-col">Success</th><th className="harness-desktop-col">p95</th>{SELF_HOSTED ? null : <th className="harness-desktop-col">Credits / Task</th>}<th className="harness-desktop-col">Last activity</th><th aria-label="Open"></th></tr></thead>
+            <thead><tr>{selecting && (
+              <th className="select-col"><input type="checkbox" aria-label="Select all"
+                checked={filtered.length > 0 && filtered.every((r) => r.kind === 'builtin' || picked.has(r.id))}
+                onChange={(e) => setPicked(e.target.checked ? new Set(filtered.filter((r) => r.kind !== 'builtin').map((r) => r.id)) : new Set())} /></th>
+            )}<th>Harness</th><th className="harness-desktop-col">Harness ID</th><th>Health</th><th className="harness-desktop-col">Base Harness</th><th className="harness-desktop-col">Tasks (7d)</th><th className="harness-desktop-col">Success</th><th className="harness-desktop-col">p95</th>{SELF_HOSTED ? null : <th className="harness-desktop-col">Credits / Task</th>}<th className="harness-desktop-col">Last activity</th><th aria-label="Open"></th></tr></thead>
             <tbody>
               {filtered.map((r) => {
                 const bad = isDegraded(r);
                 const { id: baseId, name: baseName, model: modelName } = baseDisplay(r);
                 return (
                   <tr key={r.id} className="object-row" style={{ cursor: 'pointer' }}
-                    onClick={() => router.push(`/harnesses/${encodeURIComponent(r.id)}`)}>
+                    onClick={() => {
+                      if (!selecting) { router.push(`/harnesses/${encodeURIComponent(r.id)}`); return; }
+                      if (r.kind === 'builtin') return;
+                      setPicked((p) => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; });
+                    }}>
+                    {selecting && (
+                      <td className="select-col" onClick={(e) => e.stopPropagation()}>
+                        {r.kind === 'builtin' ? null : (
+                          <input type="checkbox" aria-label={`Select ${r.name}`} checked={picked.has(r.id)}
+                            onChange={(e) => setPicked((p) => { const n = new Set(p); if (e.target.checked) n.add(r.id); else n.delete(r.id); return n; })} />
+                        )}
+                      </td>
+                    )}
                     <td className="object-cell"><div className="object-title">
                       <span className="object-icon"><iconify-icon icon={r.kind === 'builtin' ? 'tabler:box' : 'tabler:terminal-2'}></iconify-icon></span>
-                      <div className="object-copy"><strong>{r.name}</strong><span>{r.kind === 'builtin' ? `Built-in · ${r.purpose}` : r.purpose}</span></div>
+                      <div className="object-copy"><strong>{r.name}</strong><span>{r.kind === 'builtin' ? `Built-in · ${r.purpose}` : r.purpose}{cloud[r.id]?.uploaded ? (
+                        <span className={'cloud-chip' + (cloud[r.id].changed ? ' changed' : '')} title={cloud[r.id].target || ''}> · <iconify-icon icon={cloud[r.id].changed ? 'tabler:cloud-up' : 'tabler:cloud-check'}></iconify-icon>{cloud[r.id].changed ? 'Changed since upload' : 'Uploaded'}</span>
+                      ) : null}</span></div>
                     </div></td>
                     <td className="harness-desktop-col" onClick={(e) => e.stopPropagation()}><CopyId value={r.id} /></td>
                     <td><span className={'status ' + (bad ? 'warning' : 'healthy')}>{bad ? 'Needs review' : 'Healthy'}</span></td>
@@ -125,12 +157,28 @@ export default function HarnessesPage() {
                   </tr>
                 );
               })}
-              {rows && !filtered.length && <tr><td colSpan={10} className="session-empty">No harnesses match.</td></tr>}
+              {rows && !filtered.length && <tr><td colSpan={selecting ? 11 : 10} className="session-empty">No harnesses match.</td></tr>}
               {!rows && <SkelRows rows={4} cols={10} first={200} />}
             </tbody>
           </table>
         </div>
+        {selecting && picked.size > 0 && (
+          <div className="select-bar">
+            <strong>{picked.size} selected</strong>
+            <button className="button primary" type="button" onClick={() => setUploading(true)}>
+              <iconify-icon icon="tabler:cloud-upload"></iconify-icon>Upload {picked.size} to cloud
+            </button>
+            <button className="button" type="button" onClick={() => setPicked(new Set())}>Cancel</button>
+          </div>
+        )}
       </div>
+
+      {uploading && (
+        <CloudUploadDialog
+          items={(rows || []).filter((r) => picked.has(r.id)).map((r) => ({ id: r.id, name: r.name, builtin: r.kind === 'builtin', uploaded: !!cloud[r.id]?.uploaded }))}
+          onClose={() => { setUploading(false); }}
+          onDone={() => { setPicked(new Set()); setSelecting(false); }} />
+      )}
 
       {adding && (
         <div className="modal-backdrop">
