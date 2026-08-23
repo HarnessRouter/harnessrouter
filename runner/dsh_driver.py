@@ -22,7 +22,6 @@ import http.server
 import json
 import os
 import pathlib
-import socket
 import sys
 import threading
 import urllib.request

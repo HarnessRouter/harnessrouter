@@ -162,8 +162,12 @@ COPY --from=ui /ui/.next/standalone /app/ui/
 COPY --from=ui /ui/.next/static     /app/ui/.next/static
 COPY --from=ui /ui/public           /app/ui/public
 
-# The agent CLIs refuse to run as root (they gate their own permission bypass on it), so the
-# runtime user is unprivileged and owns the workspace and data volume.
+# `agent` is the PRODUCT's user: the gateway and the console run as it and it owns the data
+# volume. The container itself starts as root and the entrypoint drops privileges per process,
+# because the runner needs root for one thing: every agent CLI runs as its own per-session uid,
+# which owns its session directory and nothing else (the write-wall; see docker/entrypoint.sh).
+# The CLIs refuse to run as root anyway (they gate their own permission bypass on it), and they
+# never do.
 #
 # The `rm -rf /home/agent/.npm` is not tidying. HOME is already /home/agent while the kit apps are
 # built above, and those builds run as root — so npm leaves ~1600 root-owned files in the cache
@@ -181,7 +185,6 @@ RUN useradd -m -u 10001 agent \
     && mkdir -p /data \
     && chown -R agent:agent /data /app /home/agent \
     && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits
-USER agent
 
 EXPOSE 3000
 VOLUME ["/data"]
