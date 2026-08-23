@@ -154,5 +154,6 @@ def test_the_agent_doc_says_a_skill_s_files_sit_beside_its_skill_md(tmp_path):
         {"path": "test.py", "content": "print('hi')"}]}], "codex")
     server._write_agent_doc(str(tmp_path), "codex", "", installed)
     doc = (tmp_path / "AGENTS.md").read_text()
-    assert "BESIDE its SKILL.md" in doc
-    assert "`.harness/skills/test-skill/SKILL.md`" in doc
+    assert "relative to THAT SKILL'S FOLDER" in doc
+    # the folder is absolute and complete: a bare filename in the skill is one join from working
+    assert f"files in `{tmp_path}/.harness/skills/test-skill/`" in doc
