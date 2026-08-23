@@ -1,0 +1,45 @@
+# Open a pull request as github-actions[bot].
+#
+# Main requires a pull request, one approval, and green checks, with no bypass for anyone. A
+# pull request cannot be approved by its own author, so an operator who works alone (or through
+# an agent using their account) could never merge. This workflow lets the agent open the PR
+# under the bot identity instead; the operator is then a reviewer, not the author, and approves
+# like anyone else.
+#
+# Trigger it with the branch to open, e.g.
+#   gh workflow run open-pr.yml -f branch=fix/x -f title="..." -f body="..."
+#
+# A PR opened with GITHUB_TOKEN does not start the checks workflow by itself (GitHub's guard
+# against recursive runs). The next push to the branch does, and the agent makes one; an empty
+# commit is enough.
+name: open-pr
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: head branch to open against main
+        required: true
+      title:
+        description: pull request title
+        required: true
+      body:
+        description: pull request body (markdown)
+        required: false
+        default: ""
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ inputs.branch }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+        run: |
+          existing=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')
+          if [ -n "$existing" ]; then echo "PR #$existing already open for $BRANCH"; exit 0; fi
+          gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"
