@@ -3,7 +3,7 @@
 // with "Add a workspace" inline: paste a key, Test shows where it lands, and the upload uses it.
 // Rows run independently on the server; each answers for itself here.
 import { useEffect, useState } from 'react';
-import { addTarget, listTargets, testKey, uploadMany, type CloudTarget, type UploadRow } from '@/lib/cloud-upload';
+import { addTarget, listTargets, uploadMany, type CloudTarget, type UploadRow } from '@/lib/cloud-upload';
 
 export interface UploadItem { id: string; name: string; builtin?: boolean; includes?: string; uploaded?: boolean }
 const ADD = '__add__';
@@ -14,7 +14,6 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
   const [targets, setTargets] = useState<CloudTarget[] | null>(null);
   const [choice, setChoice] = useState<string>('');
   const [key, setKey] = useState('');
-  const [tested, setTested] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [rows, setRows] = useState<UploadRow[] | null>(null);
@@ -28,25 +27,27 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
   const single = items.length === 1;
   const adding = choice === ADD;
 
-  async function test() {
+  async function add() {
+    // One verb: Add verifies the key, stores the workspace, and the picker lands on it.
     setBusy(true); setErr(null);
-    try { setTested((await testKey(key.trim())).label); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); setTested(null); }
+    try {
+      const t = await addTarget(key.trim());
+      const r = await listTargets();
+      setTargets(r.targets); setChoice(t.id); setKey('');
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
   async function run() {
     setBusy(true); setErr(null);
     try {
-      let targetId = choice;
-      if (adding) { const t = await addTarget(key.trim()); targetId = t.id; }
-      const r = await uploadMany(eligible.map((i) => i.id), targetId);
+      const r = await uploadMany(eligible.map((i) => i.id), choice);
       setRows(r.results); onDone?.(r.results);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
 
   const title = single ? `Upload "${items[0].name}"` : `Upload ${eligible.length} to cloud`;
-  const canUpload = !busy && eligible.length > 0 && (!adding || (key.trim().length > 0 && tested !== null));
+  const canUpload = !busy && eligible.length > 0 && !adding;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -80,12 +81,10 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
                 <div className="field"><label htmlFor="cloudKey">Workspace API key</label>
                   <div className="cloud-keyrow">
                     <input id="cloudKey" type="password" autoComplete="off" placeholder="sk-hr-" value={key}
-                      onChange={(e) => { setKey(e.target.value); setTested(null); }} />
-                    <button className="button" type="button" disabled={busy || !key.trim()} onClick={() => void test()}>Test</button>
+                      onChange={(e) => setKey(e.target.value)} />
+                    <button className="button primary" type="button" disabled={busy || !key.trim()} onClick={() => void add()}>{busy ? 'Adding…' : 'Add'}</button>
                   </div>
-                  {tested
-                    ? <span className="field-help"><span className="status healthy">{tested}</span></span>
-                    : <span className="field-help">From the cloud console, inside the workspace, under Keys.</span>}
+                  <span className="field-help">From the cloud console, inside the workspace, under Keys.</span>
                 </div>
               )}
               {single && (
