@@ -6,6 +6,26 @@
 # that restarts. `docker run --restart` then does the recovering.
 set -euo pipefail
 
+# ── privilege layout ──────────────────────────────────────────────────────────
+# Three principals, and the distance between them is the product's security model:
+#   root    this entrypoint and the runner. The runner switches to a per-session uid for every
+#           agent process, which is the one thing that needs root. CAP_SETUID, CAP_SETGID and
+#           CAP_CHOWN are in Docker's default set: no --privileged, no --cap-add.
+#   agent   the product: the gateway, the console, the data volume. Its databases, blobs and
+#           secret store are readable by it alone.
+#   20000+  one uid per session, owning its session directory and nothing else. /tmp, /var/tmp
+#           and /dev/shm are closed to those uids, so the ONLY path an agent process can write is
+#           its own session directory. A deliverable saved to "/tmp/deck.pptx" fails at the write,
+#           while the model is still there to choose the right path, instead of vanishing: the
+#           self-hosted reproduction of the 2026-08-21 lost-deliverable incident wrote exactly
+#           there. See _isolate_session in runner/server.py.
+if [ "$(id -u)" -ne 0 ]; then
+  echo "[harnessrouter] ERROR: the container must start as root. It drops privileges itself: the product runs as 'agent', every agent process as its own session uid. Remove --user from docker run."
+  exit 1
+fi
+PRODUCT=agent
+AS_PRODUCT="setpriv --reuid=$PRODUCT --regid=$PRODUCT --init-groups"
+
 DATA_DIR="${HR_DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
 
@@ -14,6 +34,21 @@ mkdir -p "$DATA_DIR"
 # when the volume is empty — so an image-time mkdir is invisible on every existing install.
 export HARNESS_WORKSPACE="${HARNESS_WORKSPACE:-$DATA_DIR/workspaces}"
 mkdir -p "$HARNESS_WORKSPACE"
+
+# The write-wall, in file modes. Idempotent and non-recursive, so it costs nothing on a volume
+# that already has it and repairs one that predates it. Session directories themselves are owned
+# by their session's uid (0700); the runner sets that as it allocates them.
+chown "$PRODUCT:$PRODUCT" "$DATA_DIR" "$HARNESS_WORKSPACE"
+chmod 751 "$DATA_DIR" "$HARNESS_WORKSPACE"        # traversable by sessions, neither listable nor writable
+for f in "$DATA_DIR"/*.db "$DATA_DIR"/*.db-* "$DATA_DIR"/selfhost-auth.json; do
+  if [ -e "$f" ]; then chown "$PRODUCT:$PRODUCT" "$f"; chmod 600 "$f"; fi
+done
+for d in "$DATA_DIR/blobs" "$DATA_DIR/secrets"; do
+  if [ -d "$d" ]; then chown "$PRODUCT:$PRODUCT" "$d"; chmod 700 "$d"; fi
+done
+for d in /tmp /var/tmp /dev/shm; do
+  if [ -d "$d" ]; then chown "root:$PRODUCT" "$d"; chmod 1770 "$d"; fi
+done
 
 # Our own processes must run on the image's interpreter, never on whatever a backend puts on
 # PATH. Hermes installs into its own venv and that venv's bin joins PATH below so the runner can
@@ -263,12 +298,16 @@ if [ -n "$missing" ]; then
   echo "[harnessrouter] WARN: requested but not installed:$missing — those backends cannot run"
 fi
 
-# runner (loopback only)
-( cd /app/runner && exec "$PY" -m uvicorn server:app --host 127.0.0.1 --port 8081 --log-level warning ) &
+# runner (loopback only). Root, for the per-session uid switch; HR_SESSION_UIDS=1 is the
+# declaration the runner fails closed without. The console's credentials and the secret-store key
+# are the product's and are not in its environment at all.
+( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
+    HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host 127.0.0.1 --port 8081 --log-level warning ) &
 pids+=($!)
 
-# gateway (loopback only)
-( cd /app/gateway && exec "$PY" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning ) &
+# gateway (loopback only), as the product. umask 077: what it creates on the volume (databases,
+# blobs, the secret store) is its alone.
+( cd /app/gateway && exec $AS_PRODUCT sh -c 'umask 077; exec "$0" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning' "$PY" ) &
 pids+=($!)
 
 # Wait for the gateway before the UI starts serving, so a first page load never races a
@@ -293,7 +332,7 @@ done
   while :; do
     HR_SESSION_KEY="$(hr_session_key)" \
     HR_AUTH_USER="$(hr_stored_user)" \
-      node server.js
+      $AS_PRODUCT sh -c 'umask 077; exec node server.js'
     status=$?
     # A clean exit is the credential change asking for a restart. Anything else is a real
     # failure, and repeating it forever would hide it — so give up and let the container die.

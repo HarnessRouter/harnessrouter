@@ -1132,9 +1132,14 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
 
 # ── pool proxy ───────────────────────────────────────────────────────────────────
 def _pool_headers() -> dict:
-    """Auth headers for the runner. Empty when local — no cloud identity exists or is needed."""
+    """Auth headers for the runner: the cloud identity token through a session pool; beside a local
+    runner, the internal key. Behind the self-hosted write-wall (HR_SESSION_UIDS) the runner refuses
+    callers without it, because every agent process shares its loopback and its routes address any
+    session by identifier."""
     tok = _pool_token()
-    return {"Authorization": f"Bearer {tok}"} if tok else {}
+    if tok:
+        return {"Authorization": f"Bearer {tok}"}
+    return {"X-Harness-Internal": INTERNAL_KEY} if INTERNAL_KEY else {}
 
 
 async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None = None,
