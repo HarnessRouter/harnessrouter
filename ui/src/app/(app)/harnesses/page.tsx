@@ -167,7 +167,7 @@ export default function HarnessesPage() {
           <p className="field-help cloud-select-hint">Built-ins already exist in the cloud. Add or fork a harness to upload.</p>
         )}
         {selecting && picked.size > 0 && (
-          <div className="settings-form-footer settings-footer-sticky select-bar">
+          <div className="select-bar">
             <strong>{picked.size} selected</strong>
             <span className="settings-footer-spacer" />
             <button className="button" type="button" onClick={() => setPicked(new Set())}>Cancel</button>
