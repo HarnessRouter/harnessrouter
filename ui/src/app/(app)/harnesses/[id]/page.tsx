@@ -37,6 +37,12 @@ export default function HarnessSettingsPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [cloud, setCloud] = useState<CloudStatus | null>(null);
+  // The chip: absent until the first upload, then "Uploaded …" or "Changed since upload".
+  // Declared with the other hooks, above every early return, so the hook order never changes.
+  useEffect(() => {
+    if (!SELF_HOSTED || !id || oobById(id)) return;
+    statusOne(id).then(setCloud).catch(() => setCloud(null));
+  }, [id, saved]);   // re-read after every save: the fingerprint may have moved
   // Draft of a NEW skill being created in the SkillEditor popup (name edited in the same popup).
   const [newSkill, setNewSkill] = useState<{ name: string } | null>(null);
   const [cards, setCards] = useState<TraceCard[]>([]);
@@ -96,11 +102,6 @@ export default function HarnessSettingsPage() {
 
   const name = oob ? oob.name : draft!.name;
   const readOnly = Boolean(oob);
-  // The chip: absent until the first upload, then "Uploaded …" or "Changed since upload".
-  useEffect(() => {
-    if (!SELF_HOSTED || readOnly || !id) return;
-    statusOne(id).then(setCloud).catch(() => setCloud(null));
-  }, [id, readOnly, dirty]);
   const skills = draft?.skills || [];
   const ownSkills = skills.map((s, idx) => ({ s, idx })).filter(({ s }) => isOwnSkill(s));
   // Built-ins the harness has not replaced with one of its own. A built-in is implicit: the
