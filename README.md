@@ -93,6 +93,33 @@ change.
 </details>
 
 <details>
+<summary>Do not add <code>--user</code>: the container starts as root and drops privileges itself</summary>
+
+The container must start as root, and from 0.8.2 it refuses to start any other way, with one line
+saying so. This is not the usual "runs as root" shortcut; it is the opposite. Root is needed for
+exactly one thing: every agent CLI runs as its own per-session user, which owns that session's
+workspace and nothing else. Switching to that user is what root is for, and the product itself runs
+as an unprivileged user from the first second.
+
+What that buys you, inside one container serving many sessions:
+
+- An agent cannot read or write another session's files, the databases, the blob store or the
+  secret store. Not "is told not to": cannot, because those paths belong to other users.
+- A file an agent saves to the wrong place fails at the write, while the model is still there to
+  correct itself, instead of silently disappearing outside the collected workspace.
+- An agent process carries none of the product's secrets in its environment.
+
+No extra privilege is granted to get there: no `--privileged`, no `--cap-add`, no custom seccomp
+profile. Docker's default capability set already includes what a root process needs to switch to
+another user, and that is all that is used.
+
+If you run with `--user` today (or `user:` in a compose file), remove it before upgrading. The
+documented command above never set one, and a volume from any earlier version is adopted in place
+on the first start.
+
+</details>
+
+<details>
 <summary>Choosing your own username and password at <code>docker run</code></summary>
 
 Two optional variables. Set them and they replace the defaults; the console never shows you the
