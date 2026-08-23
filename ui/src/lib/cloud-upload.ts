@@ -10,7 +10,6 @@ export interface UploadRow { id: string; ok: boolean; action: 'create' | 'replac
 
 export const listTargets = () => gw<{ targets: CloudTarget[]; last: string }>('GET', '/v1/cloud-upload/targets');
 export const addTarget = (api_key: string) => gw<CloudTarget>('POST', '/v1/cloud-upload/targets', { api_key });
-export const testKey = (api_key: string) => gw<{ ok: true; label: string }>('POST', '/v1/cloud-upload/targets/test', { api_key });
 export const removeTarget = (id: string) => gw<{ targets: CloudTarget[]; last: string }>('DELETE', `/v1/cloud-upload/targets?id=${encodeURIComponent(id)}`);
 export const uploadOne = (id: string, target: string) => gw<UploadRow & { status: CloudStatus }>('POST', `/v1/harnesses/${encodeURIComponent(id)}/upload`, { target });
 export const uploadMany = (ids: string[], target: string) => gw<{ results: UploadRow[]; target: CloudTarget }>('POST', '/v1/harnesses/upload', { ids, target });
