@@ -502,6 +502,19 @@ def _write_input_files(cwd: str, files: list[dict] | None) -> list[str]:
 _MCP_NAME_RE = __import__("re").compile(r"[^a-zA-Z0-9_]+")
 
 
+_SKILL_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _skill_dir_name(s: str) -> str:
+    """A skill's directory name: what the author called it, minus anything that could leave the
+    directory. Hyphens are KEPT — kebab-case is the skill format's own convention, every SKILL.md
+    frontmatter uses it, and the CLIs match a skill by that name. Renaming `test-skill` to
+    `test_skill` (the MCP sanitizer, built for a different job) made the directory disagree with
+    the frontmatter inside it and with what the user asked for by name."""
+    n = _SKILL_NAME_RE.sub("-", (s or "").strip()).strip("-_")
+    return n or "skill"
+
+
 def _mcp_name(s: str) -> str:
     """Sanitize an MCP server name into a CLI-safe identifier (alnum + underscore)."""
     n = _MCP_NAME_RE.sub("_", (s or "").strip()).strip("_")
@@ -619,7 +632,7 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         entryroot = ".harness/skills"
     installed: list[dict] = []
     for sk in skills or []:
-        name = _mcp_name((sk or {}).get("name") or (sk or {}).get("id") or "")
+        name = _skill_dir_name((sk or {}).get("name") or (sk or {}).get("id") or "")
         if not name:
             continue
         files = (sk or {}).get("files")
@@ -753,7 +766,10 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     if skills_meta:
         lines += ["## Available skills", "",
                   "These skills are installed in this workspace. When a task matches one, read its "
-                  "SKILL.md first and follow its instructions and bundled scripts.", ""]
+                  "SKILL.md first and follow its instructions and bundled scripts. A skill's own "
+                  "files sit BESIDE its SKILL.md, so a bare filename in a skill (`test.py`, "
+                  "`scripts/run.sh`) means that skill's directory, not this workspace's root: run "
+                  "it by its full path, or change into that directory first.", ""]
         for s in skills_meta:
             d = f" — {s['desc']}" if s.get("desc") else ""
             lines.append(f"- **{s['name']}**{d} (`{s['entry']}`)")
