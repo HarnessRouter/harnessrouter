@@ -248,7 +248,7 @@ function gwHeaders(): Record<string, string> {
            ...workspaceHeaders() };
 }
 
-async function gw<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function gw<T>(method: string, path: string, body?: unknown): Promise<T> {
   const r = await harnessFetch(`/api/harness${path}`, {
     method, headers: gwHeaders(), cache: 'no-store',
     body: body === undefined ? undefined : JSON.stringify(body),
