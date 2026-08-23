@@ -6,6 +6,8 @@
 // 2026-07-22, a pure label with no runtime effect is noise, not a setting.)
 import { useEffect, useState } from 'react';
 import { useWorkspace } from '@/lib/workspace';
+import { SELF_HOSTED } from '@/lib/edition';
+import { CloudUploadCard } from '@/components/CloudUploadCard';
 
 export default function WorkspaceSettingsPage() {
   const { current, update, loading } = useWorkspace();
@@ -52,6 +54,7 @@ export default function WorkspaceSettingsPage() {
             </div>
           </section>
         </form>
+        {SELF_HOSTED && <CloudUploadCard />}
       </div>
     </section>
   );

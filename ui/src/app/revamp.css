@@ -1890,3 +1890,20 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .invite-linkrow input { flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--line);
       border-radius: 9px; background: var(--surface-subtle); color: var(--ink); font-size: 12.5px; }
     .invite-copy { flex: 0 0 auto; width: auto !important; padding: 0 16px; }
+
+    /* ── cloud upload: one dialog, a chip, a select bar ───────────────────────── */
+    .cloud-kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+    .cloud-kv div { display: contents; }
+    .cloud-kv dt { color: var(--muted); }
+    .cloud-kv dd { margin: 0; color: var(--ink); }
+    .cloud-keyrow { display: flex; gap: 8px; }
+    .cloud-keyrow input { flex: 1; min-width: 0; }
+    .cloud-rows td { padding: 10px 12px; }
+    .cloud-note { color: var(--muted); font-size: 12px; }
+    .cloud-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .cloud-chip.changed { color: var(--ink); }
+    .cloud-chip iconify-icon { font-size: 14px; }
+    .select-bar { position: sticky; bottom: 12px; z-index: 3; display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+    .select-bar strong { margin-right: auto; }
+    .select-col { width: 36px; }
+    .select-col input { cursor: pointer; }
