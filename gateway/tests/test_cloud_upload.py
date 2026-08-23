@@ -221,3 +221,18 @@ def test_the_same_harness_uploads_to_every_workspace_a_key_points_at(api, cloud)
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     r3 = api.post(f"/v1/harnesses/{hid}/upload").json()
     assert r3["action"] == "replace" and r3["remote_id"] == hid
+
+
+def test_a_target_stored_before_the_cloud_knew_its_name_heals_on_listing(api, cloud):
+    """A key added while the hosted side answered empty names keeps working and picks up the
+    name the moment the hosted side can answer, with no re-adding."""
+    cloud.keys["sk-hr-good"] = {**cloud.keys["sk-hr-good"], "workspace_name": "", "member": ""}
+    api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
+    assert api.get("/v1/cloud-upload/targets").json()["targets"][0]["label"] == "Cloud workspace"
+    cloud.keys["sk-hr-good"] = {**cloud.keys["sk-hr-good"], "workspace_name": "Test Workspace", "member": "richard"}
+    j = api.get("/v1/cloud-upload/targets").json()
+    assert j["targets"][0]["label"] == "Test Workspace (richard)"
+    # healed persistently: no further /v1/me calls once complete
+    n = len([c for c in cloud.calls if c[1] == "/v1/me"])
+    api.get("/v1/cloud-upload/targets")
+    assert len([c for c in cloud.calls if c[1] == "/v1/me"]) == n
