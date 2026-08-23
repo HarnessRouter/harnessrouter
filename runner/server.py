@@ -621,13 +621,28 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         the same SKILL.md this product already stores).
     Each skill: {name, files:[{path, content}]} (or {content} -> SKILL.md).
     Returns [{name, desc, entry}] for the skills actually installed (entry = SKILL.md path)."""
+    # EVERY CLI WITH A SKILL LOADER GETS ITS SKILLS WHERE THAT LOADER LOOKS. The CLI then presents
+    # each skill to the model with its directory and its own rules about relative paths, which is
+    # the mechanism that makes skills work at all. Codex and hermes used to get a directory of
+    # our own invention (.harness/skills) plus prose in AGENTS.md; a weaker model read the
+    # SKILL.md at the path we gave it, then ran its "test.py" in the workspace root, twice, and
+    # `rg --files` never showed it the file because the tree was hidden (2026-08-23).
     if backend == "claude":
         rootrels = [".harness/home/.claude/skills", ".claude/skills"]
         entryroot = ".claude/skills"
     elif backend == "pi":
         rootrels = [".harness/home/.pi/agent/skills"]
         entryroot = ".harness/home/.pi/agent/skills"
+    elif backend == "codex":
+        # $CODEX_HOME/skills/<name>/SKILL.md, and CODEX_HOME is redirected into the workspace
+        rootrels = [".harness/home/.codex/skills"]
+        entryroot = ".harness/home/.codex/skills"
+    elif backend == "hermes":
+        # $HERMES_HOME/skills/<name>/SKILL.md: the <available_skills> index hermes builds itself
+        rootrels = [".harness/home/.hermes/skills"]
+        entryroot = ".harness/home/.hermes/skills"
     else:
+        # dsh has no skill loader; the AGENTS.md block below is the only door
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
     installed: list[dict] = []

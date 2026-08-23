@@ -142,7 +142,7 @@ def test_a_skill_keeps_the_name_its_author_gave_it(tmp_path):
     server._write_skills(str(tmp_path), [{"name": "test-skill",
                                           "files": [{"path": "SKILL.md", "content": "---\nname: test-skill\n---\nRun test.py"},
                                                     {"path": "test.py", "content": "print('hi')"}]}], "codex")
-    d = tmp_path / ".harness" / "skills" / "test-skill"
+    d = tmp_path / ".harness" / "home" / ".codex" / "skills" / "test-skill"   # where codex itself looks
     assert (d / "SKILL.md").exists() and (d / "test.py").read_text() == "print('hi')"
 
 
@@ -156,4 +156,16 @@ def test_the_agent_doc_says_a_skill_s_files_sit_beside_its_skill_md(tmp_path):
     doc = (tmp_path / "AGENTS.md").read_text()
     assert "relative to THAT SKILL'S FOLDER" in doc
     # the folder is absolute and complete: a bare filename in the skill is one join from working
-    assert f"files in `{tmp_path}/.harness/skills/test-skill/`" in doc
+    assert f"files in `{tmp_path}/.harness/home/.codex/skills/test-skill/`" in doc
+
+
+def test_each_cli_gets_skills_where_its_own_loader_looks(tmp_path):
+    sk = [{"name": "s", "files": [{"path": "SKILL.md", "content": "---\nname: s\n---\nx"}]}]
+    for backend, where in (("codex", ".harness/home/.codex/skills/s/SKILL.md"),
+                           ("hermes", ".harness/home/.hermes/skills/s/SKILL.md"),
+                           ("pi", ".harness/home/.pi/agent/skills/s/SKILL.md"),
+                           ("claude", ".harness/home/.claude/skills/s/SKILL.md"),
+                           ("dsh", ".harness/skills/s/SKILL.md")):
+        d = tmp_path / backend
+        server._write_skills(str(d), sk, backend)
+        assert (d / where).exists(), backend
