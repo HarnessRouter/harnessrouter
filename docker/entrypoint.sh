@@ -13,12 +13,12 @@ set -euo pipefail
 #           CAP_CHOWN are in Docker's default set: no --privileged, no --cap-add.
 #   agent   the product: the gateway, the console, the data volume. Its databases, blobs and
 #           secret store are readable by it alone.
-#   20000+  one uid per session, owning its session directory and nothing else. /tmp, /var/tmp
-#           and /dev/shm are closed to those uids, so the ONLY path an agent process can write is
-#           its own session directory. A deliverable saved to "/tmp/deck.pptx" fails at the write,
-#           while the model is still there to choose the right path, instead of vanishing: the
-#           self-hosted reproduction of the 2026-08-21 lost-deliverable incident wrote exactly
-#           there. See _isolate_session in runner/server.py.
+#   20000+  one uid per session, owning its session directory and nothing else. It cannot read or
+#           write another session's workspace, the workspace parent, the databases, the blobs or
+#           the secret store: a deliverable written to any of those paths fails at the write, while
+#           the model is still there to choose the right one, instead of vanishing. Shared scratch
+#           (/tmp, /var/tmp, /dev/shm) stays writable, because tools hardcode it — see the mode
+#           below. See _isolate_session in runner/server.py.
 if [ "$(id -u)" -ne 0 ]; then
   echo "[harnessrouter] ERROR: the container must start as root. It drops privileges itself: the product runs as 'agent', every agent process as its own session uid. Remove --user from docker run."
   exit 1
@@ -46,8 +46,21 @@ done
 for d in "$DATA_DIR/blobs" "$DATA_DIR/secrets"; do
   if [ -d "$d" ]; then chown "$PRODUCT:$PRODUCT" "$d"; chmod 700 "$d"; fi
 done
+# Shared scratch stays USABLE. Sessions get their own TMPDIR inside their workspace (see turn()
+# in the runner), but a machine's scratch directories are a convention that tools hardcode, and a
+# tool that cannot write /tmp does not fall back: LibreOffice puts its UNO pipe there and dies with
+# "no valid pipe path found", which is every .docx/.xlsx/.pptx render and every PDF preview. Closed
+# to sessions, one deck task on the demo box spent twenty minutes failing around it before finding
+# a way through. Measured both ways under real conditions: closed, no output at all; open as below,
+# a 524 KB PDF and its slide render.
+#
+# 1733, not 1777: a session can CREATE and use paths here (w+x) and the sticky bit stops it
+# removing another session's files, but it cannot LIST the directory — so one session cannot
+# enumerate another's scratch, which is what shared /tmp otherwise gives away. Deliverables are a
+# different question and are answered by the workspace contract, not by this mode: the paths that
+# silently swallowed one (the workspace parent, another session's directory) stay closed.
 for d in /tmp /var/tmp /dev/shm; do
-  if [ -d "$d" ]; then chown "root:$PRODUCT" "$d"; chmod 1770 "$d"; fi
+  if [ -d "$d" ]; then chown root:root "$d"; chmod 1733 "$d"; fi
 done
 
 # Our own processes must run on the image's interpreter, never on whatever a backend puts on
