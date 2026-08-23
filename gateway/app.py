@@ -11606,6 +11606,238 @@ async def list_harnesses_public(request: Request) -> dict:
     return {"harnesses": items}
 
 
+# ── Cloud upload: a local harness, pushed to a hosted workspace ────────────────
+# One-way door. The self-hosted instance is the source of truth and the hosted copy is a
+# deployment target: an upload REPLACES it, nothing is pulled back, and the hosted copy is not
+# protected from the next upload. Upsert on the harness id, so the hosted id is the local id and
+# stays stable forever (API callers and links on the hosted side keep working across re-uploads).
+# The hosted workspace is whatever the API key was minted in; the operator pastes one key and
+# Test shows the destination name. Stored encrypted beside the provider keys, never handed to the
+# browser; this process does the upload. Not a UHP surface: a product feature, like plugins.
+_CLOUD_UPLOAD_KEY = "harness-cloud-upload"          # vault: {base_url, api_key}
+_CLOUD_UPLOAD_DEFAULT_BASE = os.environ.get("HR_CLOUD_API_BASE", "https://api.harnessrouter.ai").rstrip("/")
+_CLOUD_UPLOAD_RECORDS_KEY = "harness-cloud-upload-records"   # vault: {hid: {fingerprint, uploaded_at, target}}
+_HID_RE = re.compile(r"^chrn_[0-9a-f]{32}$")
+
+
+class CloudTargetBody(BaseModel):
+    api_key: str | None = None          # omitted or "" on PUT keeps the stored key
+    base_url: str | None = None
+
+
+async def _cloud_target() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+    except Exception:  # noqa: BLE001
+        doc = {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _cloud_target_public(t: dict) -> dict:
+    key = str(t.get("api_key") or "")
+    return {"configured": bool(key), "base_url": t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE,
+            "key_hint": (key[:6] + "…" + key[-4:]) if len(key) >= 10 else ("…" if key else ""),
+            "org": t.get("org") or "", "org_name": t.get("org_name") or "",
+            "workspace": t.get("workspace") or "", "workspace_name": t.get("workspace_name") or ""}
+
+
+async def _cloud_records() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+    except Exception:  # noqa: BLE001
+        doc = {}
+    return doc if isinstance(doc, dict) else {}
+
+
+async def _cloud_me(base_url: str, api_key: str) -> dict:
+    """Resolve a key to where an upload lands. Raises HTTPException with the hosted side's words."""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as c:
+            r = await c.get(f"{base_url}/v1/me", headers={"authorization": f"Bearer {api_key}"})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"could not reach {base_url}: {str(e)[:120]}")
+    if r.status_code == 401:
+        raise HTTPException(401, "the cloud workspace rejected this key")
+    if r.status_code != 200:
+        raise HTTPException(502, f"cloud answered {r.status_code}")
+    me = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if not isinstance(me, dict) or not me.get("org"):
+        raise HTTPException(502, "cloud answered without an org")
+    if not me.get("workspace"):
+        raise HTTPException(400, "this key is not bound to a workspace; mint one inside the workspace")
+    return me
+
+
+async def _cloud_harness_body(org: str, hid: str, v: dict) -> dict:
+    """What travels: the harness config, with every skill's files inlined (a bundle the local
+    instance offloaded to a blob is a local detail; the hosted side gets the files). Never:
+    provider keys (not part of a harness), sessions, produced files, the local workspace."""
+    out = _harness_out(await _mcp_migrate(org, hid, v))
+    skills = []
+    for sk in out.get("skills") or []:
+        if not isinstance(sk, dict):
+            continue
+        sk = dict(sk)
+        if sk.get("blob") and not sk.get("files"):
+            raw = await _blob_get(f"skills/{sk['blob']}.json", kb=BLOB_KB)
+            if raw:
+                try:
+                    sk["files"] = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    pass
+            sk.pop("blob", None)
+        skills.append(sk)
+    return {"name": out["name"], "base": out["base"], "base_label": out.get("baseLabel") or out["base"],
+            "default_model": out.get("defaultModel") or None, "system_prompt": out.get("systemPrompt") or None,
+            "mcp_servers": out.get("mcpServers") or [], "skills": skills,
+            "disabled_tools": out.get("disabledTools") or [], "max_step": out.get("maxStep"),
+            "timeout_seconds": out.get("timeoutSeconds"), "additional_headers": out.get("additionalHeaders") or [],
+            "kit": out.get("kit") or None,
+            "source": "selfhost", "source_instance": socket.gethostname()}
+
+
+def _cloud_fingerprint(body: dict) -> str:
+    stable = {k: v for k, v in body.items() if k not in ("source", "source_instance")}
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+
+
+async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> dict:
+    """Upload one harness. Returns the per-row result the dialog renders; never raises for a
+    single harness, so a batch finishes every row."""
+    if not _HID_RE.match(hid):
+        return {"id": hid, "ok": False, "action": "skip", "error": "built-in"}
+    v = await _vertex_get(hid)
+    if not v or str(v.get("org") or "") != org or str(v.get("deleted") or "") in ("1", "true"):
+        return {"id": hid, "ok": False, "action": "skip", "error": "not found"}
+    body = await _cloud_harness_body(org, hid, v)
+    fp = _cloud_fingerprint(body)
+    action = "replace" if hid in records else "create"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=8.0)) as c:
+            r = await c.put(f"{target['base_url']}/v1/harnesses/{hid}", json=body,
+                            headers={"authorization": f"Bearer {target['api_key']}"})
+    except Exception as e:  # noqa: BLE001
+        return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
+    if r.status_code not in (200, 201):
+        detail = ""
+        try:
+            j = r.json()
+            detail = str((j.get("error") or {}).get("message") or j.get("detail") or "")
+        except Exception:  # noqa: BLE001
+            detail = r.text[:160]
+        return {"id": hid, "ok": False, "action": action, "error": f"cloud answered {r.status_code}: {detail}"[:300]}
+    records[hid] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
+                    "target": f"{target.get('org_name') or target.get('org')} / {target.get('workspace_name') or target.get('workspace')}"}
+    return {"id": hid, "ok": True, "action": action, "name": body["name"]}
+
+
+def _cloud_status(hid: str, records: dict, fp: str | None) -> dict:
+    rec = records.get(hid)
+    if not rec:
+        return {"uploaded": False}
+    return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
+            "changed": bool(fp) and rec.get("fingerprint") != fp}
+
+
+@app.get("/v1/cloud-upload/target")
+async def cloud_target_get(request: Request) -> dict:
+    await _principal(request)
+    return _cloud_target_public(await _cloud_target())
+
+
+@app.put("/v1/cloud-upload/target")
+async def cloud_target_put(body: CloudTargetBody, request: Request) -> dict:
+    await _principal(request)
+    cur = await _cloud_target()
+    key = (body.api_key or "").strip() or str(cur.get("api_key") or "")
+    base = (body.base_url or "").strip().rstrip("/") or str(cur.get("base_url") or "") or _CLOUD_UPLOAD_DEFAULT_BASE
+    if not key:
+        raise HTTPException(400, "an API key is required")
+    me = await _cloud_me(base, key)
+    doc = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
+           "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or ""}
+    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY, json.dumps(doc), require_encryption=True)
+    return _cloud_target_public(doc)
+
+
+@app.post("/v1/cloud-upload/target/test")
+async def cloud_target_test(body: CloudTargetBody, request: Request) -> dict:
+    """Where would an upload land. Tests the key in the body, or the stored one when omitted."""
+    await _principal(request)
+    cur = await _cloud_target()
+    key = (body.api_key or "").strip() or str(cur.get("api_key") or "")
+    base = (body.base_url or "").strip().rstrip("/") or str(cur.get("base_url") or "") or _CLOUD_UPLOAD_DEFAULT_BASE
+    if not key:
+        raise HTTPException(400, "an API key is required")
+    me = await _cloud_me(base, key)
+    return {"ok": True, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
+            "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or ""}
+
+
+@app.delete("/v1/cloud-upload/target")
+async def cloud_target_delete(request: Request) -> dict:
+    await _principal(request)
+    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY, "", require_encryption=True)
+    return {"configured": False}
+
+
+class CloudUploadBody(BaseModel):
+    ids: list[str]
+
+
+@app.post("/v1/harnesses/upload")
+async def cloud_upload_batch(body: CloudUploadBody, request: Request) -> dict:
+    p = await _principal(request)
+    target = await _cloud_target()
+    if not target.get("api_key"):
+        raise HTTPException(400, "no cloud workspace connected")
+    records = await _cloud_records()
+    results = [await _cloud_upload_one(p.get("org", ""), str(h), target, records) for h in body.ids[:200]]
+    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
+    return {"results": results, "target": _cloud_target_public(target)}
+
+
+@app.post("/v1/harnesses/{hid}/upload")
+async def cloud_upload_one(hid: str, request: Request) -> dict:
+    p = await _principal(request)
+    target = await _cloud_target()
+    if not target.get("api_key"):
+        raise HTTPException(400, "no cloud workspace connected")
+    records = await _cloud_records()
+    res = await _cloud_upload_one(p.get("org", ""), hid, target, records)
+    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
+    if not res.get("ok"):
+        raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
+    return {**res, "status": _cloud_status(hid, records, None) | {"changed": False}}
+
+
+@app.get("/v1/harnesses/{hid}/upload")
+async def cloud_upload_status(hid: str, request: Request) -> dict:
+    """The chip on the harness page: never uploaded, uploaded, or changed since."""
+    p = await _principal(request)
+    records = await _cloud_records()
+    if hid not in records:
+        return {"uploaded": False}
+    v = await _vertex_get(hid)
+    fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
+    return _cloud_status(hid, records, fp)
+
+
+@app.get("/v1/cloud-upload/status")
+async def cloud_upload_status_all(request: Request) -> dict:
+    """For the list: which harnesses have been uploaded, and whether each changed since."""
+    p = await _principal(request)
+    records = await _cloud_records()
+    out = {}
+    for hid in records:
+        v = await _vertex_get(hid)
+        fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
+        out[hid] = _cloud_status(hid, records, fp)
+    return {"harnesses": out}
+
+
 @app.get("/v1/harnesses/{hid}")
 async def get_harness_public(hid: str, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
