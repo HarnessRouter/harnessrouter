@@ -266,8 +266,9 @@ def render_markdown(text: str) -> str:
 
 
 def rewrite_links(html_text: str, depth: int) -> str:
-    """Point in-repo markdown links at their built pages."""
-    up = "../" * depth
+    """Point in-repo markdown links at their built pages (root-absolute, see url_for)."""
+    up = "/"
+    samedir = "/spec/" if depth else "/"
     pairs = [
         (rf'href="(?:\.\./)*versions/{VERSION}/([a-z]+)\.md"', rf'href="{up}spec/\1"'),
         (r'href="(?:\.\./)*README\.md"', f'href="{url_for("index.html", up)}"'),
@@ -276,7 +277,7 @@ def rewrite_links(html_text: str, depth: int) -> str:
         (r'href="(?:\.\./)*CHANGELOG\.md"', f'href="{up}changelog"'),
         (r'href="(?:\.\./)*conformance/?"', f'href="{up}conformance"'),
         (r'href="(?:\.\./)*\.\./conformance/"', f'href="{up}conformance"'),
-        (r'href="([a-z]+)\.md"', rf'href="\1"'),
+        (r'href="([a-z]+)\.md"', rf'href="{samedir}\1"'),
         (r'href="(?:\.\./)*schema/([^"/]+)"',
          rf'href="{up}schema/\1"'),                       # the machine-readable files ship with the site
         (r'href="(?:\.\./)*schema/"', f'href="{up}spec/schema"'),
@@ -303,6 +304,10 @@ def url_for(path: str, up: str = "") -> str:
     A standards site gets cited, and a citation to .../spec/errors.html cannot survive a change
     of static host or generator, while .../spec/errors can. vercel.json sets cleanUrls, which
     serves the extensionless form and redirects the .html one, so old links keep working.
+
+    Links are root-absolute. cleanUrls serves spec/index.html at /spec — no trailing slash — so a
+    RELATIVE same-directory link on that page resolves against the site root and 404s. Absolute
+    paths resolve identically from every serve path.
     """
     if path == "index.html":
         rel = ""
@@ -310,7 +315,7 @@ def url_for(path: str, up: str = "") -> str:
         rel = path[: -len("/index.html")]          # spec/index.html -> spec
     else:
         rel = path[: -len(".html")]                # conformance.html -> conformance
-    return (up + rel) or "./"
+    return "/" + rel
 
 
 def sidebar(current: str, depth: int) -> str:
