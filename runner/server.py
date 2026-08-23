@@ -367,22 +367,35 @@ def _mcp_name(s: str) -> str:
 
 
 def _write_mcp_config_claude(cwd: str, servers: list[dict]) -> str | None:
-    """Write a Claude Code .mcp.json for the enabled HTTP/SSE MCP servers. Returns its path
-    (passed via --mcp-config), or None if there are none."""
+    """Write a Claude Code .mcp.json for the enabled MCP servers. Returns its path
+    (passed via --mcp-config), or None if there are none.
+
+    Both remote (http/sse, keyed on `url`) and local (stdio, keyed on `command`) servers
+    are supported — stdio is the CLI's own default transport (`claude mcp add` defaults to
+    it, and a stdio entry is just `{"type": "stdio", "command": ..., "args": [...]}` in the
+    same .mcp.json this already writes), so accepting one here is not a new format, only a
+    second field this function previously never looked at."""
     entries: dict = {}
     for s in servers or []:
-        url = (s or {}).get("url")
-        if not url:
+        s = s or {}
+        name = _mcp_name(s.get("name") or s.get("id") or "mcp")
+        url = s.get("url")
+        command = s.get("command")
+        if url:
+            transport = (s.get("transport") or "http").lower()
+            entry = {"type": "sse" if transport == "sse" else "http", "url": url}
+            auth = s.get("auth")
+            if auth:  # bearer token (resolved by the gateway) -> Authorization header
+                hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+                entry["headers"] = {"Authorization": hdr}
+            if isinstance(s.get("headers"), dict):
+                entry.setdefault("headers", {}).update(s["headers"])
+        elif command:
+            entry = {"type": "stdio", "command": command, "args": s.get("args") or []}
+            if isinstance(s.get("env"), dict):
+                entry["env"] = s["env"]
+        else:
             continue
-        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
-        transport = ((s or {}).get("transport") or "http").lower()
-        entry = {"type": "sse" if transport == "sse" else "http", "url": url}
-        auth = (s or {}).get("auth")
-        if auth:  # bearer token (resolved by the gateway) -> Authorization header
-            hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-            entry["headers"] = {"Authorization": hdr}
-        if isinstance((s or {}).get("headers"), dict):
-            entry.setdefault("headers", {}).update(s["headers"])
         entries[name] = entry
     if not entries:
         return None
@@ -495,6 +508,70 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         if wrote:
             installed.append({"name": name, "desc": _skill_desc(files),
                               "entry": f"{entryroot}/{name}/SKILL.md"})
+    return installed
+
+
+# A plugin's hooks and CLI entry points are run directly by the shell, not by an interpreter
+# named on the command line — Claude Code's own convention (see any real plugin's hooks.json,
+# which invokes hooks/*.sh with no leading `sh`) requires the executable bit on disk. JSON has
+# no file-mode concept, so a caller may say so explicitly (`{"executable": true}` per file); where
+# it does not, the well-known locations a Claude Code plugin's own manifest format expects
+# scripts to live in — `bin/*` and `hooks/*.sh` — are treated as executable by convention, the
+# same convention the format itself already relies on. Verified the hard way: without this,
+# --plugin-dir loads the plugin's manifest fine and every hook invocation then fails with
+# "Permission denied" — a difference invisible until a hook actually fires.
+_PLUGIN_EXEC_PATTERNS = (re.compile(r"^bin/[^/]+$"), re.compile(r"^hooks/[^/]+\.sh$"))
+
+
+def _plugin_file_is_executable(rel: str, declared: bool | None) -> bool:
+    if declared is not None:
+        return bool(declared)
+    return any(p.match(rel) for p in _PLUGIN_EXEC_PATTERNS)
+
+
+def _write_plugins(cwd: str, plugins: list[dict]) -> list[str]:
+    """Materialize enabled Claude Code plugins into the workspace, one directory per plugin
+    under `.harness/plugins/<name>/`. Each plugin: {name, files:[{path, content|content_b64,
+    executable?}]}. Returns the absolute paths written, in order — the caller turns each into
+    one `--plugin-dir <path>` argument to `_build_claude`.
+
+    A single root, unlike skills: a plugin is loaded exclusively through --plugin-dir, so
+    there is no discovery path to also mirror it under, and a stray second copy under
+    .claude/ would risk Claude Code loading the same plugin twice."""
+    installed: list[str] = []
+    for pg in plugins or []:
+        pg = pg or {}
+        name = _mcp_name(pg.get("name") or pg.get("id") or "")
+        files = pg.get("files")
+        if not name or not files:
+            continue
+        root = _safe_join(cwd, f".harness/plugins/{name}")
+        if root is None:
+            continue
+        wrote = False
+        for f in files:
+            f = f or {}
+            rel = f.get("path")
+            content = f.get("content")
+            content_b64 = f.get("content_b64")
+            if not rel or (content is None and content_b64 is None):
+                continue
+            dest = _safe_join(str(root), rel)
+            if dest is None:
+                continue
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if content_b64 is not None:
+                    dest.write_bytes(base64.b64decode(content_b64))
+                else:
+                    dest.write_text(content)
+                if _plugin_file_is_executable(rel, f.get("executable")):
+                    dest.chmod(dest.stat().st_mode | 0o111)
+                wrote = True
+            except Exception:  # noqa: BLE001
+                continue
+        if wrote:
+            installed.append(str(root))
     return installed
 
 
@@ -847,7 +924,7 @@ def _claude_thinking_env(model: str) -> dict:
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
                   cwd: str, env: dict, resume_session_id: str | None = None,
                   mcp_config: str | None = None, disallowed_tools: list[str] | None = None,
-                  partial: bool = False) -> list[str]:
+                  partial: bool = False, plugin_dirs: list[str] | None = None) -> list[str]:
     p = provider or "anthropic"
     if p not in CLAUDE_PROVIDERS:
         raise HTTPException(400, f"unknown claude provider '{p}' (one of {sorted(CLAUDE_PROVIDERS)})")
@@ -902,6 +979,8 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
         cmd.append("--include-partial-messages")
     if mcp_config:   # owner-attached MCP servers (.harness/mcp.json) — adds their tools this turn
         cmd += ["--mcp-config", mcp_config]
+    for pd in (plugin_dirs or []):   # owner-attached Claude Code plugins, one --plugin-dir each
+        cmd += ["--plugin-dir", pd]
     # Disabled tools go in settings.json, NOT on the command line. `--disallowedTools` is part of
     # the permission prompt system, and we pass --dangerously-skip-permissions (autonomous runs
     # cannot answer a prompt), which disables that system wholesale — so the flag was accepted,
@@ -2591,6 +2670,7 @@ class TurnReq(BaseModel):
     files: list[dict] | None = None        # caller-attached input files: [{filename, content_b64}]
     mcp_servers: list[dict] | None = None  # enabled MCP servers: [{name, url, transport?, auth?, headers?}]
     skills: list[dict] | None = None       # enabled skills: [{name, files:[{path, content|content_b64}]}]
+    plugins: list[dict] | None = None      # enabled Claude Code plugins: [{name, files:[{path, content|content_b64}]}]
     agent_doc: str | None = None           # harness instruction doc → AGENTS.md (codex) / CLAUDE.md (claude)
     skills_suppressed: list[str] | None = None  # built-in skill names to NOT mount (harness disabled them)
     tools_disabled: list[str] | None = None     # built-in tool names to disable (claude: --disallowedTools)
@@ -2705,9 +2785,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
+        plugin_dirs = _write_plugins(cwd, req.plugins)
         cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,
                             resume_session_id=req.resume_session_id, mcp_config=mcp_config,
-                            disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages))
+                            disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages),
+                            plugin_dirs=plugin_dirs)
     turn_id = "turn" + uuid.uuid4().hex
     with _turns_lock:
         # Double-check under the lock: a concurrent retry with the same key may have raced past the
