@@ -22,8 +22,8 @@ export default function HarnessesPage() {
   const [baseFlt, setBaseFlt] = useState('all');
   const [healthFlt, setHealthFlt] = useState('all');
   const [adding, setAdding] = useState(false);
-  // Select mode: checkboxes appear, a bar follows the selection, nothing else changes.
-  const [selecting, setSelecting] = useState(false);
+  // No selection mode: the checkboxes are simply there. Ticking any row summons the bar;
+  // clearing the last tick dismisses it. A row click still opens the harness.
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [uploading, setUploading] = useState(false);
   const [cloud, setCloud] = useState<Record<string, CloudStatus>>({});
@@ -85,13 +85,7 @@ export default function HarnessesPage() {
       <div className="page">
         <div className="page-header">
           <div><h1>Harnesses</h1><p>Create, monitor, and configure the reusable agents in this Workspace.</p></div>
-          <div className="header-actions">
-            {SELF_HOSTED && (
-              <button className="button" type="button" aria-pressed={selecting}
-                onClick={() => { setSelecting(!selecting); setPicked(new Set()); }}>{selecting ? 'Done' : 'Select'}</button>
-            )}
-            <button className="button primary" type="button" onClick={() => { setName(''); setAdding(true); }}><iconify-icon icon="tabler:plus"></iconify-icon>Add Harness</button>
-          </div>
+          <button className="button primary" type="button" onClick={() => { setName(''); setAdding(true); }}><iconify-icon icon="tabler:plus"></iconify-icon>Add Harness</button>
         </div>
         <div className="toolbar">
           <div className="collection-tools">
@@ -115,7 +109,7 @@ export default function HarnessesPage() {
         </div>
         <div className="table-wrap">
           <table className="harness-inventory-table">
-            <thead><tr>{selecting && (
+            <thead><tr>{SELF_HOSTED && (
               <th className="select-col"><input type="checkbox" aria-label="Select all"
                 disabled={!filtered.some((r) => r.kind !== 'builtin')}
                 checked={filtered.some((r) => r.kind !== 'builtin') && filtered.every((r) => r.kind === 'builtin' || picked.has(r.id))}
@@ -127,12 +121,8 @@ export default function HarnessesPage() {
                 const { id: baseId, name: baseName, model: modelName } = baseDisplay(r);
                 return (
                   <tr key={r.id} className="object-row" style={{ cursor: 'pointer' }}
-                    onClick={() => {
-                      if (!selecting) { router.push(`/harnesses/${encodeURIComponent(r.id)}`); return; }
-                      if (r.kind === 'builtin') return;
-                      setPicked((p) => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; });
-                    }}>
-                    {selecting && (
+                    onClick={() => router.push(`/harnesses/${encodeURIComponent(r.id)}`)}>
+                    {SELF_HOSTED && (
                       <td className="select-col" onClick={(e) => e.stopPropagation()}>
                         {r.kind === 'builtin' ? null : (
                           <input type="checkbox" aria-label={`Select ${r.name}`} checked={picked.has(r.id)}
@@ -158,19 +148,19 @@ export default function HarnessesPage() {
                   </tr>
                 );
               })}
-              {rows && !filtered.length && <tr><td colSpan={selecting ? 11 : 10} className="session-empty">No harnesses match.</td></tr>}
+              {rows && !filtered.length && <tr><td colSpan={SELF_HOSTED ? 11 : 10} className="session-empty">No harnesses match.</td></tr>}
               {!rows && <SkelRows rows={4} cols={10} first={200} />}
             </tbody>
           </table>
         </div>
-        {selecting && rows && !filtered.some((r) => r.kind !== 'builtin') && (
+        {rows && !filtered.some((r) => r.kind !== 'builtin') && SELF_HOSTED && (
           <p className="field-help cloud-select-hint">Built-ins already exist in the cloud. Add or fork a harness to upload.</p>
         )}
-        {selecting && picked.size > 0 && (
+        {picked.size > 0 && (
           <div className="select-bar">
             <strong>{picked.size} selected</strong>
             <span className="settings-footer-spacer" />
-            <button className="button" type="button" onClick={() => setPicked(new Set())}>Cancel</button>
+            <button className="button" type="button" onClick={() => setPicked(new Set())}>Clear</button>
             <button className="button primary" type="button" onClick={() => setUploading(true)}>
               <iconify-icon icon="tabler:cloud-upload"></iconify-icon>Upload {picked.size} to Cloud
             </button>
@@ -182,7 +172,7 @@ export default function HarnessesPage() {
         <CloudUploadDialog
           items={(rows || []).filter((r) => picked.has(r.id)).map((r) => ({ id: r.id, name: r.name, builtin: r.kind === 'builtin', uploaded: !!cloud[r.id]?.uploaded }))}
           onClose={() => { setUploading(false); }}
-          onDone={() => { setPicked(new Set()); setSelecting(false); }} />
+          onDone={() => { setPicked(new Set()); }} />
       )}
 
       {adding && (
