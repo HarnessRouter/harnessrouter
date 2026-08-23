@@ -159,6 +159,9 @@ def _mp4(seconds: float = 1.0, size: str = "128x72") -> bytes:
 
 
 # ── the provider, mocked at the transport ────────────────────────────────────────
+
+_TASK_SEQ = 0          # provider task ids are unique across the whole file, see handle()
+
 class Provider:
     """A stand-in for the two connected providers that answers per model, records every request,
     and can be told to fail a specific one. The adapters run for real against it.
@@ -214,7 +217,15 @@ class Provider:
             if model in self.fail:
                 st, b = self.fail[model]
                 return httpx.Response(st, json=b)
-            tid = f"task_{len(self.tasks) + 1}"
+            # Globally unique, NOT per-instance. The provider fixture is per-test, so a
+            # per-instance counter gives every test's first render the same id "task_1" — and an
+            # assertion that scopes on a task id then cannot tell THIS job's poll from the poll of
+            # a job an earlier test left running. That ambiguity read as a product failure (a
+            # deleted agent's job looking as though it were still being polled) whenever the file
+            # ran in an order that left one behind.
+            global _TASK_SEQ
+            _TASK_SEQ += 1
+            tid = f"task_{_TASK_SEQ}"
             self.tasks[tid] = {"model": model}
             return httpx.Response(200, json={"id": tid, "task_id": tid, "object": "video",
                                              "model": model, "status": "queued"})
@@ -308,6 +319,28 @@ def resolvable_cdn(monkeypatch):
         return real(host, port, *a, **kw)
 
     monkeypatch.setattr(socket, "getaddrinfo", fake)
+
+
+@pytest.fixture(autouse=True)
+def _no_jobs_from_earlier_tests():
+    """Every test starts with an empty job store.
+
+    `_media_sweep` advances EVERY running job in the store, so a job an earlier test left running
+    (its poll not yet due when that test ended) is advanced by the next test's sweep — a poll, and
+    on a failure answer a fresh submit. That is correct product behaviour and wrong test
+    behaviour: it lands in the next test's `_calls`, where assertions that count provider traffic
+    then measure work this test never asked for. Scoping an assertion to a job's own task id does
+    not fix it (the ids are only unique within the file, and a leftover job's poll can carry any
+    of them); the isolation belongs here, once, rather than in each assertion.
+
+    Retired rather than deleted: a job that reaches a terminal status is invisible to the sweeper
+    by the same rule the product uses, so nothing here depends on the store's delete semantics."""
+    for row in asyncio.run(app.BACKING.graph.find(app._MEDIA_JOB_LABEL, {"status": "running"})):
+        job = app._media_job_out(row)
+        if job:
+            job["status"] = "cancelled"
+            asyncio.run(app._media_job_save(job))
+    yield
 
 
 @pytest.fixture()
