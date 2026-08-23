@@ -47,7 +47,7 @@ export function CloudUploadCard() {
             <div className="table-wrap cloud-rows"><table><tbody>
               {targets.map((t) => (<tr key={t.id}>
                 <td><strong>{t.label}</strong></td>
-                <td className="cloud-note">{t.key_hint}</td>
+                <td className="cloud-note">{t.revoked ? 'Key revoked. Paste a new one.' : t.key_hint}</td>
                 <td className="cloud-remove"><button className="button quiet small" type="button" disabled={busy} onClick={() => void remove(t.id)}>Remove</button></td>
               </tr>))}
             </tbody></table></div>

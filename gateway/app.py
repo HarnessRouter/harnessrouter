@@ -11666,7 +11666,7 @@ def _cloud_target_public(t: dict) -> dict:
     return {"id": _cloud_tkey(t), "base_url": t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE,
             "key_hint": (key[:6] + "…" + key[-4:]) if len(key) >= 10 else ("…" if key else ""),
             "member": t.get("member") or "", "workspace_name": t.get("workspace_name") or "",
-            "label": _cloud_label(t)}
+            "revoked": bool(t.get("revoked")), "label": _cloud_label(t)}
 
 
 def _cloud_tkey(target: dict) -> str:
@@ -11822,11 +11822,17 @@ async def cloud_targets_get(request: Request) -> dict:
             continue
         try:
             me = await _cloud_me(t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE, t.get("api_key") or "")
-        except HTTPException:
+        except HTTPException as e:
+            # A revoked key is a state the operator must see, not an empty label. Anything else
+            # (network, hosted hiccup) stays silent and retries on the next listing.
+            if e.status_code == 401 and not t.get("revoked"):
+                t["revoked"] = True
+                changed = True
             continue
         t.update({"org": me.get("org") or t.get("org") or "", "org_name": me.get("org_name") or "",
                   "workspace": me.get("workspace") or t.get("workspace") or "",
-                  "workspace_name": me.get("workspace_name") or "", "member": me.get("member") or ""})
+                  "workspace_name": me.get("workspace_name") or "", "member": me.get("member") or "",
+                  "revoked": False})
         new_key = _cloud_tkey(t)
         if new_key != tkey:
             doc["targets"].pop(tkey, None)

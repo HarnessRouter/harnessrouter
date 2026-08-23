@@ -236,3 +236,16 @@ def test_a_target_stored_before_the_cloud_knew_its_name_heals_on_listing(api, cl
     n = len([c for c in cloud.calls if c[1] == "/v1/me"])
     api.get("/v1/cloud-upload/targets")
     assert len([c for c in cloud.calls if c[1] == "/v1/me"]) == n
+
+
+def test_a_revoked_key_is_named_not_hidden(api, cloud):
+    """A revoked key must read as 'key revoked', never as a generic label. Heal marks it on the
+    401; a working key that later answers clears the mark."""
+    cloud.keys["sk-hr-good"] = {**cloud.keys["sk-hr-good"], "workspace_name": "", "member": ""}
+    api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
+    dead = cloud.keys.pop("sk-hr-good")                      # revoke on the hosted side
+    j = api.get("/v1/cloud-upload/targets").json()
+    assert j["targets"][0]["revoked"] is True
+    cloud.keys["sk-hr-good"] = {**dead, "workspace_name": "Test Workspace", "member": "richard"}
+    j = api.get("/v1/cloud-upload/targets").json()           # un-revoked: heals and clears the mark
+    assert j["targets"][0]["revoked"] is False and j["targets"][0]["label"] == "Test Workspace (richard)"
