@@ -1905,10 +1905,10 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .cloud-note { color: var(--muted); font-size: 12px; }
     .cloud-remove { text-align: right; }
     #cloudTo { width: 100%; }
-    .cloud-chip { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; vertical-align: middle; color: var(--muted); font-size: 12px; white-space: nowrap; }
-    .header-actions .cloud-chip { margin-left: 0; }
+    .cloud-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .cloud-chip iconify-icon { flex: 0 0 auto; font-size: 14px; }
+    .object-copy .cloud-chip { margin-top: 3px; }
     .cloud-chip.changed { color: var(--ink); }
-    .cloud-chip iconify-icon { font-size: 14px; }
     /* The selection bar is FIXED to the viewport bottom, same recipe as the harness settings
        action bar above: a short list must still put the action where the thumb expects it. */
     .select-bar { position: fixed; left: var(--sidebar-w); right: 0; bottom: 0; z-index: 20;

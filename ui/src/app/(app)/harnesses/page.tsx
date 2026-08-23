@@ -132,9 +132,9 @@ export default function HarnessesPage() {
                     )}
                     <td className="object-cell"><div className="object-title">
                       <span className="object-icon"><iconify-icon icon={r.kind === 'builtin' ? 'tabler:box' : 'tabler:terminal-2'}></iconify-icon></span>
-                      <div className="object-copy"><strong>{r.name}</strong><span>{r.kind === 'builtin' ? `Built-in · ${r.purpose}` : r.purpose}{cloud[r.id]?.uploaded ? (
+                      <div className="object-copy"><strong>{r.name}</strong><span>{r.kind === 'builtin' ? `Built-in · ${r.purpose}` : r.purpose}</span>{cloud[r.id]?.uploaded ? (
                         <span className={'cloud-chip' + (cloud[r.id].changed ? ' changed' : '')} title={cloud[r.id].target || ''}><iconify-icon icon={cloud[r.id].changed ? 'tabler:cloud-up' : 'tabler:cloud-check'}></iconify-icon><span>{cloud[r.id].changed ? 'Changed since upload' : 'Uploaded'}</span></span>
-                      ) : null}</span></div>
+                      ) : null}</div>
                     </div></td>
                     <td className="harness-desktop-col" onClick={(e) => e.stopPropagation()}><CopyId value={r.id} /></td>
                     <td><span className={'status ' + (bad ? 'warning' : 'healthy')}>{bad ? 'Needs review' : 'Healthy'}</span></td>
