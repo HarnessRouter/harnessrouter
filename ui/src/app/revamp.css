@@ -1907,3 +1907,4 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .select-bar strong { margin-right: auto; }
     .select-col { width: 36px; }
     .select-col input { cursor: pointer; }
+    .cloud-select-hint { margin: 10px 2px 0; }

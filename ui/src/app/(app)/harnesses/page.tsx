@@ -117,7 +117,8 @@ export default function HarnessesPage() {
           <table className="harness-inventory-table">
             <thead><tr>{selecting && (
               <th className="select-col"><input type="checkbox" aria-label="Select all"
-                checked={filtered.length > 0 && filtered.every((r) => r.kind === 'builtin' || picked.has(r.id))}
+                disabled={!filtered.some((r) => r.kind !== 'builtin')}
+                checked={filtered.some((r) => r.kind !== 'builtin') && filtered.every((r) => r.kind === 'builtin' || picked.has(r.id))}
                 onChange={(e) => setPicked(e.target.checked ? new Set(filtered.filter((r) => r.kind !== 'builtin').map((r) => r.id)) : new Set())} /></th>
             )}<th>Harness</th><th className="harness-desktop-col">Harness ID</th><th>Health</th><th className="harness-desktop-col">Base Harness</th><th className="harness-desktop-col">Tasks (7d)</th><th className="harness-desktop-col">Success</th><th className="harness-desktop-col">p95</th>{SELF_HOSTED ? null : <th className="harness-desktop-col">Credits / Task</th>}<th className="harness-desktop-col">Last activity</th><th aria-label="Open"></th></tr></thead>
             <tbody>
@@ -162,6 +163,9 @@ export default function HarnessesPage() {
             </tbody>
           </table>
         </div>
+        {selecting && rows && !filtered.some((r) => r.kind !== 'builtin') && (
+          <p className="field-help cloud-select-hint">Built-ins already exist in the cloud. Add or fork a harness to upload.</p>
+        )}
         {selecting && picked.size > 0 && (
           <div className="select-bar">
             <strong>{picked.size} selected</strong>
