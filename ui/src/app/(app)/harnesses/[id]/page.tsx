@@ -146,7 +146,7 @@ export default function HarnessSettingsPage() {
               {SELF_HOSTED && !readOnly && cloud?.uploaded && (
                 <span className={'cloud-chip' + (cloud.changed ? ' changed' : '')} title={cloud.target || ''}>
                   <iconify-icon icon={cloud.changed ? 'tabler:cloud-up' : 'tabler:cloud-check'}></iconify-icon>
-                  {cloud.changed ? 'Changed since upload' : `Uploaded ${timeAgo(cloud.uploaded_at ?? null)}`}
+                  <span>{cloud.changed ? 'Changed since upload' : `Uploaded ${timeAgo(cloud.uploaded_at ?? null)}`}</span>
                 </span>
               )}
             </div>

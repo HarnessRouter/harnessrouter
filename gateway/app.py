@@ -11642,13 +11642,27 @@ def _cloud_target_public(t: dict) -> dict:
             "workspace": t.get("workspace") or "", "workspace_name": t.get("workspace_name") or ""}
 
 
+def _cloud_tkey(target: dict) -> str:
+    """One hosted copy per (org, workspace): the record key a target owns."""
+    return f"{target.get('org') or ''}|{target.get('workspace') or ''}"
+
+
 async def _cloud_records() -> dict:
+    """{harness id: {target key: {remote_id, fingerprint, uploaded_at, target}}}.
+
+    Per harness AND per target: the same local harness uploads to as many workspaces as the
+    operator connects over time, each keeping its own hosted copy. A v1 flat record (one target,
+    implicit) predates that and is discarded rather than guessed at: it never shipped."""
     v = await _vault_get(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY)
     try:
         doc = json.loads(v) if v else {}
     except Exception:  # noqa: BLE001
         doc = {}
-    return doc if isinstance(doc, dict) else {}
+    if not isinstance(doc, dict) or (doc and doc.get("v") != 2):
+        return {"v": 2, "harnesses": {}}
+    if not doc:
+        return {"v": 2, "harnesses": {}}
+    return doc
 
 
 async def _cloud_me(base_url: str, api_key: str) -> dict:
@@ -11713,28 +11727,55 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
         return {"id": hid, "ok": False, "action": "skip", "error": "not found"}
     body = await _cloud_harness_body(org, hid, v)
     fp = _cloud_fingerprint(body)
-    action = "replace" if hid in records else "create"
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=8.0)) as c:
-            r = await c.put(f"{target['base_url']}/v1/harnesses/{hid}", json=body,
-                            headers={"authorization": f"Bearer {target['api_key']}"})
-    except Exception as e:  # noqa: BLE001
-        return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
-    if r.status_code not in (200, 201):
+    per = records.setdefault("harnesses", {}).setdefault(hid, {})
+    tkey = _cloud_tkey(target)
+    rec = per.get(tkey)
+    action = "replace" if rec else "create"
+    # The hosted id is the local id when that id is free, and a minted one when it is not. Hosted
+    # ids are global across orgs, and the hosted side answers 404 for an id owned by another org,
+    # deliberately indistinguishable from missing. That is a legitimate situation, not an error:
+    # the same local harness uploaded to a second org (a changed key, a shared instance, an id
+    # claimed by an earlier test) must land, so on that 404 the upload retries once under a fresh
+    # id and the record keeps the mapping. Stability holds per target: every later upload replaces
+    # the same hosted copy.
+    # This target's hosted id: its own record first; else the local id, but only when no OTHER
+    # target has claimed it (a second workspace in the SAME org would otherwise silently update
+    # the first workspace's copy rather than creating its own); else minted.
+    if rec:
+        remote_id = str(rec.get("remote_id") or hid)
+    elif per:
+        remote_id = "chrn" + uuid.uuid4().hex
+    else:
+        remote_id = hid
+    last_error = ""
+    for attempt in (remote_id, "chrn" + uuid.uuid4().hex):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=8.0)) as c:
+                r = await c.put(f"{target['base_url']}/v1/harnesses/{attempt}", json=body,
+                                headers={"authorization": f"Bearer {target['api_key']}"})
+        except Exception as e:  # noqa: BLE001
+            return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
+        if r.status_code in (200, 201):
+            per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
+                         "remote_id": attempt,
+                         "target": f"{target.get('org_name') or target.get('org')} / {target.get('workspace_name') or target.get('workspace')}"}
+            return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": attempt}
         detail = ""
         try:
             j = r.json()
             detail = str((j.get("error") or {}).get("message") or j.get("detail") or "")
         except Exception:  # noqa: BLE001
             detail = r.text[:160]
-        return {"id": hid, "ok": False, "action": action, "error": f"cloud answered {r.status_code}: {detail}"[:300]}
-    records[hid] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
-                    "target": f"{target.get('org_name') or target.get('org')} / {target.get('workspace_name') or target.get('workspace')}"}
-    return {"id": hid, "ok": True, "action": action, "name": body["name"]}
+        last_error = f"cloud answered {r.status_code}: {detail}"[:300]
+        if r.status_code != 404:
+            break                       # only the taken-id case is worth a second attempt
+    return {"id": hid, "ok": False, "action": action, "error": last_error}
 
 
-def _cloud_status(hid: str, records: dict, fp: str | None) -> dict:
-    rec = records.get(hid)
+def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict:
+    """Status against the CURRENTLY connected workspace: other targets' copies exist but are not
+    this chip's business."""
+    rec = (records.get("harnesses", {}).get(hid) or {}).get(_cloud_tkey(target))
     if not rec:
         return {"uploaded": False}
     return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
@@ -11810,7 +11851,7 @@ async def cloud_upload_one(hid: str, request: Request) -> dict:
     await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
     if not res.get("ok"):
         raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
-    return {**res, "status": _cloud_status(hid, records, None) | {"changed": False}}
+    return {**res, "status": _cloud_status(hid, records, None, target) | {"changed": False}}
 
 
 @app.get("/v1/harnesses/{hid}/upload")
@@ -11818,11 +11859,12 @@ async def cloud_upload_status(hid: str, request: Request) -> dict:
     """The chip on the harness page: never uploaded, uploaded, or changed since."""
     p = await _principal(request)
     records = await _cloud_records()
-    if hid not in records:
+    target = await _cloud_target()
+    if not (records.get("harnesses", {}).get(hid) or {}).get(_cloud_tkey(target)):
         return {"uploaded": False}
     v = await _vertex_get(hid)
     fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
-    return _cloud_status(hid, records, fp)
+    return _cloud_status(hid, records, fp, target)
 
 
 @app.get("/v1/cloud-upload/status")
@@ -11830,11 +11872,15 @@ async def cloud_upload_status_all(request: Request) -> dict:
     """For the list: which harnesses have been uploaded, and whether each changed since."""
     p = await _principal(request)
     records = await _cloud_records()
+    target = await _cloud_target()
+    tkey = _cloud_tkey(target)
     out = {}
-    for hid in records:
+    for hid, per in records.get("harnesses", {}).items():
+        if tkey not in per:
+            continue
         v = await _vertex_get(hid)
         fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
-        out[hid] = _cloud_status(hid, records, fp)
+        out[hid] = _cloud_status(hid, records, fp, target)
     return {"harnesses": out}
 
 
