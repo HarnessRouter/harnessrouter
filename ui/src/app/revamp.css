@@ -1893,10 +1893,7 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .invite-copy { flex: 0 0 auto; width: auto !important; padding: 0 16px; }
 
     /* ── cloud upload: one dialog, a chip, a select bar ───────────────────────── */
-    .cloud-kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
-    .cloud-kv div { display: contents; }
-    .cloud-kv dt { color: var(--muted); }
-    .cloud-kv dd { margin: 0; color: var(--ink); }
+    .cloud-includes { margin-top: -2px; }
     .cloud-keyrow { display: flex; gap: 8px; }
     .cloud-keyrow input { flex: 1; min-width: 0; }
     .cloud-rows { max-height: 44vh; overflow-y: auto; }
