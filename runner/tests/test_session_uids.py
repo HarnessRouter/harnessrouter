@@ -70,7 +70,8 @@ def test_own_tree_only_reowns_the_listed_owners_and_never_hard_links(tmp_path, m
     assert "planted" not in names and "link2" not in names
     assert all(u == 31337 and g == 31337 for _, u, g in calls)
     calls.clear()
-    server._own_tree(str(root), 31337, {0})               # nothing here is root's: nothing moves
+    # a uid nothing here belongs to: nothing moves. (Not root — the suite may itself run as root.)
+    server._own_tree(str(root), 31337, {424242})
     assert calls == []
 
 
@@ -128,3 +129,30 @@ def test_hermes_without_vision_auth_keeps_its_default(tmp_path):
                                model="claude-sonnet-5", vision_auth=None)
     cfg = yaml.safe_load((tmp_path / ".hermes" / "config.yaml").read_text())
     assert "auxiliary" not in cfg
+
+
+def test_a_skill_keeps_the_name_its_author_gave_it(tmp_path):
+    """Kebab-case is the skill format's convention and the frontmatter's own name. The directory
+    must agree with it; only path separators and traversal are removed."""
+    assert server._skill_dir_name("test-skill") == "test-skill"
+    assert server._skill_dir_name("Deck Style") == "Deck-Style"
+    assert server._skill_dir_name("../escape") == "escape"
+    assert server._skill_dir_name("a/b") == "a-b"
+    assert server._skill_dir_name("") == "skill"
+    server._write_skills(str(tmp_path), [{"name": "test-skill",
+                                          "files": [{"path": "SKILL.md", "content": "---\nname: test-skill\n---\nRun test.py"},
+                                                    {"path": "test.py", "content": "print('hi')"}]}], "codex")
+    d = tmp_path / ".harness" / "skills" / "test-skill"
+    assert (d / "SKILL.md").exists() and (d / "test.py").read_text() == "print('hi')"
+
+
+def test_the_agent_doc_says_a_skill_s_files_sit_beside_its_skill_md(tmp_path):
+    """The failure this prevents: 'Run test.py' in a SKILL.md, and the agent runs it in the
+    workspace root, where nothing is."""
+    installed = server._write_skills(str(tmp_path), [{"name": "test-skill", "files": [
+        {"path": "SKILL.md", "content": "---\nname: test-skill\ndescription: d\n---\nRun test.py"},
+        {"path": "test.py", "content": "print('hi')"}]}], "codex")
+    server._write_agent_doc(str(tmp_path), "codex", "", installed)
+    doc = (tmp_path / "AGENTS.md").read_text()
+    assert "BESIDE its SKILL.md" in doc
+    assert "`.harness/skills/test-skill/SKILL.md`" in doc
