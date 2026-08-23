@@ -766,13 +766,18 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     if skills_meta:
         lines += ["## Available skills", "",
                   "These skills are installed in this workspace. When a task matches one, read its "
-                  "SKILL.md first and follow its instructions and bundled scripts. A skill's own "
-                  "files sit BESIDE its SKILL.md, so a bare filename in a skill (`test.py`, "
-                  "`scripts/run.sh`) means that skill's directory, not this workspace's root: run "
-                  "it by its full path, or change into that directory first.", ""]
+                  "SKILL.md first and follow its instructions and bundled scripts. Every path a "
+                  "skill mentions (`test.py`, `scripts/run.sh`) is relative to THAT SKILL'S "
+                  "FOLDER below, never to this workspace: prefix it with the folder, or cd there "
+                  "first. The folder is where its bundled scripts and data already are.", ""]
         for s in skills_meta:
             d = f" — {s['desc']}" if s.get("desc") else ""
-            lines.append(f"- **{s['name']}**{d} (`{s['entry']}`)")
+            # ABSOLUTE, and the directory rather than the file: a skill that says "run test.py"
+            # is then one join away from a command that works, with nothing to infer. The
+            # relative path this replaced left the model to compose a path from two places, and
+            # a weaker one ran the bare filename in the workspace root instead (2026-08-23).
+            folder = os.path.dirname(os.path.join(cwd, s["entry"]))
+            lines.append(f"- **{s['name']}**{d} — files in `{folder}/` (start with `SKILL.md` there)")
         lines.append("")
     block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
     body = ((base + "\n\n") if base else "") + block
