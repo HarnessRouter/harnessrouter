@@ -2,26 +2,19 @@
 // Settings: the stored cloud workspaces. Add with a key, remove any time. One sentence of
 // contract. Self-hosted only.
 import { useEffect, useState } from 'react';
-import { addTarget, listTargets, removeTarget, testKey, type CloudTarget } from '@/lib/cloud-upload';
+import { addTarget, listTargets, removeTarget, type CloudTarget } from '@/lib/cloud-upload';
 
 export function CloudUploadCard() {
   const [targets, setTargets] = useState<CloudTarget[] | null>(null);
   const [key, setKey] = useState('');
-  const [tested, setTested] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { listTargets().then((r) => setTargets(r.targets)).catch(() => setTargets([])); }, []);
 
-  async function test() {
-    setBusy(true); setErr(null);
-    try { setTested((await testKey(key.trim())).label); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); setTested(null); }
-    finally { setBusy(false); }
-  }
   async function add(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setErr(null);
-    try { await addTarget(key.trim()); setKey(''); setTested(null); setTargets((await listTargets()).targets); }
+    try { await addTarget(key.trim()); setKey(''); setTargets((await listTargets()).targets); }
     catch (er) { setErr(er instanceof Error ? er.message : String(er)); }
     finally { setBusy(false); }
   }
@@ -55,13 +48,10 @@ export function CloudUploadCard() {
           <div className="field"><label htmlFor="cloudKey">Add a workspace</label>
             <div className="cloud-keyrow">
               <input id="cloudKey" type="password" autoComplete="off" placeholder="sk-hr-" value={key}
-                onChange={(e) => { setKey(e.target.value); setTested(null); }} />
-              <button className="button" type="button" disabled={busy || !key.trim()} onClick={() => void test()}>Test</button>
-              <button className="button primary" type="submit" disabled={busy || !key.trim()}>Add</button>
+                onChange={(e) => setKey(e.target.value)} />
+              <button className="button primary" type="submit" disabled={busy || !key.trim()}>{busy ? 'Adding…' : 'Add'}</button>
             </div>
-            {tested
-              ? <span className="field-help"><span className="status healthy">{tested}</span></span>
-              : <span className="field-help">From the cloud console, inside the workspace, under Keys.</span>}
+            <span className="field-help">From the cloud console, inside the workspace, under Keys.</span>
           </div>
           {err && <div className="notice"><iconify-icon icon="tabler:alert-triangle"></iconify-icon><div>{err}</div></div>}
         </div>
