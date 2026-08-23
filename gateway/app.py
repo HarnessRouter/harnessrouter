@@ -11625,21 +11625,48 @@ class CloudTargetBody(BaseModel):
     base_url: str | None = None
 
 
-async def _cloud_target() -> dict:
+async def _cloud_targets() -> dict:
+    """{targets: {tkey: {base_url, api_key, org, org_name, workspace, workspace_name}}, last: tkey}.
+
+    Several stored destinations: the operator uploads to wherever they hold a key, and the dialog
+    offers the stored ones in a picker. A v1 single-target doc (one key at the root) is wrapped
+    into the list rather than discarded, so a key pasted before this shape survives."""
     v = await _vault_get(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY)
     try:
         doc = json.loads(v) if v else {}
     except Exception:  # noqa: BLE001
         doc = {}
-    return doc if isinstance(doc, dict) else {}
+    if not isinstance(doc, dict):
+        return {"targets": {}, "last": ""}
+    if doc.get("api_key"):                      # v1: one target at the root
+        tkey = _cloud_tkey(doc)
+        return {"targets": {tkey: doc}, "last": tkey}
+    doc.setdefault("targets", {})
+    doc.setdefault("last", "")
+    return doc
+
+
+async def _cloud_targets_save(doc: dict) -> None:
+    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY, json.dumps(doc), require_encryption=True)
+
+
+def _cloud_label(t: dict) -> str:
+    """What a person sees for a destination. Display names and the account email only: org and
+    workspace ids are internal and never shown (the harness id is the one deliberate exception
+    in the product)."""
+    ws = str(t.get("workspace_name") or "").strip()
+    member = str(t.get("member") or "").strip()
+    if ws and member:
+        return f"{ws} ({member})"
+    return ws or member or "Cloud workspace"
 
 
 def _cloud_target_public(t: dict) -> dict:
     key = str(t.get("api_key") or "")
-    return {"configured": bool(key), "base_url": t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE,
+    return {"id": _cloud_tkey(t), "base_url": t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE,
             "key_hint": (key[:6] + "…" + key[-4:]) if len(key) >= 10 else ("…" if key else ""),
-            "org": t.get("org") or "", "org_name": t.get("org_name") or "",
-            "workspace": t.get("workspace") or "", "workspace_name": t.get("workspace_name") or ""}
+            "member": t.get("member") or "", "workspace_name": t.get("workspace_name") or "",
+            "label": _cloud_label(t)}
 
 
 def _cloud_tkey(target: dict) -> str:
@@ -11757,8 +11784,7 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
             return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
         if r.status_code in (200, 201):
             per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
-                         "remote_id": attempt,
-                         "target": f"{target.get('org_name') or target.get('org')} / {target.get('workspace_name') or target.get('workspace')}"}
+                         "remote_id": attempt, "target": _cloud_label(target)}
             return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": attempt}
         detail = ""
         try:
@@ -11782,73 +11808,114 @@ def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict
             "changed": bool(fp) and rec.get("fingerprint") != fp}
 
 
-@app.get("/v1/cloud-upload/target")
-async def cloud_target_get(request: Request) -> dict:
+@app.get("/v1/cloud-upload/targets")
+async def cloud_targets_get(request: Request) -> dict:
     await _principal(request)
-    return _cloud_target_public(await _cloud_target())
+    doc = await _cloud_targets()
+    return {"targets": [_cloud_target_public(t) for t in doc["targets"].values()], "last": doc.get("last") or ""}
 
 
-@app.put("/v1/cloud-upload/target")
-async def cloud_target_put(body: CloudTargetBody, request: Request) -> dict:
+@app.post("/v1/cloud-upload/targets")
+async def cloud_targets_add(body: CloudTargetBody, request: Request) -> dict:
+    """Add (or refresh) a stored destination: the key is verified before anything is written."""
     await _principal(request)
-    cur = await _cloud_target()
-    key = (body.api_key or "").strip() or str(cur.get("api_key") or "")
-    base = (body.base_url or "").strip().rstrip("/") or str(cur.get("base_url") or "") or _CLOUD_UPLOAD_DEFAULT_BASE
+    key = (body.api_key or "").strip()
+    base = (body.base_url or "").strip().rstrip("/") or _CLOUD_UPLOAD_DEFAULT_BASE
     if not key:
         raise HTTPException(400, "an API key is required")
     me = await _cloud_me(base, key)
-    doc = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
-           "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or ""}
-    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY, json.dumps(doc), require_encryption=True)
-    return _cloud_target_public(doc)
+    t = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
+         "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or "",
+         "member": me.get("member") or ""}
+    doc = await _cloud_targets()
+    doc["targets"][_cloud_tkey(t)] = t
+    doc["last"] = _cloud_tkey(t)
+    await _cloud_targets_save(doc)
+    return _cloud_target_public(t)
 
 
-@app.post("/v1/cloud-upload/target/test")
-async def cloud_target_test(body: CloudTargetBody, request: Request) -> dict:
-    """Where would an upload land. Tests the key in the body, or the stored one when omitted."""
+@app.post("/v1/cloud-upload/targets/test")
+async def cloud_targets_test(body: CloudTargetBody, request: Request) -> dict:
+    """Where would this key land. Nothing is stored."""
     await _principal(request)
-    cur = await _cloud_target()
-    key = (body.api_key or "").strip() or str(cur.get("api_key") or "")
-    base = (body.base_url or "").strip().rstrip("/") or str(cur.get("base_url") or "") or _CLOUD_UPLOAD_DEFAULT_BASE
+    key = (body.api_key or "").strip()
+    base = (body.base_url or "").strip().rstrip("/") or _CLOUD_UPLOAD_DEFAULT_BASE
     if not key:
         raise HTTPException(400, "an API key is required")
     me = await _cloud_me(base, key)
-    return {"ok": True, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
-            "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or ""}
+    return {"ok": True, "label": _cloud_label(me), "workspace_name": me.get("workspace_name") or "",
+            "member": me.get("member") or ""}
 
 
-@app.delete("/v1/cloud-upload/target")
-async def cloud_target_delete(request: Request) -> dict:
+@app.delete("/v1/cloud-upload/targets")
+async def cloud_targets_remove(request: Request, id: str = "") -> dict:
+    """Remove one stored destination (?id=), or every one of them (no id). Upload records stay:
+    they are history, and re-adding the same workspace's key finds them again."""
     await _principal(request)
-    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY, "", require_encryption=True)
-    return {"configured": False}
+    doc = await _cloud_targets()
+    if id:
+        doc["targets"].pop(id, None)
+        if doc.get("last") == id:
+            doc["last"] = next(iter(doc["targets"]), "")
+    else:
+        doc = {"targets": {}, "last": ""}
+    await _cloud_targets_save(doc)
+    return {"targets": [_cloud_target_public(t) for t in doc["targets"].values()], "last": doc.get("last") or ""}
 
 
 class CloudUploadBody(BaseModel):
     ids: list[str]
+    target: str | None = None              # a stored destination's id; the only one when omitted
+
+
+async def _cloud_pick_target(tid: str | None) -> dict:
+    doc = await _cloud_targets()
+    targets = doc["targets"]
+    if not targets:
+        raise HTTPException(400, "no cloud workspace connected")
+    if tid:
+        t = targets.get(tid)
+        if not t:
+            raise HTTPException(400, "that stored workspace is gone; pick another")
+        return t
+    if len(targets) == 1:
+        return next(iter(targets.values()))
+    last = targets.get(doc.get("last") or "")
+    if last:
+        return last
+    raise HTTPException(400, "several workspaces are stored; name one")
+
+
+async def _cloud_remember_last(target: dict) -> None:
+    doc = await _cloud_targets()
+    if doc.get("last") != _cloud_tkey(target) and _cloud_tkey(target) in doc["targets"]:
+        doc["last"] = _cloud_tkey(target)
+        await _cloud_targets_save(doc)
 
 
 @app.post("/v1/harnesses/upload")
 async def cloud_upload_batch(body: CloudUploadBody, request: Request) -> dict:
     p = await _principal(request)
-    target = await _cloud_target()
-    if not target.get("api_key"):
-        raise HTTPException(400, "no cloud workspace connected")
+    target = await _cloud_pick_target(body.target)
     records = await _cloud_records()
     results = [await _cloud_upload_one(p.get("org", ""), str(h), target, records) for h in body.ids[:200]]
     await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
+    await _cloud_remember_last(target)
     return {"results": results, "target": _cloud_target_public(target)}
 
 
+class CloudUploadOneBody(BaseModel):
+    target: str | None = None
+
+
 @app.post("/v1/harnesses/{hid}/upload")
-async def cloud_upload_one(hid: str, request: Request) -> dict:
+async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody | None = None) -> dict:
     p = await _principal(request)
-    target = await _cloud_target()
-    if not target.get("api_key"):
-        raise HTTPException(400, "no cloud workspace connected")
+    target = await _cloud_pick_target((body.target if body else None))
     records = await _cloud_records()
     res = await _cloud_upload_one(p.get("org", ""), hid, target, records)
     await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
+    await _cloud_remember_last(target)
     if not res.get("ok"):
         raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
     return {**res, "status": _cloud_status(hid, records, None, target) | {"changed": False}}
@@ -11859,12 +11926,14 @@ async def cloud_upload_status(hid: str, request: Request) -> dict:
     """The chip on the harness page: never uploaded, uploaded, or changed since."""
     p = await _principal(request)
     records = await _cloud_records()
-    target = await _cloud_target()
-    if not (records.get("harnesses", {}).get(hid) or {}).get(_cloud_tkey(target)):
+    per = records.get("harnesses", {}).get(hid) or {}
+    if not per:
         return {"uploaded": False}
     v = await _vertex_get(hid)
     fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
-    return _cloud_status(hid, records, fp, target)
+    rec = max(per.values(), key=lambda r: r.get("uploaded_at") or 0)
+    return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
+            "changed": bool(fp) and rec.get("fingerprint") != fp}
 
 
 @app.get("/v1/cloud-upload/status")
@@ -11872,15 +11941,15 @@ async def cloud_upload_status_all(request: Request) -> dict:
     """For the list: which harnesses have been uploaded, and whether each changed since."""
     p = await _principal(request)
     records = await _cloud_records()
-    target = await _cloud_target()
-    tkey = _cloud_tkey(target)
     out = {}
     for hid, per in records.get("harnesses", {}).items():
-        if tkey not in per:
+        if not per:
             continue
         v = await _vertex_get(hid)
         fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
-        out[hid] = _cloud_status(hid, records, fp, target)
+        rec = max(per.values(), key=lambda r: r.get("uploaded_at") or 0)
+        out[hid] = {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
+                    "changed": bool(fp) and rec.get("fingerprint") != fp}
     return {"harnesses": out}
 
 

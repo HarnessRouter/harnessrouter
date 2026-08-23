@@ -1903,6 +1903,8 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .cloud-rows td { padding: 10px 12px; }
     .modal .modal-actions { position: sticky; bottom: 0; background: #fff; padding-bottom: 2px; }
     .cloud-note { color: var(--muted); font-size: 12px; }
+    .cloud-remove { text-align: right; }
+    #cloudTo { width: 100%; }
     .cloud-chip { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; vertical-align: middle; color: var(--muted); font-size: 12px; white-space: nowrap; }
     .header-actions .cloud-chip { margin-left: 0; }
     .cloud-chip.changed { color: var(--ink); }
