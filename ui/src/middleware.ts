@@ -49,6 +49,11 @@ function isPublic(path: string): boolean {
     // this is a UHP server before deciding what credential to present. The document is version
     // metadata — no user data.
     || path === '/api/harness/v1/uhp'
+    // A shared task is FOR people without an account: the link is the credential. The page and
+    // the data it fetches are public; what they reveal is decided by the gateway, which answers
+    // only for a token whose owner has sharing switched on, and with nothing but that session.
+    || path.startsWith('/share/')
+    || path.startsWith('/api/share/')
     || path.startsWith('/_next/')
     // An /api path is never a static asset, whatever it ends with. Neither is /data — those are
     // files a TASK produced, and agents write .png, .svg, .css and .js routinely. Matching those

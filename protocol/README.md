@@ -128,3 +128,8 @@ of an existing field. A client that ignores every UHP extension still gets a wor
 Changes to this specification follow [`GOVERNANCE.md`](GOVERNANCE.md). The short version: propose in
 prose first, and no change lands unless the specification, the reference implementation and the
 conformance suite move together.
+
+## Background
+
+For the story behind the name, the alternatives weighed and why *Unified* won the letters UHP, see
+[Background: the naming of UHP](naming).
