@@ -46,7 +46,7 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
     finally { setBusy(false); }
   }
 
-  const title = single ? `Upload "${items[0].name}"` : `Upload ${eligible.length} to cloud`;
+  const title = single ? `Upload "${items[0].name.trim()}"` : `Upload ${eligible.length} to cloud`;
   const canUpload = !busy && eligible.length > 0 && !adding;
 
   return (
@@ -62,7 +62,7 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
               {rows.map((r) => {
                 const it = items.find((i) => i.id === r.id);
                 return (<tr key={r.id}>
-                  <td><strong>{it?.name || r.name || ''}</strong></td>
+                  <td><strong>{(it?.name || r.name || '').trim()}</strong></td>
                   <td>{r.ok ? (r.action === 'create' ? 'Created' : 'Replaced') : r.action === 'skip' ? 'Skipped' : 'Failed'}</td>
                   <td className="cloud-note">{r.ok ? '' : r.error}</td>
                 </tr>);
@@ -87,15 +87,13 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
                   <span className="field-help">From the cloud console, inside the workspace, under Keys.</span>
                 </div>
               )}
-              {single && (
-                <dl className="cloud-kv">
-                  <div><dt>Includes</dt><dd>{items[0].includes || 'instructions'}</dd></div>
-                </dl>
+              {single && items[0].includes && (
+                <span className="field-help cloud-includes">Includes {items[0].includes}</span>
               )}
               {!single && (
                 <div className="table-wrap cloud-rows"><table><tbody>
                   {items.map((i) => (<tr key={i.id}>
-                    <td><strong>{i.name}</strong></td>
+                    <td><strong>{i.name.trim()}</strong></td>
                     <td>{i.builtin ? 'Skip' : i.uploaded ? 'Replace' : 'Create'}</td>
                     <td className="cloud-note">{i.builtin ? 'built-in' : ''}</td>
                   </tr>))}
