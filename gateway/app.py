@@ -11812,6 +11812,30 @@ def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict
 async def cloud_targets_get(request: Request) -> dict:
     await _principal(request)
     doc = await _cloud_targets()
+    # Self-heal a label: a target stored while the hosted side could not name its workspace keeps
+    # empty fields, and the hosted side has since learned to answer (names are stamped on keys at
+    # mint and were backfilled). Re-resolve only while a field is missing, best effort: a dead key
+    # keeps its stored shape and stays listed, and removal is always available.
+    changed = False
+    for tkey, t in list(doc["targets"].items()):
+        if t.get("workspace_name") and t.get("member"):
+            continue
+        try:
+            me = await _cloud_me(t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE, t.get("api_key") or "")
+        except HTTPException:
+            continue
+        t.update({"org": me.get("org") or t.get("org") or "", "org_name": me.get("org_name") or "",
+                  "workspace": me.get("workspace") or t.get("workspace") or "",
+                  "workspace_name": me.get("workspace_name") or "", "member": me.get("member") or ""})
+        new_key = _cloud_tkey(t)
+        if new_key != tkey:
+            doc["targets"].pop(tkey, None)
+            doc["targets"][new_key] = t
+            if doc.get("last") == tkey:
+                doc["last"] = new_key
+        changed = True
+    if changed:
+        await _cloud_targets_save(doc)
     return {"targets": [_cloud_target_public(t) for t in doc["targets"].values()], "last": doc.get("last") or ""}
 
 
