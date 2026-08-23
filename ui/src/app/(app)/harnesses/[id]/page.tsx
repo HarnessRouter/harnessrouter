@@ -149,11 +149,6 @@ export default function HarnessSettingsPage() {
                   {cloud.changed ? 'Changed since upload' : `Uploaded ${timeAgo(cloud.uploaded_at ?? null)}`}
                 </span>
               )}
-              {SELF_HOSTED && !readOnly && (
-                <button className="button" type="button" disabled={dirty} title={dirty ? 'Save first' : ''} onClick={() => setUploading(true)}>
-                  <iconify-icon icon="tabler:cloud-upload"></iconify-icon>Upload to cloud
-                </button>
-              )}
             </div>
           </div>
 
@@ -347,11 +342,15 @@ export default function HarnessSettingsPage() {
               )}
               {dirty ? (
                 <button className="button primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
-              ) : (
+              ) : (<>
+                {SELF_HOSTED && (
+                  <button className="button" type="button" onClick={() => setUploading(true)}>
+                    <iconify-icon icon="tabler:cloud-upload"></iconify-icon>Upload to Cloud</button>
+                )}
                 <button className="button primary" type="button"
                   onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
                   <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
-              )}
+              </>)}
             </div>
           )}
           {/* Built-ins have nothing to save, but they still need somewhere to act — same bar,
