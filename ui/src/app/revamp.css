@@ -1907,7 +1907,10 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     #cloudTo { width: 100%; }
     .cloud-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
     .cloud-chip iconify-icon { flex: 0 0 auto; font-size: 14px; }
-    .object-copy .cloud-chip { margin-top: 3px; }
+    /* .object-copy makes every descendant span a block; the chip's label is not a line of its
+       own, so undo that inside the chip. */
+    .object-copy .cloud-chip { display: flex; align-items: center; margin-top: 3px; }
+    .object-copy .cloud-chip span { display: inline; margin-top: 0; max-width: none; font-size: 12px; line-height: 1; }
     .cloud-chip.changed { color: var(--ink); }
     /* The selection bar is FIXED to the viewport bottom, same recipe as the harness settings
        action bar above: a short list must still put the action where the thumb expects it. */
