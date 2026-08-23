@@ -67,3 +67,15 @@ requesting review.
 
 By contributing, you agree that your contribution is licensed under the Apache License 2.0, the
 same license as this repository.
+
+## How changes land on main
+
+`main` takes pull requests only: one approval, every check green, no bypass for anyone, admins
+included. A pull request cannot be approved by its own author, so an agent working through a
+maintainer's account opens its pull requests with the `open-pr` workflow instead, which creates
+them as `github-actions[bot]`; the maintainer then reviews and approves like any other change.
+
+```bash
+gh workflow run open-pr.yml -f branch=<branch> -f title="<title>" -f body="<body>"
+git commit --allow-empty -m "ci: start checks" && git push   # a bot-opened PR needs one push to run CI
+```
