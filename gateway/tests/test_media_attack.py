@@ -38,6 +38,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from fs_workspace import FsWorkspaceFiles
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Set BEFORE importing app: the backing, the internal key and the encryption passphrase are all
@@ -221,7 +223,7 @@ def _connect_provider(key: str = PROVIDER_KEY) -> None:
 @pytest.fixture(scope="module", autouse=True)
 def integration(client):
     _connect_provider()
-    app.BACKING.workspace = app.backing.LocalWorkspaceFiles(os.path.join(_DATA, "workspaces"))
+    app.BACKING.workspace = FsWorkspaceFiles(os.path.join(_DATA, "workspaces"))
     return True
 
 

@@ -1132,9 +1132,14 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
 
 # ── pool proxy ───────────────────────────────────────────────────────────────────
 def _pool_headers() -> dict:
-    """Auth headers for the runner. Empty when local — no cloud identity exists or is needed."""
+    """Auth headers for the runner: the cloud identity token through a session pool; beside a local
+    runner, the internal key. Behind the self-hosted write-wall (HR_SESSION_UIDS) the runner refuses
+    callers without it, because every agent process shares its loopback and its routes address any
+    session by identifier."""
     tok = _pool_token()
-    return {"Authorization": f"Bearer {tok}"} if tok else {}
+    if tok:
+        return {"Authorization": f"Bearer {tok}"}
+    return {"X-Harness-Internal": INTERNAL_KEY} if INTERNAL_KEY else {}
 
 
 async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None = None,
@@ -4458,6 +4463,53 @@ _TEXT_ONLY_INPUT = {"qwen3.7-max"}
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
 
 
+# Which model answers an agent's own IMAGE questions. hermes asks them separately from the
+# conversation (vision_analyze, the browser tools) through its auxiliary router, with a 120 second
+# ceiling, and by default against whatever model the harness runs. So choosing a model to write
+# with also chose it for looking at pictures, and a harness on a model that is slow or unwilling
+# with images spent 120 seconds per audit and got "Request timed out" (a deck task on the demo
+# instance, 2026-08-22, qwen3.8-max over an aggregator: twenty minutes of re-render and retry).
+#
+# A model we list as supported has to work, whichever one it is, with whatever integrations this
+# instance has. So vision is resolved like image generation (_image_auth): a capability, served by
+# whichever integration can serve it, independent of the turn's chat connection. Every
+# integration on the instance is a candidate, in a fixed order so the answer never depends on
+# which one was added first; the first that serves a vision-capable model wins, and that
+# integration's own credential and endpoint go with it. An instance whose only key is Anthropic
+# audits with Claude; one whose only key is OpenAI audits with GPT; one with both uses whichever
+# sorts first. When nothing on the instance serves one, hermes keeps its default (the main
+# model), which is today's behaviour and the honest answer: we cannot route to a model that no
+# integration here can reach.
+_VISION_CAPABLE = ("claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5", "gpt-5.6-luna",
+                   "gpt-5.4", "claude-sonnet-4.6", "claude-opus-5", "gpt-5.5")
+
+
+async def _vision_auth(sid: str, backend: str) -> dict | None:
+    """Credentials and model for an agent's image questions, or None when no integration on
+    this instance serves a vision-capable model. Same shape and trust rules as the chat auth:
+    a brokered per-turn credential, never a provider key (self-hosted owner mode is the declared
+    exception, where the operator's own key is the point)."""
+    if not sid:
+        return None
+    integrations = sorted(await _integrations_doc(), key=lambda i: str(i.get("name") or ""))
+    for integ in integrations:
+        served = _integration_models(integ)
+        canonical = next((c for c in _VISION_CAPABLE if c in served), None)
+        if not canonical:
+            continue
+        vendor = (integ.get("provider") or "").strip().lower()
+        provider = _INTEGRATION_WIRING.get((vendor, backend)) or vendor
+        conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend,
+                "provider": provider,
+                **{k: v for k, v in (integ.get("config") or {}).items() if v not in (None, "")}}
+        auth = _auth_from_conn(conn, sid)
+        if not auth or not auth.get("api_key"):
+            continue
+        return {"provider": provider, "model": served[canonical],
+                "base_url": auth.get("base_url") or "", "api_key": auth["api_key"]}
+    return None
+
+
 def _conn_serves(conn: dict, friendly: str) -> bool:
     """Whether this connection's vendor actually serves the requested model.
 
@@ -4804,6 +4856,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     candidates += [(n, None) for n in chain]
     # Independent of which chat connection wins below: images are usually a different provider.
     image_auth = await _image_auth(sid, backend)
+    vision_auth = await _vision_auth(sid, backend) if backend == "hermes" else None
     for name, pre in candidates:
         conn, src = (pre, "integration") if pre is not None else await _get_connection(org, name)
         if not conn:
@@ -4843,6 +4896,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "partial_messages": bool(partial_messages),
                 # pi: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
                 "vision": model_req.strip().lower() not in _TEXT_ONLY_INPUT,
+                # hermes: which integration answers its image questions (vision_analyze, browser
+                # tools), resolved across the instance like image generation, so the capability
+                # does not depend on the model chosen to write with. See _vision_auth.
+                "vision_auth": vision_auth,
                 # codex streaming: run via the app-server protocol (item/agentMessage/delta)
                 "codex_appserver": bool(codex_appserver)}
         # Stop requested while we were resolving the connection / provisioning the previous
