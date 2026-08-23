@@ -20,7 +20,7 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
   const [rows, setRows] = useState<UploadRow[] | null>(null);
 
   useEffect(() => {
-    listTargets().then((r) => { setTargets(r.targets); setChoice(r.targets.length ? (r.last || r.targets[0].id) : ADD); })
+    listTargets().then((r) => { const live = r.targets.filter((t) => !t.revoked); setTargets(r.targets); setChoice(live.length ? ((live.find((t) => t.id === r.last) ? r.last : live[0].id)) : ADD); })
       .catch(() => { setTargets([]); setChoice(ADD); });
   }, []);
 
@@ -72,7 +72,7 @@ export function CloudUploadDialog({ items, onClose, onDone }: {
               <div className="field"><label htmlFor="cloudTo">To</label>
                 <select id="cloudTo" value={choice} disabled={busy}
                   onChange={(e) => { setChoice(e.target.value); setErr(null); }}>
-                  {targets.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  {targets.map((t) => <option key={t.id} value={t.id} disabled={t.revoked}>{t.label}{t.revoked ? ' (key revoked)' : ''}</option>)}
                   <option value={ADD}>Add a workspace…</option>
                 </select>
               </div>
