@@ -6223,8 +6223,11 @@ async def get_session_share(sid: str, request: Request) -> dict:
 async def _share_sid(token: str) -> str | None:
     """Resolve a share token to its session id — only while sharing is enabled."""
     tok = re.sub(r"[^A-Za-z0-9]", "", token or "")
-    if not tok or not VG_GATEWAY_URL:
+    if not tok:
         return None
+    # No VG_GATEWAY_URL guard: the lookup below goes through BACKING.graph, which is the SQLite
+    # store self-hosted. The guard predated that store and made every share link on a self-hosted
+    # box resolve to "not found" while the console happily minted them.
     hit = _SHARE_TOKEN_CACHE.get(tok)
     if hit and time.time() - hit[0] < _SHARE_TTL:
         return hit[1] or None
