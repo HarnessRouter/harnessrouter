@@ -15,6 +15,9 @@ import { CopyId } from '@/components/CopyId';
 import { SkillEditor, McpModal, McpRow } from '@/components/HarnessEditors';
 import { fetchTraceWindow, statsFor, p95Of, avgCreditsOf, type TraceCard } from '@/lib/revamp-data';
 import { SELF_HOSTED } from '@/lib/edition';
+import { CloudUploadDialog } from '@/components/CloudUploadDialog';
+import { statusOne, type CloudStatus } from '@/lib/cloud-upload';
+import { timeAgo } from '@/lib/revamp-data';
 
 type Skill = CustomHarness['skills'][number];
 const isOwnSkill = (s: Skill) => Boolean((s.files && s.files.length) || (s as { content?: string }).content || s.blob);
@@ -32,6 +35,14 @@ export default function HarnessSettingsPage() {
   const [editSkillIdx, setEditSkillIdx] = useState<number | null>(null);
   const [mcpModal, setMcpModal] = useState<{ idx: number | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [cloud, setCloud] = useState<CloudStatus | null>(null);
+  // The chip: absent until the first upload, then "Uploaded …" or "Changed since upload".
+  // Declared with the other hooks, above every early return, so the hook order never changes.
+  useEffect(() => {
+    if (!SELF_HOSTED || !id || oobById(id)) return;
+    statusOne(id).then(setCloud).catch(() => setCloud(null));
+  }, [id, saved]);   // re-read after every save: the fingerprint may have moved
   // Draft of a NEW skill being created in the SkillEditor popup (name edited in the same popup).
   const [newSkill, setNewSkill] = useState<{ name: string } | null>(null);
   const [cards, setCards] = useState<TraceCard[]>([]);
@@ -130,7 +141,15 @@ export default function HarnessSettingsPage() {
         <form className="settings-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
           <div className="settings-form-head">
             <div><h2>Harness Settings</h2><p>Configure the instructions, capabilities, and execution limits inherited by every Task on this Harness.</p></div>
-            <div className="header-actions"><span className="save-state">{readOnly ? 'Built-in · read-only' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></div>
+            <div className="header-actions">
+              <span className="save-state">{readOnly ? 'Built-in · read-only' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span>
+              {SELF_HOSTED && !readOnly && cloud?.uploaded && (
+                <span className={'cloud-chip' + (cloud.changed ? ' changed' : '')} title={cloud.target || ''}>
+                  <iconify-icon icon={cloud.changed ? 'tabler:cloud-up' : 'tabler:cloud-check'}></iconify-icon>
+                  <span>{cloud.changed ? 'Changed since upload' : `Uploaded ${timeAgo(cloud.uploaded_at ?? null)}`}</span>
+                </span>
+              )}
+            </div>
           </div>
 
           <section className="form-section">
@@ -323,11 +342,15 @@ export default function HarnessSettingsPage() {
               )}
               {dirty ? (
                 <button className="button primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
-              ) : (
+              ) : (<>
+                {SELF_HOSTED && (
+                  <button className="button" type="button" onClick={() => setUploading(true)}>
+                    <iconify-icon icon="tabler:cloud-upload"></iconify-icon>Upload to Cloud</button>
+                )}
                 <button className="button primary" type="button"
                   onClick={() => router.push(`/tasks?h=${encodeURIComponent(id)}`)}>
                   <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
-              )}
+              </>)}
             </div>
           )}
           {/* Built-ins have nothing to save, but they still need somewhere to act — same bar,
@@ -384,6 +407,14 @@ export default function HarnessSettingsPage() {
             upd({ mcpServers: mcpModal.idx != null ? draft.mcpServers.map((x, k) => (k === mcpModal.idx ? entry : x)) : [...draft.mcpServers, entry] });
             setMcpModal(null);
           }} />
+      )}
+      {uploading && draft && (
+        <CloudUploadDialog
+          items={[{ id: draft.id, name: draft.name, uploaded: !!cloud?.uploaded,
+                    includes: ['instructions', draft.defaultModel, (draft.skills || []).length ? `${draft.skills.length} skill${draft.skills.length === 1 ? '' : 's'}` : '',
+                               (draft.mcpServers || []).length ? `${draft.mcpServers.length} MCP server${draft.mcpServers.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') }]}
+          onClose={() => setUploading(false)}
+          onDone={() => { statusOne(draft.id).then(setCloud).catch(() => null); }} />
       )}
       {confirmDelete && draft && (
         <div className="modal-backdrop">

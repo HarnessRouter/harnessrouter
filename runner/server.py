@@ -502,6 +502,19 @@ def _write_input_files(cwd: str, files: list[dict] | None) -> list[str]:
 _MCP_NAME_RE = __import__("re").compile(r"[^a-zA-Z0-9_]+")
 
 
+_SKILL_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _skill_dir_name(s: str) -> str:
+    """A skill's directory name: what the author called it, minus anything that could leave the
+    directory. Hyphens are KEPT — kebab-case is the skill format's own convention, every SKILL.md
+    frontmatter uses it, and the CLIs match a skill by that name. Renaming `test-skill` to
+    `test_skill` (the MCP sanitizer, built for a different job) made the directory disagree with
+    the frontmatter inside it and with what the user asked for by name."""
+    n = _SKILL_NAME_RE.sub("-", (s or "").strip()).strip("-_")
+    return n or "skill"
+
+
 def _mcp_name(s: str) -> str:
     """Sanitize an MCP server name into a CLI-safe identifier (alnum + underscore)."""
     n = _MCP_NAME_RE.sub("_", (s or "").strip()).strip("_")
@@ -608,18 +621,33 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         the same SKILL.md this product already stores).
     Each skill: {name, files:[{path, content}]} (or {content} -> SKILL.md).
     Returns [{name, desc, entry}] for the skills actually installed (entry = SKILL.md path)."""
+    # EVERY CLI WITH A SKILL LOADER GETS ITS SKILLS WHERE THAT LOADER LOOKS. The CLI then presents
+    # each skill to the model with its directory and its own rules about relative paths, which is
+    # the mechanism that makes skills work at all. Codex and hermes used to get a directory of
+    # our own invention (.harness/skills) plus prose in AGENTS.md; a weaker model read the
+    # SKILL.md at the path we gave it, then ran its "test.py" in the workspace root, twice, and
+    # `rg --files` never showed it the file because the tree was hidden (2026-08-23).
     if backend == "claude":
         rootrels = [".harness/home/.claude/skills", ".claude/skills"]
         entryroot = ".claude/skills"
     elif backend == "pi":
         rootrels = [".harness/home/.pi/agent/skills"]
         entryroot = ".harness/home/.pi/agent/skills"
+    elif backend == "codex":
+        # $CODEX_HOME/skills/<name>/SKILL.md, and CODEX_HOME is redirected into the workspace
+        rootrels = [".harness/home/.codex/skills"]
+        entryroot = ".harness/home/.codex/skills"
+    elif backend == "hermes":
+        # $HERMES_HOME/skills/<name>/SKILL.md: the <available_skills> index hermes builds itself
+        rootrels = [".harness/home/.hermes/skills"]
+        entryroot = ".harness/home/.hermes/skills"
     else:
+        # dsh has no skill loader; the AGENTS.md block below is the only door
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
     installed: list[dict] = []
     for sk in skills or []:
-        name = _mcp_name((sk or {}).get("name") or (sk or {}).get("id") or "")
+        name = _skill_dir_name((sk or {}).get("name") or (sk or {}).get("id") or "")
         if not name:
             continue
         files = (sk or {}).get("files")
@@ -753,10 +781,18 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     if skills_meta:
         lines += ["## Available skills", "",
                   "These skills are installed in this workspace. When a task matches one, read its "
-                  "SKILL.md first and follow its instructions and bundled scripts.", ""]
+                  "SKILL.md first and follow its instructions and bundled scripts. Every path a "
+                  "skill mentions (`test.py`, `scripts/run.sh`) is relative to THAT SKILL'S "
+                  "FOLDER below, never to this workspace: prefix it with the folder, or cd there "
+                  "first. The folder is where its bundled scripts and data already are.", ""]
         for s in skills_meta:
             d = f" — {s['desc']}" if s.get("desc") else ""
-            lines.append(f"- **{s['name']}**{d} (`{s['entry']}`)")
+            # ABSOLUTE, and the directory rather than the file: a skill that says "run test.py"
+            # is then one join away from a command that works, with nothing to infer. The
+            # relative path this replaced left the model to compose a path from two places, and
+            # a weaker one ran the bare filename in the workspace root instead (2026-08-23).
+            folder = os.path.dirname(os.path.join(cwd, s["entry"]))
+            lines.append(f"- **{s['name']}**{d} — files in `{folder}/` (start with `SKILL.md` there)")
         lines.append("")
     block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
     body = ((base + "\n\n") if base else "") + block

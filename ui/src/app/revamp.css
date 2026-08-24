@@ -1518,6 +1518,7 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
   margin: 0; padding: 12px 32px; background: #fff; border-top: 1px solid var(--line); z-index: 20; }
 #view-harness .settings-form { padding-bottom: 88px; }
 @media (max-width: 760px) { #view-harness .settings-footer-sticky { left: 0; } }
+@media (max-width: 760px) { .select-bar { left: 0; } }
 /* Composer + file cards must never overflow a narrow conversation pane (preview split, mobile). */
 .wbx-conv, .wbx-conv-main, .wbx-composer, .wbx-composer-row { min-width: 0; }
 .wbx-composer-row > * { min-width: 0; }
@@ -1890,3 +1891,32 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .invite-linkrow input { flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--line);
       border-radius: 9px; background: var(--surface-subtle); color: var(--ink); font-size: 12.5px; }
     .invite-copy { flex: 0 0 auto; width: auto !important; padding: 0 16px; }
+
+    /* ── cloud upload: one dialog, a chip, a select bar ───────────────────────── */
+    .cloud-includes { margin-top: -2px; }
+    .cloud-keyrow { display: flex; gap: 8px; }
+    .cloud-keyrow input { flex: 1; min-width: 0; }
+    .cloud-rows { max-height: 44vh; overflow-y: auto; }
+    .cloud-rows td { padding: 10px 12px; }
+    .modal .modal-actions { position: sticky; bottom: 0; background: #fff; padding-bottom: 2px; }
+    .cloud-note { color: var(--muted); font-size: 12px; }
+    .cloud-remove { text-align: right; }
+    #cloudTo { width: 100%; }
+    .cloud-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .cloud-chip iconify-icon { flex: 0 0 auto; font-size: 14px; }
+    /* .object-copy makes every descendant span a block; the chip's label is not a line of its
+       own, so undo that inside the chip. */
+    .object-copy .cloud-chip { display: flex; align-items: center; margin-top: 3px; }
+    .object-copy .cloud-chip span { display: inline; margin-top: 0; max-width: none; font-size: 12px; line-height: 1; }
+    .cloud-chip.changed { color: var(--ink); }
+    /* The selection bar is FIXED to the viewport bottom, same recipe as the harness settings
+       action bar above: a short list must still put the action where the thumb expects it. */
+    .select-bar { position: fixed; left: var(--sidebar-w); right: 0; bottom: 0; z-index: 20;
+      display: flex; align-items: center; gap: 12px; margin: 0; padding: 12px 32px;
+      background: #fff; border-top: 1px solid var(--line); }
+    .select-bar strong { white-space: nowrap; }
+    .select-bar .settings-footer-spacer { flex: 1; }
+    .select-col { width: 36px; }
+    .select-col input { cursor: pointer; }
+    .cloud-select-hint { margin: 10px 2px 0; }
+    .button { white-space: nowrap; }
