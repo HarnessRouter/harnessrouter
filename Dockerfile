@@ -141,6 +141,13 @@ RUN chmod +x /tmp/install-skills.sh \
 # Starter Kits: a Harness plus an app, both baked in. Same pull-and-pin shape as the skills
 # bundle above, and the same rule: pass a commit sha to get the newest catalogue, because that
 # is what changes the layer's inputs.
+# What this build IS, for the discovery document and anything else that reports a version. The
+# release workflow passes the tag; a local build says so honestly rather than claiming a number.
+# Without this the gateway fell back to a literal that had been six releases stale, so every
+# install told clients it was 0.3.0 (found by the 0.9.0 release sanity run).
+ARG HR_VERSION=dev
+ENV HR_VERSION=${HR_VERSION}
+
 ARG WITH_STARTER_KITS=1
 ARG HR_KITS_REPO=https://github.com/HarnessRouter/starter-kit.git
 ARG HR_KITS_REF=main
