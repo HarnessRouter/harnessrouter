@@ -2844,8 +2844,11 @@ def uhp_discovery() -> dict:
             "versions": UHP_VERSIONS, "default_version": UHP_VERSION,
             "conformance_class": UHP_CONFORMANCE_CLASS,
             "capabilities": dict(UHP_CAPABILITIES),
+            # The version this build IS (baked by the release workflow). "dev" for a build that
+            # was never released, which is the honest answer: the literal that used to sit here
+            # went stale and told every client 0.3.0 six releases later.
             "implementation": {"name": "HarnessRouter Community Edition",
-                               "version": os.environ.get("HR_VERSION", "0.3.0")}}
+                               "version": os.environ.get("HR_VERSION") or "dev"}}
 
 
 @app.get("/healthz")
