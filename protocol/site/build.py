@@ -67,6 +67,64 @@ EXTRA = [
     ("naming.html", "The Naming of the Unified Harness Protocol", ROOT / "naming.md"),
 ]
 
+# Per-page meta descriptions. Search engines treat a site-wide description as one page repeated
+# seventeen times; each entry states what its page — and only its page — defines. This dict is the
+# metadata manifest: build() asserts every page has one, they are unique, and lengths sit in the
+# 100–170 band that renders whole in Google, Bing, and the AI-engine retrieval snippets.
+DESCRIPTIONS = {
+    "index.html":
+        "The Unified Harness Protocol (UHP) is an open standard for running complete agent "
+        "harnesses — tasks, sessions, streaming, files — through one shared contract.",
+    "spec/index.html":
+        "The complete UHP specification: architecture, lifecycle, harnesses, tasks, streaming, "
+        "sessions, files, errors, security, and schema — versioned and testable.",
+    "spec/architecture.html":
+        "UHP architecture: the resource model, object scoping, and conformance keywords that "
+        "govern how a server exposes agent harnesses through one contract.",
+    "spec/lifecycle.html":
+        "UHP lifecycle: how a client and server negotiate protocol versions, discover "
+        "capabilities, and track a task's states from submission to result.",
+    "spec/harnesses.html":
+        "UHP harness discovery: the harness object, model availability, and how a conformant "
+        "server advertises what can run a client's work.",
+    "spec/tasks.html":
+        "UHP tasks: one unit of work, input in and result out — the request shape, execution "
+        "semantics, and response contract clients build on.",
+    "spec/streaming.html":
+        "UHP streaming: how a server reports progress while long agent tasks run — the event "
+        "stream, tool-call visibility, and reconnection rules.",
+    "spec/sessions.html":
+        "UHP sessions: continuing work where a task left off — conversation state, working "
+        "directories, inspection, and stopping a session.",
+    "spec/files.html":
+        "UHP files and artifacts: getting files into a harness run and artifacts out, with the "
+        "upload, download, and preview semantics servers provide.",
+    "spec/errors.html":
+        "UHP errors: one error envelope, a closed set of codes, and which failures are worth "
+        "retrying — the contract client error handling relies on.",
+    "spec/security.html":
+        "UHP security: credentials, object scoping, and artifact handling — the requirements a "
+        "server meets to run agent workloads for callers it has never met.",
+    "spec/schema.html":
+        "UHP schema: the machine-readable OpenAPI 3.1 and JSON Schema 2020-12 definitions that "
+        "are normative for every object's structure.",
+    "conformance.html":
+        "The UHP conformance suite: local checks that grade any HTTP implementation into "
+        "conformance classes — runnable by anyone, against anyone's server.",
+    "versioning.html":
+        "UHP versioning: date-based versions, what may change between them, and how clients and "
+        "servers stay compatible as the specification evolves.",
+    "governance.html":
+        "UHP governance: the maintainer-led, proposal-first model for changing the protocol, and "
+        "how decisions are recorded in the open.",
+    "changelog.html":
+        "The UHP changelog: every published specification version and what changed in it, from "
+        "the current release backward.",
+    "naming.html":
+        "Why it is called the Unified Harness Protocol: the nine names weighed, why Unified won "
+        "the letters UHP, and how the standard relates to HarnessRouter.",
+}
+
 # HarnessRouter's docs palette and type, so the two properties read as one family.
 CSS = """
 :root{
@@ -208,8 +266,9 @@ def render_markdown(text: str) -> str:
 
 
 def rewrite_links(html_text: str, depth: int) -> str:
-    """Point in-repo markdown links at their built pages."""
-    up = "../" * depth
+    """Point in-repo markdown links at their built pages (root-absolute, see url_for)."""
+    up = "/"
+    samedir = "/spec/" if depth else "/"
     pairs = [
         (rf'href="(?:\.\./)*versions/{VERSION}/([a-z]+)\.md"', rf'href="{up}spec/\1"'),
         (r'href="(?:\.\./)*README\.md"', f'href="{url_for("index.html", up)}"'),
@@ -218,7 +277,7 @@ def rewrite_links(html_text: str, depth: int) -> str:
         (r'href="(?:\.\./)*CHANGELOG\.md"', f'href="{up}changelog"'),
         (r'href="(?:\.\./)*conformance/?"', f'href="{up}conformance"'),
         (r'href="(?:\.\./)*\.\./conformance/"', f'href="{up}conformance"'),
-        (r'href="([a-z]+)\.md"', rf'href="\1"'),
+        (r'href="([a-z]+)\.md"', rf'href="{samedir}\1"'),
         (r'href="(?:\.\./)*schema/([^"/]+)"',
          rf'href="{up}schema/\1"'),                       # the machine-readable files ship with the site
         (r'href="(?:\.\./)*schema/"', f'href="{up}spec/schema"'),
@@ -245,6 +304,10 @@ def url_for(path: str, up: str = "") -> str:
     A standards site gets cited, and a citation to .../spec/errors.html cannot survive a change
     of static host or generator, while .../spec/errors can. vercel.json sets cleanUrls, which
     serves the extensionless form and redirects the .html one, so old links keep working.
+
+    Links are root-absolute. cleanUrls serves spec/index.html at /spec — no trailing slash — so a
+    RELATIVE same-directory link on that page resolves against the site root and 404s. Absolute
+    paths resolve identically from every serve path.
     """
     if path == "index.html":
         rel = ""
@@ -252,7 +315,7 @@ def url_for(path: str, up: str = "") -> str:
         rel = path[: -len("/index.html")]          # spec/index.html -> spec
     else:
         rel = path[: -len(".html")]                # conformance.html -> conformance
-    return (up + rel) or "./"
+    return "/" + rel
 
 
 def sidebar(current: str, depth: int) -> str:
@@ -285,7 +348,8 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "") -> str
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)} · Unified Harness Protocol</title>
-<meta name="description" content="The Unified Harness Protocol (UHP): an open standard for running complete agent harnesses as shared infrastructure.">
+<meta name="description" content="{html.escape(DESCRIPTIONS[current])}">
+<link rel="canonical" href="https://{SITE}/{url_for(current).lstrip("./")}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -358,6 +422,16 @@ HERO = f"""
 
 
 def build() -> int:
+    # The description manifest must cover every page, one page per description, at snippet length.
+    # Asserted here so a new page cannot ship with the homepage's description by accident.
+    all_pages = {p for p, _, _ in flat_pages() + EXTRA}
+    assert all_pages == set(DESCRIPTIONS), (
+        f"description manifest out of sync — missing: {sorted(all_pages - set(DESCRIPTIONS))}, "
+        f"stale: {sorted(set(DESCRIPTIONS) - all_pages)}")
+    assert len(set(DESCRIPTIONS.values())) == len(DESCRIPTIONS), "duplicate meta descriptions"
+    bad_len = {p: len(d) for p, d in DESCRIPTIONS.items() if not 100 <= len(d) <= 170}
+    assert not bad_len, f"meta descriptions outside the 100-170 char band: {bad_len}"
+
     if DIST.exists():
         shutil.rmtree(DIST)
     (DIST / "spec").mkdir(parents=True)
@@ -395,6 +469,18 @@ def build() -> int:
     (DIST / "sitemap.xml").write_text(
         f'<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}</urlset>\n')
+
+    # llms.txt: the same index the sitemap provides, in the markdown form AI tooling ingests when
+    # someone hands it the site. Generated from the same page list, so it cannot drift.
+    llms = [f"# Unified Harness Protocol\n\n> {DESCRIPTIONS['index.html']}\n"]
+    for group, items in NAV:
+        llms.append(f"\n## {group}\n")
+        for p, title, _ in items:
+            llms.append(f"- [{title}](https://{SITE}/{url_for(p).lstrip('./')}): {DESCRIPTIONS[p]}")
+    llms.append("\n## Background\n")
+    for p, title, _ in EXTRA:
+        llms.append(f"- [{title}](https://{SITE}/{url_for(p).lstrip('./')}): {DESCRIPTIONS[p]}")
+    (DIST / "llms.txt").write_text("\n".join(llms) + "\n", encoding="utf-8")
 
     # Host config travels WITH the build, so `python site/build.py && vercel deploy dist` is the
     # whole publish. cleanUrls lives there, and the extensionless links this file emits depend on
