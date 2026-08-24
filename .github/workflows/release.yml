@@ -140,6 +140,7 @@ jobs:
           build-args: |
             HR_SKILLS_REF=${{ needs.plan.outputs.skills }}
             HR_KITS_REF=${{ needs.plan.outputs.kits }}
+            HR_VERSION=${{ needs.plan.outputs.version }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}

@@ -249,3 +249,13 @@ def test_a_revoked_key_is_named_not_hidden(api, cloud):
     cloud.keys["sk-hr-good"] = {**dead, "workspace_name": "Test Workspace", "member": "richard"}
     j = api.get("/v1/cloud-upload/targets").json()           # un-revoked: heals and clears the mark
     assert j["targets"][0]["revoked"] is False and j["targets"][0]["label"] == "Test Workspace (richard)"
+
+
+def test_discovery_reports_the_version_this_build_is(api, monkeypatch):
+    """The literal that used to sit in the discovery document went stale and told every client
+    0.3.0 six releases later. The version comes from the build now, and an unreleased build says
+    so rather than claiming a number."""
+    monkeypatch.delenv("HR_VERSION", raising=False)
+    assert api.get("/v1/uhp").json()["implementation"]["version"] == "dev"
+    monkeypatch.setenv("HR_VERSION", "0.9.1")
+    assert api.get("/v1/uhp").json()["implementation"]["version"] == "0.9.1"
