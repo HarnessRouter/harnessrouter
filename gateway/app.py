@@ -4449,12 +4449,21 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gemini-3.6-flash", "kimi-k3", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash"]},
-    # OPENCODE IS SEEDED, NOT EARNED. Per the bar at the top of this table a model belongs here
-    # only after a real turn on this backend completed against the live provider and was checked
-    # for substitution. None of that has happened yet: this single entry exists so the base is
-    # routable at all (without it every request falls back and the fallback IS the trap this
-    # comment block describes). Probe it, then keep it and add siblings — or remove the base.
-    "opencode": {"default": "gpt-5.4", "models": ["gpt-5.4"]},
+    # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
+    # Responses) client pointed at our relay, with the package chosen per turn from the model
+    # family (see _opencode_config, which mirrors _pi_models_json). The serving paths are
+    # therefore pi's, and pi's rows earned them — so the catalogue is pi's set.
+    # STILL UNPROBED ON THIS BACKEND: inheriting a serving path is not the same as a completed
+    # turn, which is what the bar at the top of this table asks for. Probe before relying on any
+    # single row here.
+    "opencode": {"default": "gpt-5.4",
+                 "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                            "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                            "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                            "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                            "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                            "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                            "mistral-medium-3.5", "step-3.7-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",

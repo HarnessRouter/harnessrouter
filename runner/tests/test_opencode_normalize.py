@@ -203,3 +203,33 @@ def test_opencode_instructions_go_to_agents_md_not_claude_md():
     from server import _agent_doc_path  # noqa: PLC0415
     assert _agent_doc_path("/ws", "opencode").name == "AGENTS.md"
     assert _agent_doc_path("/ws", "claude").name == "CLAUDE.md"
+
+
+# ── the ai-sdk package is chosen per turn from the model family ───────────────────────
+from server import _opencode_config  # noqa: E402
+
+
+def _npm_for(model, provider):
+    d = tempfile.mkdtemp()
+    _opencode_config(Auth(api_key="k", base_url="https://relay.example/v1"), model, d, None, None,
+                     None, provider)
+    return _json.loads(open(f"{d}/opencode.json").read())["provider"]["hr"]["npm"]
+
+
+def test_claude_on_an_anthropic_connection_uses_the_messages_package():
+    """A claude model on an anthropic-native connection speaks Messages, not chat/completions.
+    Sending it to the openai-compatible package fails at the first call."""
+    assert _npm_for("claude-sonnet-5", "anthropic") == "@ai-sdk/anthropic"
+
+
+def test_claude_through_the_router_also_uses_the_messages_package():
+    assert _npm_for("claude-opus-5", "tokenrouter") == "@ai-sdk/anthropic"
+
+
+def test_a_gpt_model_through_the_router_uses_the_responses_package():
+    assert _npm_for("gpt-5.4", "tokenrouter") == "@ai-sdk/openai"
+
+
+def test_everything_else_falls_to_openai_compatible():
+    assert _npm_for("qwen3.7-max", "openai-api") == "@ai-sdk/openai-compatible"
+    assert _npm_for("deepseek-v4-pro", "openai-api") == "@ai-sdk/openai-compatible"

@@ -2148,13 +2148,25 @@ def _opencode_mcp(servers: list[dict] | None) -> dict:
 
 
 def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
-                     skills_dir: str | None, tools_disabled: list[str] | None = None) -> str:
+                     skills_dir: str | None, tools_disabled: list[str] | None = None,
+                     pr: str = "") -> str:
     """Write <cwd>/opencode.json and return the provider-qualified model id for --model."""
     if not auth.base_url:
         raise HTTPException(400, "opencode needs a base_url (none configured)")
-    # /v1/responses endpoints need the openai provider package; everything else is the
-    # openai-compatible one. Same split the docs draw, same model heuristic the tree already uses.
-    npm = "@ai-sdk/openai" if _HERMES_RESPONSES_API_MODEL.search(model or "") else "@ai-sdk/openai-compatible"
+    # Which ai-sdk package serves this turn. A turn runs exactly ONE model, so this is decided per
+    # turn at provider level rather than per model entry — opencode resolves
+    # `model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible"`, so the provider-level
+    # value is what a single-model config needs.
+    #
+    # The split MIRRORS _pi_models_json, because both reach the same relays over the same wire
+    # formats: a claude model on an anthropic-native connection speaks Messages, not
+    # chat/completions, and sending it to the openai-compatible package fails at the first call.
+    if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+        npm = "@ai-sdk/anthropic"
+    elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        npm = "@ai-sdk/openai"          # /v1/responses
+    else:
+        npm = "@ai-sdk/openai-compatible"   # /v1/chat/completions
     cfg: dict = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -2187,7 +2199,7 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
     if auth.api_key:
         env[_OPENCODE_KEY_ENV] = auth.api_key
-    qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled)
+    qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr)
     cmd = ["opencode", "run", "--format", "json", "--model", qualified,
            # The sandbox is the trust boundary, so permissions are granted up front: nobody is
            # attached to answer a prompt. Same rationale as pi --approve and claude
