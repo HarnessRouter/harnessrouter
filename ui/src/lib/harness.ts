@@ -77,10 +77,9 @@ export const OOB: OobHarness[] = [
     systemPrompt: 'You are DeepSeek Harness, an autonomous coding agent. You work on a real git workspace, running shell commands and editing files to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'opencode', name: 'OpenCode', version: 'v1.18.23', backend: 'opencode', status: 'ready',
-    // ONE model on purpose. The server's catalogue seeds opencode with gpt-5.4 alone because no
-    // model has yet been earned by a real turn on this backend; listing the usual multi-family set
-    // here would advertise models the server would refuse and silently substitute.
-    models: ['gpt-5.4'], defaultModel: 'gpt-5.4', moreModels: 0,
+    // Multi-family, matching the server catalogue: opencode reaches models through the same
+    // relays as pi, with the ai-sdk package chosen per turn from the model family.
+    models: ['gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.3-codex', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.7-max', 'qwen3.8-max', 'mistral-medium-3.5', 'step-3.7-flash'], defaultModel: 'gpt-5.4', moreModels: 0,
     systemPrompt: 'You are OpenCode, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
 ];
