@@ -98,6 +98,28 @@ def test_usage_ignores_a_missing_or_malformed_payload():
     assert state.get("_oc_usage", {}).get("input_tokens", 0) == 0
 
 
+def test_mcp_is_a_flat_name_to_server_map_not_nested_under_servers():
+    """The RELEASED schema (opencode.ai/config.json) is `mcp.<name>`. The repo source tree is ahead
+    of the release and nests under `mcp.servers`; writing that shape makes the shipped binary
+    refuse the whole config."""
+    d = tempfile.mkdtemp()
+    _opencode_config(Auth(api_key="k", base_url="https://relay.example/v1"), "gpt-5.4", d,
+                     [{"name": "docs", "url": "https://mcp.example/sse"}], None, None, "openai-api")
+    cfg = _json.loads(open(f"{d}/opencode.json").read())
+    assert "servers" not in cfg["mcp"]
+    assert cfg["mcp"]["docs"]["type"] == "remote"
+
+
+def test_skills_is_an_object_with_paths_not_a_bare_array():
+    """The released binary rejects a bare array: "Expected object | undefined, got [...] skills".
+    This is the shape that actually failed a live turn."""
+    d = tempfile.mkdtemp()
+    _opencode_config(Auth(api_key="k", base_url="https://relay.example/v1"), "gpt-5.4", d, None,
+                     "/ws/.harness/skills", None, "openai-api")
+    cfg = _json.loads(open(f"{d}/opencode.json").read())
+    assert cfg["skills"] == {"paths": ["/ws/.harness/skills"]}
+
+
 def test_mcp_remote_pins_oauth_off_and_keeps_headers():
     """An interactive OAuth dance has nowhere to happen in a sandbox."""
     out = _opencode_mcp([{"name": "docs", "url": "https://mcp.example/sse",
@@ -233,3 +255,18 @@ def test_a_gpt_model_through_the_router_uses_the_responses_package():
 def test_everything_else_falls_to_openai_compatible():
     assert _npm_for("qwen3.7-max", "openai-api") == "@ai-sdk/openai-compatible"
     assert _npm_for("deepseek-v4-pro", "openai-api") == "@ai-sdk/openai-compatible"
+
+
+def test_error_message_is_read_from_the_real_nested_shape():
+    """Captured from a live 401 against the relay: the message is under error.data.message, not
+    error.message. Reading the flat key gave the user a stringified dict."""
+    _, state = _run([_ev("error", error={"name": "APIError",
+                                         "data": {"message": "Authentication failed.", "statusCode": 401}})])
+    assert state["_oc_error"] == "Authentication failed."
+
+
+def test_error_falls_back_to_the_flat_message_then_the_name():
+    _, s1 = _run([_ev("error", error={"message": "flat form"})])
+    assert s1["_oc_error"] == "flat form"
+    _, s2 = _run([_ev("error", error={"name": "APIError"})])
+    assert s2["_oc_error"] == "APIError"
