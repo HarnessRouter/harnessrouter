@@ -203,7 +203,7 @@ export default function IntegrationsPage() {
             <MappingTable
               title="Image Model, Integration Mapping"
               blurb={<>Which integration generates images. Routed separately from chat because it is
-                usually a different provider \u2014 an Anthropic connection has no image API at all.{' '}
+                usually a different provider, and an Anthropic connection has no image API at all.{' '}
                 An image model with no integration means a Harness cannot generate images.</>}
               map={doc.image_model_map || {}}
               allCanonicals={allImageCanonicals}
@@ -382,12 +382,14 @@ function MappingTable({ title, blurb, map, allCanonicals, servedBy, integrations
         <table className="itg-table itg-map-table">
           <thead><tr><th>Model</th><th>Integration</th><th aria-label="Actions"></th></tr></thead>
           <tbody>
-            {Object.entries(map).map(([model, iname]) => (
+            {Object.entries(map).filter(([, iname]) => iname).map(([model, iname]) => (
               <tr key={model}>
                 <td>
                   <select className="select" value={model} disabled={busy}
                     onChange={(e) => {
                       const next = { ...map };
+                      // Renaming a row is not a delete: clear the old key outright rather than
+                      // leaving an "off" marker that would suppress the model it moved away from.
                       delete next[model];
                       next[e.target.value] = iname;
                       onChange(next);
@@ -407,8 +409,13 @@ function MappingTable({ title, blurb, map, allCanonicals, servedBy, integrations
                   </select>
                 </td>
                 <td className="itg-row-actions">
+                  {/* Writes an explicit "off" marker rather than dropping the key. The server
+                      claims every model an integration can serve, so simply removing the row let
+                      the claim put it straight back: the save returned 200 and the row reappeared,
+                      which read as Delete being broken. An empty value is how "no integration
+                      serves this" is said. */}
                   <button className="button danger-ghost" type="button" disabled={busy}
-                    onClick={() => { const next = { ...map }; delete next[model]; onChange(next); }}>Delete</button>
+                    onClick={() => onChange({ ...map, [model]: '' })}>Delete</button>
                 </td>
               </tr>
             ))}
