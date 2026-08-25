@@ -138,3 +138,59 @@ def test_unknown_tool_names_are_dropped_not_written():
     assert _opencode_denies(["not_a_tool", "bash"]) == {"bash": "deny"}
     assert _opencode_denies([]) == {}
     assert _opencode_denies(None) == {}
+
+
+# ── argv, checked against the shipped binary's own --help (opencode 1.18.23) ──────────
+import json as _json  # noqa: E402
+import tempfile  # noqa: E402
+
+from server import Auth, _build_opencode  # noqa: E402
+
+
+def _argv(**kw):
+    d = tempfile.mkdtemp()
+    env: dict = {}
+    auth = Auth(api_key="sk-test", base_url="https://relay.example/v1")
+    return _build_opencode("openai-api", auth, "gpt-5.4", "do it", d, env, **kw), d, env
+
+
+def test_argv_is_a_headless_json_run():
+    cmd, _, _ = _argv()
+    assert cmd[:4] == ["opencode", "run", "--format", "json"]
+    assert "--model" in cmd and "hr/gpt-5.4" in cmd
+    assert cmd[-1] == "do it"
+
+
+def test_argv_disables_plugins():
+    """--pure empties cfg.plugin_origins. Project config lives IN the workspace, so without this a
+    task could write plugin_origins into opencode.json and have the next turn execute it."""
+    cmd, _, _ = _argv()
+    assert "--pure" in cmd
+
+
+def test_argv_requests_thinking_or_reasoning_never_arrives():
+    """run.ts gates the reasoning emit on the --thinking flag; without it the normalizer's
+    reasoning branch is unreachable."""
+    cmd, _, _ = _argv()
+    assert "--thinking" in cmd
+
+
+def test_resume_passes_the_session_id():
+    cmd, _, _ = _argv(resume_session_id="ses_abc")
+    assert "--session" in cmd and "ses_abc" in cmd
+
+
+def test_key_goes_to_the_environment_and_never_into_the_config_file():
+    cmd, d, env = _argv()
+    assert env["HR_OPENCODE_KEY"] == "sk-test"
+    cfg = _json.loads(open(f"{d}/opencode.json").read())
+    assert cfg["provider"]["hr"]["options"]["apiKey"] == "{env:HR_OPENCODE_KEY}"
+    assert "sk-test" not in open(f"{d}/opencode.json").read()
+    assert cfg["provider"]["hr"]["options"]["baseURL"] == "https://relay.example/v1"
+
+
+def test_a_prompt_starting_with_a_dash_is_not_read_as_a_flag():
+    d = tempfile.mkdtemp()
+    auth = Auth(api_key="k", base_url="https://relay.example/v1")
+    cmd = _build_opencode("openai-api", auth, "gpt-5.4", "--version", d, {})
+    assert cmd[-2:] == ["--", "--version"]

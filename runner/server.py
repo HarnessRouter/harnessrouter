@@ -2187,7 +2187,16 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
            # The sandbox is the trust boundary, so permissions are granted up front: nobody is
            # attached to answer a prompt. Same rationale as pi --approve and claude
            # --dangerously-skip-permissions.
-           "--auto"]
+           "--auto",
+           # Plugins off. `--pure` empties cfg.plugin_origins (plugin/index.ts:181), and project
+           # config is a file IN the workspace: without this a task could write plugin_origins into
+           # opencode.json and have the NEXT turn execute it. Same hole pi closes with
+           # --no-extensions.
+           "--pure",
+           # Reasoning parts are emitted ONLY when this flag is set — run.ts gates the emit on
+           # `part.type === "reasoning" && part.time?.end && thinking`. Without it the normalizer's
+           # reasoning branch is unreachable and thinking silently never reaches the user.
+           "--thinking"]
     if resume_session_id:
         cmd += ["--session", resume_session_id]
     cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
