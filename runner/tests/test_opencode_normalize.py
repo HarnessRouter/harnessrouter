@@ -194,3 +194,12 @@ def test_a_prompt_starting_with_a_dash_is_not_read_as_a_flag():
     auth = Auth(api_key="k", base_url="https://relay.example/v1")
     cmd = _build_opencode("openai-api", auth, "gpt-5.4", "--version", d, {})
     assert cmd[-2:] == ["--", "--version"]
+
+
+def test_opencode_instructions_go_to_agents_md_not_claude_md():
+    """opencode's discovery targets are literally ["AGENTS.md"] (core/src/instruction-context.ts).
+    Writing CLAUDE.md instead fails SILENTLY: the file lands, and the backend never reads it, so
+    the harness's instructions vanish with no error anywhere."""
+    from server import _agent_doc_path  # noqa: PLC0415
+    assert _agent_doc_path("/ws", "opencode").name == "AGENTS.md"
+    assert _agent_doc_path("/ws", "claude").name == "CLAUDE.md"
