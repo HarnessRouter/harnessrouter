@@ -2219,7 +2219,14 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
         # set. Shape is {paths, urls} per the published schema; the source tree's bare array is a
         # newer form the released binary rejects outright ("Expected object | undefined").
         cfg["skills"] = {"paths": [skills_dir]}
-    pathlib.Path(cwd, "opencode.json").write_text(json.dumps(cfg, indent=2))
+    # Into .harness/, NOT the workspace root. Produced files are `git status` of the workspace,
+    # and a root-level opencode.json showed up as a deliverable on every turn — internal config
+    # (relay URL, key env name, /data paths) handed to the user as if the agent had made it.
+    # The binary honours OPENCODE_CONFIG (verified on 1.18.23: a config at this path is loaded
+    # and reaches the provider); the env var is set in _build_opencode below.
+    hdir = pathlib.Path(cwd, ".harness")
+    hdir.mkdir(exist_ok=True)
+    (hdir / "opencode.json").write_text(json.dumps(cfg, indent=2))
     return f"hr/{model}"
 
 
@@ -2232,6 +2239,7 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     if auth.api_key:
         env[_OPENCODE_KEY_ENV] = auth.api_key
     qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr)
+    env["OPENCODE_CONFIG"] = os.path.join(cwd, ".harness", "opencode.json")
     cmd = ["opencode", "run", "--format", "json", "--model", qualified,
            # The sandbox is the trust boundary, so permissions are granted up front: nobody is
            # attached to answer a prompt. Same rationale as pi --approve and claude
