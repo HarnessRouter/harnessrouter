@@ -940,6 +940,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "dsh"): "openai-api",
     ("tokenrouter", "dsh"): "tokenrouter",     ("vercel", "dsh"): "tokenrouter",
     ("llmtr", "dsh"): "tokenrouter",
+    # opencode reaches every provider through one OpenAI-compatible client, so each integration
+    # maps to the runner provider that carries the right base_url; the runner picks the ai-sdk
+    # package (openai vs openai-compatible) from the model, not from this row.
+    ("anthropic", "opencode"): "anthropic",    ("openai", "opencode"): "openai",
+    ("azure-foundry", "opencode"): "azure",
+    ("openrouter", "opencode"): "openai-api",
+    ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
+    ("llmtr", "opencode"): "tokenrouter",
 }
 
 
@@ -4441,6 +4449,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gemini-3.6-flash", "kimi-k3", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash"]},
+    # OPENCODE IS SEEDED, NOT EARNED. Per the bar at the top of this table a model belongs here
+    # only after a real turn on this backend completed against the live provider and was checked
+    # for substitution. None of that has happened yet: this single entry exists so the base is
+    # routable at all (without it every request falls back and the fallback IS the trap this
+    # comment block describes). Probe it, then keep it and add siblings — or remove the base.
+    "opencode": {"default": "gpt-5.4", "models": ["gpt-5.4"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4546,6 +4560,8 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "pi"
     if base in ("dsh", "deepseek-harness"):
         return "dsh"
+    if base == "opencode":
+        return "opencode"
     return ""
 
 
@@ -10985,6 +11001,22 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
                   ("edit", "Edit"), ("todo_write", "Todo"), ("subagent", "Subagent")],
         "tool_enforcement": "instruction",
+    },
+    "opencode": {
+        "label": "OpenCode", "backend": "opencode", "status": "ready",
+        "system_prompt": ("You are OpenCode, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # opencode's permission keys, verbatim from core/src/v1/config/permission.ts. These are the
+        # real names the deny rules match, not display labels — the same trap the claude list warns
+        # about, where a decorated label silently matches nothing and disables no tool.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"), ("list", "List"),
+                  ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("task", "Task"),
+                  ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
+        # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
+        # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
+        "tool_enforcement": "hard",
     },
 }
 
