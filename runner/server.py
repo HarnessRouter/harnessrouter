@@ -3284,6 +3284,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         scratch = os.path.join(cwd, "tmp")
         os.makedirs(scratch, exist_ok=True)
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = scratch
+    # PWD must agree with the cwd the process is spawned in. _child_env copies the runner's own
+    # environment, whose PWD is /app/runner; Popen(cwd=...) changes the directory but not the
+    # variable, and Bun-based CLIs trust $PWD over getcwd(). opencode therefore believed it was
+    # running inside /app/runner — unreadable to the session uid — and every turn died with an
+    # opaque UnknownError. Proven by env bisection on a live failure: with 40 inherited variables,
+    # removing or correcting PWD alone flips the turn from failing to passing.
+    env["PWD"] = cwd
     auth = req.auth or Auth()
     model = req.model or spec["default_model"]
     use_appserver = backend == "codex" and bool(req.codex_appserver)
