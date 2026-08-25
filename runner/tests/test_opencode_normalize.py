@@ -105,7 +105,7 @@ def test_mcp_is_a_flat_name_to_server_map_not_nested_under_servers():
     d = tempfile.mkdtemp()
     _opencode_config(Auth(api_key="k", base_url="https://relay.example/v1"), "gpt-5.4", d,
                      [{"name": "docs", "url": "https://mcp.example/sse"}], None, None, "openai-api")
-    cfg = _json.loads(open(f"{d}/opencode.json").read())
+    cfg = _json.loads(open(f"{d}/.harness/opencode.json").read())
     assert "servers" not in cfg["mcp"]
     assert cfg["mcp"]["docs"]["type"] == "remote"
 
@@ -116,7 +116,7 @@ def test_skills_is_an_object_with_paths_not_a_bare_array():
     d = tempfile.mkdtemp()
     _opencode_config(Auth(api_key="k", base_url="https://relay.example/v1"), "gpt-5.4", d, None,
                      "/ws/.harness/skills", None, "openai-api")
-    cfg = _json.loads(open(f"{d}/opencode.json").read())
+    cfg = _json.loads(open(f"{d}/.harness/opencode.json").read())
     assert cfg["skills"] == {"paths": ["/ws/.harness/skills"]}
 
 
@@ -205,9 +205,9 @@ def test_resume_passes_the_session_id():
 def test_key_goes_to_the_environment_and_never_into_the_config_file():
     cmd, d, env = _argv()
     assert env["HR_OPENCODE_KEY"] == "sk-test"
-    cfg = _json.loads(open(f"{d}/opencode.json").read())
+    cfg = _json.loads(open(f"{d}/.harness/opencode.json").read())
     assert cfg["provider"]["hr"]["options"]["apiKey"] == "{env:HR_OPENCODE_KEY}"
-    assert "sk-test" not in open(f"{d}/opencode.json").read()
+    assert "sk-test" not in open(f"{d}/.harness/opencode.json").read()
     assert cfg["provider"]["hr"]["options"]["baseURL"] == "https://relay.example/v1"
 
 
@@ -235,7 +235,7 @@ def _npm_for(model, provider):
     d = tempfile.mkdtemp()
     _opencode_config(Auth(api_key="k", base_url="https://relay.example/v1"), model, d, None, None,
                      None, provider)
-    return _json.loads(open(f"{d}/opencode.json").read())["provider"]["hr"]["npm"]
+    return _json.loads(open(f"{d}/.harness/opencode.json").read())["provider"]["hr"]["npm"]
 
 
 def test_claude_on_an_anthropic_connection_uses_the_messages_package():
@@ -305,3 +305,18 @@ def test_a_bare_nonzero_exit_says_so_instead_of_going_blank():
 def test_a_failing_tool_is_quoted_when_the_process_dies_without_an_error_event():
     ev = _opencode_eof({"final": "", "_oc_tool_errors": ["bash: boom"]}, 1)[0]
     assert "bash: boom" in ev["result"]
+
+
+def test_config_lives_under_harness_not_the_workspace_root():
+    """Produced files are `git status` of the workspace. A root-level opencode.json was collected
+    as a deliverable on every turn, handing the user internal config (relay URL, key env name,
+    data-volume paths). .harness/ is excluded from collection; OPENCODE_CONFIG points the binary
+    at it (verified on 1.18.23)."""
+    import os
+    d = tempfile.mkdtemp()
+    env: dict = {}
+    _build_opencode("openai-api", Auth(api_key="k", base_url="https://relay.example/v1"),
+                    "gpt-5.4", "hi", d, env)
+    assert not os.path.exists(f"{d}/opencode.json")
+    assert os.path.exists(f"{d}/.harness/opencode.json")
+    assert env["OPENCODE_CONFIG"] == f"{d}/.harness/opencode.json"
