@@ -57,13 +57,18 @@ export default function HarnessesPage() {
     .filter((r) => {
       if (baseFlt === 'all') return true;
       const b = baseOf(r).toLowerCase();
-      if (baseFlt === 'codex') return b.includes('codex');
-      if (baseFlt === 'hermes') return b.includes('hermes');
+      // Stored records carry either the base id or its display name in `runtime`, so the two
+      // whose id and name differ need their own line. Everything else matches on its id, which
+      // is what keeps this working when a base is added.
+      if (baseFlt === 'claude-code') return b.includes('claude');
+      if (baseFlt === 'dsh') return b === 'dsh' || b.includes('deepseek');
       // 'pi' must be an exact-ish match: substring would also catch every base that merely
       // contains the letters (nothing today, but 'claude' teaches the lesson cheaply).
       if (baseFlt === 'pi') return b === 'pi' || b.startsWith('pi ');
-      if (baseFlt === 'dsh') return b === 'dsh' || b.includes('deepseek');
-      return b.includes('claude');
+      // NOT a `return b.includes('claude')` default. That made every unrecognised filter value
+      // silently mean Claude Code, so a base added to the dropdown without a matching branch here
+      // would quietly list the wrong rows instead of listing none.
+      return b.includes(baseFlt);
     })
     .filter((r) => healthFlt === 'all' || (healthFlt === 'review') === isDegraded(r));
 
@@ -93,11 +98,11 @@ export default function HarnessesPage() {
               value={q} onChange={(e) => setQ(e.target.value)} />
             <select className="select" aria-label="Filter by Base Harness" value={baseFlt} onChange={(e) => setBaseFlt(e.target.value)}>
               <option value="all">All Base Harnesses</option>
-              <option value="codex">Codex</option>
-              <option value="claude">Claude Code</option>
-              <option value="pi">Pi</option>
-              <option value="dsh">DeepSeek Harness</option>
-              <option value="hermes">Hermes</option>
+              {/* Derived from OOB so a new base cannot be missing here: the hardcoded list had
+                  already drifted once, offering five options for six bases. */}
+              {OOB.filter((o) => o.status === 'ready').map((o) => (
+                <option key={o.id} value={o.id}>{o.name}</option>
+              ))}
             </select>
             <select className="select" aria-label="Filter Harnesses by health" value={healthFlt} onChange={(e) => setHealthFlt(e.target.value)}>
               <option value="all">All health</option>
@@ -205,7 +210,9 @@ export default function HarnessesPage() {
                                 ? 'Minimal, steerable harness with four core tools, best when you want a lean agent you can shape.'
                                 : o.id === 'dsh'
                                   ? 'DeepSeek\u2019s own agent runtime, best for deep-reasoning work on the DeepSeek model family.'
-                                  : 'Best for long-context analysis, document workflows, and structured review.'}</span></span>
+                                  : o.id === 'opencode'
+                                    ? 'Open source terminal agent, best when you want a widely used harness that runs any model you have configured.'
+                                    : 'Best for long-context analysis, document workflows, and structured review.'}</span></span>
                         <span className="base-choice-models">{oobDefaultModel(o)} default</span>
                       </label>
                     ))}
