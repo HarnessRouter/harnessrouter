@@ -758,10 +758,15 @@ _AGENTS_END = "<!-- harness-skills:end -->"
 
 
 def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
-    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi and dsh (all four read
+    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi, dsh and opencode (all read
     AGENTS.md from the cwd — pi as a context file before its trust gate, dsh via its
-    dsh-agent-instructions workspace loader), CLAUDE.md for Claude Code."""
-    return pathlib.Path(cwd) / ("AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh") else "CLAUDE.md")
+    dsh-agent-instructions workspace loader, opencode via instruction-context.ts, whose discovery
+    targets are literally ["AGENTS.md"]), CLAUDE.md for Claude Code.
+
+    Getting this wrong is silent: the file is written either way, and a backend that does not read
+    the name we chose simply never sees the harness's instructions."""
+    return pathlib.Path(cwd) / (
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode") else "CLAUDE.md")
 
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
