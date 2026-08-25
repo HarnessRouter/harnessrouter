@@ -1017,9 +1017,15 @@ async def _effective_image_model_map() -> dict[str, str]:
     serve is dropped, not honoured — same rule as chat, for the same reason."""
     integrations = await _integrations_doc()
     servable = {str(i.get("name") or ""): _integration_image_models(i) for i in integrations}
-    mm = {k: v for k, v in (await _image_model_map_doc()).items() if k in servable.get(v, {})}
+    stored = await _image_model_map_doc()
+    # An explicit empty value is "off": the operator removed this row, and auto-claiming must not
+    # undo that. Without this the Delete button reports success and changes nothing.
+    off = {k for k, v in stored.items() if not str(v).strip()}
+    mm = {k: v for k, v in stored.items() if str(v).strip() and k in servable.get(v, {})}
     for name, models in servable.items():
         for canonical in models:
+            if canonical in off:
+                continue
             mm.setdefault(canonical, name)
     return mm
 
@@ -1069,9 +1075,15 @@ async def _effective_model_map() -> dict[str, str]:
     """
     integrations = await _integrations_doc()
     servable = {str(i.get("name") or ""): _integration_models(i) for i in integrations}
-    mm = {k: v for k, v in (await _model_map_doc()).items() if k in servable.get(v, {})}
+    stored = await _model_map_doc()
+    # Explicit empty value = "off". Auto-claiming is what makes a new model light up without a
+    # re-save; it must not also override an operator who deliberately removed a row.
+    off = {k for k, v in stored.items() if not str(v).strip()}
+    mm = {k: v for k, v in stored.items() if str(v).strip() and k in servable.get(v, {})}
     for name, models in servable.items():
         for canonical in models:
+            if canonical in off:
+                continue
             mm.setdefault(canonical, name)
     return mm
 
@@ -3635,17 +3647,21 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     names = {i["name"] for i in out}
     if len(names) != len(out):
         raise HTTPException(400, "integration names must be unique")
+    # An EMPTY value is kept, and means "no integration serves this model". Dropping it made the
+    # console's Delete a no-op: the effective maps claim every servable model on read, so removing
+    # the explicit row simply let the claim put it back, and the write returned 200 having changed
+    # nothing visible. "Off" needs to be sayable, and this is where it is said.
     mm = {str(k).strip(): str(v).strip() for k, v in (body.model_map or {}).items()
-          if str(k).strip() and str(v).strip()}
+          if str(k).strip()}
     for model, iname in mm.items():
-        if iname not in names:
+        if iname and iname not in names:
             raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
     imm = None
     if body.image_model_map is not None:
         imm = {str(k).strip(): str(v).strip() for k, v in body.image_model_map.items()
-               if str(k).strip() and str(v).strip()}
+               if str(k).strip()}
         for model, iname in imm.items():
-            if iname not in names:
+            if iname and iname not in names:
                 raise HTTPException(400, f"image model '{model}' maps to unknown integration '{iname}'")
     # Only EXPLICIT routes are stored. Claiming every servable model here is what froze the map:
     # a model added to the source table afterwards had no entry and read as "no provider", while
