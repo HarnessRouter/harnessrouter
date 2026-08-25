@@ -335,7 +335,9 @@ cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null |
 trap cleanup TERM INT EXIT
 
 avail=""; missing=""
-for b in claude codex hermes pi dsh; do
+# Derived from HR_BACKENDS, not a second hardcoded list. The literal list here missed opencode and
+# reported "backends available: none" on an instance that had it installed and working.
+for b in ${HR_BACKENDS//,/ }; do
   wanted "$b" || continue
   if [ -x "$(backend_bin "$b")" ]; then avail="$avail $b"; else missing="$missing $b"; fi
 done

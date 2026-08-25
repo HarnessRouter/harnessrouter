@@ -2093,6 +2093,32 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     return list(mcp)
 
 
+def _opencode_eof(state: dict, rc: int) -> list[dict]:
+    """Synthesize the turn's result at end of stream.
+
+    opencode emits only mid-turn events (text, reasoning, tool_use, step_start, step_finish,
+    error); the process exiting is the terminal signal. Status therefore comes from the error
+    event and the exit code together, and the final text is the last completed text part.
+
+    A non-zero exit with no error event and no text is the case that produced
+    "exit_code=1, no diagnostic output" on a live turn: say so explicitly rather than leaving the
+    trace blank."""
+    usage = state.get("_oc_usage") or {}
+    final = state.get("final", "")
+    err = state.get("_oc_error", "")
+    if err:
+        return [{"type": "result", "subtype": "error", "is_error": True,
+                 "result": err, "usage": usage}]
+    if rc == 0:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": final, "usage": usage}]
+    tools = state.get("_oc_tool_errors") or []
+    why = ("; ".join(t for t in tools if t)[:500]
+           or f"opencode exited {rc} without reporting an error")
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": final or why, "usage": usage}]
+
+
 OPENCODE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 
 # opencode resolves `{env:VAR}` inside its config at load time, so the provider key is named in
@@ -2304,6 +2330,11 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
     return pre
 
 
+# opencode's stream has no terminal event, so the normalizer carries an `eof` the run loop calls
+# when the process exits. See _run_turn_bg.
+_opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -2404,6 +2435,20 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     finally:
         killer.cancel()
     rec["exit_code"] = rc
+    # Backends whose stream carries NO terminal event finish here: for them the process exiting IS
+    # the end of the turn. claude/codex/pi/dsh all emit something terminal of their own and set
+    # `result_ev` in the loop above, so they have no `eof` and this is skipped. opencode does not:
+    # its six event types are all mid-turn, and without this a SUCCESSFUL turn produced no final
+    # text, no usage, and a status inferred from the exit code alone.
+    eof = getattr(normalize, "eof", None)
+    if eof is not None and result_ev is None:
+        for ev in eof(state, rc):
+            ev["_ts"] = time.time()
+            with _turns_lock:
+                rec["events"].append(ev)
+            if ev.get("type") == "result":
+                result_ev = ev
+                state["final"] = state.get("final") or ev.get("result") or ""
     rec["result"] = state.get("final", "")
     rec["status"] = ("cancelled" if rec.get("cancelled")
                      else "timeout" if rec.get("capped")
