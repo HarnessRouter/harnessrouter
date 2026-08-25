@@ -2132,13 +2132,33 @@ async def _reconcile_session(v: dict) -> bool:
         if age > _GW_MAX_TURN_S:
             status = "failed"              # past the hard cap with no result -> interrupted
         else:
+            # First ask the RUNNER whether the recorded turn still exists. Turn records are
+            # in-memory there, so a restart answers 404 — and a 404 means the process that owned
+            # this turn is gone and it can never finish. Settle it NOW as failed. Without this the
+            # single-container deployment showed "Working" for the full six-hour cap after any
+            # restart: adoption below is gated on the control store, which self-hosted does not
+            # have, so nothing else could ever settle the record. Seen live: a SIGKILLed container
+            # left a finished-looking transcript pinned at "Working" for half an hour.
+            # An unreachable runner is NOT "gone" — transient network says retry, not fail.
+            rt_probe = str(v.get("runner_turn_id") or "")
+            probe_gone = not rt_probe
+            if rt_probe:
+                try:
+                    _pr = await _sandbox(f"/turn/{rt_probe}", str(sid), "GET", params={"since": 0})
+                    probe_gone = _pr.status_code == 404
+                except Exception:  # noqa: BLE001
+                    probe_gone = False
+            if probe_gone:
+                status = "failed"
             # Stale heartbeat but no terminal result yet: the owning replica likely died mid-turn
             # (deploy / scale-in / crash) while the turn keeps executing in its sandbox. ADOPT it —
             # resume harvesting its events to the trace + bus so viewers don't freeze. Run it
             # DETACHED (it polls for the rest of the turn); blocking here would stall the sweep for
             # every other session. The lease makes adoption single-flight, so a duplicate spawn on
             # the next sweep simply refuses at lease_admit. Tracked in _inflight so drain settles it.
-            if sid not in _adopting:
+            if status == "failed":
+                pass                        # provably gone — fall through and settle below
+            elif sid not in _adopting:
                 _adopting.add(sid)
                 async def _adopt_bg(_sid=sid, _org=str(v.get("tenant") or ""), _v=v):
                     try:
@@ -2150,7 +2170,8 @@ async def _reconcile_session(v: dict) -> bool:
                 _t = asyncio.create_task(_adopt_bg())
                 _inflight.add(_t)
                 _t.add_done_callback(_inflight.discard)
-            return False                   # not settled yet; the detached adopter (or a later sweep) will
+            if status != "failed":
+                return False               # not settled yet; the detached adopter (or a later sweep) will
     await _vertex_upsert(sid, {"status": status, "turn_status": status})
     if base:                               # reflect in the manifest so the Recents/Traces card updates
         mb = await _blob_get(_manifest_key(base), kb=TRACE_KB)
