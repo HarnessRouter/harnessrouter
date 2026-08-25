@@ -270,3 +270,38 @@ def test_error_falls_back_to_the_flat_message_then_the_name():
     assert s1["_oc_error"] == "flat form"
     _, s2 = _run([_ev("error", error={"name": "APIError"})])
     assert s2["_oc_error"] == "APIError"
+
+
+# ── end of stream: opencode has no terminal event, the process exiting is the signal ──
+from server import _opencode_eof, _opencode_to_claude  # noqa: E402
+
+
+def test_the_run_loop_can_find_the_eof_hook():
+    """_run_turn_bg looks for `normalize.eof`. If this attribute goes missing the turn silently
+    loses its result event again."""
+    assert getattr(_opencode_to_claude, "eof", None) is _opencode_eof
+
+
+def test_clean_exit_reports_success_with_the_final_text_and_usage():
+    state = {"final": "the answer", "_oc_usage": {"input_tokens": 5}}
+    ev = _opencode_eof(state, 0)[0]
+    assert ev["subtype"] == "success" and ev["is_error"] is False
+    assert ev["result"] == "the answer" and ev["usage"] == {"input_tokens": 5}
+
+
+def test_an_error_event_wins_over_the_exit_code():
+    ev = _opencode_eof({"final": "", "_oc_error": "Authentication failed."}, 0)[0]
+    assert ev["is_error"] is True and ev["result"] == "Authentication failed."
+
+
+def test_a_bare_nonzero_exit_says_so_instead_of_going_blank():
+    """This is the live failure: exit 1, no error event, nothing on stderr. The trace showed
+    'exit_code=1, no diagnostic output', which tells the user nothing."""
+    ev = _opencode_eof({"final": ""}, 1)[0]
+    assert ev["is_error"] is True
+    assert "exited 1" in ev["result"]
+
+
+def test_a_failing_tool_is_quoted_when_the_process_dies_without_an_error_event():
+    ev = _opencode_eof({"final": "", "_oc_tool_errors": ["bash: boom"]}, 1)[0]
+    assert "bash: boom" in ev["result"]
