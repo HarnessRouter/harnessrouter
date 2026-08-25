@@ -4572,6 +4572,23 @@ def _conn_serves(conn: dict, friendly: str) -> bool:
     return m in table or m in table.values()
 
 
+def _backend_of_builtin(harness_id: str) -> str:
+    """Backend for a BUILT-IN harness, whose id is its base id ("opencode", "pi", "dsh", ...).
+
+    Built-ins have no stored Harness vertex — the console renders them from the catalogue — so
+    _backend_of_harness sees None and the caller used to fall through to guessing the backend from
+    the MODEL NAME. That guess is wrong for every built-in whose family does not match its name:
+    a built-in `pi` or `opencode` harness running gpt-5.4 routed to codex, because _route_backend
+    maps anything containing "gpt" to codex. Self-hosted that surfaces as
+    `spawn: No such file or directory: 'codex'`; where codex IS installed it is worse, because the
+    turn succeeds on a backend nobody asked for.
+    """
+    b = (harness_id or "").strip().lower()
+    if b == "claude":
+        return "claude"        # stored alias for claude-code
+    return str((_BASE_CATALOG.get(b) or {}).get("backend") or "")
+
+
 def _backend_of_harness(hv: dict | None) -> str:
     """The backend a harness is pinned to, from its base. Empty when unknown (caller-inferred)."""
     base = str((hv or {}).get("base") or "").lower()
@@ -5517,7 +5534,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     # only fall back to inferring it from the model name when there's no harness. This makes the
     # model permission check below meaningful — the requested model is validated against the
     # harness's fixed backend, not allowed to silently re-route to a different one.
-    backend = _backend_of_harness(hv) or _route_backend(model_req or body.model, body.backend)
+    backend = (_backend_of_harness(hv) or _backend_of_builtin(harness_id)
+               or _route_backend(model_req or body.model, body.backend))
     # Server-side model permission (CT-124): an unauthorized model for this backend is replaced by
     # the harness's authorized default and the substitution is recorded in the run metadata.
     model_req, requested_model, model_fallback, model_fallback_reason = _resolve_model_policy(
@@ -11268,7 +11286,8 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
+    backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
+               or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
 
@@ -12115,7 +12134,8 @@ async def get_harness_models_public(hid: str, request: Request) -> dict:
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
+    backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
+               or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
 
