@@ -340,8 +340,25 @@ export default function IntegrationsPage() {
               <button className="button" type="button" onClick={() => setConfirmDelete(null)} disabled={busy}>Cancel</button>
               <button className="button danger" type="button" disabled={busy}
                 onClick={async () => {
-                  const mm = Object.fromEntries(Object.entries(doc.model_map).filter(([, v]) => v !== confirmDelete));
-                  if (await persist({ integrations: doc.integrations.filter((i) => i.name !== confirmDelete), model_map: mm })) setConfirmDelete(null);
+                  // EVERY map that can name an integration has to be pruned here, not just the
+                  // chat one. The server rejects the whole write if any mapping still points at a
+                  // name that is gone, so leaving image_model_map behind made Delete fail with
+                  // "image model 'gpt-image-1' maps to unknown integration 'Vercel'" and no way
+                  // forward from the dialog. The copy above already promises this.
+                  const drop = (m: Record<string, string> | undefined) =>
+                    Object.fromEntries(Object.entries(m || {}).filter(([, v]) => v !== confirmDelete));
+                  const mm = drop(doc.model_map);
+                  const imm = drop(doc.image_model_map);
+                  // media_policy names integrations inside per-model order/disabled lists. The
+                  // server does not validate it, but leaving a deleted name there would resurrect
+                  // it in the UI's ordering controls.
+                  const mp = Object.fromEntries(Object.entries(doc.media_policy || {}).map(([k, v]) => [k, {
+                    ...v,
+                    order: (v?.order || []).filter((n) => n !== confirmDelete),
+                    disabled: (v?.disabled || []).filter((n) => n !== confirmDelete),
+                  }]));
+                  if (await persist({ integrations: doc.integrations.filter((i) => i.name !== confirmDelete),
+                                      model_map: mm, image_model_map: imm, media_policy: mp })) setConfirmDelete(null);
                 }}>{busy ? 'Deleting…' : 'Delete'}</button>
             </div>
           </section>
