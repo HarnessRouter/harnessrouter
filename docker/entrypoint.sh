@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -242,9 +242,7 @@ install_backends() {
   fi
 
   # opencode is MIT, so unlike Claude Code and hermes it COULD be baked into the image. It is
-  # installed here anyway to keep one install path for every backend, and it is deliberately not in
-  # the default HR_BACKENDS: the gateway has no model catalogue for it yet (that needs a real probed
-  # turn), so installing it by default would ship a CLI nothing can route to. Opt in explicitly.
+  # installed here anyway so that every backend has ONE install path.
   if wanted opencode && [ ! -x "$(backend_bin opencode)" ]; then
     echo "[harnessrouter] installing opencode (MIT)…"
     try_install "opencode" install_opencode || true
