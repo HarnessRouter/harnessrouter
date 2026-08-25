@@ -2173,6 +2173,18 @@ async def _reconcile_session(v: dict) -> bool:
             if status != "failed":
                 return False               # not settled yet; the detached adopter (or a later sweep) will
     await _vertex_upsert(sid, {"status": status, "turn_status": status})
+    # Settle the RESPONSE record in the same pass. The session vertex and the response blob are two
+    # records of one fact; settling only the vertex left the turn list showing a live "Working…"
+    # spinner on a turn whose process died — the exact confusion this sweep exists to remove — and
+    # a background poller on GET /v1/responses/{id} was only healed if something happened to GET it.
+    rid_run = str(v.get("running_response_id") or "")
+    if rid_run:
+        try:
+            rec_run = await _resp_get(rid_run)
+            if rec_run:
+                await _reconcile_response(rid_run, rec_run)
+        except Exception:  # noqa: BLE001 — the vertex settle above already landed; a later GET heals
+            pass
     if base:                               # reflect in the manifest so the Recents/Traces card updates
         mb = await _blob_get(_manifest_key(base), kb=TRACE_KB)
         if mb:
@@ -2209,6 +2221,12 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     settled = None
     if vs in ("done", "failed", "cancelled"):
         settled = _RESP_STATUS_MAP.get(vs)
+        # "completed" is a claim about THIS response, not about the session. A record with no
+        # output of its own (the finalize died before any content landed) settling as "completed"
+        # invents a success: the turn list showed 'continue finish the work' as completed when it
+        # never produced a byte. An empty settled record is 'incomplete' — terminal, honest.
+        if settled == "completed" and not (rec.get("output") or []):
+            settled = "incomplete"
     else:
         try:
             hb = float(v.get("heartbeat") or 0)
