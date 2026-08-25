@@ -2095,6 +2095,23 @@ OPENCODE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter
 # itself never lands on disk in the session workspace.
 _OPENCODE_KEY_ENV = "HR_OPENCODE_KEY"
 
+# The permission keys opencode actually understands (core/src/v1/config/permission.ts). Enforcement
+# is HARD here: the action set is ask|allow|deny, so a denied tool is genuinely absent rather than
+# merely discouraged. A key outside this set would be accepted by the record-with-rest schema and
+# then silently match no tool, so unknown names are dropped rather than written.
+_OPENCODE_PERMS = {"read", "edit", "glob", "grep", "list", "bash", "task", "external_directory",
+                   "todowrite", "question", "webfetch", "websearch", "lsp", "doom_loop", "skill"}
+
+
+def _opencode_denies(tools_disabled: list[str] | None) -> dict:
+    """Harness tool ids -> {<key>: "deny"}. Catalog labels arrive "bash (Shell)"-style; keep the id."""
+    out: dict = {}
+    for raw in tools_disabled or []:
+        name = (raw or "").split(" (")[0].strip().lower()
+        if name in _OPENCODE_PERMS:
+            out[name] = "deny"
+    return out
+
 
 def _opencode_mcp(servers: list[dict] | None) -> dict:
     """opencode `mcp.servers.<name>`: a tagged union on `type` (packages/core/src/config/mcp.ts).
@@ -2126,7 +2143,7 @@ def _opencode_mcp(servers: list[dict] | None) -> dict:
 
 
 def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
-                     skills_dir: str | None) -> str:
+                     skills_dir: str | None, tools_disabled: list[str] | None = None) -> str:
     """Write <cwd>/opencode.json and return the provider-qualified model id for --model."""
     if not auth.base_url:
         raise HTTPException(400, "opencode needs a base_url (none configured)")
@@ -2146,6 +2163,9 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     mcp = _opencode_mcp(mcp_servers)
     if mcp:
         cfg["mcp"] = {"servers": mcp}
+    denies = _opencode_denies(tools_disabled)
+    if denies:
+        cfg["permission"] = denies
     if skills_dir:
         # `skills` takes arbitrary paths, so the directory _write_skills already produced is named
         # here directly. No mirroring into a per-CLI home, which is the trap codex and hermes set.
@@ -2156,13 +2176,13 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
 
 def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                    skills_dir: str | None = None) -> list[str]:
+                    skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
     if auth.api_key:
         env[_OPENCODE_KEY_ENV] = auth.api_key
-    qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir)
+    qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled)
     cmd = ["opencode", "run", "--format", "json", "--model", qualified,
            # The sandbox is the trust boundary, so permissions are granted up front: nobody is
            # attached to answer a prompt. Same rationale as pi --approve and claude
@@ -3213,7 +3233,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
         cmd = _build_opencode(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                              skills_dir=skills_dir)
+                              skills_dir=skills_dir, tools_disabled=req.tools_disabled)
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         plugin_dirs = _write_plugins(cwd, req.plugins)
