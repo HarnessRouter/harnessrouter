@@ -116,3 +116,25 @@ def test_mcp_local_builds_command_and_env():
 
 def test_mcp_skips_entries_with_neither_url_nor_command():
     assert _opencode_mcp([{"name": "empty"}]) == {}
+
+
+# ── permissions: opencode enforces deny HARD, unlike codex/hermes ────────────────────
+from server import _opencode_denies  # noqa: E402
+
+
+def test_disabled_tools_become_deny_rules():
+    assert _opencode_denies(["bash", "webfetch"]) == {"bash": "deny", "webfetch": "deny"}
+
+
+def test_catalog_label_suffix_is_stripped_to_the_real_key():
+    """Labels arrive "bash (Shell)"-style; a label written verbatim would match no tool and
+    silently disable nothing — the failure mode the claude notes call out."""
+    assert _opencode_denies(["bash (Shell)", "Read"]) == {"bash": "deny", "read": "deny"}
+
+
+def test_unknown_tool_names_are_dropped_not_written():
+    """The config schema accepts arbitrary extra keys, so an unknown name would be stored and then
+    match nothing. Dropping it keeps the written config honest about what is enforced."""
+    assert _opencode_denies(["not_a_tool", "bash"]) == {"bash": "deny"}
+    assert _opencode_denies([]) == {}
+    assert _opencode_denies(None) == {}

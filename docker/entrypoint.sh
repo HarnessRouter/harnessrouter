@@ -185,7 +185,33 @@ backend_bin() {
     hermes) echo "$TOOLS/venv/bin/hermes" ;;
     pi)     echo "$TOOLS/bin/pi" ;;
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
+    opencode) echo "$TOOLS/bin/opencode" ;;
   esac
+}
+
+# opencode ships prebuilt binaries on GitHub releases rather than npm, so fetch the asset directly.
+# NOT the vendor's install script: it hardcodes INSTALL_DIR=$HOME/.opencode/bin with no override, so
+# it cannot be pointed at the data volume, and piping a remote script into a shell inside an
+# entrypoint is a supply-chain surface this product does not need. Pin with HR_OPENCODE_VERSION.
+install_opencode() {
+  case "$(uname -m)" in
+    x86_64)        oc_arch="x64" ;;
+    aarch64|arm64) oc_arch="arm64" ;;
+    *) echo "unsupported architecture $(uname -m) for opencode"; return 1 ;;
+  esac
+  oc_ref="${HR_OPENCODE_VERSION:-latest}"
+  if [ "$oc_ref" = "latest" ]; then
+    oc_url="https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-$oc_arch.tar.gz"
+  else
+    oc_url="https://github.com/anomalyco/opencode/releases/download/v${oc_ref#v}/opencode-linux-$oc_arch.tar.gz"
+  fi
+  oc_tmp="$(mktemp -d)"
+  curl -fsSL "$oc_url" -o "$oc_tmp/opencode.tar.gz" || { rm -rf "$oc_tmp"; return 1; }
+  tar -xzf "$oc_tmp/opencode.tar.gz" -C "$oc_tmp" || { rm -rf "$oc_tmp"; return 1; }
+  [ -f "$oc_tmp/opencode" ] || { echo "release archive contained no opencode binary"; rm -rf "$oc_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && mv "$oc_tmp/opencode" "$TOOLS/bin/opencode" && chmod 755 "$TOOLS/bin/opencode" \
+    || { rm -rf "$oc_tmp"; return 1; }
+  rm -rf "$oc_tmp"
 }
 
 # Run an install and, if it fails, SAY WHY.
@@ -213,6 +239,15 @@ install_backends() {
   if wanted claude && [ ! -x "$(backend_bin claude)" ]; then
     echo "[harnessrouter] installing Claude Code (Anthropic's terms apply)…"
     try_install "Claude Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund @anthropic-ai/claude-code || true
+  fi
+
+  # opencode is MIT, so unlike Claude Code and hermes it COULD be baked into the image. It is
+  # installed here anyway to keep one install path for every backend, and it is deliberately not in
+  # the default HR_BACKENDS: the gateway has no model catalogue for it yet (that needs a real probed
+  # turn), so installing it by default would ship a CLI nothing can route to. Opt in explicitly.
+  if wanted opencode && [ ! -x "$(backend_bin opencode)" ]; then
+    echo "[harnessrouter] installing opencode (MIT)…"
+    try_install "opencode" install_opencode || true
   fi
 
   if wanted codex && [ ! -x "$(backend_bin codex)" ]; then
