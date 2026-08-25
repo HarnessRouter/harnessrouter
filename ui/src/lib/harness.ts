@@ -76,6 +76,13 @@ export const OOB: OobHarness[] = [
     models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'deepseek-v4-pro', moreModels: 0,
     systemPrompt: 'You are DeepSeek Harness, an autonomous coding agent. You work on a real git workspace, running shell commands and editing files to complete the task end to end.',
     tools: [], skills: [] },
+  { id: 'opencode', name: 'OpenCode', version: 'v1.18.23', backend: 'opencode', status: 'ready',
+    // ONE model on purpose. The server's catalogue seeds opencode with gpt-5.4 alone because no
+    // model has yet been earned by a real turn on this backend; listing the usual multi-family set
+    // here would advertise models the server would refuse and silently substitute.
+    models: ['gpt-5.4'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are OpenCode, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
 ];
 
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
