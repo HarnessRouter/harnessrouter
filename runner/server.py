@@ -2119,9 +2119,13 @@ def _opencode_denies(tools_disabled: list[str] | None) -> dict:
 
 
 def _opencode_mcp(servers: list[dict] | None) -> dict:
-    """opencode `mcp.servers.<name>`: a tagged union on `type` (packages/core/src/config/mcp.ts).
-    local => {command:[...]}, remote => {url, headers}. oauth is pinned false: an interactive
-    OAuth dance has nowhere to happen in a sandbox, and leaving it unset invites one."""
+    """opencode `mcp.<name>`: a tagged union on `type`, local => {command:[...]},
+    remote => {url, headers}. oauth is pinned false: an interactive OAuth dance has nowhere to
+    happen in a sandbox, and leaving it unset invites one.
+
+    Shape taken from the PUBLISHED schema (https://opencode.ai/config.json), not from the repo's
+    source tree. The tree is ahead of the release and disagrees with it: source nests servers under
+    `mcp.servers` and gives `timeout` an object, the shipped binary wants a flat `mcp.<name>` map."""
     out: dict = {}
     for i, sv in enumerate(servers or []):
         if not isinstance(sv, dict):
@@ -2179,14 +2183,16 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     }
     mcp = _opencode_mcp(mcp_servers)
     if mcp:
-        cfg["mcp"] = {"servers": mcp}
+        cfg["mcp"] = mcp
     denies = _opencode_denies(tools_disabled)
     if denies:
         cfg["permission"] = denies
     if skills_dir:
-        # `skills` takes arbitrary paths, so the directory _write_skills already produced is named
-        # here directly. No mirroring into a per-CLI home, which is the trap codex and hermes set.
-        cfg["skills"] = [skills_dir]
+        # `skills.paths` takes arbitrary directories, so the one _write_skills already produced is
+        # named here directly. No mirroring into a per-CLI home, which is the trap codex and hermes
+        # set. Shape is {paths, urls} per the published schema; the source tree's bare array is a
+        # newer form the released binary rejects outright ("Expected object | undefined").
+        cfg["skills"] = {"paths": [skills_dir]}
     pathlib.Path(cwd, "opencode.json").write_text(json.dumps(cfg, indent=2))
     return f"hr/{model}"
 
@@ -2281,8 +2287,19 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
     if t == "error":
         # The CLI can exit 0 on a provider error, so this event is the only truthful failure
         # signal — the same trap pi has.
+        # Real shape, captured from a live 401 against the relay:
+        #   {"type":"error","sessionID":...,"error":{"name":"APIError",
+        #    "data":{"message":"...","statusCode":401,...}}}
+        # The message is nested under `data`, so reading `error.message` yields nothing and the
+        # user gets a stringified dict. Try the nested form first, then the flat one.
         err = obj.get("error")
-        state["_oc_error"] = str(err.get("message") if isinstance(err, dict) else err or "opencode error")
+        msg = ""
+        if isinstance(err, dict):
+            data = err.get("data") if isinstance(err.get("data"), dict) else {}
+            msg = str(data.get("message") or err.get("message") or err.get("name") or "")
+        elif err:
+            msg = str(err)
+        state["_oc_error"] = msg or "opencode error"
         return pre
     return pre
 
