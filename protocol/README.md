@@ -35,25 +35,17 @@ job, not a completion.
 | **Versioning rules** | [`VERSIONING.md`](VERSIONING.md) |
 | **License** | Apache-2.0, same as the repository |
 
-## This standard does not require HarnessRouter Cloud
-
-That is the point of writing it down, so it is worth being concrete rather than reassuring.
+## No hosted service required
 
 UHP is an HTTP contract. A conformant server is any server that answers the requests in this
 specification with the responses in this specification. It may run agents in containers, in
 subprocesses, on a queue, or on someone else's infrastructure. Nothing in the wire format requires
-a hosted service, an account, a licence key, or a call home.
+a hosted service, an account, a licence key, or a call home — a conformant server can run wholly on
+your own machine, on your own provider keys, storing everything on a volume you own.
 
-Two independent implementations exist to keep that honest:
-
-- **HarnessRouter Community Edition** — the reference implementation, in this repository, running
-  wholly on your own machine (`docker run harnessrouter/harnessrouter:0.3.0`). It uses your own
-  provider keys and stores everything on a volume you own. It is the implementation the conformance
-  suite is developed against.
-- **HarnessRouter Cloud** — a commercial hosted implementation of the same protocol.
-
-A client written against this specification works with either, and with any third implementation
-that passes the conformance suite. If you find a behaviour the specification does not describe but
+A client written against this specification works with any server that passes the conformance
+suite, whoever built it. The [examples](IMPLEMENTATIONS.md) page lists the servers and clients
+built against UHP so far. If you find a behaviour the specification does not describe but
 your client depends on, that is a specification bug — please
 [open an issue](https://github.com/HarnessRouter/harnessrouter/issues).
 
@@ -122,6 +114,11 @@ of an existing field. A client that ignores every UHP extension still gets a wor
    ```
 4. Publish your report. A server that passes at a class MAY describe itself as
    "UHP 2026-08-11 conformant (<class>)".
+
+Two role-specific guides walk through this in order:
+[Implement a client](CONNECTING.md) — discovery, task submission, event handling, and
+artifact retrieval — and [Implement a server](SERVING.md) — the operations a server answers
+and how it connects one or more harnesses.
 
 ## Contributing
 

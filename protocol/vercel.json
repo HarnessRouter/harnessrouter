@@ -1,7 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "bash site/build.sh",
+  "outputDirectory": "site/dist",
+  "ignoreCommand": "git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" \"$VERCEL_GIT_COMMIT_SHA\" -- .",
   "cleanUrls": true,
   "trailingSlash": false,
+  "redirects": [
+    { "source": "/spec", "destination": "/spec/2026-08-11", "permanent": false }
+  ],
   "headers": [
     {
       "source": "/schema/(.*).json",
