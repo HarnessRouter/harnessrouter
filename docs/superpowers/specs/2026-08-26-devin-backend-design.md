@@ -50,6 +50,15 @@ Use the ACP-per-turn approach:
 - A new ACP client thread in the runner drives `initialize`, `session/new`, `session/prompt`, and reads `session/update` notifications.
 - A new `_devin_to_claude` normalizer maps ACP events to the canonical claude stream-json events the rest of the system already consumes.
 
+## Pattern alignment with existing backends
+
+The closest existing implementation is the **Codex app-server driver** (`_run_codex_appserver_bg`). It already spawns a CLI, sends `initialize`, `thread/resume`/`thread/start`, `turn/start`, reads JSON-RPC notifications, extracts usage, and kills the process after one turn. The Devin driver should reuse that exact shape, but with ACP method names (`session/*` instead of `thread/*`/`turn/*`).
+
+- Like **Hermes** and the **Codex app-server**, `devin` should have a custom runner function (`_run_devin_acp_bg`) and likely register `normalize: None` in `BACKENDS`, because the driver calls the normalizer directly.
+- Like **OpenCode**, Devin is installed at runtime and needs a per-session `HOME`/`XDG_DATA_HOME` redirect so state and credentials live on the data volume.
+- Like **Claude Code**, **Codex**, and **Hermes**, a resume must be guarded: only call `session/resume` if the previous session artifact is actually present in the workspace/data dir.
+- Like **OpenCode** and **Claude Code**, tool restrictions can be enforced at the wire level (ACP `request_permission` responses), so `tool_enforcement` is "hard".
+
 ## Architecture
 
 ```
@@ -76,7 +85,7 @@ UHP client / console
 
 ## Components
 
-### 1. Runner backend registry
+### 1. Runner backend registry and dispatch
 
 Add `devin` to `BACKENDS` in `runner/server.py`:
 
@@ -86,38 +95,52 @@ BACKENDS = {
     "devin": {
         "providers": sorted(DEVIN_PROVIDERS),
         "default_model": DEVIN_DEFAULT_MODEL,
-        "normalize": _devin_to_claude,
+        # The driver calls _devin_to_claude directly, like _run_hermes_bg and _run_codex_appserver_bg.
+        "normalize": None,
     },
 }
 ```
 
-Pattern matches the existing `opencode` entry in `runner/server.py`.
+In `turn()`, add a dispatch branch before the fallback to `_run_turn_bg`:
 
-### 2. Build function `_build_devin`
+```python
+elif backend == "devin":
+    model = model or DEVIN_DEFAULT_MODEL
+    threading.Thread(target=_run_devin_acp_bg,
+                     args=(turn_id, cwd, env, model, req.prompt,
+                           req.resume_session_id, req.timeout_seconds,
+                           req.mcp_servers, req.tools_disabled),
+                     daemon=True).start()
+```
 
-Returns the argv and prepares environment:
+This mirrors the existing `codex` app-server and `hermes` branches.
+
+### 2. Devin env / argv helper
+
+Called inside `_run_devin_acp_bg` before `subprocess.Popen`:
 
 - `cmd = ["devin", "acp", "--model", model]`
 - Sets `WINDSURF_API_KEY` from the harness connection auth.
 - Sets `DEVIN_MODEL` for redundancy.
 - Sets `HOME` to `<cwd>/.harness/home` (existing pattern) and `XDG_DATA_HOME` to a path inside the data volume so Devin credentials and session state persist.
-- Respects `tools_disabled` by choosing a `--permission-mode` or by translating the list to ACP permission behavior.
+- Prepares the disabled-tools list so the driver can respond to ACP `request_permission` notifications.
 
 ### 3. ACP client `_run_devin_acp_bg`
 
-A new background thread, similar in shape to `_run_turn_bg` but stdio-driven JSON-RPC:
+A new background thread, modeled on `_run_codex_appserver_bg` (JSON-RPC over stdio) rather than `_run_turn_bg` (one-way JSONL stdout):
 
 1. Spawn `devin acp`.
 2. Send `initialize` with protocol version and client capabilities.
-3. If the agent advertises authentication, send `authenticate` or rely on `WINDSURF_API_KEY` already in env.
-4. Send `session/new` (or `session/resume` if `resume_session_id` is present) with `cwd` and optional MCP servers.
+3. On `initialize` response, send `initialized` notification (ACP handshake) or rely on `WINDSURF_API_KEY` in env.
+4. **Resume guard:** if `resume_session_id` is set, check for the Devin session artifact under `XDG_DATA_HOME/devin/cli/sessions` (or equivalent). If it exists, call `session/resume`; otherwise call `session/new` and log `resume_lost` like Hermes/Claude/Codex.
 5. Send `session/prompt` with the prompt as a text content array.
 6. Read `stdout` line-by-line for JSON-RPC responses and `session/update` notifications.
-7. For each notification, call `_devin_to_claude` and append to the turn’s event list.
-8. On `session/prompt` response with `stopReason`, finalize the turn.
-9. On gateway `cancel`, send `session/cancel` and kill the process group.
-10. On timeout, send `session/cancel` and kill.
-11. Close with `session/close` if supported and the process is still alive.
+7. For each `session/update`, call `_devin_to_claude` and append events to the turn record.
+8. On `request_permission`, send `session/respond` (or the ACP equivalent) with `approve`/`deny` based on the harness `tools_disabled` list.
+9. On `session/prompt` response with `stopReason`, or on `turn/failed`/`error` notifications, finalize the turn.
+10. On gateway `cancel`, send `session/cancel` and kill the process group.
+11. On timeout, send `session/cancel` and kill.
+12. Close with `session/close` if supported and the process is still alive.
 
 ### 4. Normalizer `_devin_to_claude`
 
@@ -138,10 +161,12 @@ The normalizer is chunk-level, not token-level, so Devin does not advertise fine
 
 ### 5. Gateway changes
 
-- Add `devin` to `_MODEL_CATALOG` with a default model and supported model list.
-- Add `devin` to `_BASES` so `/v1/bases` advertises it.
-- Update `_route_backend` to return `"devin"` for devin-model ids and `base == "devin"`.
-- Add a provider mapping for a new `devin`/`windsurf` provider to `WINDSURF_API_KEY` (or equivalent) so integrations can be saved and brokered like the other backends.
+- Add `devin` to `_BASE_CATALOG` (label, backend, system prompt, tools, `tool_enforcement: "hard"`).
+- Add `devin` to `_MODEL_CATALOG` with Devin's own default model and supported model list (not inherited from pi/opencode).
+- Add `devin` to `_SUPPORTED_BASES` (derived automatically from `_BASE_CATALOG`).
+- Add a `devin` entry to `_PROVIDER_CATALOG` with `secret: "api_key"` and no default `base_url`.
+- Add `("devin", "devin"): "devin"` to `_INTEGRATION_WIRING`.
+- In `_route_backend`, either add a Devin heuristic or rely on `_backend_of_builtin` (which already uses `_BASE_CATALOG` for built-in harnesses).
 
 ### 6. UI changes
 
@@ -152,11 +177,13 @@ The normalizer is chunk-level, not token-level, so Devin does not advertise fine
 ### 7. Docker install
 
 - Add `devin` to `HR_BACKENDS` default and `backend_bin` in `docker/entrypoint.sh`.
-- Add an `install_devin` function that installs the binary at first run, not at image build time.
-- The install must not pipe an untrusted script into a shell blindly. Preferred approach:
+- Add an `install_devin` function that installs the binary at first run, not at image build time. It should mirror `install_opencode` in structure:
+  - Determine arch (`x86_64` → `x86_64-unknown-linux`, `aarch64` → `aarch64-unknown-linux`).
   - Download the manifest from `https://static.devin.ai/cli/current/manifest.json`.
   - Verify the SHA-256 checksum.
-  - Extract the matching bundle into `$DATA_DIR/agent-tools/devin/_versions/<version>` and link `devin` into `$DATA_DIR/agent-tools/bin/devin`.
+  - Extract the matching bundle into a versioned directory under `$DATA_DIR/agent-tools/devin`.
+  - Symlink `devin` into `$DATA_DIR/agent-tools/bin/devin`.
+- Set `HOME` and `XDG_DATA_HOME` so Devin writes credentials/session state under the data volume, not the image's root home.
 - Print a clear license/source warning, mirroring the existing Claude Code and Hermes install messages.
 
 ## Authentication
@@ -167,9 +194,9 @@ Devin CLI ACP mode accepts credentials in this order:
 2. Credentials stored by `devin auth login`.
 3. ACP `authenticate` request.
 
-For a headless server the only viable option is `WINDSURF_API_KEY`. The user will add a new `devin` (or `windsurf`) integration in the console. The gateway stores the key and passes it to the runner as `Auth.api_key`, which `_build_devin` maps to `WINDSURF_API_KEY`.
+For a headless server the only viable option is `WINDSURF_API_KEY`. The user adds a `devin` integration in the console; the gateway stores the key and passes it to the runner as `Auth.api_key`, which the driver maps to `WINDSURF_API_KEY`.
 
-This is a new provider type, not a model provider. It is a Devin/Windsurf account API key.
+`devin` is a new provider type. In the default self-hosted mode (`HR_SANDBOX_TRUST=owner`) the raw key is passed through to the runner, just like the other backends. In a hosted/brokered deployment, `devin` should be omitted from `_BROKERABLE_PROVIDERS` because the credential is a Devin account key and cannot be safely brokered.
 
 ## Session continuity
 
