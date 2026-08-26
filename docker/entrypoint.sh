@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,devin}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -186,6 +186,7 @@ backend_bin() {
     pi)     echo "$TOOLS/bin/pi" ;;
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
     opencode) echo "$TOOLS/bin/opencode" ;;
+    devin)  echo "$TOOLS/bin/devin" ;;
   esac
 }
 
@@ -212,6 +213,21 @@ install_opencode() {
   mkdir -p "$TOOLS/bin" && mv "$oc_tmp/opencode" "$TOOLS/bin/opencode" && chmod 755 "$TOOLS/bin/opencode" \
     || { rm -rf "$oc_tmp"; return 1; }
   rm -rf "$oc_tmp"
+}
+
+# Devin is a proprietary CLI (Cognition/Windsurf). It cannot be redistributed inside a public
+# image, so we install it on first run under the end user's terms. The official installer writes
+# version bundles and credentials under $XDG_DATA_HOME and links the binary into $HOME/.local/bin;
+# we redirect both to the data volume so state is checkpointed and the image stays clean.
+install_devin() {
+  local devin_home="$DATA_DIR/agent-tools/devin/home"
+  local devin_xdg="$DATA_DIR/agent-tools/devin"
+  mkdir -p "$devin_home" "$devin_xdg" "$TOOLS/bin"
+  HOME="$devin_home" XDG_DATA_HOME="$devin_xdg" \
+    bash -c 'curl -fsSL https://cli.devin.ai/install.sh | bash' || return 1
+  local installed="$devin_home/.local/bin/devin"
+  [ -x "$installed" ] || { echo "Devin installer did not produce a binary at $installed"; return 1; }
+  ln -sf "$installed" "$TOOLS/bin/devin"
 }
 
 # Run an install and, if it fails, SAY WHY.
@@ -246,6 +262,11 @@ install_backends() {
   if wanted opencode && [ ! -x "$(backend_bin opencode)" ]; then
     echo "[harnessrouter] installing opencode (MIT)…"
     try_install "opencode" install_opencode || true
+  fi
+
+  if wanted devin && [ ! -x "$(backend_bin devin)" ]; then
+    echo "[harnessrouter] installing Devin (Cognition/Windsurf terms apply)…"
+    try_install "Devin" install_devin || true
   fi
 
   if wanted codex && [ ! -x "$(backend_bin codex)" ]; then
