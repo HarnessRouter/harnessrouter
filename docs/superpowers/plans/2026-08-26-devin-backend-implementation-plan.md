@@ -11,7 +11,7 @@
 ## Global constraints
 
 - **Do not ship the proprietary Devin binary in the open-source image.** Install at first run, on the data volume, under the end user's terms.
-- **Runtime auth:** only `WINDSURF_API_KEY` is practical for a headless server; `devin auth login` is not an unattended flow.
+- **Runtime auth:** only `DEVIN_API_KEY` is practical for a headless server; `devin auth login` is not an unattended flow.
 - **Process model:** one `devin acp` subprocess per turn, killed on cancel/timeout.
 - **Session continuity:** attempt `session/resume` only when the previous session artifact is present in the data volume; otherwise start fresh and emit `resume_lost`.
 - **Tool enforcement:** `tool_enforcement` is "hard" — the driver responds to ACP `request_permission` with approve/deny based on `tools_disabled`.
@@ -335,7 +335,7 @@ def _run_devin_acp_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str
     xdg.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)
     env["XDG_DATA_HOME"] = str(xdg)
-    if env.get("WINDSURF_API_KEY"):
+    if env.get("DEVIN_API_KEY"):
         pass  # already injected by turn()
 
     cmd = [env.get("DEVIN_ACP_BINARY") or "devin", "acp", "--model", model]
@@ -394,8 +394,8 @@ In `turn()` (around line 3373), after the `hermes` branch, add:
 ```python
 elif backend == "devin":
     model = model or DEVIN_DEFAULT_MODEL
-    if not env.get("WINDSURF_API_KEY"):
-        rec.update(status="failed", error="WINDSURF_API_KEY not configured for devin backend", done=True)
+    if not env.get("DEVIN_API_KEY"):
+        rec.update(status="failed", error="DEVIN_API_KEY not configured for devin backend", done=True)
         return _turn_resp(rec)
     threading.Thread(target=_run_devin_acp_bg,
                      args=(turn_id, cwd, env, model, req.prompt,
@@ -667,11 +667,11 @@ Expected: `devin` appears in the `bases` and `models` results.
 
 - [ ] **Step 3: Manual smoke with a real or fake binary**
 
-If a `WINDSURF_API_KEY` is available:
+If a `DEVIN_API_KEY` is available:
 
 ```bash
-export WINDSURF_API_KEY=...
-docker run -e HR_BACKENDS=devin -e WINDSURF_API_KEY ... harnessrouter-devin
+export DEVIN_API_KEY=...
+docker run -e HR_BACKENDS=devin -e DEVIN_API_KEY ... harnessrouter-devin
 # Create a devin harness in the UI and run a turn.
 ```
 

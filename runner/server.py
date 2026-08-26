@@ -2730,8 +2730,6 @@ def _run_devin_acp_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str
     env["HOME"] = str(home)
     env["XDG_DATA_HOME"] = str(xdg)
     env["DEVIN_MODEL"] = model
-    if env.get("WINDSURF_API_KEY"):
-        pass  # already injected by turn()
 
     binary = env.get("DEVIN_ACP_BINARY") or os.environ.get("DEVIN_ACP_BINARY") or "devin"
     cmd = [binary, "acp", "--model", model]
@@ -2898,7 +2896,7 @@ def _run_devin_acp_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str
                     send("initialized", {}, notify=True)
                     # Devin's ACP server requires authentication before sessions. Use the first
                     # advertised auth method and pass the API key in the standard _meta field.
-                    api_key = env.get("WINDSURF_API_KEY", "")
+                    api_key = env.get("DEVIN_API_KEY", "")
                     am = (res.get("authMethods") or [{}])[0]
                     auth_id = am.get("id") or "devin-browser"
                     id_auth = send("authenticate", {"methodId": auth_id, "_meta": {"api_key": api_key}})
@@ -3723,7 +3721,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     elif backend == "devin":
         model = model or DEVIN_DEFAULT_MODEL
         if auth.api_key:
-            env["WINDSURF_API_KEY"] = auth.api_key
+            env["DEVIN_API_KEY"] = auth.api_key
     elif backend == "dsh":
         model = model or DSH_DEFAULT_MODEL
         cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
@@ -3775,9 +3773,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                req.resume_session_id, req.timeout_seconds, hermes_mcp),
                          daemon=True).start()
     elif backend == "devin":
-        if not env.get("WINDSURF_API_KEY"):
+        if not env.get("DEVIN_API_KEY"):
             rec = _turns[turn_id]
-            rec.update(status="failed", error="WINDSURF_API_KEY not configured for devin backend", done=True)
+            rec.update(status="failed", error="DEVIN_API_KEY not configured for devin backend", done=True)
             return {"turn_id": turn_id, "status": rec["status"], "backend": backend, "model": model,
                     "host": socket.gethostname(), "max_seconds": cap, "done": rec["done"], "error": rec.get("error")}
         threading.Thread(target=_run_devin_acp_bg,

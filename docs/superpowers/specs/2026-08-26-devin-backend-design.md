@@ -35,7 +35,7 @@ This design adds Devin as a runner backend by running `devin acp` once per turn 
 ## Research summary
 
 - `devin acp` is launched as a subprocess and speaks JSON-RPC over stdio.
-- Credentials: `WINDSURF_API_KEY` env, or credentials from `devin auth login`, or an ACP `authenticate` request.
+- Credentials: `DEVIN_API_KEY` env, or credentials from `devin auth login`, or an ACP `authenticate` request.
 - Flags: `devin acp --model <model>` sets the default model per ACP session.
 - ACP flow: `initialize` → `session/new` (or `session/resume`/`session/load`) → `session/prompt` → `session/update` notifications → `session/cancel` if needed.
 - Devin CLI is installed via `curl -fsSL https://cli.devin.ai/install.sh | bash`. The install script writes version bundles to `$XDG_DATA_HOME/devin/cli/_versions` and links `devin` into `$HOME/.local/bin`. We will run it with redirected `HOME`/`XDG_DATA_HOME` so it lands on the data volume.
@@ -65,7 +65,7 @@ The closest existing implementation is the **Codex app-server driver** (`_run_co
 UHP client / console
         │
         ▼
-    Gateway (FastAPI)  ←  adds "devin" to /v1/bases, /v1/models, routes provider → WINDSURF_API_KEY
+    Gateway (FastAPI)  ←  adds "devin" to /v1/bases, /v1/models, routes provider → DEVIN_API_KEY
         │
         ▼
     Runner /turn
@@ -120,7 +120,7 @@ This mirrors the existing `codex` app-server and `hermes` branches.
 Called inside `_run_devin_acp_bg` before `subprocess.Popen`:
 
 - `cmd = ["devin", "acp", "--model", model]`
-- Sets `WINDSURF_API_KEY` from the harness connection auth.
+- Sets `DEVIN_API_KEY` from the harness connection auth.
 - Sets `DEVIN_MODEL` for redundancy.
 - Sets `HOME` to `<cwd>/.harness/home` (existing pattern) and `XDG_DATA_HOME` to a path inside the data volume so Devin credentials and session state persist.
 - Prepares the disabled-tools list so the driver can respond to ACP `request_permission` notifications.
@@ -131,7 +131,7 @@ A new background thread, modeled on `_run_codex_appserver_bg` (JSON-RPC over std
 
 1. Spawn `devin acp`.
 2. Send `initialize` with protocol version and client capabilities.
-3. On `initialize` response, send `initialized` notification (ACP handshake) or rely on `WINDSURF_API_KEY` in env.
+3. On `initialize` response, send `initialized` notification (ACP handshake) or rely on `DEVIN_API_KEY` in env.
 4. **Resume guard:** if `resume_session_id` is set, check for the Devin session artifact under `XDG_DATA_HOME/devin/cli/sessions` (or equivalent). If it exists, call `session/resume`; otherwise call `session/new` and log `resume_lost` like Hermes/Claude/Codex.
 5. Send `session/prompt` with the prompt as a text content array.
 6. Read `stdout` line-by-line for JSON-RPC responses and `session/update` notifications.
@@ -187,11 +187,11 @@ The normalizer is chunk-level, not token-level, so Devin does not advertise fine
 
 Devin CLI ACP mode accepts credentials in this order:
 
-1. `WINDSURF_API_KEY` env var.
+1. `DEVIN_API_KEY` env var.
 2. Credentials stored by `devin auth login`.
 3. ACP `authenticate` request.
 
-For a headless server the only viable option is `WINDSURF_API_KEY`. The user adds a `devin` integration in the console; the gateway stores the key and passes it to the runner as `Auth.api_key`, which the driver maps to `WINDSURF_API_KEY`.
+For a headless server the only viable option is `DEVIN_API_KEY`. The user adds a `devin` integration in the console; the gateway stores the key and passes it to the runner as `Auth.api_key`, which the driver maps to `DEVIN_API_KEY`.
 
 `devin` is a new provider type. In the default self-hosted mode (`HR_SANDBOX_TRUST=owner`) the raw key is passed through to the runner, just like the other backends. In a hosted/brokered deployment, `devin` should be omitted from `_BROKERABLE_PROVIDERS` because the credential is a Devin account key and cannot be safely brokered.
 
@@ -209,7 +209,7 @@ If Devin does **not** support resume across fresh processes, the design must fal
 | Failure | UHP behavior |
 | --------- | -------------- |
 | `devin` binary not installed | `invalid_request_error` / `backend_not_found` with install instructions |
-| `WINDSURF_API_KEY` missing | `invalid_request_error` / `invalid_credential` |
+| `DEVIN_API_KEY` missing | `invalid_request_error` / `invalid_credential` |
 | ACP `initialize` fails | `server_error` / `upstream_error` |
 | ACP `auth_required` | `authentication_error` |
 | ACP `session/prompt` error or non-zero exit | `server_error` / `devin_error` with the error message from ACP |
@@ -221,7 +221,7 @@ If Devin does **not** support resume across fresh processes, the design must fal
 - `runner/tests/test_devin_normalize.py`: unit tests for `_devin_to_claude` against captured ACP notification JSON.
 - A fake ACP server script in `runner/tests/` so `_run_devin_acp_bg` can be exercised without a real Devin account.
 - `uhp-conformance` run against the local gateway to verify `/v1/bases`, `/v1/models`, `/v1/responses` work with the new backend.
-- Manual test with a real `WINDSURF_API_KEY` after implementation.
+- Manual test with a real `DEVIN_API_KEY` after implementation.
 
 ## Risks and open questions
 
