@@ -948,6 +948,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "opencode"): "openai-api",
     ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
     ("llmtr", "opencode"): "tokenrouter",
+    ("devin", "devin"): "devin",
 }
 
 
@@ -3507,6 +3508,14 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret_label": "API Key",
         "key_hint": "sk_…",
     },
+    "devin": {
+        "label": "Devin",
+        "base_url": None,
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "Devin / Windsurf API Key",
+        "key_hint": "wind-…",
+    },
     "azure-foundry": {
         "label": "Azure OpenAI",
         "base_url": None,          # one resource per customer — there is no default to know
@@ -4123,6 +4132,8 @@ def _route_backend(model: str | None, explicit: str | None) -> str:
     m = (model or "").lower()
     if "hermes" in m:
         return "hermes"
+    if "devin" in m:
+        return "devin"
     if any(k in m for k in ("codex", "gpt", "openai", "o3", "o4")):
         return "codex"
     if any(k in m for k in ("claude", "anthropic", "sonnet", "opus", "haiku")):
@@ -4316,6 +4327,17 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
         "hunyuan-3":          "tencent/hy3",
         "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
+    },
+    # Devin (Cognition) backend: the runner talks to the Devin/Windsurf API directly, so these
+    # are placeholder identity mappings for the starter model set. They will be replaced with the
+    # real provider ids once `devin models list --format json` is available.
+    "devin": {
+        "devin-swe":       "devin-swe",
+        "devin-swe-fast":  "devin-swe-fast",
+        "devin-opus":      "devin-opus",
+        "devin-sonnet":    "devin-sonnet",
+        "devin-gpt-5.5":   "devin-gpt-5.5",
+        "devin-adaptive":  "devin-adaptive",
     },
 }
 
@@ -4522,6 +4544,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash"]},
+    "devin": {"default": "devin-swe",
+              "models": ["devin-swe", "devin-swe-fast", "devin-opus",
+                         "devin-sonnet", "devin-gpt-5.5", "devin-adaptive"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4531,7 +4556,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash"]},
 }
-_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
+_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai",
+                "hermes", "pi", "dsh", "deepseek", "devin"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
 #   qwen3.7-max  -> 400 InvalidParameter "Unexpected item type in content"  (rejects the TYPE)
@@ -4646,6 +4672,8 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "dsh"
     if base == "opencode":
         return "opencode"
+    if base == "devin":
+        return "devin"
     return ""
 
 
@@ -11110,6 +11138,17 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
         # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
+        "tool_enforcement": "hard",
+    },
+    "devin": {
+        "label": "Devin", "backend": "devin", "status": "ready",
+        "system_prompt": ("You are Devin, an autonomous software-engineering agent. You work on a "
+                          "real git workspace with shell and file access, reading and editing files "
+                          "and running commands to complete the task end to end."),
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"),
+                  ("webfetch", "Web Fetch"), ("websearch", "Web Search"),
+                  ("task", "Task"), ("todowrite", "Todo")],
         "tool_enforcement": "hard",
     },
 }
