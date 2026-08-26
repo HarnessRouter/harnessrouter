@@ -83,3 +83,29 @@ jobs:
       # suite pass and a failing test still fail; the first real test file makes it moot.
       - run: npm test -- --passWithNoTests
       - run: npm run build
+
+  # The unifiedharnessprotocol.org site is generated from protocol/ markdown by
+  # protocol/site/build.py and deployed by Vercel. Nothing gated it until now — a broken generator,
+  # a dead cross-link, a missing #anchor, or a description-manifest violation would reach the
+  # production deploy with a green PR. This job runs the SAME build.sh the Vercel deploy runs, from
+  # the same working directory (protocol/), so the gate and the deploy cannot diverge; build.py
+  # self-checks links, anchors, versions and metadata, so the build failing is the signal.
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Read the interpreter from the same .python-version the Vercel build reads, so CI and the
+      # deploy can never run different Pythons.
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: protocol/.python-version
+          cache: pip
+          cache-dependency-path: protocol/site/requirements.txt
+      - name: Build the spec site exactly as the deploy does
+        working-directory: protocol
+        run: bash site/build.sh
+      # The single host config gates the deploy; a malformed vercel.json, or one whose build no
+      # longer points at build.sh, would break publishing silently. Assert it stays valid and wired.
+      - name: The host config stays valid and wired to build.sh
+        run: |
+          python3 -c "import json; c=json.load(open('protocol/vercel.json')); assert c['buildCommand']=='bash site/build.sh', 'buildCommand drifted from build.sh'; assert c['outputDirectory']=='site/dist', 'outputDirectory drifted'"
