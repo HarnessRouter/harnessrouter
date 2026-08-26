@@ -940,6 +940,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "dsh"): "openai-api",
     ("tokenrouter", "dsh"): "tokenrouter",     ("vercel", "dsh"): "tokenrouter",
     ("llmtr", "dsh"): "tokenrouter",
+    # opencode reaches every provider through one OpenAI-compatible client, so each integration
+    # maps to the runner provider that carries the right base_url; the runner picks the ai-sdk
+    # package (openai vs openai-compatible) from the model, not from this row.
+    ("anthropic", "opencode"): "anthropic",    ("openai", "opencode"): "openai",
+    ("azure-foundry", "opencode"): "azure",
+    ("openrouter", "opencode"): "openai-api",
+    ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
+    ("llmtr", "opencode"): "tokenrouter",
 }
 
 
@@ -1009,9 +1017,15 @@ async def _effective_image_model_map() -> dict[str, str]:
     serve is dropped, not honoured — same rule as chat, for the same reason."""
     integrations = await _integrations_doc()
     servable = {str(i.get("name") or ""): _integration_image_models(i) for i in integrations}
-    mm = {k: v for k, v in (await _image_model_map_doc()).items() if k in servable.get(v, {})}
+    stored = await _image_model_map_doc()
+    # An explicit empty value is "off": the operator removed this row, and auto-claiming must not
+    # undo that. Without this the Delete button reports success and changes nothing.
+    off = {k for k, v in stored.items() if not str(v).strip()}
+    mm = {k: v for k, v in stored.items() if str(v).strip() and k in servable.get(v, {})}
     for name, models in servable.items():
         for canonical in models:
+            if canonical in off:
+                continue
             mm.setdefault(canonical, name)
     return mm
 
@@ -1061,9 +1075,15 @@ async def _effective_model_map() -> dict[str, str]:
     """
     integrations = await _integrations_doc()
     servable = {str(i.get("name") or ""): _integration_models(i) for i in integrations}
-    mm = {k: v for k, v in (await _model_map_doc()).items() if k in servable.get(v, {})}
+    stored = await _model_map_doc()
+    # Explicit empty value = "off". Auto-claiming is what makes a new model light up without a
+    # re-save; it must not also override an operator who deliberately removed a row.
+    off = {k for k, v in stored.items() if not str(v).strip()}
+    mm = {k: v for k, v in stored.items() if str(v).strip() and k in servable.get(v, {})}
     for name, models in servable.items():
         for canonical in models:
+            if canonical in off:
+                continue
             mm.setdefault(canonical, name)
     return mm
 
@@ -2065,7 +2085,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         rec["usage"] = translator.usage
     await _vertex_upsert(sid, {"status": rec["status"], "turn_status": rec["status"]})
     try:
-        produced = (await _collect_produced(sid, set()) if terminal in ("completed", "incomplete") else [])
+        # Every terminal outcome collects. A cancelled or failed turn may already have written the
+        # deliverable (a Stop that lands after the file is saved, an OOM at finalize) — skipping
+        # collection threw those files away from the record while they sat in the workspace.
+        produced = await _collect_produced(sid, set())
         for oev in translator.complete(rec["status"], produced):
             _emit(oev)
     except Exception:  # noqa: BLE001
@@ -2112,13 +2135,33 @@ async def _reconcile_session(v: dict) -> bool:
         if age > _GW_MAX_TURN_S:
             status = "failed"              # past the hard cap with no result -> interrupted
         else:
+            # First ask the RUNNER whether the recorded turn still exists. Turn records are
+            # in-memory there, so a restart answers 404 — and a 404 means the process that owned
+            # this turn is gone and it can never finish. Settle it NOW as failed. Without this the
+            # single-container deployment showed "Working" for the full six-hour cap after any
+            # restart: adoption below is gated on the control store, which self-hosted does not
+            # have, so nothing else could ever settle the record. Seen live: a SIGKILLed container
+            # left a finished-looking transcript pinned at "Working" for half an hour.
+            # An unreachable runner is NOT "gone" — transient network says retry, not fail.
+            rt_probe = str(v.get("runner_turn_id") or "")
+            probe_gone = not rt_probe
+            if rt_probe:
+                try:
+                    _pr = await _sandbox(f"/turn/{rt_probe}", str(sid), "GET", params={"since": 0})
+                    probe_gone = _pr.status_code == 404
+                except Exception:  # noqa: BLE001
+                    probe_gone = False
+            if probe_gone:
+                status = "failed"
             # Stale heartbeat but no terminal result yet: the owning replica likely died mid-turn
             # (deploy / scale-in / crash) while the turn keeps executing in its sandbox. ADOPT it —
             # resume harvesting its events to the trace + bus so viewers don't freeze. Run it
             # DETACHED (it polls for the rest of the turn); blocking here would stall the sweep for
             # every other session. The lease makes adoption single-flight, so a duplicate spawn on
             # the next sweep simply refuses at lease_admit. Tracked in _inflight so drain settles it.
-            if sid not in _adopting:
+            if status == "failed":
+                pass                        # provably gone — fall through and settle below
+            elif sid not in _adopting:
                 _adopting.add(sid)
                 async def _adopt_bg(_sid=sid, _org=str(v.get("tenant") or ""), _v=v):
                     try:
@@ -2130,8 +2173,21 @@ async def _reconcile_session(v: dict) -> bool:
                 _t = asyncio.create_task(_adopt_bg())
                 _inflight.add(_t)
                 _t.add_done_callback(_inflight.discard)
-            return False                   # not settled yet; the detached adopter (or a later sweep) will
+            if status != "failed":
+                return False               # not settled yet; the detached adopter (or a later sweep) will
     await _vertex_upsert(sid, {"status": status, "turn_status": status})
+    # Settle the RESPONSE record in the same pass. The session vertex and the response blob are two
+    # records of one fact; settling only the vertex left the turn list showing a live "Working…"
+    # spinner on a turn whose process died — the exact confusion this sweep exists to remove — and
+    # a background poller on GET /v1/responses/{id} was only healed if something happened to GET it.
+    rid_run = str(v.get("running_response_id") or "")
+    if rid_run:
+        try:
+            rec_run = await _resp_get(rid_run)
+            if rec_run:
+                await _reconcile_response(rid_run, rec_run)
+        except Exception:  # noqa: BLE001 — the vertex settle above already landed; a later GET heals
+            pass
     if base:                               # reflect in the manifest so the Recents/Traces card updates
         mb = await _blob_get(_manifest_key(base), kb=TRACE_KB)
         if mb:
@@ -2168,6 +2224,12 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     settled = None
     if vs in ("done", "failed", "cancelled"):
         settled = _RESP_STATUS_MAP.get(vs)
+        # "completed" is a claim about THIS response, not about the session. A record with no
+        # output of its own (the finalize died before any content landed) settling as "completed"
+        # invents a success: the turn list showed 'continue finish the work' as completed when it
+        # never produced a byte. An empty settled record is 'incomplete' — terminal, honest.
+        if settled == "completed" and not (rec.get("output") or []):
+            settled = "incomplete"
     else:
         try:
             hb = float(v.get("heartbeat") or 0)
@@ -3627,17 +3689,21 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     names = {i["name"] for i in out}
     if len(names) != len(out):
         raise HTTPException(400, "integration names must be unique")
+    # An EMPTY value is kept, and means "no integration serves this model". Dropping it made the
+    # console's Delete a no-op: the effective maps claim every servable model on read, so removing
+    # the explicit row simply let the claim put it back, and the write returned 200 having changed
+    # nothing visible. "Off" needs to be sayable, and this is where it is said.
     mm = {str(k).strip(): str(v).strip() for k, v in (body.model_map or {}).items()
-          if str(k).strip() and str(v).strip()}
+          if str(k).strip()}
     for model, iname in mm.items():
-        if iname not in names:
+        if iname and iname not in names:
             raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
     imm = None
     if body.image_model_map is not None:
         imm = {str(k).strip(): str(v).strip() for k, v in body.image_model_map.items()
-               if str(k).strip() and str(v).strip()}
+               if str(k).strip()}
         for model, iname in imm.items():
-            if iname not in names:
+            if iname and iname not in names:
                 raise HTTPException(400, f"image model '{model}' maps to unknown integration '{iname}'")
     # Only EXPLICIT routes are stored. Claiming every servable model here is what froze the map:
     # a model added to the source table afterwards had no entry and read as "no provider", while
@@ -4441,6 +4507,21 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gemini-3.6-flash", "kimi-k3", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash"]},
+    # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
+    # Responses) client pointed at our relay, with the package chosen per turn from the model
+    # family (see _opencode_config, which mirrors _pi_models_json). The serving paths are
+    # therefore pi's, and pi's rows earned them — so the catalogue is pi's set.
+    # STILL UNPROBED ON THIS BACKEND: inheriting a serving path is not the same as a completed
+    # turn, which is what the bar at the top of this table asks for. Probe before relying on any
+    # single row here.
+    "opencode": {"default": "gpt-5.4",
+                 "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                            "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                            "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                            "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                            "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                            "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                            "mistral-medium-3.5", "step-3.7-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4533,6 +4614,23 @@ def _conn_serves(conn: dict, friendly: str) -> bool:
     return m in table or m in table.values()
 
 
+def _backend_of_builtin(harness_id: str) -> str:
+    """Backend for a BUILT-IN harness, whose id is its base id ("opencode", "pi", "dsh", ...).
+
+    Built-ins have no stored Harness vertex — the console renders them from the catalogue — so
+    _backend_of_harness sees None and the caller used to fall through to guessing the backend from
+    the MODEL NAME. That guess is wrong for every built-in whose family does not match its name:
+    a built-in `pi` or `opencode` harness running gpt-5.4 routed to codex, because _route_backend
+    maps anything containing "gpt" to codex. Self-hosted that surfaces as
+    `spawn: No such file or directory: 'codex'`; where codex IS installed it is worse, because the
+    turn succeeds on a backend nobody asked for.
+    """
+    b = (harness_id or "").strip().lower()
+    if b == "claude":
+        return "claude"        # stored alias for claude-code
+    return str((_BASE_CATALOG.get(b) or {}).get("backend") or "")
+
+
 def _backend_of_harness(hv: dict | None) -> str:
     """The backend a harness is pinned to, from its base. Empty when unknown (caller-inferred)."""
     base = str((hv or {}).get("base") or "").lower()
@@ -4546,6 +4644,8 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "pi"
     if base in ("dsh", "deepseek-harness"):
         return "dsh"
+    if base == "opencode":
+        return "opencode"
     return ""
 
 
@@ -4688,6 +4788,15 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
                 out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(fr.content)})
         except Exception:  # noqa: BLE001
             continue
+    # Advance the runner's collection cursor ONLY now that the files are captured to blobs. This is
+    # the other half of the stranded-artifact fix: /produced lists everything since the last ack,
+    # so a turn that died before this line leaves the cursor untouched and the next collection
+    # simply picks its files up. A skipped file (size cap, internal) is a decision, not a failure,
+    # so it is acked too rather than re-offered forever.
+    try:
+        await _sandbox("/produced/ack", sid, "POST")
+    except Exception:  # noqa: BLE001 — cursor stays behind; the next collection re-lists, harmless
+        pass
     return out
 
 
@@ -5476,7 +5585,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     # only fall back to inferring it from the model name when there's no harness. This makes the
     # model permission check below meaningful — the requested model is validated against the
     # harness's fixed backend, not allowed to silently re-route to a different one.
-    backend = _backend_of_harness(hv) or _route_backend(model_req or body.model, body.backend)
+    backend = (_backend_of_harness(hv) or _backend_of_builtin(harness_id)
+               or _route_backend(model_req or body.model, body.backend))
     # Server-side model permission (CT-124): an unauthorized model for this backend is replaced by
     # the harness's authorized default and the substitution is recorded in the run metadata.
     model_req, requested_model, model_fallback, model_fallback_reason = _resolve_model_policy(
@@ -10986,6 +11096,22 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("edit", "Edit"), ("todo_write", "Todo"), ("subagent", "Subagent")],
         "tool_enforcement": "instruction",
     },
+    "opencode": {
+        "label": "OpenCode", "backend": "opencode", "status": "ready",
+        "system_prompt": ("You are OpenCode, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # opencode's permission keys, verbatim from core/src/v1/config/permission.ts. These are the
+        # real names the deny rules match, not display labels — the same trap the claude list warns
+        # about, where a decorated label silently matches nothing and disables no tool.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"), ("list", "List"),
+                  ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("task", "Task"),
+                  ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
+        # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
+        # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
+        "tool_enforcement": "hard",
+    },
 }
 
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
@@ -11211,7 +11337,8 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
+    backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
+               or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
 
@@ -12058,7 +12185,8 @@ async def get_harness_models_public(hid: str, request: Request) -> dict:
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    backend = _backend_of_harness(v) or _route_backend(str(v.get("default_model") or ""), None)
+    backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
+               or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
             **_harness_models_view(v, backend, await _servable_models(org, backend))}
 
