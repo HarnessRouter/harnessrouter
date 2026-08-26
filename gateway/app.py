@@ -948,6 +948,11 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "opencode"): "openai-api",
     ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
     ("llmtr", "opencode"): "tokenrouter",
+    ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
+    ("azure-foundry", "qwen"): "azure",
+    ("openrouter", "qwen"): "openai-api",
+    ("tokenrouter", "qwen"): "tokenrouter",    ("vercel", "qwen"): "tokenrouter",
+    ("llmtr", "qwen"): "tokenrouter",
     # custom: user-supplied endpoint + model + key. Maps to runner providers that can actually
     # drive a bring-your-own OpenAI/Anthropic endpoint — NOT codex, whose current releases speak
     # only the OpenAI Responses API and so cannot reach a custom chat/completions endpoint.
@@ -4605,6 +4610,17 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash"]},
+    # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
+    # Unprobed per-model on this backend (one live turn each of qwen3.7-max and gpt-5.4 verified,
+    # 2026-08-25) — substitution-check before leaning on any single row.
+    "qwen": {"default": "qwen3.7-max",
+             "models": ["qwen3.7-max", "qwen3.8-max",
+                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                        "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                        "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -11251,6 +11267,18 @@ _BASE_CATALOG: dict[str, dict] = {
         # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
         "tool_enforcement": "hard",
+    },
+    "qwen": {
+        "label": "Qwen Code", "backend": "qwen", "status": "ready",
+        "system_prompt": ("You are Qwen Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # From the live init event's tool list (0.22.1). No per-tool kill switch on the CLI, so
+        # disabling is an instruction to the model — same tier as codex/hermes/dsh.
+        "tools": [("read_file", "File Read"), ("write_file", "File Write"), ("edit", "Edit"),
+                  ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
+                  ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
     },
 }
 
