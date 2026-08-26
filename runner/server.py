@@ -832,6 +832,9 @@ class Auth(BaseModel):
     gcp_sa_json: str | None = None         # service-account JSON (string) → file
     # Codex provider tuning
     wire_api: str | None = None            # responses | chat (default responses)
+    # Custom provider
+    api_format: str | None = None          # "openai" | "anthropic" (custom integration)
+    full_url: str | None = None            # "1" when the URL is a complete request URL
 
 
 # ── canonical-event normalizers ──────────────────────────────────────────────────
@@ -1158,6 +1161,11 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
             sa.write_text(auth.gcp_sa_json)
             env["GOOGLE_APPLICATION_CREDENTIALS"] = str(sa)
     elif p == "tokenrouter":
+        # tokenrouter speaks Anthropic on the claude backend. A custom integration with
+        # api_format=openai cannot be served here — the CLI only speaks Anthropic Messages.
+        if auth.api_format == "openai":
+            raise HTTPException(400, "claude backend cannot serve an OpenAI-format custom integration "
+                                 "(use a backend that supports openai-api, like hermes or opencode)")
         if auth.base_url:
             # Claude Code appends /v1/messages itself — a base_url stored with /v1 (the
             # OpenAI-compat form) would double the segment and 404 every call.
@@ -1260,6 +1268,11 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     # why codex state used to vanish. (auth.json inside is still creds-excluded.)
     cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".codex"
     cfg_dir.mkdir(parents=True, exist_ok=True)
+    # codex only speaks the OpenAI Responses API now — current releases removed
+    # `wire_api = "chat"` entirely, so a custom chat-completions endpoint cannot be driven by
+    # codex at all (the gateway greys codex out for those integrations). Always the supported
+    # "responses" value; a custom-endpoint turn against chat-only would 404 clearly rather than
+    # crash on config load.
     cfg = _CODEX_CONFIG_TMPL.format(
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
@@ -1426,7 +1439,10 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     base = auth.base_url or _DSH_DEFAULT_BASE.get(pr, "")
     if not base:
         raise HTTPException(400, f"dsh provider '{pr}' needs a base_url (none configured)")
-    if not base.rstrip("/").endswith("/v1"):
+    # The relay joins upstream paths against a /v1 base for known providers. But a CUSTOM
+    # openai endpoint carries its own version path (https://host/api/coding/v3) — appending
+    # /v1 would make /v3/v1 and 404, so a custom base is used as-is.
+    if auth.api_format != "openai" and not base.rstrip("/").endswith("/v1"):
         base = base.rstrip("/") + "/v1"   # the relay joins upstream paths against a /v1 base
     # HR_DSH_*: consumed and scrubbed by the driver before the runtime starts. The runtime gets
     # a loopback relay URL and a placeholder key — the credential never enters its environment.
@@ -1441,8 +1457,13 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
         # Family decides the route, not the integration's name: deepseek models keep the
         # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
         # family rides the pi-ai route. api by family — the same routing the pi backend
-        # live-verified on these channels.
-        if pr == "anthropic" or _PI_CLAUDE_MODEL.search(model or ""):
+        # live-verified on these channels. When api_format is set (custom integration), the
+        # user's explicit choice wins.
+        if auth.api_format == "anthropic":
+            api = "anthropic-messages"
+        elif auth.api_format == "openai":
+            api = "openai-completions"
+        elif pr == "anthropic" or _PI_CLAUDE_MODEL.search(model or ""):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
             api = "openai-responses"
@@ -1583,7 +1604,7 @@ _PI_CLAUDE_MODEL = re.compile(r"(?:^|/)(?:us\.anthropic\.)?claude", re.I)
 
 
 def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
-                    vision: bool = True) -> str:
+                    vision: bool = True, custom_openai: bool = False) -> str:
     """A one-provider ~/.pi/agent/models.json ("hr") for a custom endpoint. Pi's anthropic client
     appends /v1/messages to baseUrl while its openai clients expect the /v1 to already be there
     (both read straight off pi's own docs/models.md examples), so the /v1 suffix is normalized
@@ -1594,11 +1615,15 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
     message with an image part — verified against a capturing sink. Declared text-only, pi drops
     the image and the turn runs; declared vision on a model whose channel refuses images, the
     whole turn dies on the provider's 400. The gateway says which models are text-only, from
-    live probes, so vision stays the default."""
+    live probes, so vision stays the default.
+
+    `custom_openai`: a CUSTOM OpenAI endpoint carries its own version path (e.g. https://host/
+    api/coding/v3) — appending our own /v1 would make /v3/v1 and 404. So for a custom endpoint
+    the base_url is used as-is and only /chat/completions is joined."""
     base = (base_url or "").rstrip("/")
     if api == "anthropic-messages":
         base = base.removesuffix("/v1")
-    elif not base.endswith("/v1"):
+    elif not custom_openai and not base.endswith("/v1"):
         base += "/v1"
     return json.dumps({"providers": {"hr": {
         "baseUrl": base, "api": api, "apiKey": api_key,
@@ -1652,14 +1677,21 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
     if use_custom:
         if not auth.base_url:
             raise HTTPException(400, f"pi provider '{pr}' needs a base_url (none configured)")
-        if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+        # When api_format is set (custom integration), use the user's explicit choice. Otherwise
+        # pick by model family — the same routing the hermes backend already proved.
+        if auth.api_format == "anthropic":
+            api = "anthropic-messages"
+        elif auth.api_format == "openai":
+            api = "openai-completions"
+        elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
             api = "openai-responses"
         else:
             api = "openai-completions"
         (home / ".pi" / "agent" / "models.json").write_text(
-            _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision))
+            _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
+                            custom_openai=bool(auth.api_format)))
         pname = "hr"
     else:
         pname = pr
@@ -2191,7 +2223,13 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     # The split MIRRORS _pi_models_json, because both reach the same relays over the same wire
     # formats: a claude model on an anthropic-native connection speaks Messages, not
     # chat/completions, and sending it to the openai-compatible package fails at the first call.
-    if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+    # When api_format is set (custom integration), the user's explicit choice wins over any
+    # model-family heuristic — the endpoint is the one they told us to reach.
+    if auth.api_format == "anthropic":
+        npm = "@ai-sdk/anthropic"
+    elif auth.api_format == "openai":
+        npm = "@ai-sdk/openai-compatible"
+    elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
         npm = "@ai-sdk/anthropic"
     elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
         npm = "@ai-sdk/openai"          # /v1/responses

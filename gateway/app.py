@@ -763,7 +763,7 @@ def _policy_chain(raw: str) -> list[str]:
 
 _AUTH_FIELDS = ("api_key", "base_url", "aws_region", "aws_access_key_id", "aws_secret_access_key",
                 "aws_session_token", "aws_bearer_token", "gcp_project", "gcp_region",
-                "gcp_sa_json", "wire_api")
+                "gcp_sa_json", "wire_api", "api_format", "full_url")
 
 
 # ── LLM egress broker ────────────────────────────────────────────────────────────────────────
@@ -783,7 +783,7 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 # transparent to the CLI. bedrock/vertex sign with the cloud SDK and are handled separately
 # (see _auth_from_conn) — they keep their own credential until their signing path is brokered.
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
-                         "openrouter", "openai-api"}
+                         "openrouter", "openai-api", "custom"}
 
 
 def _mint_turn_cred(sid: str, conn_name: str) -> str:
@@ -948,6 +948,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "opencode"): "openai-api",
     ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
     ("llmtr", "opencode"): "tokenrouter",
+    # custom: user-supplied endpoint + model + key. Maps to runner providers that can actually
+    # drive a bring-your-own OpenAI/Anthropic endpoint — NOT codex, whose current releases speak
+    # only the OpenAI Responses API and so cannot reach a custom chat/completions endpoint.
+    ("custom", "claude"): "tokenrouter",
+    ("custom", "hermes"): "openai-api",        ("custom", "opencode"): "tokenrouter",
+    ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
 }
 
 
@@ -1048,7 +1054,17 @@ def _integration_models(integ: dict) -> dict[str, str]:
     whole derived list, which would otherwise re-add exactly the models later found unreachable
     (a stale snapshot is indistinguishable from a deliberate override, so it cannot be trusted
     to introduce models). Nothing is lost: only canonicals in the catalog can be requested.
+
+    The "custom" provider is the exception: it has no vendor table. The model comes from the
+    integration's own config — the user-supplied model_id. That is the one model this integration
+    serves, and it is its own provider-native id (the user's endpoint calls it whatever they named
+    it, and the runner sends that name verbatim).
     """
+    provider = str(integ.get("provider") or "").lower()
+    if provider == "custom":
+        cfg = integ.get("config") or {}
+        model_id = str(cfg.get("model_id") or "").strip()
+        return {model_id: model_id} if model_id else {}
     models = dict(_vendor_models(str(integ.get("provider") or "").lower()))
     for m in (integ.get("models") or []):
         canonical = str(m.get("canonical") or "").strip()
@@ -1136,6 +1152,8 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
         return None
     integ = next((i for i in await _integrations_doc() if (i.get("name") or "") == iname), None)
     if not integ:
+        return None
+    if not _integration_serves_backend(integ, backend):
         return None
     provider = _INTEGRATION_WIRING.get(((integ.get("provider") or "").lower(), backend))
     if not provider:
@@ -3522,6 +3540,19 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "aws_bearer_token",
         "secret_label": "API Key (bearer token)",
     },
+    "custom": {
+        "label": "Custom",
+        "base_url": None,          # user provides
+        "fields": [
+            {"key": "api_format", "label": "API Format"},
+            {"key": "base_url", "label": "Endpoint URL",
+             "placeholder": "https://your-api.example.com"},
+            {"key": "full_url", "label": "完整URL（Use Full URL）"},
+            {"key": "model_id", "label": "Model ID", "placeholder": "your-model-name"},
+        ],
+        "secret": "api_key",
+        "secret_label": "API Key",
+    },
 }
 
 
@@ -3549,6 +3580,38 @@ def _provider_model_id(provider: str, canonical: str) -> str | None:
 def _provider_backends(provider: str) -> list[str]:
     """Runner backends that can carry this vendor (which agent CLI can drive it)."""
     return sorted({b for (p, b) in _INTEGRATION_WIRING if p == provider})
+
+
+# Which agent backends can drive a CUSTOM integration at a given API format. A custom endpoint
+# speaks exactly one wire protocol, and each agent CLI speaks a fixed subset of them:
+#   claude   (Claude Code) — Anthropic Messages only
+#   codex    (Codex)        — OpenAI Responses API ONLY (current codex releases removed
+#                             `wire_api = "chat"`, so it can no longer reach a chat/completions-
+#                             only endpoint at all)
+#   hermes   (Hermes)       — OpenAI chat/completions only (via the openai-api loopback relay)
+#   opencode, pi, dsh       — BOTH (api_format is passed straight to the CLI/model-map)
+# An "openai" custom endpoint cannot drive claude (Anthropic-only), and it cannot drive codex
+# (chat/completions dropped). An "anthropic" custom endpoint cannot drive codex or hermes. So
+# codex is offered for NO custom integration — it only works against first-party OpenAI/Azure
+# Responses endpoints. Listing a custom model as available on a backend whose protocol it can't
+# speak is a promise the router breaks at the first call, so these sets drive the picker's
+# grey-out.
+_CUSTOM_FORMAT_BACKENDS = {
+    "openai": {"hermes", "opencode", "pi", "dsh"},
+    "anthropic": {"claude", "opencode", "pi", "dsh"},
+}
+
+
+def _integration_serves_backend(integ: dict, backend: str) -> bool:
+    """Can this integration actually run a turn on `backend`? For a custom provider this is
+    gated by its api_format (see _CUSTOM_FORMAT_BACKENDS); every other provider just needs a
+    wiring entry. This is the ONE place the picker's availability and the router's permission
+    agree, so a model shown as available is a model that can actually run."""
+    provider = str(integ.get("provider") or "").lower()
+    if provider == "custom":
+        fmt = str((integ.get("config") or {}).get("api_format") or "").strip().lower()
+        return fmt in _CUSTOM_FORMAT_BACKENDS and backend in _CUSTOM_FORMAT_BACKENDS[fmt]
+    return bool(_INTEGRATION_WIRING.get((provider, backend)))
 
 
 def _provider_catalog_public() -> list[dict]:
@@ -3673,6 +3736,19 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         known_base = (_PROVIDER_CATALOG.get(provider) or {}).get("base_url")
         if known_base and not cfg.get("base_url"):
             cfg["base_url"] = known_base
+        # Custom provider URL normalisation. The user's base_url is the literal prefix their
+        # endpoint wants the resource path joined against — for "openai" that's /chat/completions
+        # and for "anthropic" /v1/messages, with NOTHING inserted in between (a custom endpoint
+        # like https://host/api/coding/v3 already carries its own version path, so a heuristic
+        # that appends /v1 makes a /v3 base into /v3/v1 and 404s). We only trim the trailing
+        # slash; the runner appends the wire path itself. When full_url is on, nothing at all is
+        # touched — the stored value is already the complete request URL.
+        if provider == "custom" and cfg.get("base_url"):
+            full = str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+            # Only trim the trailing slash either way — never insert or strip a version path.
+            cfg["base_url"] = cfg["base_url"].rstrip("/")
+            # Store full_url as "1" / "" so it round-trips cleanly through the config.
+            cfg["full_url"] = "1" if full else ""
         # Store ONLY what the source table doesn't already say: an id this instance overrides
         # (a custom deployment name, say). Everything else is derived on read by
         # _integration_models, so the catalog in source stays the single source of truth and a
@@ -4664,11 +4740,35 @@ def _model_authorized(requested: str, backend: str) -> bool:
     return False
 
 
+async def _model_authorized_async(requested: str, backend: str, org: str) -> bool:
+    """Like _model_authorized, but also admits models from custom integrations. Custom models
+    are not in the hardcoded catalog — they come from the integration's own model_id config.
+
+    Two sources for "can this backend serve it", checked because EITHER can be true:
+      - _servable_models: the explicit servable set, when NO chain exists. A chain makes it
+        return None, which is "no restriction" — but that must not fall through to False for a
+        custom model, or the model the user picked silently runs on the default.
+      - the effective model map: a model mapped to an integration whose provider is wired to
+        this backend is routable REGARDLESS of whether a chain also exists. This is the
+        decisive check for custom integrations when a chain is configured."""
+    if _model_authorized(requested, backend):
+        return True
+    r = (requested or "").strip().lower()
+    integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
+    for canonical, iname in (await _effective_model_map()).items():
+        if canonical.lower() != r:
+            continue
+        integ = integrations.get(iname)
+        if integ and _integration_serves_backend(integ, backend):
+            return True
+    return False
+
+
 def _harness_model_default(hv: dict | None, backend: str) -> str:
     return str((hv or {}).get("default_model") or _MODEL_CATALOG.get(backend, {}).get("default") or "")
 
 
-def _resolve_model_policy(requested: str, hv: dict | None, backend: str) -> tuple[str, str, bool, str]:
+async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, org: str = "") -> tuple[str, str, bool, str]:
     """Server-side model permission for a turn. Returns (effective, requested, fallback?, reason).
     Empty/bare request -> the harness default (not a fallback). An unauthorized model is replaced by
     the authorized fallback (the harness default) and flagged."""
@@ -4676,12 +4776,10 @@ def _resolve_model_policy(requested: str, hv: dict | None, backend: str) -> tupl
     req = (requested or "").strip()
     if not req or req.lower() in _BARE_MODELS:
         return default, req, False, ""
-    if _model_authorized(req, backend):
+    if await _model_authorized_async(req, backend, org):
         return req, req, False, ""
     return default, req, True, (f"model '{req}' is not available for this harness's backend "
                                 f"'{backend}'; used the authorized default '{default}'")
-
-
 async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     """Canonical models something can actually run on this backend.
 
@@ -4700,12 +4798,12 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         integ = integrations.get(iname)
         if not integ:
             continue
-        if _INTEGRATION_WIRING.get((str(integ.get("provider") or "").lower(), backend)):
+        if _integration_serves_backend(integ, backend):
             servable.add(canonical)
     return servable
 
 
-def _harness_models_view(hv: dict | None, backend: str, servable: set[str] | None = None) -> dict:
+async def _harness_models_view(hv: dict | None, backend: str, servable: set[str] | None = None) -> dict:
     """The per-harness model capability view: allowed models, default, and authorized fallback.
     `servable` (from _servable_models) marks the ones a provider is actually configured for."""
     cat = _MODEL_CATALOG.get(backend, {})
@@ -4714,7 +4812,35 @@ def _harness_models_view(hv: dict | None, backend: str, servable: set[str] | Non
     ok = (lambda m: True) if servable is None else (lambda m: m in servable)
     models = [{"id": m, "label": m, "backend": backend, "available": ok(m), "default": m == default}
               for m in curated]
-    if default and default not in curated:   # a custom default outside the curated list
+    # Custom integrations bring their own model ids that are not in the curated catalog.
+    # They must still appear in the picker — a model that is servable and absent from the
+    # list is a silent dead end, and the harness page offers no other way to select it.
+    # Check both the explicit servable set AND the effective model map, because when a
+    # chain exists (servable=None) the chain is the fallback for unmapped models — a model
+    # WITH a mapping is still routable and must still be shown.
+    eff_map = await _effective_model_map()
+    integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
+    seen = set(curated)
+    for canonical, iname in eff_map.items():
+        if canonical in seen:
+            continue
+        integ = integrations.get(iname)
+        if integ and _integration_serves_backend(integ, backend):
+            models.append({"id": canonical, "label": canonical, "backend": backend,
+                           "available": True, "default": canonical == default})
+            seen.add(canonical)
+    # A custom model whose api_format this backend can't speak is still LISTED so the operator
+    # can see it exists, but greyed out (available=False) rather than silently omitted — the
+    # picker must not offer a choice that fails at the first call.
+    for canonical, iname in eff_map.items():
+        if canonical in seen:
+            continue
+        integ = integrations.get(iname)
+        if integ and str(integ.get("provider") or "").lower() == "custom":
+            models.append({"id": canonical, "label": canonical, "backend": backend,
+                           "available": False, "default": canonical == default})
+            seen.add(canonical)
+    if default and default not in seen:
         models.insert(0, {"id": default, "label": default, "backend": backend,
                           "available": ok(default), "default": True})
     return {"backend": backend, "default": default, "fallback": default, "models": models}
@@ -5589,8 +5715,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                or _route_backend(model_req or body.model, body.backend))
     # Server-side model permission (CT-124): an unauthorized model for this backend is replaced by
     # the harness's authorized default and the substitution is recorded in the run metadata.
-    model_req, requested_model, model_fallback, model_fallback_reason = _resolve_model_policy(
-        model_req, hv, backend)
+    model_req, requested_model, model_fallback, model_fallback_reason = await _resolve_model_policy(
+        model_req, hv, backend, org)
     # Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
     # via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
     # item.updated (self-healing → batch if it doesn't emit updates). Default off = current batch
@@ -11340,7 +11466,7 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
                or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
-            **_harness_models_view(v, backend, await _servable_models(org, backend))}
+            **await _harness_models_view(v, backend, await _servable_models(org, backend))}
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}/skills/{skill_id}/files")
@@ -12168,12 +12294,36 @@ async def list_models(request: Request) -> dict:
     # `available` is computed, not asserted: a model with no provider behind it is listed as
     # unavailable so a picker can disable it, instead of offering a choice that fails at run time.
     out = {}
+    # Custom integration models: pulled from the effective model map so they appear in the
+    # picker for every backend that can serve them. A chain (servable=None) is the FALLBACK
+    # for models without a mapping; a model WITH a mapping (custom or otherwise) is still
+    # routable, so it must still be shown.
+    eff_map = await _effective_model_map()
+    integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
     for b, c in _MODEL_CATALOG.items():
         servable = await _servable_models(org, b)
         ok = (lambda m: True) if servable is None else (lambda m: m in servable)
-        out[b] = {"default": c["default"],
-                  "models": [{"id": m, "label": m, "backend": b, "available": ok(m),
-                              "default": m == c["default"]} for m in c["models"]]}
+        models = [{"id": m, "label": m, "backend": b, "available": ok(m),
+                    "default": m == c["default"]} for m in c["models"]]
+        seen = set(c["models"])
+        # Add models from the effective map that are not already in the catalog.
+        # A model serves this backend only if its integration's api_format is compatible;
+        # on an incompatible backend it is still LISTED (so the operator sees it exists) but
+        # greyed out (available=False) rather than silently omitted.
+        for canonical, iname in eff_map.items():
+            if canonical in seen:
+                continue
+            integ = integrations.get(iname)
+            if not integ:
+                continue
+            if _integration_serves_backend(integ, b):
+                models.append({"id": canonical, "label": canonical, "backend": b,
+                               "available": True, "default": False})
+            elif str(integ.get("provider") or "").lower() == "custom":
+                models.append({"id": canonical, "label": canonical, "backend": b,
+                               "available": False, "default": False})
+            seen.add(canonical)
+        out[b] = {"default": c["default"], "models": models}
     return {"backends": out}
 
 
@@ -12188,7 +12338,7 @@ async def get_harness_models_public(hid: str, request: Request) -> dict:
     backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
                or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
-            **_harness_models_view(v, backend, await _servable_models(org, backend))}
+            **await _harness_models_view(v, backend, await _servable_models(org, backend))}
 
 
 @app.get("/v1/harnesses/{hid}/skills/{skill_id}/files")
