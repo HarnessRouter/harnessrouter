@@ -2693,6 +2693,282 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     rec["done"] = True
 
 
+def _run_devin_acp_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str,
+                      resume_session_id: str | None, timeout_seconds: int | None,
+                      mcp_servers: list[dict] | None, tools_disabled: list[str] | None) -> None:
+    rec = _turns[turn_id]
+    state: dict = {"final": ""}
+    result_appended = False
+    result_ev = None
+    shutting_down = False
+
+    def append(ev: dict) -> None:
+        nonlocal result_appended, result_ev
+        ev["_ts"] = time.time()
+        if ev.get("type") == "result":
+            result_appended = True
+            result_ev = ev
+        with _turns_lock:
+            rec["events"].append(ev)
+
+    # env setup (mirrors claude/codex session isolation)
+    home = pathlib.Path(cwd) / ".harness" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    data_dir = env.get("HR_DATA_DIR") or os.environ.get("HR_DATA_DIR") or "/data"
+    xdg = pathlib.Path(data_dir) / "agent-tools" / "devin"
+    try:
+        xdg.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Dev hosts without a /data volume: fall back to a writable per-session path.
+        xdg = home / "data" / "agent-tools" / "devin"
+        xdg.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)
+    env["XDG_DATA_HOME"] = str(xdg)
+    env["DEVIN_MODEL"] = model
+    if env.get("WINDSURF_API_KEY"):
+        pass  # already injected by turn()
+
+    binary = env.get("DEVIN_ACP_BINARY") or os.environ.get("DEVIN_ACP_BINARY") or "devin"
+    cmd = [binary, "acp", "--model", model]
+
+    try:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True,
+                                **_as_session(cwd))
+    except Exception as e:  # noqa: BLE001
+        rec.update(status="failed", error=f"spawn devin acp: {e}"[:500], done=True)
+        return
+    rec["pid"] = proc.pid
+    rec["proc"] = proc
+    if rec.get("cancelled"):
+        _kill_proc_tree(proc)
+
+    cap = min(timeout_seconds, MAX_TURN_SECONDS) if timeout_seconds else MAX_TURN_SECONDS
+
+    _nid = [0]
+    def _rid() -> int:
+        _nid[0] += 1
+        return _nid[0]
+
+    send_lock = threading.Lock()
+
+    def send(method: str, params: dict, notify: bool = False) -> int | None:
+        msg = {"jsonrpc": "2.0", "method": method, "params": params}
+        if not notify:
+            msg["id"] = _rid()
+        line = json.dumps(msg) + "\n"
+        with send_lock:
+            try:
+                proc.stdin.write(line)  # type: ignore[union-attr]
+                proc.stdin.flush()  # type: ignore[union-attr]
+            except Exception:
+                pass
+        return msg.get("id")
+
+    def send_response(req_id: int, result: dict) -> None:
+        msg = {"jsonrpc": "2.0", "id": req_id, "result": result}
+        line = json.dumps(msg) + "\n"
+        with send_lock:
+            try:
+                proc.stdin.write(line)  # type: ignore[union-attr]
+                proc.stdin.flush()  # type: ignore[union-attr]
+            except Exception:
+                pass
+
+    session_id = None
+    stop_reason = None
+    turn_status = None
+    errbuf: list[str] = []
+    id_init = id_session = id_prompt = None
+    prompt_sent = False
+
+    def _permission_response(req_id: int, p: dict) -> None:
+        tc = p.get("toolCall") or {}
+        tool_name = tc.get("name") or tc.get("tool") or tc.get("title") or ""
+        denied = bool(tools_disabled and tool_name in tools_disabled)
+        options = p.get("options") or []
+        option_id = None
+        for opt in options:
+            kind = (opt.get("kind") or "").lower()
+            if not denied and kind.startswith("allow"):
+                option_id = opt.get("optionId")
+                break
+            if denied and kind.startswith(("reject", "deny")):
+                option_id = opt.get("optionId")
+                break
+        if option_id is None:
+            option_id = "reject-once" if denied else "allow-once"
+        send_response(req_id, {"outcome": {"outcome": "selected", "optionId": option_id}})
+
+    def _send_cancel() -> None:
+        if session_id:
+            send("session/cancel", {"sessionId": session_id}, notify=True)
+
+    def _shutdown(cancel: bool = False) -> None:
+        nonlocal shutting_down
+        if shutting_down:
+            return
+        shutting_down = True
+        if cancel and session_id:
+            _send_cancel()
+        try:
+            if proc.poll() is None:
+                _kill_proc_tree(proc)
+        except Exception:
+            pass
+
+    def _devin_timeout() -> None:
+        rec["capped"] = True
+        _shutdown(cancel=True)
+
+    def _devin_cancel() -> None:
+        _shutdown(cancel=True)
+
+    killer = threading.Timer(cap, _devin_timeout)
+    killer.daemon = True
+    killer.start()
+
+    # Resume guard: only resume if the session artifact actually exists on disk.
+    resume = None
+    if resume_session_id:
+        sess_dir = xdg / "cli" / "sessions"
+        if (sess_dir / resume_session_id).exists() or (sess_dir / f"{resume_session_id}.json").exists():
+            resume = resume_session_id
+        else:
+            print(f"[resume] devin: session {resume_session_id} not in workspace — starting fresh", flush=True)
+            append({"type": "system", "subtype": "resume_lost", "requested_session_id": resume_session_id})
+
+    # Watcher thread that sends session/cancel and kills on external cancel/timeout.
+    def _watcher() -> None:
+        while not rec.get("done"):
+            if rec.get("cancelled"):
+                _devin_cancel()
+                return
+            if rec.get("capped"):
+                _devin_timeout()
+                return
+            time.sleep(0.2)
+
+    watcher = threading.Thread(target=_watcher, daemon=True)
+    watcher.start()
+
+    try:
+        id_init = send("initialize", {"protocolVersion": "1",
+                                      "clientInfo": {"name": "harness-runner", "version": "1"},
+                                      "capabilities": {"session": {"resume": True}}})
+        for raw in proc.stdout:  # type: ignore[union-attr]
+            raw = raw.strip()
+            if not raw:
+                continue
+            if not raw.startswith("{"):
+                errbuf.append(raw)
+                if len(errbuf) > 80:
+                    del errbuf[0]
+                continue
+            try:
+                msg = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                continue
+            mid = msg.get("id")
+            method = msg.get("method")
+
+            # Requests from the agent (e.g. permission prompts)
+            if method is not None and mid is not None and "result" not in msg and "error" not in msg:
+                if method == "session/request_permission":
+                    _permission_response(mid, msg.get("params") or {})
+                else:
+                    # Unknown request: respond with empty result so the agent is not blocked.
+                    send_response(mid, {})
+                continue
+
+            # Responses to our requests
+            if method is None and mid is not None:
+                if msg.get("error") and mid in (id_init, id_session, id_prompt):
+                    errbuf.append(str((msg["error"] or {}).get("message") or "devin acp error"))
+                    turn_status = "failed"
+                    break
+                res = msg.get("result") or {}
+                if mid == id_init:
+                    send("initialized", {}, notify=True)
+                    if resume:
+                        session_id = resume
+                        append({"type": "system", "subtype": "init", "session_id": session_id, "model": model})
+                        rec["session_id"] = session_id
+                        id_session = send("session/resume", {"sessionId": resume, "cwd": cwd,
+                                                               "mcpServers": mcp_servers or []})
+                        # For resume the session id is already known, so we can start the turn now.
+                        id_prompt = send("session/prompt", {"sessionId": session_id,
+                                                            "prompt": [{"type": "text", "text": prompt}]})
+                        prompt_sent = True
+                    else:
+                        id_session = send("session/new", {"cwd": cwd, "mcpServers": mcp_servers or []})
+                elif mid == id_session:
+                    sid = res.get("sessionId") or session_id or resume or ""
+                    if sid and sid != session_id:
+                        session_id = sid
+                        append({"type": "system", "subtype": "init", "session_id": session_id, "model": model})
+                        rec["session_id"] = session_id
+                    if not prompt_sent:
+                        id_prompt = send("session/prompt", {"sessionId": session_id,
+                                                            "prompt": [{"type": "text", "text": prompt}]})
+                        prompt_sent = True
+                elif mid == id_prompt:
+                    for ev in _devin_to_claude(msg, state):
+                        append(ev)
+                    stop_reason = (res or {}).get("stopReason")
+                    break
+                continue
+
+            # Notifications (method without id)
+            if method is not None and mid is None:
+                if method == "session/update":
+                    for ev in _devin_to_claude(msg, state):
+                        append(ev)
+                elif method == "session/cancel":
+                    stop_reason = "cancelled"
+                    break
+                elif method in ("error", "turn/failed"):
+                    p = msg.get("params") or {}
+                    errbuf.append(str(p.get("message") or (p.get("error") or {}).get("message") or "devin error"))
+                    turn_status = "failed"
+                    break
+    except Exception as e:  # noqa: BLE001
+        errbuf.append(f"{type(e).__name__}: {str(e)[:150]}")
+        turn_status = turn_status or "failed"
+    finally:
+        killer.cancel()
+        _shutdown(cancel=False)
+        try:
+            rc = proc.wait()
+        except Exception:  # noqa: BLE001
+            rc = proc.returncode if proc.returncode is not None else -1
+        rec["exit_code"] = rc
+
+    if not result_appended:
+        ok = (turn_status in (None, "completed") and not rec.get("cancelled")
+              and not rec.get("capped") and stop_reason == "end_turn")
+        err_txt = ("\n".join(errbuf[-30:]).strip()
+                   or f"devin acp status={turn_status}, stop_reason={stop_reason}")[:2000]
+        if ok:
+            res_txt = state.get("final", "")
+        else:
+            res_txt = "\n\n".join(x for x in (state.get("final", "").strip(), err_txt) if x)[:4000] or err_txt
+        append({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                "result": res_txt})
+
+    rec["result"] = state.get("final", "")
+    rec["status"] = ("cancelled" if rec.get("cancelled")
+                     else "timeout" if rec.get("capped")
+                     else _status_from_result(result_ev, rc))
+    if rec["status"] in ("failed", "error", "timeout"):
+        tail = "\n".join(errbuf[-30:]).strip()
+        ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
+        rec["error"] = (str(ev_err).strip() or tail
+                        or f"exit_code={rc}, no diagnostic output")[:2000]
+    rec["done"] = True
+
+
 # ── hermes driver — DB-polling turn runner ───────────────────────────────────────
 # hermes-agent emits no event stream on stdout, but flushes every message (assistant text,
 # OpenAI-style tool_calls, tool results) incrementally into $HERMES_HOME/state.db during the run.
