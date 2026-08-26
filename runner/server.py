@@ -359,6 +359,7 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
+QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
@@ -643,6 +644,10 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # $HERMES_HOME/skills/<name>/SKILL.md: the <available_skills> index hermes builds itself
         rootrels = [".harness/home/.hermes/skills"]
         entryroot = ".harness/home/.hermes/skills"
+    elif backend == "qwen":
+        # ~/.qwen/skills under the redirected HOME — the dir the shipped 0.22.1 creates itself.
+        rootrels = [".harness/home/.qwen/skills"]
+        entryroot = ".harness/home/.qwen/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -766,6 +771,8 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
 
     Getting this wrong is silent: the file is written either way, and a backend that does not read
     the name we chose simply never sees the harness's instructions."""
+    if backend == "qwen":
+        return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     return pathlib.Path(cwd) / (
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode") else "CLAUDE.md")
 
@@ -2356,6 +2363,66 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     return list(mcp)
 
 
+QWEN_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+
+def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
+    """~/.qwen/settings.json under the redirected HOME. Only mcpServers is written (gemini-cli
+    schema: command/args/env for stdio, url/httpUrl for remote); auth stays in the ENVIRONMENT
+    (OPENAI_API_KEY / OPENAI_BASE_URL + --auth-type openai), so unlike pi and opencode no
+    credential ever lands on disk for this backend."""
+    qdir = home / ".qwen"
+    qdir.mkdir(parents=True, exist_ok=True)
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"httpUrl": url}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": argv[0], "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        servers[name] = entry
+    cfg: dict = {}
+    if servers:
+        cfg["mcpServers"] = servers
+    (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
+
+
+def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in QWEN_PROVIDERS:
+        raise HTTPException(400, f"unknown qwen provider '{pr}' (one of {sorted(QWEN_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "qwen needs a base_url (none configured)")
+    home = pathlib.Path(cwd) / ".harness" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["OPENAI_BASE_URL"] = auth.base_url
+    _qwen_settings(home, mcp_servers)
+    cmd = ["qwen", "-p", prompt, "-o", "stream-json", "-m", model,
+           # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
+           # without it every -r run dies "No auth type is selected"); fresh runs take it too for
+           # one deterministic path.
+           "--auth-type", "openai"]
+    if resume_session_id:
+        cmd += ["-r", resume_session_id]
+    return cmd
+
+
 def _opencode_eof(state: dict, rc: int) -> list[dict]:
     """Synthesize the turn's result at end of stream.
 
@@ -2635,6 +2702,11 @@ BACKENDS = {
             "normalize": _dsh_to_claude},
     "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
                  "normalize": _opencode_to_claude},
+    # qwen-code emits claude's stream-json natively (verified against the shipped 0.22.1:
+    # system/init with session_id, assistant/message, result/subtype/usage in claude's field
+    # names) — so its normalizer IS the claude passthrough.
+    "qwen": {"providers": sorted(QWEN_PROVIDERS), "default_model": QWEN_DEFAULT_MODEL,
+             "normalize": _claude_passthrough},
 }
 
 
@@ -3662,6 +3734,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
+    elif backend == "qwen":
+        model = model or QWEN_DEFAULT_MODEL
+        cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
     elif backend == "opencode":
         model = model or OPENCODE_DEFAULT_MODEL
         # _write_skills already ran for this backend, so the directory it produced is on disk and
