@@ -570,13 +570,17 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes ...   # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode ...   # the default
+docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
-**Known issue: any value that leaves out `hermes` makes the container exit immediately**
-with status 1 and no error message. `claude`, `codex` and `claude,codex` all do it, and the last
-line in the log is the install line for the backend it was working on, so it reads as if the
-install killed it, which it did not. Until that is fixed, leave `HR_BACKENDS` unset.
+A backend that fails to install is not fatal: the others still work, and the console offers what
+the gateway's catalogue lists, so an unavailable backend simply is not shown.
+
+Previously documented here: that any value leaving out `hermes` made the container exit
+immediately with status 1. That no longer reproduces. Checked 2026-08-25 on a fresh volume with
+`HR_BACKENDS=codex` (one of the values named) and with `HR_BACKENDS=opencode`: both reach a healthy
+container with zero restarts and a gateway serving 200.
 
 Chromium is genuinely an image layer, so it stays a build flag:
 
