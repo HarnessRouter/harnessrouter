@@ -2338,6 +2338,62 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
     return pre
 
 
+def _devin_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map one ACP JSON-RPC line to canonical claude stream-json events."""
+    if not isinstance(obj, dict):
+        return []
+    evs: list[dict] = []
+
+    # JSON-RPC response to a request we made (e.g. session/prompt final)
+    if "id" in obj and "result" in obj:
+        res = obj["result"]
+        stop = res.get("stopReason")
+        if stop:
+            ok = stop == "end_turn"
+            # Devin does not stream token counts today; leave usage empty.
+            evs.append({"type": "result", "subtype": "success" if ok else "error",
+                        "is_error": not ok, "result": state.get("final", "")})
+        return evs
+
+    params = obj.get("params") or {}
+    update_type = params.get("type")
+    if update_type == "agent_message_chunk":
+        for c in params.get("content") or []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "text":
+                text = c.get("text") or ""
+                state["final"] = state.get("final", "") + text
+                evs.append({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            elif c.get("type") == "reasoning":
+                evs.append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": c.get("thinking") or ""}]}})
+    elif update_type == "tool_call":
+        tc = params.get("toolCall") or {}
+        evs.append({"type": "assistant", "message": {"content": [{"type": "tool_use",
+                        "id": tc.get("id") or "", "name": tc.get("name") or "",
+                        "input": tc.get("input") or {}}]}})
+    elif update_type == "tool_call_update":
+        tc = params.get("toolCall") or {}
+        status = tc.get("status")
+        if status in ("completed", "success"):
+            out = tc.get("output") or {}
+            parts = [x.get("text") or "" for x in (out.get("content") or []) if isinstance(x, dict)]
+            evs.append({"type": "user", "message": {"content": [{"type": "tool_result",
+                            "tool_use_id": tc.get("id") or "", "is_error": False,
+                            "content": "\n".join(parts)}]}})
+    elif update_type == "plan":
+        plan = params.get("plan") or {}
+        if plan:
+            evs.append({"type": "system", "subtype": "plan", "plan": plan})
+    elif update_type == "user_message_chunk":
+        # Echo of our prompt; ignore.
+        pass
+    elif update_type == "request_permission":
+        # Handled at the driver level; the normalizer does not emit UI events for it.
+        pass
+    return evs
+
+
 # opencode's stream has no terminal event, so the normalizer carries an `eof` the run loop calls
 # when the process exits. See _run_turn_bg.
 _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]

@@ -1,0 +1,5 @@
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "sess-1", "type": "agent_message_chunk", "content": [{"type": "text", "text": "Hello "}]}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "sess-1", "type": "agent_message_chunk", "content": [{"type": "text", "text": "world"}]}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "sess-1", "type": "tool_call", "toolCall": {"id": "tc-1", "name": "bash", "input": {"command": "echo hi"}}}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "sess-1", "type": "tool_call_update", "toolCall": {"id": "tc-1", "status": "completed", "output": {"content": [{"type": "text", "text": "hi"}]}}}}
+{"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "end_turn"}}
