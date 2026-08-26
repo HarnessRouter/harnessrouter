@@ -2402,6 +2402,9 @@ _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
+DEVIN_PROVIDERS = {"devin"}
+DEVIN_DEFAULT_MODEL = os.environ.get("DEVIN_DEFAULT_MODEL", "devin-swe")
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -2415,6 +2418,8 @@ BACKENDS = {
             "normalize": _dsh_to_claude},
     "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
                  "normalize": _opencode_to_claude},
+    "devin": {"providers": sorted(DEVIN_PROVIDERS), "default_model": DEVIN_DEFAULT_MODEL,
+              "normalize": None},  # _run_devin_acp_bg calls _devin_to_claude directly
 }
 
 
@@ -3708,6 +3713,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                          max_turns=req.max_turns, mcp_servers=req.mcp_servers,
                                          vision_auth=req.vision_auth)
+    elif backend == "devin":
+        model = model or DEVIN_DEFAULT_MODEL
+        if auth.api_key:
+            env["WINDSURF_API_KEY"] = auth.api_key
     elif backend == "dsh":
         model = model or DSH_DEFAULT_MODEL
         cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
@@ -3748,6 +3757,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                            "backend": backend, "model": model, "started": time.time()}
         if key:
             _turn_by_key[key] = turn_id
+    cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     if use_appserver:
         threading.Thread(target=_run_codex_appserver_bg,
                          args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds),
@@ -3757,12 +3767,22 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                          args=(turn_id, cwd, env, model, hermes_provider, req.prompt,
                                req.resume_session_id, req.timeout_seconds, hermes_mcp),
                          daemon=True).start()
+    elif backend == "devin":
+        if not env.get("WINDSURF_API_KEY"):
+            rec = _turns[turn_id]
+            rec.update(status="failed", error="WINDSURF_API_KEY not configured for devin backend", done=True)
+            return {"turn_id": turn_id, "status": rec["status"], "backend": backend, "model": model,
+                    "host": socket.gethostname(), "max_seconds": cap, "done": rec["done"], "error": rec.get("error")}
+        threading.Thread(target=_run_devin_acp_bg,
+                         args=(turn_id, cwd, env, model, req.prompt,
+                               req.resume_session_id, req.timeout_seconds,
+                               req.mcp_servers, req.tools_disabled),
+                         daemon=True).start()
     else:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
                          daemon=True).start()
-    cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,
             "host": socket.gethostname(), "max_seconds": cap}
 
