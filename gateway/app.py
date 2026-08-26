@@ -2085,7 +2085,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         rec["usage"] = translator.usage
     await _vertex_upsert(sid, {"status": rec["status"], "turn_status": rec["status"]})
     try:
-        produced = (await _collect_produced(sid, set()) if terminal in ("completed", "incomplete") else [])
+        # Every terminal outcome collects. A cancelled or failed turn may already have written the
+        # deliverable (a Stop that lands after the file is saved, an OOM at finalize) — skipping
+        # collection threw those files away from the record while they sat in the workspace.
+        produced = await _collect_produced(sid, set())
         for oev in translator.complete(rec["status"], produced):
             _emit(oev)
     except Exception:  # noqa: BLE001
@@ -4785,6 +4788,15 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
                 out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(fr.content)})
         except Exception:  # noqa: BLE001
             continue
+    # Advance the runner's collection cursor ONLY now that the files are captured to blobs. This is
+    # the other half of the stranded-artifact fix: /produced lists everything since the last ack,
+    # so a turn that died before this line leaves the cursor untouched and the next collection
+    # simply picks its files up. A skipped file (size cap, internal) is a decision, not a failure,
+    # so it is acked too rather than re-offered forever.
+    try:
+        await _sandbox("/produced/ack", sid, "POST")
+    except Exception:  # noqa: BLE001 — cursor stays behind; the next collection re-lists, harmless
+        pass
     return out
 
 
