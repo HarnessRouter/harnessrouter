@@ -2785,7 +2785,7 @@ def _run_devin_acp_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str
     stop_reason = None
     turn_status = None
     errbuf: list[str] = []
-    id_init = id_session = id_prompt = None
+    id_init = id_auth = id_session = id_prompt = None
     prompt_sent = False
 
     def _permission_response(req_id: int, p: dict) -> None:
@@ -2889,13 +2889,20 @@ def _run_devin_acp_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str
 
             # Responses to our requests
             if method is None and mid is not None:
-                if msg.get("error") and mid in (id_init, id_session, id_prompt):
+                if msg.get("error") and mid in (id_init, id_auth, id_session, id_prompt):
                     errbuf.append(str((msg["error"] or {}).get("message") or "devin acp error"))
                     turn_status = "failed"
                     break
                 res = msg.get("result") or {}
                 if mid == id_init:
                     send("initialized", {}, notify=True)
+                    # Devin's ACP server requires authentication before sessions. Use the first
+                    # advertised auth method and pass the API key in the standard _meta field.
+                    api_key = env.get("WINDSURF_API_KEY", "")
+                    am = (res.get("authMethods") or [{}])[0]
+                    auth_id = am.get("id") or "devin-browser"
+                    id_auth = send("authenticate", {"methodId": auth_id, "_meta": {"api_key": api_key}})
+                elif mid == id_auth:
                     if resume:
                         session_id = resume
                         append({"type": "system", "subtype": "init", "session_id": session_id, "model": model})

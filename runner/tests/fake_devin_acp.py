@@ -12,9 +12,14 @@ def main():
     assert init["method"] == "initialize"
     send({"jsonrpc": "2.0", "id": init["id"],
           "result": {"protocolVersion": 1,
-                     "agentCapabilities": {"session": {"resume": True}}}})
+                     "agentCapabilities": {"session": {"resume": True}},
+                     "authMethods": [{"id": "fake-auth", "name": "Fake", "description": ""}]}})
     initialized = json.loads(input())
     assert initialized["method"] == "initialized"
+
+    auth_req = json.loads(input())
+    assert auth_req["method"] == "authenticate"
+    send({"jsonrpc": "2.0", "id": auth_req["id"], "result": {}})
 
     session_req = json.loads(input())
     session_id = "sess-fake-123"
