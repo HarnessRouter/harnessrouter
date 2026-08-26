@@ -17,8 +17,8 @@
 # They land in the data volume, so the cost is paid once per volume rather than once per start.
 # Choose backends at RUN time:
 #
-#   docker run -e HR_BACKENDS=claude,codex,hermes   ...   # default: all three
-#   docker run -e HR_BACKENDS=claude                ...   # lean
+#   docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode ...   # the default
+#   docker run -e HR_BACKENDS=opencode                            ...   # lean
 #
 # WITH_BROWSER is still a build arg because Chromium and its system libraries genuinely belong
 # in the image layer.
