@@ -4911,7 +4911,10 @@ def _strip_internal(d: dict) -> dict:
 # Harness-internal seed/config files the runner writes into the workspace to drive the agent
 # (e.g. AGENTS.md surfaces installed skills for codex; CLAUDE.md is the claude equivalent). They are
 # never user-facing artifacts, so they must never appear in a turn's output file list.
-_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md"}
+# Instruction files WE write into the workspace — one per backend family. A new backend that
+# introduces a new context-file name must add it here or the harness's own instructions get
+# collected as a "produced" deliverable on the first turn (QWEN.md did, 2026-08-25).
+_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md"}
 
 
 def _is_internal_output(name: str) -> bool:
