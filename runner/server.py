@@ -357,6 +357,7 @@ CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
 HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
+OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
@@ -641,6 +642,13 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # $HERMES_HOME/skills/<name>/SKILL.md: the <available_skills> index hermes builds itself
         rootrels = [".harness/home/.hermes/skills"]
         entryroot = ".harness/home/.hermes/skills"
+    elif backend == "opencode":
+        # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
+        # discover skills from"), so there is no per-CLI home directory to guess here — we write
+        # one directory and name it in opencode.json. This is the only backend where the loader
+        # adapts to us instead of the other way round.
+        rootrels = [".harness/skills"]
+        entryroot = ".harness/skills"
     else:
         # dsh has no skill loader; the AGENTS.md block below is the only door
         rootrels = [".harness/skills"]
@@ -750,10 +758,15 @@ _AGENTS_END = "<!-- harness-skills:end -->"
 
 
 def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
-    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi and dsh (all four read
+    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi, dsh and opencode (all read
     AGENTS.md from the cwd — pi as a context file before its trust gate, dsh via its
-    dsh-agent-instructions workspace loader), CLAUDE.md for Claude Code."""
-    return pathlib.Path(cwd) / ("AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh") else "CLAUDE.md")
+    dsh-agent-instructions workspace loader, opencode via instruction-context.ts, whose discovery
+    targets are literally ["AGENTS.md"]), CLAUDE.md for Claude Code.
+
+    Getting this wrong is silent: the file is written either way, and a backend that does not read
+    the name we chose simply never sees the harness's instructions."""
+    return pathlib.Path(cwd) / (
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode") else "CLAUDE.md")
 
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
@@ -2080,6 +2093,256 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     return list(mcp)
 
 
+def _opencode_eof(state: dict, rc: int) -> list[dict]:
+    """Synthesize the turn's result at end of stream.
+
+    opencode emits only mid-turn events (text, reasoning, tool_use, step_start, step_finish,
+    error); the process exiting is the terminal signal. Status therefore comes from the error
+    event and the exit code together, and the final text is the last completed text part.
+
+    A non-zero exit with no error event and no text is the case that produced
+    "exit_code=1, no diagnostic output" on a live turn: say so explicitly rather than leaving the
+    trace blank."""
+    usage = state.get("_oc_usage") or {}
+    final = state.get("final", "")
+    err = state.get("_oc_error", "")
+    if err:
+        return [{"type": "result", "subtype": "error", "is_error": True,
+                 "result": err, "usage": usage}]
+    if rc == 0:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": final, "usage": usage}]
+    tools = state.get("_oc_tool_errors") or []
+    why = ("; ".join(t for t in tools if t)[:500]
+           or f"opencode exited {rc} without reporting an error")
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": final or why, "usage": usage}]
+
+
+OPENCODE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+# opencode resolves `{env:VAR}` inside its config at load time, so the provider key is named in
+# opencode.json and read from the environment — the same discipline as hermes `key_env`. The key
+# itself never lands on disk in the session workspace.
+_OPENCODE_KEY_ENV = "HR_OPENCODE_KEY"
+
+# The permission keys opencode actually understands (core/src/v1/config/permission.ts). Enforcement
+# is HARD here: the action set is ask|allow|deny, so a denied tool is genuinely absent rather than
+# merely discouraged. A key outside this set would be accepted by the record-with-rest schema and
+# then silently match no tool, so unknown names are dropped rather than written.
+_OPENCODE_PERMS = {"read", "edit", "glob", "grep", "list", "bash", "task", "external_directory",
+                   "todowrite", "question", "webfetch", "websearch", "lsp", "doom_loop", "skill"}
+
+
+def _opencode_denies(tools_disabled: list[str] | None) -> dict:
+    """Harness tool ids -> {<key>: "deny"}. Catalog labels arrive "bash (Shell)"-style; keep the id."""
+    out: dict = {}
+    for raw in tools_disabled or []:
+        name = (raw or "").split(" (")[0].strip().lower()
+        if name in _OPENCODE_PERMS:
+            out[name] = "deny"
+    return out
+
+
+def _opencode_mcp(servers: list[dict] | None) -> dict:
+    """opencode `mcp.<name>`: a tagged union on `type`, local => {command:[...]},
+    remote => {url, headers}. oauth is pinned false: an interactive OAuth dance has nowhere to
+    happen in a sandbox, and leaving it unset invites one.
+
+    Shape taken from the PUBLISHED schema (https://opencode.ai/config.json), not from the repo's
+    source tree. The tree is ahead of the release and disagrees with it: source nests servers under
+    `mcp.servers` and gives `timeout` an object, the shipped binary wants a flat `mcp.<name>` map."""
+    out: dict = {}
+    for i, sv in enumerate(servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        cmd = sv.get("command")
+        if url:
+            entry: dict = {"type": "remote", "url": url, "oauth": False}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif cmd:
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            argv = [str(a) for a in argv] + [str(a) for a in (sv.get("args") or [])]
+            entry = {"type": "local", "command": argv}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["environment"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        out[name] = entry
+    return out
+
+
+def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
+                     skills_dir: str | None, tools_disabled: list[str] | None = None,
+                     pr: str = "") -> str:
+    """Write <cwd>/opencode.json and return the provider-qualified model id for --model."""
+    if not auth.base_url:
+        raise HTTPException(400, "opencode needs a base_url (none configured)")
+    # Which ai-sdk package serves this turn. A turn runs exactly ONE model, so this is decided per
+    # turn at provider level rather than per model entry — opencode resolves
+    # `model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible"`, so the provider-level
+    # value is what a single-model config needs.
+    #
+    # The split MIRRORS _pi_models_json, because both reach the same relays over the same wire
+    # formats: a claude model on an anthropic-native connection speaks Messages, not
+    # chat/completions, and sending it to the openai-compatible package fails at the first call.
+    if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+        npm = "@ai-sdk/anthropic"
+    elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        npm = "@ai-sdk/openai"          # /v1/responses
+    else:
+        npm = "@ai-sdk/openai-compatible"   # /v1/chat/completions
+    cfg: dict = {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+            "hr": {
+                "npm": npm,
+                "options": {"baseURL": auth.base_url, "apiKey": "{env:%s}" % _OPENCODE_KEY_ENV},
+                "models": {model: {}},
+            }
+        },
+    }
+    mcp = _opencode_mcp(mcp_servers)
+    if mcp:
+        cfg["mcp"] = mcp
+    denies = _opencode_denies(tools_disabled)
+    if denies:
+        cfg["permission"] = denies
+    if skills_dir:
+        # `skills.paths` takes arbitrary directories, so the one _write_skills already produced is
+        # named here directly. No mirroring into a per-CLI home, which is the trap codex and hermes
+        # set. Shape is {paths, urls} per the published schema; the source tree's bare array is a
+        # newer form the released binary rejects outright ("Expected object | undefined").
+        cfg["skills"] = {"paths": [skills_dir]}
+    # Into .harness/, NOT the workspace root. Produced files are `git status` of the workspace,
+    # and a root-level opencode.json showed up as a deliverable on every turn — internal config
+    # (relay URL, key env name, /data paths) handed to the user as if the agent had made it.
+    # The binary honours OPENCODE_CONFIG (verified on 1.18.23: a config at this path is loaded
+    # and reaches the provider); the env var is set in _build_opencode below.
+    hdir = pathlib.Path(cwd, ".harness")
+    hdir.mkdir(exist_ok=True)
+    (hdir / "opencode.json").write_text(json.dumps(cfg, indent=2))
+    return f"hr/{model}"
+
+
+def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                    resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                    skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in OPENCODE_PROVIDERS:
+        raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
+    if auth.api_key:
+        env[_OPENCODE_KEY_ENV] = auth.api_key
+    qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr)
+    env["OPENCODE_CONFIG"] = os.path.join(cwd, ".harness", "opencode.json")
+    cmd = ["opencode", "run", "--format", "json", "--model", qualified,
+           # The sandbox is the trust boundary, so permissions are granted up front: nobody is
+           # attached to answer a prompt. Same rationale as pi --approve and claude
+           # --dangerously-skip-permissions.
+           "--auto",
+           # Plugins off. `--pure` empties cfg.plugin_origins (plugin/index.ts:181), and project
+           # config is a file IN the workspace: without this a task could write plugin_origins into
+           # opencode.json and have the NEXT turn execute it. Same hole pi closes with
+           # --no-extensions.
+           "--pure",
+           # Reasoning parts are emitted ONLY when this flag is set — run.ts gates the emit on
+           # `part.type === "reasoning" && part.time?.end && thinking`. Without it the normalizer's
+           # reasoning branch is unreachable and thinking silently never reaches the user.
+           "--thinking"]
+    if resume_session_id:
+        cmd += ["--session", resume_session_id]
+    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    return cmd
+
+
+def _opencode_usage_add(state: dict, tk: dict | None) -> None:
+    """step-finish carries Session.getUsage()'s `tokens`:
+    {total, input, output, reasoning, cache:{read,write}}. `input` is ALREADY cache-exclusive
+    (opencode subtracts read+write itself), which is the canonical contract — no adjustment."""
+    if not isinstance(tk, dict):
+        return
+    tot = state.setdefault("_oc_usage", {"input_tokens": 0, "output_tokens": 0,
+                                         "cache_read_tokens": 0, "cache_write_tokens": 0})
+    cache = tk.get("cache") if isinstance(tk.get("cache"), dict) else {}
+    for v, dst in ((tk.get("input"), "input_tokens"), (tk.get("output"), "output_tokens"),
+                   (cache.get("read"), "cache_read_tokens"), (cache.get("write"), "cache_write_tokens")):
+        if isinstance(v, (int, float)):
+            tot[dst] += int(v)
+
+
+def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `opencode run --format json` line to zero+ canonical claude stream-json events.
+
+    The emitter (cli/cmd/run.ts) writes {type, timestamp, sessionID, ...data} per line and emits
+    exactly six types: text, reasoning, tool_use, step_start, step_finish, error.
+
+    IMPORTANT — this stream is CHUNK level, not token level. `text` and `reasoning` are emitted
+    only once the part is complete (the emitter gates on `part.time?.end`), and `tool_use` only at
+    completed/error, never running. So each text event is a whole part and is emitted once: there
+    is no delta/tail self-healing to do here, unlike pi or codex. Do not advertise token streaming
+    for this backend."""
+    t = obj.get("type")
+    sid = obj.get("sessionID")
+    pre: list[dict] = []
+    if sid and not state.get("_oc_init"):
+        # Every event carries sessionID, so the session is captured off the first line of the
+        # stream rather than from a separate lookup.
+        state["_oc_init"] = True
+        pre = [{"type": "system", "subtype": "init", "session_id": sid, "model": state.get("model")}]
+    part = obj.get("part") if isinstance(obj.get("part"), dict) else {}
+    if t == "text":
+        txt = part.get("text") or ""
+        if not txt:
+            return pre
+        # claude result semantics: `final` is the LAST assistant text, so a completed part
+        # REPLACES it rather than accumulating a mid-run aside into the answer.
+        state["final"] = txt
+        return pre + [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if t == "reasoning":
+        txt = part.get("text") or ""
+        if not txt:
+            return pre
+        return pre + [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": txt}]}}]
+    if t == "tool_use":
+        st = part.get("state") if isinstance(part.get("state"), dict) else {}
+        if st.get("status") == "error":
+            state.setdefault("_oc_tool_errors", []).append(str(st.get("error") or ""))
+        return pre + [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": part.get("id") or "tool",
+             "name": part.get("tool") or "tool", "input": st.get("input") or {}}]}}]
+    if t == "step_finish":
+        _opencode_usage_add(state, part.get("tokens"))
+        return pre
+    if t == "error":
+        # The CLI can exit 0 on a provider error, so this event is the only truthful failure
+        # signal — the same trap pi has.
+        # Real shape, captured from a live 401 against the relay:
+        #   {"type":"error","sessionID":...,"error":{"name":"APIError",
+        #    "data":{"message":"...","statusCode":401,...}}}
+        # The message is nested under `data`, so reading `error.message` yields nothing and the
+        # user gets a stringified dict. Try the nested form first, then the flat one.
+        err = obj.get("error")
+        msg = ""
+        if isinstance(err, dict):
+            data = err.get("data") if isinstance(err.get("data"), dict) else {}
+            msg = str(data.get("message") or err.get("message") or err.get("name") or "")
+        elif err:
+            msg = str(err)
+        state["_oc_error"] = msg or "opencode error"
+        return pre
+    return pre
+
+
+# opencode's stream has no terminal event, so the normalizer carries an `eof` the run loop calls
+# when the process exits. See _run_turn_bg.
+_opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -2094,6 +2357,8 @@ BACKENDS = {
            "normalize": _pi_to_claude},
     "dsh": {"providers": sorted(DSH_PROVIDERS), "default_model": DSH_DEFAULT_MODEL,
             "normalize": _dsh_to_claude},
+    "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
+                 "normalize": _opencode_to_claude},
 }
 
 
@@ -2178,6 +2443,20 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     finally:
         killer.cancel()
     rec["exit_code"] = rc
+    # Backends whose stream carries NO terminal event finish here: for them the process exiting IS
+    # the end of the turn. claude/codex/pi/dsh all emit something terminal of their own and set
+    # `result_ev` in the loop above, so they have no `eof` and this is skipped. opencode does not:
+    # its six event types are all mid-turn, and without this a SUCCESSFUL turn produced no final
+    # text, no usage, and a status inferred from the exit code alone.
+    eof = getattr(normalize, "eof", None)
+    if eof is not None and result_ev is None:
+        for ev in eof(state, rc):
+            ev["_ts"] = time.time()
+            with _turns_lock:
+                rec["events"].append(ev)
+            if ev.get("type") == "result":
+                result_ev = ev
+                state["final"] = state.get("final") or ev.get("result") or ""
     rec["result"] = state.get("final", "")
     rec["status"] = ("cancelled" if rec.get("cancelled")
                      else "timeout" if rec.get("capped")
@@ -2812,14 +3091,49 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Respo
         raise
 
 
-@app.get("/produced")
-def produced(identifier: str = "") -> dict:
-    """Files created/modified during the current turn (uncommitted vs the hydrated checkpoint).
-    Call BEFORE /checkpoint commits them. Excludes internal state / scratch / secrets / vcs."""
-    ws = _ws(identifier)
+# ── the COLLECTION cursor: a git ref advanced only when the gateway has captured the files ──────
+# Collection used to be "uncommitted vs HEAD", which made HEAD double as the collection cursor —
+# and /checkpoint moves HEAD unconditionally. Any terminal path that skipped collection (crash,
+# cancel, OOM kill, sweep-settle) followed by any checkpoint therefore buried the turn's files:
+# still on disk, permanently invisible to /produced. Watched happen live, twice, to the same deck
+# (2026-08-25). The cursor is now its own ref, so "checkpointed" no longer implies "collected",
+# and whatever a dead turn left behind is simply produced by the next turn that does collect.
+_COLLECTED_REF = "refs/hr/collected"
+
+
+def _collected_init(ws: str) -> None:
+    """Point the cursor at the current HEAD if it does not exist yet — hydrate/first-turn
+    semantics: what arrived in the checkpoint was not produced by any turn here."""
+    if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode != 0:
+        head = _git(ws, "rev-parse", "-q", "--verify", "HEAD")
+        if head.returncode == 0:
+            _git(ws, "update-ref", _COLLECTED_REF, head.stdout.strip())
+
+
+def _produced_keep(status: str, path: str) -> bool:
+    if not path or path.endswith("/") or status.startswith("D"):
+        return False
+    if path in _PRODUCED_EXCLUDE_NAMES or path.startswith(_PRODUCED_EXCLUDE_PREFIX):
+        return False
+    return not _is_produced_noise(path)
+
+
+def _produced_list(ws: str) -> list[dict]:
+    """Everything changed since the last ACKNOWLEDGED collection: committed changes past the
+    cursor (diff <ref> → worktree) plus untracked files. NOT merely uncommitted-vs-HEAD."""
     _git_ensure(ws)
+    _collected_init(ws)
+    seen: dict[str, str] = {}
+    if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
+        d = _git(ws, "diff", "--name-status", _COLLECTED_REF)
+        for line in (d.stdout or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            status, path = parts[0], parts[-1].strip().strip('"')
+            if _produced_keep(status, path):
+                seen[path] = status[:1]
     p = _git(ws, "status", "--porcelain", "-uall")
-    out = []
     for line in (p.stdout or "").splitlines():
         if len(line) < 4:
             continue
@@ -2827,14 +3141,36 @@ def produced(identifier: str = "") -> dict:
         if " -> " in path:                       # rename: take the new path
             path = path.split(" -> ", 1)[1]
         path = path.strip().strip('"')
-        if not path or path.endswith("/") or status == "D ":
-            continue
-        if path in _PRODUCED_EXCLUDE_NAMES or path.startswith(_PRODUCED_EXCLUDE_PREFIX):
-            continue
-        if _is_produced_noise(path):
-            continue
-        out.append({"path": path, "status": status.strip() or "?"})
+        if _produced_keep(status, path):
+            seen.setdefault(path, status.strip() or "?")
+    return [{"path": k, "status": v} for k, v in seen.items()]
+
+
+def _produced_ack(ws: str) -> str:
+    """Advance the cursor: commit the current state and point the ref at it. Called by the gateway
+    ONLY after it has captured the listed files, which is the one thing that makes 'collected'
+    mean collected."""
+    _git_ensure(ws)
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-q", "-m", f"collected {int(time.time())}", "--allow-empty")
+    head = _git(ws, "rev-parse", "HEAD").stdout.strip()
+    _git(ws, "update-ref", _COLLECTED_REF, head)
+    return head
+
+
+@app.get("/produced")
+def produced(identifier: str = "") -> dict:
+    """Files changed since the last acknowledged collection — surviving checkpoints, crashes and
+    cancels in between. Excludes internal state / scratch / secrets / vcs."""
+    ws = _ws(identifier)
+    out = _produced_list(ws)
     return {"files": out, "count": len(out)}
+
+
+@app.post("/produced/ack")
+def produced_ack(identifier: str = "") -> dict:
+    ws = _ws(identifier)
+    return {"ok": True, "collected": _produced_ack(ws)}
 
 
 @app.get("/file")
@@ -3013,6 +3349,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         scratch = os.path.join(cwd, "tmp")
         os.makedirs(scratch, exist_ok=True)
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = scratch
+    # PWD must agree with the cwd the process is spawned in. _child_env copies the runner's own
+    # environment, whose PWD is /app/runner; Popen(cwd=...) changes the directory but not the
+    # variable, and Bun-based CLIs trust $PWD over getcwd(). opencode therefore believed it was
+    # running inside /app/runner — unreadable to the session uid — and every turn died with an
+    # opaque UnknownError. Proven by env bisection on a live failure: with 40 inherited variables,
+    # removing or correcting PWD alone flips the turn from failing to passing.
+    env["PWD"] = cwd
     auth = req.auth or Auth()
     model = req.model or spec["default_model"]
     use_appserver = backend == "codex" and bool(req.codex_appserver)
@@ -3043,6 +3386,14 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
+    elif backend == "opencode":
+        model = model or OPENCODE_DEFAULT_MODEL
+        # _write_skills already ran for this backend, so the directory it produced is on disk and
+        # can simply be named in opencode.json (its `skills` key takes arbitrary paths).
+        skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+        cmd = _build_opencode(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              skills_dir=skills_dir, tools_disabled=req.tools_disabled)
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         plugin_dirs = _write_plugins(cwd, req.plugins)
