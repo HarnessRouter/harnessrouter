@@ -2417,7 +2417,15 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
            # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
            # without it every -r run dies "No auth type is selected"); fresh runs take it too for
            # one deterministic path.
-           "--auth-type", "openai"]
+           "--auth-type", "openai",
+           # WITHOUT --yolo a headless run registers NO shell, write or edit tool at all — the
+           # default "auto" permission mode simply omits them, and the agent announces "I don't
+           # have a shell tool registered" and tries to delegate. Verified both ways on 0.22.1:
+           # default init tools lack shell/write/edit; with --yolo they are present, perm mode
+           # "yolo", and a real command wrote a file. The sandbox is the trust boundary here, the
+           # same rationale as claude --dangerously-skip-permissions, pi --approve and opencode
+           # --auto.
+           "--yolo"]
     if resume_session_id:
         cmd += ["-r", resume_session_id]
     return cmd

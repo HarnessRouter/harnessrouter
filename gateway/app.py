@@ -11278,9 +11278,11 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are Qwen Code, an autonomous coding agent. You work on a real git "
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
-        # From the live init event's tool list (0.22.1). No per-tool kill switch on the CLI, so
-        # disabling is an instruction to the model — same tier as codex/hermes/dsh.
-        "tools": [("read_file", "File Read"), ("write_file", "File Write"), ("edit", "Edit"),
+        # From the live init event's tool list under --yolo (0.22.1) — shell/write/edit exist
+        # ONLY in yolo mode, which the runner always passes. No per-tool kill switch on the CLI,
+        # so disabling is an instruction to the model — same tier as codex/hermes/dsh.
+        "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
         "tool_enforcement": "instruction",

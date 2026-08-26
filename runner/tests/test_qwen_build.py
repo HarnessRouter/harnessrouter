@@ -25,6 +25,15 @@ def test_argv_is_headless_stream_json_with_explicit_auth_type():
     assert "--auth-type" in cmd and "openai" in cmd
 
 
+def test_yolo_is_present_or_the_agent_has_no_shell_at_all():
+    """Verified on 0.22.1 both ways: without --yolo a headless run registers NO shell, write or
+    edit tool (the agent literally says "I don't have a shell tool registered" and delegates);
+    with it, perm mode is yolo and a real command wrote a file. Losing this flag is a silent
+    capability amputation, not a permission tweak."""
+    cmd, _, _ = _argv()
+    assert "--yolo" in cmd
+
+
 def test_resume_uses_dash_r():
     cmd, _, _ = _argv(resume_session_id="8e039a38-f91f")
     assert cmd[-2:] == ["-r", "8e039a38-f91f"]
