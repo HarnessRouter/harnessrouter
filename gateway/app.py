@@ -325,12 +325,17 @@ app = FastAPI(title="harness-gateway", docs_url=None, redoc_url=None, openapi_ur
 # by /v1/ is rewritten — every real route (/v1, /a, /w, /share, /healthz, /readyz, /internal) has a
 # reserved first segment that cannot match a chrn_<32hex> / builtin slug, so this is a NO-OP behind
 # today's nginx (paths already arrive stripped to /v1/*) and only activates once api. targets ACA.
-_HID_PREFIX_RE = re.compile(r"^/(chrn_[0-9a-f]{32}|codex|claude-code|pi|hermes)(/v1/.*)$")
+# Compiled below, AFTER _BASE_CATALOG exists, from the catalog itself. It was a hardcoded
+# alternation here, and it drifted twice: /dsh/v1/* and /opencode/v1/* answered FastAPI's bare 404
+# because nobody added the new base ids (found live on the hosted side, first /opencode/v1 call).
+# The middleware reads the global at request time, so the late assignment is safe — every
+# module-level statement runs before uvicorn serves a request.
+_HID_PREFIX_RE: re.Pattern | None = None
 
 
 @app.middleware("http")
 async def _harness_path_prefix(request: Request, call_next):
-    m = _HID_PREFIX_RE.match(request.scope.get("path", ""))
+    m = _HID_PREFIX_RE.match(request.scope.get("path", "")) if _HID_PREFIX_RE else None
     if m:
         hid, rest = m.group(1), m.group(2)
         request.scope["path"] = rest
@@ -11285,6 +11290,11 @@ _BASE_CATALOG: dict[str, dict] = {
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
 # `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
 _SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
+
+# The per-harness URL (/{hid}/v1/*) accepts every base id the catalog declares, plus stored chrn
+# ids — DERIVED, so adding a base to _BASE_CATALOG routes its public URL with no second edit.
+_HID_PREFIX_RE = re.compile(
+    r"^/(chrn_[0-9a-f]{32}|" + "|".join(re.escape(b) for b in sorted(_SUPPORTED_BASES, key=len, reverse=True)) + r")(/v1/.*)$")
 
 
 def _require_supported_base(base: str) -> str:
