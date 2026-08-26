@@ -1,6 +1,7 @@
 // Official brand marks for the default (OOB) harnesses, served from /public/logos.
 // claude-code -> claude.png (Anthropic), codex -> codex.png, pi -> pi.png,
-// hermes -> hermes.png, dsh -> deepseek.png. Custom harnesses fall back to a generic glyph.
+// hermes -> hermes.png, dsh -> deepseek.png, opencode -> opencode.png (the square mark from
+// opencode.ai, its apple-touch icon). Custom harnesses fall back to a generic glyph.
 import React from 'react';
 
 const LOGO: Record<string, string> = {
@@ -9,6 +10,7 @@ const LOGO: Record<string, string> = {
   pi: '/logos/pi.png',
   hermes: '/logos/hermes.png',
   dsh: '/logos/deepseek.png',
+  opencode: '/logos/opencode.png',
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {
