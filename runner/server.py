@@ -3091,14 +3091,49 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Respo
         raise
 
 
-@app.get("/produced")
-def produced(identifier: str = "") -> dict:
-    """Files created/modified during the current turn (uncommitted vs the hydrated checkpoint).
-    Call BEFORE /checkpoint commits them. Excludes internal state / scratch / secrets / vcs."""
-    ws = _ws(identifier)
+# ── the COLLECTION cursor: a git ref advanced only when the gateway has captured the files ──────
+# Collection used to be "uncommitted vs HEAD", which made HEAD double as the collection cursor —
+# and /checkpoint moves HEAD unconditionally. Any terminal path that skipped collection (crash,
+# cancel, OOM kill, sweep-settle) followed by any checkpoint therefore buried the turn's files:
+# still on disk, permanently invisible to /produced. Watched happen live, twice, to the same deck
+# (2026-08-25). The cursor is now its own ref, so "checkpointed" no longer implies "collected",
+# and whatever a dead turn left behind is simply produced by the next turn that does collect.
+_COLLECTED_REF = "refs/hr/collected"
+
+
+def _collected_init(ws: str) -> None:
+    """Point the cursor at the current HEAD if it does not exist yet — hydrate/first-turn
+    semantics: what arrived in the checkpoint was not produced by any turn here."""
+    if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode != 0:
+        head = _git(ws, "rev-parse", "-q", "--verify", "HEAD")
+        if head.returncode == 0:
+            _git(ws, "update-ref", _COLLECTED_REF, head.stdout.strip())
+
+
+def _produced_keep(status: str, path: str) -> bool:
+    if not path or path.endswith("/") or status.startswith("D"):
+        return False
+    if path in _PRODUCED_EXCLUDE_NAMES or path.startswith(_PRODUCED_EXCLUDE_PREFIX):
+        return False
+    return not _is_produced_noise(path)
+
+
+def _produced_list(ws: str) -> list[dict]:
+    """Everything changed since the last ACKNOWLEDGED collection: committed changes past the
+    cursor (diff <ref> → worktree) plus untracked files. NOT merely uncommitted-vs-HEAD."""
     _git_ensure(ws)
+    _collected_init(ws)
+    seen: dict[str, str] = {}
+    if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
+        d = _git(ws, "diff", "--name-status", _COLLECTED_REF)
+        for line in (d.stdout or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            status, path = parts[0], parts[-1].strip().strip('"')
+            if _produced_keep(status, path):
+                seen[path] = status[:1]
     p = _git(ws, "status", "--porcelain", "-uall")
-    out = []
     for line in (p.stdout or "").splitlines():
         if len(line) < 4:
             continue
@@ -3106,14 +3141,36 @@ def produced(identifier: str = "") -> dict:
         if " -> " in path:                       # rename: take the new path
             path = path.split(" -> ", 1)[1]
         path = path.strip().strip('"')
-        if not path or path.endswith("/") or status == "D ":
-            continue
-        if path in _PRODUCED_EXCLUDE_NAMES or path.startswith(_PRODUCED_EXCLUDE_PREFIX):
-            continue
-        if _is_produced_noise(path):
-            continue
-        out.append({"path": path, "status": status.strip() or "?"})
+        if _produced_keep(status, path):
+            seen.setdefault(path, status.strip() or "?")
+    return [{"path": k, "status": v} for k, v in seen.items()]
+
+
+def _produced_ack(ws: str) -> str:
+    """Advance the cursor: commit the current state and point the ref at it. Called by the gateway
+    ONLY after it has captured the listed files, which is the one thing that makes 'collected'
+    mean collected."""
+    _git_ensure(ws)
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-q", "-m", f"collected {int(time.time())}", "--allow-empty")
+    head = _git(ws, "rev-parse", "HEAD").stdout.strip()
+    _git(ws, "update-ref", _COLLECTED_REF, head)
+    return head
+
+
+@app.get("/produced")
+def produced(identifier: str = "") -> dict:
+    """Files changed since the last acknowledged collection — surviving checkpoints, crashes and
+    cancels in between. Excludes internal state / scratch / secrets / vcs."""
+    ws = _ws(identifier)
+    out = _produced_list(ws)
     return {"files": out, "count": len(out)}
+
+
+@app.post("/produced/ack")
+def produced_ack(identifier: str = "") -> dict:
+    ws = _ws(identifier)
+    return {"ok": True, "collected": _produced_ack(ws)}
 
 
 @app.get("/file")
