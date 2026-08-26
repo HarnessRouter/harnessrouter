@@ -758,15 +758,15 @@ _AGENTS_END = "<!-- harness-skills:end -->"
 
 
 def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
-    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi, dsh and opencode (all read
+    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi, dsh, opencode and Devin (all read
     AGENTS.md from the cwd — pi as a context file before its trust gate, dsh via its
     dsh-agent-instructions workspace loader, opencode via instruction-context.ts, whose discovery
-    targets are literally ["AGENTS.md"]), CLAUDE.md for Claude Code.
+    targets are literally ["AGENTS.md"], Devin via its ACP driver), CLAUDE.md for Claude Code.
 
     Getting this wrong is silent: the file is written either way, and a backend that does not read
     the name we chose simply never sees the harness's instructions."""
     return pathlib.Path(cwd) / (
-        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode") else "CLAUDE.md")
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "devin") else "CLAUDE.md")
 
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
@@ -2400,8 +2400,8 @@ _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
 
 
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
-# in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
-# (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
+# in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes and devin have their
+# own drivers (_run_hermes_bg — DB-polling, no stdout events; devin — ACP), so they carry no normalizer.
 DEVIN_PROVIDERS = {"devin"}
 DEVIN_DEFAULT_MODEL = os.environ.get("DEVIN_DEFAULT_MODEL", "devin-swe")
 
@@ -3578,7 +3578,7 @@ def capabilities(identifier: str = "") -> dict:
 
 
 class TurnReq(BaseModel):
-    backend: str = "claude"          # claude | codex | hermes | pi | dsh
+    backend: str = "claude"          # claude | codex | hermes | pi | dsh | devin
     provider: str | None = None      # see BACKENDS[...].providers
     model: str | None = None
     prompt: str
@@ -3653,7 +3653,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     #     than a block. Written here once rather than as two divergent branches — hermes previously
     #     had neither, and silently ignored every disabled tool.
     agent_doc = req.agent_doc or ""
-    if backend in ("codex", "hermes", "dsh") and req.tools_disabled:
+    if backend in ("codex", "hermes", "dsh", "devin") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
