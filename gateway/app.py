@@ -56,6 +56,13 @@ VG_TENANT_DEFAULT = os.environ.get("VG_TENANT_DEFAULT", "")   # hosted-backing o
 GLOBAL_TENANT = os.environ.get("HARNESS_GLOBAL_TENANT", "global")
 BILLING_HARVEST_URL = os.environ.get("BILLING_HARVEST_URL", "").rstrip("/")
 BILLING_INTERNAL_KEY = os.environ.get("BILLING_INTERNAL_KEY", "")
+# Devin model discovery: Codeium/Windsurf Connect-RPC endpoints used by the Devin CLI.
+DEVIN_DISCOVERY_BASE_URL = os.environ.get("DEVIN_DISCOVERY_BASE_URL", "https://server.codeium.com").rstrip("/")
+DEVIN_DISCOVERY_AUTH_PATH = "/exa.auth_pb.AuthService/GetUserJwt"
+DEVIN_DISCOVERY_MODELS_PATH = "/exa.api_server_pb.ApiServerService/GetCliModelConfigs"
+DEVIN_DISCOVERY_IDE_VERSION = os.environ.get("DEVIN_DISCOVERY_IDE_VERSION", "3.2.23")
+DEVIN_DISCOVERY_EXTENSION_VERSION = os.environ.get("DEVIN_DISCOVERY_EXTENSION_VERSION", "1.48.2")
+DEVIN_DISCOVERY_TTL_S = float(os.environ.get("DEVIN_DISCOVERY_TTL_S", "300"))
 # Engine base URL (same engine the console BFF proxies) — used to fetch the pricing table so the
 # gateway can stamp a concise per-run credit total on each finished trace. Optional: if unset,
 # credits are simply not computed (usage still metered via the harvest as before).
@@ -355,6 +362,9 @@ async def _harness_path_prefix(request: Request, call_next):
 # non-streaming endpoint ever needs compression, gzip that Response explicitly.
 _http: httpx.AsyncClient | None = None
 _sems: dict[str, asyncio.Semaphore] = {}
+# Devin dynamic model discovery cache: api_key hash -> (timestamp, set of model ids, ordered list, labels dict)
+_devin_model_cache: dict[str, tuple[float, frozenset[str], list[str], dict[str, str]]] = {}
+_devin_model_cache_lock = asyncio.Lock()
 
 
 def _conc_limit(scope: str) -> int:
@@ -4710,6 +4720,127 @@ def _resolve_model_policy(requested: str, hv: dict | None, backend: str) -> tupl
                                 f"'{backend}'; used the authorized default '{default}'")
 
 
+def _devin_discovery_metadata(api_key: str, user_jwt: str = "") -> dict:
+    """Connect-RPC Metadata payload used by Devin's auth and model-discovery endpoints."""
+    return {
+        "apiKey": api_key,
+        "userJwt": user_jwt,
+        "ideName": "windsurf",
+        "ideVersion": DEVIN_DISCOVERY_IDE_VERSION,
+        "extensionName": "windsurf",
+        "extensionVersion": DEVIN_DISCOVERY_EXTENSION_VERSION,
+        "locale": "en",
+    }
+
+
+def _devin_select_models(configs: list[dict]) -> list[tuple[str, str]]:
+    """Pick the live ACP-usable model list from Devin's GetCliModelConfigs response.
+
+    The `devin acp` default agent currently supports the main SWE-1.x family only.
+    We keep the `devin-swe` alias and the latest recommended SWE model per major family,
+    skipping disabled/internal MODEL_* ids and non-SWE families that ACP will reject.
+    Returns [(model_uid, label), ...] ordered: newest SWE family first.
+    """
+    selected: list[tuple[str, str, str]] = []   # (uid, label, family)
+    seen: set[str] = {"devin-swe"}
+    for c in configs:
+        if c.get("disabled"):
+            continue
+        uid = str(c.get("modelUid") or "").strip()
+        if not uid or uid in seen or uid.startswith("MODEL_"):
+            continue
+        if not c.get("isRecommended"):
+            continue
+        family_meta = c.get("modelFamilyMetadata") or {}
+        family = str(family_meta.get("modelFamilyLabel") or "").strip()
+        if not re.match(r"^SWE-\d+\.\d+$", family):
+            continue
+        seen.add(uid)
+        label = str(c.get("label") or uid).strip()
+        if not label:
+            label = uid
+        selected.append((uid, label, family))
+    # Newest SWE family first (e.g. SWE-1.7 before SWE-1.6), then by uid.
+    selected.sort(key=lambda x: (x[2], x[0]), reverse=True)
+    # Always keep the legacy alias as a fallback option.
+    selected.append(("devin-swe", "Devin SWE", ""))
+    return [(uid, label) for uid, label, _ in selected]
+
+
+def _devin_update_catalog(selected: list[tuple[str, str]]) -> set[str]:
+    """Refresh the in-memory Devin model catalog and canonical map with discovered ids."""
+    if not selected:
+        return set(_MODEL_CATALOG.get("devin", {}).get("models", []))
+    ids = [uid for uid, _ in selected]
+    labels = {uid: label for uid, label in selected}
+    # Newest SWE family first after sorting; use it as the default.
+    default = ids[0]
+    _MODEL_CATALOG["devin"]["models"] = ids
+    _MODEL_CATALOG["devin"]["default"] = default
+    _MODEL_CATALOG["devin"]["model_labels"] = labels
+    _VENDOR_MODELS["devin"] = {m: m for m in ids}
+    return set(ids)
+
+
+async def _devin_api_key_for_org(org: str | None) -> str | None:
+    """Find a Devin connection api_key for this org, falling back to the operator env."""
+    for name in await _resolve_chain(org, "devin", None):
+        conn, _ = await _get_connection(org, name)
+        if conn and conn.get("api_key"):
+            return str(conn["api_key"])
+    return os.environ.get("DEVIN_API_KEY") or os.environ.get("WINDSURF_API_KEY") or None
+
+
+async def _devin_discover_models(api_key: str | None) -> set[str]:
+    """Fetch the live Devin model list from server.codeium.com and cache it.
+
+    Falls back to the existing static catalog if the credential is missing or discovery fails.
+    """
+    static = set(_MODEL_CATALOG.get("devin", {}).get("models", []))
+    if not api_key:
+        return static
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    now = time.time()
+    async with _devin_model_cache_lock:
+        if key_hash in _devin_model_cache:
+            ts, cached_set, _, _ = _devin_model_cache[key_hash]
+            if now - ts < DEVIN_DISCOVERY_TTL_S:
+                return set(cached_set)
+    try:
+        http = _client()
+        auth_payload = {"metadata": _devin_discovery_metadata(api_key)}
+        auth_resp = await http.post(
+            f"{DEVIN_DISCOVERY_BASE_URL}{DEVIN_DISCOVERY_AUTH_PATH}",
+            json=auth_payload,
+            headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1", "Accept": "*/*"},
+            timeout=15,
+        )
+        auth_resp.raise_for_status()
+        user_jwt = str(auth_resp.json().get("userJwt") or "")
+        if not user_jwt:
+            return static
+        models_payload = {"metadata": _devin_discovery_metadata(api_key, user_jwt)}
+        models_resp = await http.post(
+            f"{DEVIN_DISCOVERY_BASE_URL}{DEVIN_DISCOVERY_MODELS_PATH}",
+            json=models_payload,
+            headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1", "Accept": "*/*"},
+            timeout=30,
+        )
+        models_resp.raise_for_status()
+        data = models_resp.json()
+        configs = data.get("clientModelConfigs") or []
+        selected = _devin_select_models(configs)
+        discovered = _devin_update_catalog(selected)
+        async with _devin_model_cache_lock:
+            _devin_model_cache[key_hash] = (time.time(), frozenset(discovered),
+                                            [uid for uid, _ in selected],
+                                            {uid: label for uid, label in selected})
+        return discovered
+    except Exception as e:  # noqa: BLE001
+        print(f"[devin] dynamic model discovery failed: {e}", flush=True)
+        return static
+
+
 async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     """Canonical models something can actually run on this backend.
 
@@ -4720,6 +4851,10 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     answer is exactly those canonicals whose integration's provider is wired to this backend.
     Offering a model nothing can serve is a promise the router then breaks — the picker would
     accept it and the turn would fail at the point of no return."""
+    if backend == "devin":
+        key = await _devin_api_key_for_org(org)
+        if key:
+            return await _devin_discover_models(key)
     if await _resolve_chain(org, backend, None):
         return None
     integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
@@ -4737,13 +4872,14 @@ def _harness_models_view(hv: dict | None, backend: str, servable: set[str] | Non
     """The per-harness model capability view: allowed models, default, and authorized fallback.
     `servable` (from _servable_models) marks the ones a provider is actually configured for."""
     cat = _MODEL_CATALOG.get(backend, {})
+    labels = cat.get("model_labels", {})
     default = _harness_model_default(hv, backend)
     curated = cat.get("models", [])
     ok = (lambda m: True) if servable is None else (lambda m: m in servable)
-    models = [{"id": m, "label": m, "backend": backend, "available": ok(m), "default": m == default}
+    models = [{"id": m, "label": labels.get(m, m), "backend": backend, "available": ok(m), "default": m == default}
               for m in curated]
     if default and default not in curated:   # a custom default outside the curated list
-        models.insert(0, {"id": default, "label": default, "backend": backend,
+        models.insert(0, {"id": default, "label": labels.get(default, default), "backend": backend,
                           "available": ok(default), "default": True})
     return {"backend": backend, "default": default, "fallback": default, "models": models}
 
@@ -12177,13 +12313,14 @@ async def list_bases(request: Request) -> dict:
     for bid, b in _BASE_CATALOG.items():
         backend = b["backend"]
         cat = _MODEL_CATALOG.get(backend, {})
+        labels = cat.get("model_labels", {})
         servable = await _servable_models(org, backend)
         ok = (lambda m: True) if servable is None else (lambda m: m in servable)
         out.append({
             "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
             "status": b["status"], "systemPrompt": b["system_prompt"],
             "defaultModel": cat.get("default", ""),
-            "models": [{"id": m, "available": ok(m), "default": m == cat.get("default")}
+            "models": [{"id": m, "label": labels.get(m, m), "available": ok(m), "default": m == cat.get("default")}
                        for m in cat.get("models", [])],
             "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
                       for n, lbl in b["tools"]],
@@ -12208,10 +12345,11 @@ async def list_models(request: Request) -> dict:
     # unavailable so a picker can disable it, instead of offering a choice that fails at run time.
     out = {}
     for b, c in _MODEL_CATALOG.items():
+        labels = c.get("model_labels", {})
         servable = await _servable_models(org, b)
         ok = (lambda m: True) if servable is None else (lambda m: m in servable)
         out[b] = {"default": c["default"],
-                  "models": [{"id": m, "label": m, "backend": b, "available": ok(m),
+                  "models": [{"id": m, "label": labels.get(m, m), "backend": b, "available": ok(m),
                               "default": m == c["default"]} for m in c["models"]]}
     return {"backends": out}
 
