@@ -38,7 +38,7 @@ This design adds Devin as a runner backend by running `devin acp` once per turn 
 - Credentials: `WINDSURF_API_KEY` env, or credentials from `devin auth login`, or an ACP `authenticate` request.
 - Flags: `devin acp --model <model>` sets the default model per ACP session.
 - ACP flow: `initialize` → `session/new` (or `session/resume`/`session/load`) → `session/prompt` → `session/update` notifications → `session/cancel` if needed.
-- Devin CLI is installed via `curl -fsSL https://cli.devin.ai/install.sh | bash`. The install script writes version bundles to `$XDG_DATA_HOME/devin/cli/_versions` and links `devin` into `$HOME/.local/bin`.
+- Devin CLI is installed via `curl -fsSL https://cli.devin.ai/install.sh | bash`. The install script writes version bundles to `$XDG_DATA_HOME/devin/cli/_versions` and links `devin` into `$HOME/.local/bin`. We will run it with redirected `HOME`/`XDG_DATA_HOME` so it lands on the data volume.
 - ACP docs: <https://agentclientprotocol.com/protocol/>
 - Devin CLI docs: <https://docs.devin.ai/cli/reference/commands>
 
@@ -177,13 +177,10 @@ The normalizer is chunk-level, not token-level, so Devin does not advertise fine
 ### 7. Docker install
 
 - Add `devin` to `HR_BACKENDS` default and `backend_bin` in `docker/entrypoint.sh`.
-- Add an `install_devin` function that installs the binary at first run, not at image build time. It should mirror `install_opencode` in structure:
-  - Determine arch (`x86_64` → `x86_64-unknown-linux`, `aarch64` → `aarch64-unknown-linux`).
-  - Download the manifest from `https://static.devin.ai/cli/current/manifest.json`.
-  - Verify the SHA-256 checksum.
-  - Extract the matching bundle into a versioned directory under `$DATA_DIR/agent-tools/devin`.
-  - Symlink `devin` into `$DATA_DIR/agent-tools/bin/devin`.
-- Set `HOME` and `XDG_DATA_HOME` so Devin writes credentials/session state under the data volume, not the image's root home.
+- Add an `install_devin` function that installs the binary at first run, not at image build time. Use the official Devin installer:
+  - Set `HOME` to a path under `$DATA_DIR/agent-tools/devin/home` and `XDG_DATA_HOME` to `$DATA_DIR/agent-tools/devin` so the installer writes versions, credentials, and session state to the data volume instead of the image's root home.
+  - Run `curl -fsSL https://cli.devin.ai/install.sh | bash` in that environment. The script downloads the manifest, verifies SHA-256, extracts the bundle, and links `devin` into `$HOME/.local/bin`.
+  - After install, symlink `devin` from `$HOME/.local/bin/devin` into `$DATA_DIR/agent-tools/bin/devin` so the existing `PATH` and `backend_bin` setup find it.
 - Print a clear license/source warning, mirroring the existing Claude Code and Hermes install messages.
 
 ## Authentication
