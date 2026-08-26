@@ -223,8 +223,11 @@ install_devin() {
   local devin_home="$DATA_DIR/agent-tools/devin/home"
   local devin_xdg="$DATA_DIR/agent-tools/devin"
   mkdir -p "$devin_home" "$devin_xdg" "$TOOLS/bin"
+  # The official installer runs "devin setup" at the end, which is interactive and fails in a
+  # headless container. It still lays the binary down first, so we ignore the exit code and verify
+  # the executable exists before declaring success.
   HOME="$devin_home" XDG_DATA_HOME="$devin_xdg" \
-    bash -c 'curl -fsSL https://cli.devin.ai/install.sh | bash' || return 1
+    bash -c 'curl -fsSL https://cli.devin.ai/install.sh | bash' || true
   local installed="$devin_home/.local/bin/devin"
   [ -x "$installed" ] || { echo "Devin installer did not produce a binary at $installed"; return 1; }
   ln -sf "$installed" "$TOOLS/bin/devin"
