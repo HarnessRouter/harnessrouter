@@ -359,6 +359,7 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
+QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
@@ -643,6 +644,10 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # $HERMES_HOME/skills/<name>/SKILL.md: the <available_skills> index hermes builds itself
         rootrels = [".harness/home/.hermes/skills"]
         entryroot = ".harness/home/.hermes/skills"
+    elif backend == "qwen":
+        # ~/.qwen/skills under the redirected HOME — the dir the shipped 0.22.1 creates itself.
+        rootrels = [".harness/home/.qwen/skills"]
+        entryroot = ".harness/home/.qwen/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -766,6 +771,8 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
 
     Getting this wrong is silent: the file is written either way, and a backend that does not read
     the name we chose simply never sees the harness's instructions."""
+    if backend == "qwen":
+        return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     return pathlib.Path(cwd) / (
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode") else "CLAUDE.md")
 
@@ -1915,8 +1922,13 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
     Surgical, matched to what was captured live: an assistant tool-call message whose `content`
     is the empty string becomes `content: null` (equally legal, and translators emit no text
     block for it), and empty `{"type": "text", "text": ""}` parts are dropped from list-shaped
-    content (if that empties a tool-call message's list, it becomes null too). Anything else —
-    other roles, non-empty text, unparseable bodies — passes through byte-identical."""
+    content (if that empties a tool-call message's list, it becomes null too). An EMPTY
+    `reasoning_content` is deleted outright: qwen-code echoes DeepSeek's extension field back
+    verbatim, and LLMTR's validator requires it non-empty when present ('String must contain at
+    least 1 character(s)', measured live on deepseek-v4-pro 2026-08-27 — the turn died right
+    after its tool call). A non-empty one is meaningful interleaved thinking and passes through.
+    Anything else — other roles, non-empty text, unparseable bodies — passes through
+    byte-identical."""
     try:
         obj = json.loads(body)
         if not isinstance(obj, dict) or not isinstance(obj.get("messages"), list):
@@ -1936,11 +1948,75 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
             elif content == "" and m.get("tool_calls"):
                 m["content"] = None
                 changed = True
+            if m.get("role") == "assistant" and m.get("reasoning_content") in ("", None) \
+                    and "reasoning_content" in m:
+                del m["reasoning_content"]
+                changed = True
         if not changed:
             return body
         return json.dumps(obj, separators=(",", ":")).encode()
     except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
         return body
+
+
+def _stringify_tool_content(body: bytes) -> bytes:
+    """Tool-role message content: array-of-parts -> plain string, in one chat-completions body.
+
+    OpenAI accepts both shapes; qwen-code sends the array form and stricter endpoints refuse it
+    ('400 tool message content must be a string' — LLMTR, measured live 2026-08-27, killing the
+    request AFTER the tool call, so the turn died mid-flight). Only text parts exist in a shell
+    tool result, so the flatten is lossless where it applies; applied only after a provider says
+    exactly that."""
+    try:
+        obj = json.loads(body)
+        changed = False
+        for m in obj.get("messages") or []:
+            if isinstance(m, dict) and m.get("role") == "tool" and isinstance(m.get("content"), list):
+                m["content"] = "".join(p.get("text", "") for p in m["content"]
+                                       if isinstance(p, dict))
+                changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+def _set_reasoning_effort_none(body: bytes) -> bytes:
+    """Set `reasoning_effort: "none"` in one chat-completions body.
+
+    OpenAI's gpt-5.6 family refuses function tools on /v1/chat/completions unless
+    reasoning_effort is 'none', and says so verbatim ("Function tools with reasoning_effort are
+    not supported ... set reasoning_effort to 'none'" — surfaced live through LLMTR 2026-08-27).
+    Applied only on that complaint, and remembered per (route, model) — never route-wide,
+    because other models on the same aggregator reject the parameter outright."""
+    try:
+        obj = json.loads(body)
+        if isinstance(obj, dict) and obj.get("reasoning_effort") != "none":
+            obj["reasoning_effort"] = "none"
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+def _drop_stream_options(body: bytes) -> bytes:
+    """Remove `stream_options` from one chat-completions body.
+
+    Spec-legal and honored by most models, but LLMTR's openai/gpt-5.x upstream 400s any
+    streaming request carrying it (isolated live 2026-08-27: the identical body succeeds the
+    moment stream_options goes; every other model there accepts it). The error is the generic
+    'The model provider rejected the request', so there is nothing to pattern-match — the relay
+    instead retries a 400 once without the field, and keeps doing so for the route only when
+    that retry is what made it work. Cost: streamed responses stop carrying usage totals."""
+    try:
+        obj = json.loads(body)
+        if isinstance(obj, dict) and "stream_options" in obj:
+            del obj["stream_options"]
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
 
 
 def _rename_max_tokens(body: bytes) -> bytes:
@@ -2067,26 +2143,63 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 and body is not None):
             self._bedrock_anthropic(base, key, body)
             return
+        try:
+            _body_model = json.loads(body or b"{}").get("model") or ""
+        except Exception:  # noqa: BLE001
+            _body_model = ""
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
             if flags.get("rename_max_tokens"):
                 body = _rename_max_tokens(body)
+            if flags.get("stringify_tool_content"):
+                body = _stringify_tool_content(body)
+            if flags.get("drop_stream_options"):
+                body = _drop_stream_options(body)
+            if flags.get(f"reasoning_effort_none:{_body_model}"):
+                body = _set_reasoning_effort_none(body)
             headers["content-length"] = str(len(body))
         resp = None
-        for attempt in (0, 1):
+        tried_slim = False
+        for attempt in (0, 1, 2):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
             try:
                 resp = urllib.request.urlopen(req, timeout=600)
+                if attempt > 0 and tried_slim:
+                    # the blind no-stream_options retry is part of what made this route work
+                    flags["drop_stream_options"] = True
                 break
             except urllib.error.HTTPError as e:
                 data = e.read()
                 renamed = _rename_max_tokens(body) if body is not None else None
-                if (attempt == 0 and e.code == 400 and b"max_completion_tokens" in data
+                if (attempt < 2 and e.code == 400 and b"max_completion_tokens" in data
                         and renamed is not None and renamed != body):
                     # The provider named the fix itself; apply it, remember it for this route.
                     flags["rename_max_tokens"] = True
                     body = renamed
+                    headers["content-length"] = str(len(body))
+                    continue
+                stringified = _stringify_tool_content(body) if body is not None else None
+                if (attempt < 2 and e.code == 400 and b"content must be a string" in data
+                        and stringified is not None and stringified != body):
+                    flags["stringify_tool_content"] = True
+                    body = stringified
+                    headers["content-length"] = str(len(body))
+                    continue
+                effort = _set_reasoning_effort_none(body) if body is not None else None
+                if (attempt < 2 and e.code == 400 and b"reasoning_effort" in data
+                        and b"'none'" in data and effort is not None and effort != body):
+                    # the provider named the fix itself; remember it for this model only
+                    flags[f"reasoning_effort_none:{_body_model}"] = True
+                    body = effort
+                    headers["content-length"] = str(len(body))
+                    continue
+                slim = _drop_stream_options(body) if body is not None else None
+                if attempt < 2 and e.code == 400 and slim is not None and slim != body:
+                    tried_slim = True
+                    # Generic 400 with stream_options aboard: blind single retry without it
+                    # (LLMTR's gpt-5.x upstream names nothing better). Sticks only if it works.
+                    body = slim
                     headers["content-length"] = str(len(body))
                     continue
                 # pass provider errors through verbatim
@@ -2354,6 +2467,83 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         cfg["mcp_discovery_timeout"] = 20
     (hermes_home / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     return list(mcp)
+
+
+QWEN_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+
+def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
+    """~/.qwen/settings.json under the redirected HOME. Only mcpServers is written (gemini-cli
+    schema: command/args/env for stdio, url/httpUrl for remote); auth stays in the ENVIRONMENT
+    (OPENAI_API_KEY / OPENAI_BASE_URL + --auth-type openai), so unlike pi and opencode no
+    credential ever lands on disk for this backend."""
+    qdir = home / ".qwen"
+    qdir.mkdir(parents=True, exist_ok=True)
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"httpUrl": url}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": argv[0], "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        servers[name] = entry
+    cfg: dict = {}
+    if servers:
+        cfg["mcpServers"] = servers
+    (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
+
+
+def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in QWEN_PROVIDERS:
+        raise HTTPException(400, f"unknown qwen provider '{pr}' (one of {sorted(QWEN_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "qwen needs a base_url (none configured)")
+    if auth.api_key:
+        # EVERY qwen turn rides the loopback relay, not just custom endpoints: request shapes
+        # strict endpoints refuse are repaired in flight (qwen sends tool-result content as an
+        # array of parts, which aggregators 400 with 'content must be a string' — measured live
+        # against LLMTR; Azure's gpt-5.x deployments 400 on max_tokens), and the real key never
+        # enters the CLI's environment — which matters more here than anywhere, because qwen
+        # takes its credential ONLY via env.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    home = pathlib.Path(cwd) / ".harness" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["OPENAI_BASE_URL"] = auth.base_url
+    _qwen_settings(home, mcp_servers)
+    cmd = ["qwen", "-p", prompt, "-o", "stream-json", "-m", model,
+           # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
+           # without it every -r run dies "No auth type is selected"); fresh runs take it too for
+           # one deterministic path.
+           "--auth-type", "openai",
+           # WITHOUT --yolo a headless run registers NO shell, write or edit tool at all — the
+           # default "auto" permission mode simply omits them, and the agent announces "I don't
+           # have a shell tool registered" and tries to delegate. Verified both ways on 0.22.1:
+           # default init tools lack shell/write/edit; with --yolo they are present, perm mode
+           # "yolo", and a real command wrote a file. The sandbox is the trust boundary here, the
+           # same rationale as claude --dangerously-skip-permissions, pi --approve and opencode
+           # --auto.
+           "--yolo"]
+    if resume_session_id:
+        cmd += ["-r", resume_session_id]
+    return cmd
 
 
 def _opencode_eof(state: dict, rc: int) -> list[dict]:
@@ -2635,6 +2825,11 @@ BACKENDS = {
             "normalize": _dsh_to_claude},
     "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
                  "normalize": _opencode_to_claude},
+    # qwen-code emits claude's stream-json natively (verified against the shipped 0.22.1:
+    # system/init with session_id, assistant/message, result/subtype/usage in claude's field
+    # names) — so its normalizer IS the claude passthrough.
+    "qwen": {"providers": sorted(QWEN_PROVIDERS), "default_model": QWEN_DEFAULT_MODEL,
+             "normalize": _claude_passthrough},
 }
 
 
@@ -3662,6 +3857,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
+    elif backend == "qwen":
+        model = model or QWEN_DEFAULT_MODEL
+        cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
     elif backend == "opencode":
         model = model or OPENCODE_DEFAULT_MODEL
         # _write_skills already ran for this backend, so the directory it produced is on disk and

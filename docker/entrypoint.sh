@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -186,6 +186,7 @@ backend_bin() {
     pi)     echo "$TOOLS/bin/pi" ;;
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
     opencode) echo "$TOOLS/bin/opencode" ;;
+    qwen)   echo "$TOOLS/bin/qwen" ;;
   esac
 }
 
@@ -246,6 +247,11 @@ install_backends() {
   if wanted opencode && [ ! -x "$(backend_bin opencode)" ]; then
     echo "[harnessrouter] installing opencode (MIT)…"
     try_install "opencode" install_opencode || true
+  fi
+
+  if wanted qwen && [ ! -x "$(backend_bin qwen)" ]; then
+    echo "[harnessrouter] installing Qwen Code (Apache-2.0)…"
+    try_install "Qwen Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund @qwen-code/qwen-code || true
   fi
 
   if wanted codex && [ ! -x "$(backend_bin codex)" ]; then
