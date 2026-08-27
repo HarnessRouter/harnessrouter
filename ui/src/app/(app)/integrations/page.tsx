@@ -252,7 +252,7 @@ export default function IntegrationsPage() {
                       <button key={c.id} type="button"
                         className={'itg-provider' + (editing.provider === c.id ? ' on' : '')}
                         disabled={Boolean(editingOriginal)}
-                        onClick={() => setEditing({ ...editing, provider: c.id, config: {} })}>
+                        onClick={() => setEditing({ ...editing, provider: c.id, config: c.id === 'custom' ? { api_format: 'openai' } : {} })}>
                         {c.label}
                       </button>
                     ))}
@@ -290,7 +290,7 @@ export default function IntegrationsPage() {
                                 {editing.config['api_format'] === 'anthropic'
                                   ? 'Anthropic Messages format works with Claude Code, OpenCode, Pi, and DSH backends.'
                                   : editing.config['api_format'] === 'openai'
-                                  ? 'OpenAI Chat Completions format works with Codex, Hermes, OpenCode, Pi, and DSH backends. Note: Claude Code does not support OpenAI format.'
+                                  ? 'OpenAI Chat Completions format works with Hermes, OpenCode, Pi, and DSH backends. Codex and Claude Code cannot drive a custom OpenAI endpoint.'
                                   : 'If you use Claude Code, choose Anthropic Messages format.'}
                               </p>
                             </div>
