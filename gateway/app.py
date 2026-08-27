@@ -964,6 +964,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "claude"): "tokenrouter",
     ("custom", "hermes"): "openai-api",        ("custom", "opencode"): "tokenrouter",
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
+    ("custom", "qwen"): "openai-api",
 }
 
 
@@ -3607,7 +3608,9 @@ def _provider_backends(provider: str) -> list[str]:
 # speak is a promise the router breaks at the first call, so these sets drive the picker's
 # grey-out.
 _CUSTOM_FORMAT_BACKENDS = {
-    "openai": {"hermes", "opencode", "pi", "dsh"},
+    # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
+    # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen"},
     "anthropic": {"claude", "opencode", "pi", "dsh"},
 }
 
