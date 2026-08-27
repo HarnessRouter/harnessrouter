@@ -3547,7 +3547,7 @@ _PROVIDER_CATALOG: dict[str, dict] = {
             {"key": "api_format", "label": "API Format"},
             {"key": "base_url", "label": "Endpoint URL",
              "placeholder": "https://your-api.example.com"},
-            {"key": "full_url", "label": "完整URL（Use Full URL）"},
+            {"key": "full_url", "label": "Use Full URL"},
             {"key": "model_id", "label": "Model ID", "placeholder": "your-model-name"},
         ],
         "secret": "api_key",
