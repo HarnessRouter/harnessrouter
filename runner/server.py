@@ -1950,6 +1950,29 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
         return body
 
 
+def _stringify_tool_content(body: bytes) -> bytes:
+    """Tool-role message content: array-of-parts -> plain string, in one chat-completions body.
+
+    OpenAI accepts both shapes; qwen-code sends the array form and stricter endpoints refuse it
+    ('400 tool message content must be a string' — LLMTR, measured live 2026-08-27, killing the
+    request AFTER the tool call, so the turn died mid-flight). Only text parts exist in a shell
+    tool result, so the flatten is lossless where it applies; applied only after a provider says
+    exactly that."""
+    try:
+        obj = json.loads(body)
+        changed = False
+        for m in obj.get("messages") or []:
+            if isinstance(m, dict) and m.get("role") == "tool" and isinstance(m.get("content"), list):
+                m["content"] = "".join(p.get("text", "") for p in m["content"]
+                                       if isinstance(p, dict))
+                changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 def _rename_max_tokens(body: bytes) -> bytes:
     """max_tokens -> max_completion_tokens in one chat-completions body.
 
@@ -2078,6 +2101,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             body = _normalize_openai_chat_body(body)
             if flags.get("rename_max_tokens"):
                 body = _rename_max_tokens(body)
+            if flags.get("stringify_tool_content"):
+                body = _stringify_tool_content(body)
             headers["content-length"] = str(len(body))
         resp = None
         for attempt in (0, 1):
@@ -2094,6 +2119,13 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     # The provider named the fix itself; apply it, remember it for this route.
                     flags["rename_max_tokens"] = True
                     body = renamed
+                    headers["content-length"] = str(len(body))
+                    continue
+                stringified = _stringify_tool_content(body) if body is not None else None
+                if (attempt == 0 and e.code == 400 and b"content must be a string" in data
+                        and stringified is not None and stringified != body):
+                    flags["stringify_tool_content"] = True
+                    body = stringified
                     headers["content-length"] = str(len(body))
                     continue
                 # pass provider errors through verbatim
@@ -2407,11 +2439,13 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         raise HTTPException(400, f"unknown qwen provider '{pr}' (one of {sorted(QWEN_PROVIDERS)})")
     if not auth.base_url:
         raise HTTPException(400, "qwen needs a base_url (none configured)")
-    if auth.api_format == "openai" and auth.api_key:
-        # A custom OpenAI endpoint rides the loopback relay, exactly like opencode's: request
-        # shapes strict endpoints refuse are repaired in flight (Azure's gpt-5.x deployments 400
-        # on max_tokens), and the real key never enters the CLI's environment — which matters
-        # more here than anywhere, because qwen takes its credential ONLY via env.
+    if auth.api_key:
+        # EVERY qwen turn rides the loopback relay, not just custom endpoints: request shapes
+        # strict endpoints refuse are repaired in flight (qwen sends tool-result content as an
+        # array of parts, which aggregators 400 with 'content must be a string' — measured live
+        # against LLMTR; Azure's gpt-5.x deployments 400 on max_tokens), and the real key never
+        # enters the CLI's environment — which matters more here than anywhere, because qwen
+        # takes its credential ONLY via env.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = pathlib.Path(cwd) / ".harness" / "home"

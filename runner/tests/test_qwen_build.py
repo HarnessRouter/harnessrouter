@@ -39,14 +39,17 @@ def test_resume_uses_dash_r():
     assert cmd[-2:] == ["-r", "8e039a38-f91f"]
 
 
-def test_auth_is_environment_only_never_disk():
-    """qwen is the one backend with NO credential at rest: env OPENAI_API_KEY/BASE_URL only.
-    settings.json must not carry the key."""
+def test_auth_is_environment_only_and_relayed():
+    """qwen takes its credential ONLY via env, so every provider rides the loopback relay: the
+    CLI's environment holds a per-route relay token — never the real key — and its base URL is
+    the relay, which also repairs shapes strict endpoints refuse (LLMTR 400s the array-form
+    tool content qwen sends). settings.json must carry neither."""
     _, d, env = _argv()
-    assert env["OPENAI_API_KEY"] == "sk-t"
-    assert env["OPENAI_BASE_URL"] == "https://relay.example/v1"
+    assert env["OPENAI_API_KEY"].startswith("hr-relay-")
+    assert "sk-t" not in env["OPENAI_API_KEY"]
+    assert env["OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
     st = pathlib.Path(d, ".harness", "home", ".qwen", "settings.json").read_text()
-    assert "sk-t" not in st
+    assert "sk-t" not in st and "hr-relay-" not in st
 
 
 def test_home_is_redirected_into_the_workspace():
