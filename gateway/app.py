@@ -4832,7 +4832,14 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
         if canonical in seen:
             continue
         integ = integrations.get(iname)
-        if integ and _integration_serves_backend(integ, backend):
+        # ONLY custom integrations inject ids here: a custom model_id genuinely exists outside
+        # the curated catalog, which is the whole reason this loop exists. Every curated model
+        # is already in `curated` with availability computed by the servable path — injecting
+        # any MAPPED model instead put llmtr's entire table into the claude picker as available
+        # (28 rows where main shows 7, measured 2026-08-27), each one a row that fails on send.
+        if not integ or str(integ.get("provider") or "").lower() != "custom":
+            continue
+        if _integration_serves_backend(integ, backend):
             models.append({"id": canonical, "label": canonical, "backend": backend,
                            "available": True, "default": canonical == default})
             seen.add(canonical)
@@ -12321,7 +12328,8 @@ async def list_models(request: Request) -> dict:
             if canonical in seen:
                 continue
             integ = integrations.get(iname)
-            if not integ:
+            # Custom integrations only — same reasoning as _harness_models_view above.
+            if not integ or str(integ.get("provider") or "").lower() != "custom":
                 continue
             if _integration_serves_backend(integ, b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
