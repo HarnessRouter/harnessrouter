@@ -263,8 +263,19 @@ header.top{position:sticky;top:0;z-index:30;background:var(--surface);
 .header-inner{display:flex;align-items:center;gap:16px;height:100%;
   width:min(100%,var(--shell-max));margin:0 auto;padding:0 var(--gutter);box-sizing:border-box}
 .brand{display:flex;align-items:center;gap:10px;font-weight:680;color:var(--ink);letter-spacing:-.01em}
-.brand .mark{width:22px;height:22px;border-radius:6px;background:var(--brand);color:#fff;
-  display:grid;place-items:center;font:600 11px/1 var(--mono)}
+/* Approved UHP mark: two raster images stacked in a fixed 30x30 box; the theme decides which is
+   visible. visibility (not display) keeps the box reserved, so switching themes never shifts layout. */
+.brand-mark{position:relative;width:30px;height:30px;flex:none}
+.brand-logo{position:absolute;inset:0;width:30px;height:30px;display:block}
+.logo-on-dark{visibility:hidden}                       /* default surface is light -> show the dark-ink mark */
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme=light]) .logo-on-light{visibility:hidden}
+  :root:not([data-theme=light]) .logo-on-dark{visibility:visible}
+}
+:root[data-theme=dark] .logo-on-light{visibility:hidden}
+:root[data-theme=dark] .logo-on-dark{visibility:visible}
+:root[data-theme=light] .logo-on-light{visibility:visible}
+:root[data-theme=light] .logo-on-dark{visibility:hidden}
 .brand .ver{font:500 11px/1 var(--mono);color:var(--muted);background:var(--subtle);
   border:1px solid var(--line);border-radius:999px;padding:4px 8px}
 .ver{position:relative;margin-left:2px}
@@ -425,9 +436,9 @@ footer{border-top:1px solid var(--line);margin-top:64px;padding:24px 0 0;
   .theme{margin-left:8px}
   main{padding:22px 16px 64px}
 }
-/* ── Very narrow: drop the wordmark text, keep the mark ──────────────────────────────── */
+/* ── Very narrow: drop the wordmark text, keep the mark (link stays labelled via aria-label) ─── */
 @media (max-width:400px){
-  .brand span:not(.mark){position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .brand-name{display:none}
 }
 """
 
@@ -714,6 +725,9 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
 <title>{html.escape(title)} · Unified Harness Protocol</title>
 <meta name="description" content="{html.escape(DESCRIPTIONS[desc_key(current)])}">
 <link rel="canonical" href="https://{SITE}/{url_for(current).lstrip("./")}">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/brand/favicon-32-light.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/brand/favicon-32-dark.png" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/brand/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -724,7 +738,13 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
 <header class="top">
   <div class="header-inner">
   <button id="menu" aria-label="Toggle navigation">☰</button>
-  <a class="brand" href="{url_for("index.html", up)}"><span class="mark">U</span><span>Unified Harness Protocol</span></a>
+  <a class="brand" href="{url_for("index.html", up)}" aria-label="Unified Harness Protocol">
+    <span class="brand-mark" aria-hidden="true">
+      <img class="brand-logo logo-on-light" src="/assets/brand/uhp-logo-mark-dark.png" alt="" width="30" height="30" decoding="async">
+      <img class="brand-logo logo-on-dark" src="/assets/brand/uhp-logo-mark-light.png" alt="" width="30" height="30" decoding="async">
+    </span>
+    <span class="brand-name">Unified Harness Protocol</span>
+  </a>
   <div class="ver" id="ver">
     <button id="vbtn" class="verpill" aria-haspopup="menu" aria-expanded="false" aria-label="Specification version">
       <span class="dot"></span><span class="vcur">{page_ver}</span>
@@ -1005,6 +1025,12 @@ def build() -> int:
     # The machine-readable definitions are part of the standard, so they are served with it.
     shutil.copytree(ROOT / "schema", DIST / "schema",
                     ignore=shutil.ignore_patterns("build.py", "__pycache__"))
+
+    # Brand raster assets (the header logo marks and the favicons) ship with the site and are served
+    # at root-absolute /assets/… so they resolve from every page depth. Copied before the link check
+    # so the checker sees the files the <img>/<link> tags reference.
+    if (HERE / "assets").is_dir():
+        shutil.copytree(HERE / "assets", DIST / "assets")
 
     # Last: every link in the finished site must resolve. Runs after schema is in place so links
     # to the machine-readable files are checked against the files that actually shipped.
