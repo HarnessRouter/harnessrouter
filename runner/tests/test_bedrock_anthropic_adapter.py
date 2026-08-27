@@ -116,3 +116,51 @@ def test_adapter_translates_both_directions():
         assert "event: message_stop" in sse
     finally:
         up.shutdown()
+
+
+def test_pop_json_path_handles_phantom_segments_and_list_siblings():
+    from server import _pop_json_path
+    # Bedrock reports tools.0.custom.eager_input_streaming for a tool whose JSON has no
+    # "custom" wrapper — the validator's union discriminator leaks into the path. And a client
+    # that sends the field sends it on EVERY tool, so one complaint strips all of them.
+    o = {"tools": [{"name": "a", "eager_input_streaming": True},
+                   {"name": "b", "eager_input_streaming": False}], "keep": 1}
+    assert _pop_json_path(o, "tools.0.custom.eager_input_streaming")
+    assert all("eager_input_streaming" not in t for t in o["tools"])
+    assert o["tools"][0]["name"] == "a" and o["keep"] == 1
+    assert _pop_json_path(o, "keep") and "keep" not in o
+    assert not _pop_json_path(o, "tools.0.custom.eager_input_streaming")   # already gone
+
+
+def test_adapter_matches_messages_with_query_string():
+    # claude-code sends /v1/messages?beta=true on streaming requests; the raw-tail match let
+    # those fall through to a generic forward against a host with no such route.
+    seen = {}
+
+    class FakeBedrock(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):  # noqa: N802
+            seen["path"] = self.path
+            data = b'{"type": "message", "content": []}'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), FakeBedrock)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _bedrock_anthropic_route(f"http://127.0.0.1:{up.server_address[1]}", "k")
+        body = json.dumps({"model": "m", "max_tokens": 8, "messages": []}).encode()
+        req = urllib.request.Request(base + "/messages?beta=true", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}"})
+        out = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        assert out["type"] == "message"
+        assert seen["path"] == "/model/m/invoke"     # adapted, not blind-forwarded
+    finally:
+        up.shutdown()

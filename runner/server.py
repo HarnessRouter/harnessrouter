@@ -1961,6 +1961,45 @@ def _rename_max_tokens(body: bytes) -> bytes:
     return body
 
 
+def _pop_json_path(obj, path: str) -> bool:
+    """Remove the value at a dotted path; -> True if anything was removed.
+
+    A numeric segment ('tools.0.custom.x') strips the leaf from EVERY element of that list,
+    not just the named index: the provider complains about the first offending entry, but a
+    client that sends the field sends it on all of them (dsh puts eager_input_streaming on
+    every tool — measured live), and stripping one per round trip never converges."""
+    def walk(node, parts) -> bool:
+        if not parts:
+            return False
+        head, rest = parts[0], parts[1:]
+        if isinstance(node, list):
+            if head.isdigit() and not rest:
+                try:
+                    del node[int(head)]
+                    return True
+                except IndexError:
+                    return False
+            hit = False
+            for item in node:
+                hit = walk(item, rest if head.isdigit() else parts) or hit
+            return hit
+        if not isinstance(node, dict):
+            return False
+        if not rest:
+            if head in node:
+                del node[head]
+                return True
+            return False
+        if head in node:
+            return walk(node[head], rest)
+        # A segment that is not a real key is the validator's UNION DISCRIMINATOR leaking into
+        # the path: Bedrock reports tools.0.custom.eager_input_streaming for a tool whose JSON
+        # has no "custom" wrapper at all (measured live). Skip the phantom segment and keep
+        # walking at the same node.
+        return walk(node, rest)
+    return walk(obj, path.split("."))
+
+
 def _aws_eventstream_frames(resp):
     """Yield (headers, payload) per AWS eventstream frame, from a streaming HTTP response.
 
@@ -2021,7 +2060,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
-        if flags.get("bedrock_anthropic") and tail == "/messages" and body is not None:
+        # Compare the PATH only: anthropic clients append query strings (claude-code sends
+        # /v1/messages?beta=true on streaming requests), and matching the raw tail let those
+        # fall through to a generic forward against a host with no such route.
+        if (flags.get("bedrock_anthropic") and tail.split("?", 1)[0] == "/messages"
+                and body is not None):
             self._bedrock_anthropic(base, key, body)
             return
         if body is not None and self.path.endswith("/chat/completions"):
@@ -2101,20 +2144,35 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             return
         op = "invoke-with-response-stream" if stream else "invoke"
         url = f"{origin.rstrip('/')}/model/{urllib.parse.quote(model, safe='')}/{op}"
-        req = urllib.request.Request(url, data=json.dumps(obj).encode(), method="POST",
-                                     headers={"authorization": f"Bearer {key}",
-                                              "content-type": "application/json",
-                                              "accept": "*/*"})
-        try:
-            resp = urllib.request.urlopen(req, timeout=600)
-        except urllib.error.HTTPError as e:
-            data = e.read()
-            self.send_response(e.code)
-            self.send_header("content-type", e.headers.get("content-type") or "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
+        # Bedrock's InvokeModel schema trails the first-party Messages API: fields the CLI
+        # sends for newer features get '<field>: Extra inputs are not permitted' (measured:
+        # claude-code's context_management, 2026-08-27). Strip exactly the field the provider
+        # names and retry — a fixed strip-list would silently rot as either side moves.
+        resp = None
+        for _ in range(4):
+            req = urllib.request.Request(url, data=json.dumps(obj).encode(), method="POST",
+                                         headers={"authorization": f"Bearer {key}",
+                                                  "content-type": "application/json",
+                                                  "accept": "*/*"})
+            try:
+                resp = urllib.request.urlopen(req, timeout=600)
+                break
+            except urllib.error.HTTPError as e:
+                data = e.read()
+                m = (re.search(rb'"?([\w.]+)"?: Extra inputs are not permitted', data)
+                     if e.code == 400 else None)
+                # The complaint names a dotted path (tools.0.custom.eager_input_streaming was
+                # measured live from dsh's client); walk it — ints are list indices — and pop
+                # the leaf. A path that no longer resolves means we already stripped it and the
+                # provider is complaining about something else: fall through and surface it.
+                if m and _pop_json_path(obj, m.group(1).decode()):
+                    continue
+                self.send_response(e.code)
+                self.send_header("content-type", e.headers.get("content-type") or "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
         if not stream:
             data = resp.read()   # already an Anthropic message response, verbatim
             self.send_response(resp.status)
