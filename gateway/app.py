@@ -3736,6 +3736,13 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         known_base = (_PROVIDER_CATALOG.get(provider) or {}).get("base_url")
         if known_base and not cfg.get("base_url"):
             cfg["base_url"] = known_base
+        # The custom form's API-format select shows "OpenAI Chat Completions" preselected, so a
+        # payload that never touched it means the user accepted that default — but a select's
+        # visible default is not form STATE, and a custom integration stored without api_format
+        # served no backend at all, silently: every picker row said "no provider" while the
+        # mapping table happily routed to it (measured live, 2026-08-27). Store what the user saw.
+        if provider == "custom" and not cfg.get("api_format"):
+            cfg["api_format"] = "openai"
         # Custom provider URL normalisation. The user's base_url is the literal prefix their
         # endpoint wants the resource path joined against — for "openai" that's /chat/completions
         # and for "anthropic" /v1/messages, with NOTHING inserted in between (a custom endpoint
