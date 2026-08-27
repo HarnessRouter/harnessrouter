@@ -280,9 +280,13 @@ install_backends() {
 
   if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
+    # boto3: hermes's bedrock provider imports it at call time, and lazy installs are sealed
+    # below — without it baked in, every hermes turn on a bedrock-served model died with
+    # "The 'boto3' package is required" after 3 retries, while the README advertised
+    # bedrock -> "Claude Code, Hermes" (issue #37, measured 2026-08-27 on a fresh volume).
     try_install "Hermes" sh -c "\"$PY\" -m venv \"$TOOLS/venv\" \
         && \"$TOOLS/venv/bin/pip\" install --no-cache-dir -q \
-             'hermes-agent==0.19.0' anthropic '$HERMES_MCP_PIN'" || true
+             'hermes-agent==0.19.0' anthropic boto3 '$HERMES_MCP_PIN'" || true
   fi
 
   [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"
@@ -311,6 +315,20 @@ install_backends() {
 # one line on start-up — and repairs it in place.
 HERMES_MCP_PIN="${HERMES_MCP_PIN:-mcp>=1.9,<2}"
 
+verify_hermes_bedrock() {
+  # Volumes installed before boto3 joined the hermes install (issue #37) get it on next start,
+  # the same repair-in-place contract verify_hermes_mcp established.
+  [ -x "$TOOLS/venv/bin/python" ] || return 0
+  "$TOOLS/venv/bin/python" -c "import boto3" 2>/dev/null && return 0
+  echo "[harnessrouter] repairing Hermes bedrock support (boto3 missing from an older install)…"
+  "$TOOLS/venv/bin/pip" install --no-cache-dir -q boto3 >/dev/null 2>&1 || true
+  if "$TOOLS/venv/bin/python" -c "import boto3" 2>/dev/null; then
+    echo "[harnessrouter] Hermes bedrock support restored"
+  else
+    echo "[harnessrouter] WARNING: Hermes cannot use the bedrock provider — boto3 could not be installed"
+  fi
+}
+
 verify_hermes_mcp() {
   [ -x "$TOOLS/venv/bin/python" ] || return 0
   "$TOOLS/venv/bin/python" - <<'PYEOF' && return 0
@@ -329,6 +347,7 @@ PYEOF
 }
 
 install_backends
+if wanted hermes; then verify_hermes_bedrock; fi
 
 pids=()
 cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
