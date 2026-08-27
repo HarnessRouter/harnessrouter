@@ -758,15 +758,15 @@ _AGENTS_END = "<!-- harness-skills:end -->"
 
 
 def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
-    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi, dsh and opencode (all read
+    """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi, dsh, opencode and Devin (all read
     AGENTS.md from the cwd — pi as a context file before its trust gate, dsh via its
     dsh-agent-instructions workspace loader, opencode via instruction-context.ts, whose discovery
-    targets are literally ["AGENTS.md"]), CLAUDE.md for Claude Code.
+    targets are literally ["AGENTS.md"], Devin via its ACP driver), CLAUDE.md for Claude Code.
 
     Getting this wrong is silent: the file is written either way, and a backend that does not read
     the name we chose simply never sees the harness's instructions."""
     return pathlib.Path(cwd) / (
-        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode") else "CLAUDE.md")
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "devin") else "CLAUDE.md")
 
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
@@ -2338,14 +2338,73 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
     return pre
 
 
+def _devin_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map one ACP JSON-RPC line to canonical claude stream-json events."""
+    if not isinstance(obj, dict):
+        return []
+    evs: list[dict] = []
+
+    # JSON-RPC response to a request we made (e.g. session/prompt final)
+    if "id" in obj and "result" in obj:
+        res = obj["result"]
+        stop = res.get("stopReason")
+        if stop:
+            ok = stop == "end_turn"
+            # Devin does not stream token counts today; leave usage empty.
+            evs.append({"type": "result", "subtype": "success" if ok else "error",
+                        "is_error": not ok, "result": state.get("final", "")})
+        return evs
+
+    params = obj.get("params") or {}
+    update_type = params.get("type")
+    if update_type == "agent_message_chunk":
+        for c in params.get("content") or []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "text":
+                text = c.get("text") or ""
+                state["final"] = state.get("final", "") + text
+                evs.append({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            elif c.get("type") == "reasoning":
+                evs.append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": c.get("thinking") or ""}]}})
+    elif update_type == "tool_call":
+        tc = params.get("toolCall") or {}
+        evs.append({"type": "assistant", "message": {"content": [{"type": "tool_use",
+                        "id": tc.get("id") or "", "name": tc.get("name") or "",
+                        "input": tc.get("input") or {}}]}})
+    elif update_type == "tool_call_update":
+        tc = params.get("toolCall") or {}
+        status = tc.get("status")
+        if status in ("completed", "success"):
+            out = tc.get("output") or {}
+            parts = [x.get("text") or "" for x in (out.get("content") or []) if isinstance(x, dict)]
+            evs.append({"type": "user", "message": {"content": [{"type": "tool_result",
+                            "tool_use_id": tc.get("id") or "", "is_error": False,
+                            "content": "\n".join(parts)}]}})
+    elif update_type == "plan":
+        plan = params.get("plan") or {}
+        if plan:
+            evs.append({"type": "system", "subtype": "plan", "plan": plan})
+    elif update_type == "user_message_chunk":
+        # Echo of our prompt; ignore.
+        pass
+    elif update_type == "request_permission":
+        # Handled at the driver level; the normalizer does not emit UI events for it.
+        pass
+    return evs
+
+
 # opencode's stream has no terminal event, so the normalizer carries an `eof` the run loop calls
 # when the process exits. See _run_turn_bg.
 _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
 
 
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
-# in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
-# (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
+# in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes and devin have their
+# own drivers (_run_hermes_bg — DB-polling, no stdout events; devin — ACP), so they carry no normalizer.
+DEVIN_PROVIDERS = {"devin"}
+DEVIN_DEFAULT_MODEL = os.environ.get("DEVIN_DEFAULT_MODEL", "devin-swe")
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -2359,6 +2418,8 @@ BACKENDS = {
             "normalize": _dsh_to_claude},
     "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
                  "normalize": _opencode_to_claude},
+    "devin": {"providers": sorted(DEVIN_PROVIDERS), "default_model": DEVIN_DEFAULT_MODEL,
+              "normalize": None},  # _run_devin_acp_bg calls _devin_to_claude directly
 }
 
 
@@ -2634,6 +2695,287 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     if not ok:
         rec["error"] = err_txt
         rec["tried"] = [{"connection": "codex-app-server", "error": err_txt[:400]}]  # -> gateway failure msg
+    rec["done"] = True
+
+
+def _run_devin_acp_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str,
+                      resume_session_id: str | None, timeout_seconds: int | None,
+                      mcp_servers: list[dict] | None, tools_disabled: list[str] | None) -> None:
+    rec = _turns[turn_id]
+    state: dict = {"final": ""}
+    result_appended = False
+    result_ev = None
+    shutting_down = False
+
+    def append(ev: dict) -> None:
+        nonlocal result_appended, result_ev
+        ev["_ts"] = time.time()
+        if ev.get("type") == "result":
+            result_appended = True
+            result_ev = ev
+        with _turns_lock:
+            rec["events"].append(ev)
+
+    # env setup (mirrors claude/codex session isolation)
+    home = pathlib.Path(cwd) / ".harness" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    data_dir = env.get("HR_DATA_DIR") or os.environ.get("HR_DATA_DIR") or "/data"
+    xdg = pathlib.Path(data_dir) / "agent-tools" / "devin"
+    try:
+        xdg.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Dev hosts without a /data volume: fall back to a writable per-session path.
+        xdg = home / "data" / "agent-tools" / "devin"
+        xdg.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)
+    env["XDG_DATA_HOME"] = str(xdg)
+    env["DEVIN_MODEL"] = model
+
+    binary = env.get("DEVIN_ACP_BINARY") or os.environ.get("DEVIN_ACP_BINARY") or "devin"
+    cmd = [binary, "acp", "--model", model]
+
+    try:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True,
+                                **_as_session(cwd))
+    except Exception as e:  # noqa: BLE001
+        rec.update(status="failed", error=f"spawn devin acp: {e}"[:500], done=True)
+        return
+    rec["pid"] = proc.pid
+    rec["proc"] = proc
+    if rec.get("cancelled"):
+        _kill_proc_tree(proc)
+
+    cap = min(timeout_seconds, MAX_TURN_SECONDS) if timeout_seconds else MAX_TURN_SECONDS
+
+    _nid = [0]
+    def _rid() -> int:
+        _nid[0] += 1
+        return _nid[0]
+
+    send_lock = threading.Lock()
+
+    def send(method: str, params: dict, notify: bool = False) -> int | None:
+        msg = {"jsonrpc": "2.0", "method": method, "params": params}
+        if not notify:
+            msg["id"] = _rid()
+        line = json.dumps(msg) + "\n"
+        with send_lock:
+            try:
+                proc.stdin.write(line)  # type: ignore[union-attr]
+                proc.stdin.flush()  # type: ignore[union-attr]
+            except Exception:
+                pass
+        return msg.get("id")
+
+    def send_response(req_id: int, result: dict) -> None:
+        msg = {"jsonrpc": "2.0", "id": req_id, "result": result}
+        line = json.dumps(msg) + "\n"
+        with send_lock:
+            try:
+                proc.stdin.write(line)  # type: ignore[union-attr]
+                proc.stdin.flush()  # type: ignore[union-attr]
+            except Exception:
+                pass
+
+    session_id = None
+    stop_reason = None
+    turn_status = None
+    errbuf: list[str] = []
+    id_init = id_auth = id_session = id_prompt = None
+    prompt_sent = False
+
+    def _permission_response(req_id: int, p: dict) -> None:
+        tc = p.get("toolCall") or {}
+        tool_name = tc.get("name") or tc.get("tool") or tc.get("title") or ""
+        denied = bool(tools_disabled and tool_name in tools_disabled)
+        options = p.get("options") or []
+        option_id = None
+        for opt in options:
+            kind = (opt.get("kind") or "").lower()
+            if not denied and kind.startswith("allow"):
+                option_id = opt.get("optionId")
+                break
+            if denied and kind.startswith(("reject", "deny")):
+                option_id = opt.get("optionId")
+                break
+        if option_id is None:
+            option_id = "reject-once" if denied else "allow-once"
+        send_response(req_id, {"outcome": {"outcome": "selected", "optionId": option_id}})
+
+    def _send_cancel() -> None:
+        if session_id:
+            send("session/cancel", {"sessionId": session_id}, notify=True)
+
+    def _shutdown(cancel: bool = False) -> None:
+        nonlocal shutting_down
+        if shutting_down:
+            return
+        shutting_down = True
+        if cancel and session_id:
+            _send_cancel()
+        try:
+            if proc.poll() is None:
+                _kill_proc_tree(proc)
+        except Exception:
+            pass
+
+    def _devin_timeout() -> None:
+        rec["capped"] = True
+        _shutdown(cancel=True)
+
+    def _devin_cancel() -> None:
+        _shutdown(cancel=True)
+
+    killer = threading.Timer(cap, _devin_timeout)
+    killer.daemon = True
+    killer.start()
+
+    # Resume guard: only resume if the session artifact actually exists on disk.
+    resume = None
+    if resume_session_id:
+        sess_dir = xdg / "cli" / "sessions"
+        if (sess_dir / resume_session_id).exists() or (sess_dir / f"{resume_session_id}.json").exists():
+            resume = resume_session_id
+        else:
+            print(f"[resume] devin: session {resume_session_id} not in workspace — starting fresh", flush=True)
+            append({"type": "system", "subtype": "resume_lost", "requested_session_id": resume_session_id})
+
+    # Watcher thread that sends session/cancel and kills on external cancel/timeout.
+    def _watcher() -> None:
+        while not rec.get("done"):
+            if rec.get("cancelled"):
+                _devin_cancel()
+                return
+            if rec.get("capped"):
+                _devin_timeout()
+                return
+            time.sleep(0.2)
+
+    watcher = threading.Thread(target=_watcher, daemon=True)
+    watcher.start()
+
+    try:
+        id_init = send("initialize", {"protocolVersion": "1",
+                                      "clientInfo": {"name": "harness-runner", "version": "1"},
+                                      "capabilities": {"session": {"resume": True}}})
+        for raw in proc.stdout:  # type: ignore[union-attr]
+            raw = raw.strip()
+            if not raw:
+                continue
+            if not raw.startswith("{"):
+                errbuf.append(raw)
+                if len(errbuf) > 80:
+                    del errbuf[0]
+                continue
+            try:
+                msg = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                continue
+            mid = msg.get("id")
+            method = msg.get("method")
+
+            # Requests from the agent (e.g. permission prompts)
+            if method is not None and mid is not None and "result" not in msg and "error" not in msg:
+                if method == "session/request_permission":
+                    _permission_response(mid, msg.get("params") or {})
+                else:
+                    # Unknown request: respond with empty result so the agent is not blocked.
+                    send_response(mid, {})
+                continue
+
+            # Responses to our requests
+            if method is None and mid is not None:
+                if msg.get("error") and mid in (id_init, id_auth, id_session, id_prompt):
+                    errbuf.append(str((msg["error"] or {}).get("message") or "devin acp error"))
+                    turn_status = "failed"
+                    break
+                res = msg.get("result") or {}
+                if mid == id_init:
+                    send("initialized", {}, notify=True)
+                    # Devin's ACP server requires authentication before sessions. Use the first
+                    # advertised auth method and pass the API key in the standard _meta field.
+                    api_key = env.get("DEVIN_API_KEY", "")
+                    am = (res.get("authMethods") or [{}])[0]
+                    auth_id = am.get("id") or "devin-browser"
+                    id_auth = send("authenticate", {"methodId": auth_id, "_meta": {"api_key": api_key}})
+                elif mid == id_auth:
+                    if resume:
+                        session_id = resume
+                        append({"type": "system", "subtype": "init", "session_id": session_id, "model": model})
+                        rec["session_id"] = session_id
+                        id_session = send("session/resume", {"sessionId": resume, "cwd": cwd,
+                                                               "mcpServers": mcp_servers or []})
+                        # For resume the session id is already known, so we can start the turn now.
+                        id_prompt = send("session/prompt", {"sessionId": session_id,
+                                                            "prompt": [{"type": "text", "text": prompt}]})
+                        prompt_sent = True
+                    else:
+                        id_session = send("session/new", {"cwd": cwd, "mcpServers": mcp_servers or []})
+                elif mid == id_session:
+                    sid = res.get("sessionId") or session_id or resume or ""
+                    if sid and sid != session_id:
+                        session_id = sid
+                        append({"type": "system", "subtype": "init", "session_id": session_id, "model": model})
+                        rec["session_id"] = session_id
+                    if not prompt_sent:
+                        id_prompt = send("session/prompt", {"sessionId": session_id,
+                                                            "prompt": [{"type": "text", "text": prompt}]})
+                        prompt_sent = True
+                elif mid == id_prompt:
+                    for ev in _devin_to_claude(msg, state):
+                        append(ev)
+                    stop_reason = (res or {}).get("stopReason")
+                    break
+                continue
+
+            # Notifications (method without id)
+            if method is not None and mid is None:
+                if method == "session/update":
+                    for ev in _devin_to_claude(msg, state):
+                        append(ev)
+                elif method == "session/cancel":
+                    stop_reason = "cancelled"
+                    break
+                elif method in ("error", "turn/failed"):
+                    p = msg.get("params") or {}
+                    errbuf.append(str(p.get("message") or (p.get("error") or {}).get("message") or "devin error"))
+                    turn_status = "failed"
+                    break
+    except Exception as e:  # noqa: BLE001
+        errbuf.append(f"{type(e).__name__}: {str(e)[:150]}")
+        turn_status = turn_status or "failed"
+    finally:
+        killer.cancel()
+        _shutdown(cancel=False)
+        try:
+            rc = proc.wait()
+        except Exception:  # noqa: BLE001
+            rc = proc.returncode if proc.returncode is not None else -1
+        rec["exit_code"] = rc
+
+    if not result_appended:
+        ok = (turn_status in (None, "completed") and not rec.get("cancelled")
+              and not rec.get("capped") and stop_reason == "end_turn")
+        err_txt = ("\n".join(errbuf[-30:]).strip()
+                   or f"devin acp status={turn_status}, stop_reason={stop_reason}")[:2000]
+        if ok:
+            res_txt = state.get("final", "")
+        else:
+            res_txt = "\n\n".join(x for x in (state.get("final", "").strip(), err_txt) if x)[:4000] or err_txt
+        append({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                "result": res_txt})
+
+    rec["result"] = state.get("final", "")
+    rec["status"] = ("cancelled" if rec.get("cancelled")
+                     else "timeout" if rec.get("capped")
+                     else _status_from_result(result_ev, rc))
+    if rec["status"] in ("failed", "error", "timeout"):
+        tail = "\n".join(errbuf[-30:]).strip()
+        ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
+        rec["error"] = (str(ev_err).strip() or tail
+                        or f"exit_code={rc}, no diagnostic output")[:2000]
     rec["done"] = True
 
 
@@ -3241,7 +3583,7 @@ def capabilities(identifier: str = "") -> dict:
 
 
 class TurnReq(BaseModel):
-    backend: str = "claude"          # claude | codex | hermes | pi | dsh
+    backend: str = "claude"          # claude | codex | hermes | pi | dsh | devin
     provider: str | None = None      # see BACKENDS[...].providers
     model: str | None = None
     prompt: str
@@ -3316,7 +3658,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     #     than a block. Written here once rather than as two divergent branches — hermes previously
     #     had neither, and silently ignored every disabled tool.
     agent_doc = req.agent_doc or ""
-    if backend in ("codex", "hermes", "dsh") and req.tools_disabled:
+    if backend in ("codex", "hermes", "dsh", "devin") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
@@ -3376,6 +3718,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                          max_turns=req.max_turns, mcp_servers=req.mcp_servers,
                                          vision_auth=req.vision_auth)
+    elif backend == "devin":
+        model = model or DEVIN_DEFAULT_MODEL
+        if auth.api_key:
+            env["DEVIN_API_KEY"] = auth.api_key
     elif backend == "dsh":
         model = model or DSH_DEFAULT_MODEL
         cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
@@ -3416,6 +3762,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                            "backend": backend, "model": model, "started": time.time()}
         if key:
             _turn_by_key[key] = turn_id
+    cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     if use_appserver:
         threading.Thread(target=_run_codex_appserver_bg,
                          args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds),
@@ -3425,12 +3772,22 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                          args=(turn_id, cwd, env, model, hermes_provider, req.prompt,
                                req.resume_session_id, req.timeout_seconds, hermes_mcp),
                          daemon=True).start()
+    elif backend == "devin":
+        if not env.get("DEVIN_API_KEY"):
+            rec = _turns[turn_id]
+            rec.update(status="failed", error="DEVIN_API_KEY not configured for devin backend", done=True)
+            return {"turn_id": turn_id, "status": rec["status"], "backend": backend, "model": model,
+                    "host": socket.gethostname(), "max_seconds": cap, "done": rec["done"], "error": rec.get("error")}
+        threading.Thread(target=_run_devin_acp_bg,
+                         args=(turn_id, cwd, env, model, req.prompt,
+                               req.resume_session_id, req.timeout_seconds,
+                               req.mcp_servers, req.tools_disabled),
+                         daemon=True).start()
     else:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
                          daemon=True).start()
-    cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,
             "host": socket.gethostname(), "max_seconds": cap}
 
