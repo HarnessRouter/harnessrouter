@@ -166,3 +166,69 @@ def test_relay_retries_a_max_tokens_rejection_and_sticks():
         assert len(calls) == 3 and "max_completion_tokens" in calls[2]
     finally:
         up.shutdown()
+
+# ── tool-content stringify-on-rejection (qwen x LLMTR, 2026-08-27) ──────────────────────────────
+# qwen-code sends tool-result content as an array of parts; strict aggregators 400 with
+# 'tool message content must be a string' — measured live, killing the turn after the tool ran.
+
+def test_stringify_tool_content_helper():
+    from server import _stringify_tool_content
+    body = json.dumps({"messages": [
+        {"role": "user", "content": [{"type": "text", "text": "leave arrays on non-tool roles"}]},
+        {"role": "tool", "tool_call_id": "c1",
+         "content": [{"type": "text", "text": "TOOL-"}, {"type": "text", "text": "OUT"}]},
+    ]}).encode()
+    out = json.loads(_stringify_tool_content(body))
+    assert out["messages"][1]["content"] == "TOOL-OUT"
+    assert isinstance(out["messages"][0]["content"], list)    # user parts untouched
+    already = json.dumps({"messages": [{"role": "tool", "content": "s"}]}).encode()
+    assert _stringify_tool_content(already) == already
+    assert _stringify_tool_content(b"not json") == b"not json"
+
+
+def test_relay_retries_a_tool_content_rejection_and_sticks():
+    calls = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            calls.append(body)
+            if any(m.get("role") == "tool" and not isinstance(m.get("content"), str)
+                   for m in body["messages"]):
+                data = b'{"error": {"message": "tool message content must be a string"}}'
+                self.send_response(400)
+            else:
+                data = b'{"ok": true}'
+                self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _hermes_relay_route(f"http://127.0.0.1:{up.server_address[1]}/v1", "sk-real")
+        body = json.dumps({"model": "m", "messages": [
+            {"role": "user", "content": "run it"},
+            {"role": "tool", "tool_call_id": "c1",
+             "content": [{"type": "text", "text": "TOOL-Q"}]},
+        ]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json"})
+        assert json.loads(urllib.request.urlopen(req, timeout=10).read()) == {"ok": True}
+        assert len(calls) == 2                              # rejected once, flattened, succeeded
+        assert calls[1]["messages"][1]["content"] == "TOOL-Q"
+        # Sticky for the route: the next request flattens preemptively.
+        urllib.request.urlopen(urllib.request.Request(
+            base + "/chat/completions", data=body, method="POST",
+            headers={"authorization": f"Bearer {tok}", "content-type": "application/json"}), timeout=10)
+        assert len(calls) == 3 and calls[2]["messages"][1]["content"] == "TOOL-Q"
+    finally:
+        up.shutdown()
