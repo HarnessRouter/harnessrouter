@@ -232,3 +232,66 @@ def test_relay_retries_a_tool_content_rejection_and_sticks():
         assert len(calls) == 3 and calls[2]["messages"][1]["content"] == "TOOL-Q"
     finally:
         up.shutdown()
+
+# ── empty reasoning_content (qwen x deepseek-v4-pro on LLMTR, 2026-08-27) ───────────────────────
+# qwen echoes DeepSeek's reasoning_content back verbatim; when it is empty, LLMTR's validator
+# 400s with 'String must contain at least 1 character(s)' — measured live, right after the tool.
+
+def test_normalize_drops_empty_reasoning_content_only():
+    from server import _normalize_openai_chat_body
+    body = json.dumps({"messages": [
+        {"role": "assistant", "content": None, "reasoning_content": "",
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "f", "arguments": "{}"}}]},
+        {"role": "assistant", "content": "hi", "reasoning_content": "kept: real thinking"},
+    ]}).encode()
+    out = json.loads(_normalize_openai_chat_body(body))
+    assert "reasoning_content" not in out["messages"][0]
+    assert out["messages"][1]["reasoning_content"] == "kept: real thinking"
+
+
+# ── stream_options drop-on-rejection (qwen x LLMTR gpt-5.x, 2026-08-27) ─────────────────────────
+# LLMTR's openai/gpt-5.x upstream 400s any streaming body carrying stream_options, with only the
+# generic 'model provider rejected the request' — so the relay retries a 400 once without the
+# field and remembers the fix only when that retry succeeded.
+
+def test_relay_retries_a_stream_options_rejection_and_sticks():
+    calls = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            calls.append(body)
+            if "stream_options" in body:
+                data = b'{"error": {"message": "The model provider rejected the request."}}'
+                self.send_response(400)
+            else:
+                data = b'{"ok": true}'
+                self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _hermes_relay_route(f"http://127.0.0.1:{up.server_address[1]}/v1", "sk-real")
+        body = json.dumps({"model": "m", "stream": True, "stream_options": {"include_usage": True},
+                           "messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json"})
+        assert json.loads(urllib.request.urlopen(req, timeout=10).read()) == {"ok": True}
+        assert len(calls) == 2 and "stream_options" not in calls[1]
+        urllib.request.urlopen(urllib.request.Request(
+            base + "/chat/completions", data=body, method="POST",
+            headers={"authorization": f"Bearer {tok}", "content-type": "application/json"}), timeout=10)
+        assert len(calls) == 3 and "stream_options" not in calls[2]   # sticky: no second 400
+    finally:
+        up.shutdown()

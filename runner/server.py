@@ -1922,8 +1922,13 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
     Surgical, matched to what was captured live: an assistant tool-call message whose `content`
     is the empty string becomes `content: null` (equally legal, and translators emit no text
     block for it), and empty `{"type": "text", "text": ""}` parts are dropped from list-shaped
-    content (if that empties a tool-call message's list, it becomes null too). Anything else —
-    other roles, non-empty text, unparseable bodies — passes through byte-identical."""
+    content (if that empties a tool-call message's list, it becomes null too). An EMPTY
+    `reasoning_content` is deleted outright: qwen-code echoes DeepSeek's extension field back
+    verbatim, and LLMTR's validator requires it non-empty when present ('String must contain at
+    least 1 character(s)', measured live on deepseek-v4-pro 2026-08-27 — the turn died right
+    after its tool call). A non-empty one is meaningful interleaved thinking and passes through.
+    Anything else — other roles, non-empty text, unparseable bodies — passes through
+    byte-identical."""
     try:
         obj = json.loads(body)
         if not isinstance(obj, dict) or not isinstance(obj.get("messages"), list):
@@ -1942,6 +1947,10 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
                     changed = True
             elif content == "" and m.get("tool_calls"):
                 m["content"] = None
+                changed = True
+            if m.get("role") == "assistant" and m.get("reasoning_content") in ("", None) \
+                    and "reasoning_content" in m:
+                del m["reasoning_content"]
                 changed = True
         if not changed:
             return body
@@ -1967,6 +1976,25 @@ def _stringify_tool_content(body: bytes) -> bytes:
                                        if isinstance(p, dict))
                 changed = True
         if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+def _drop_stream_options(body: bytes) -> bytes:
+    """Remove `stream_options` from one chat-completions body.
+
+    Spec-legal and honored by most models, but LLMTR's openai/gpt-5.x upstream 400s any
+    streaming request carrying it (isolated live 2026-08-27: the identical body succeeds the
+    moment stream_options goes; every other model there accepts it). The error is the generic
+    'The model provider rejected the request', so there is nothing to pattern-match — the relay
+    instead retries a 400 once without the field, and keeps doing so for the route only when
+    that retry is what made it work. Cost: streamed responses stop carrying usage totals."""
+    try:
+        obj = json.loads(body)
+        if isinstance(obj, dict) and "stream_options" in obj:
+            del obj["stream_options"]
             return json.dumps(obj, separators=(",", ":")).encode()
     except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
         pass
@@ -2103,13 +2131,19 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
                 body = _stringify_tool_content(body)
+            if flags.get("drop_stream_options"):
+                body = _drop_stream_options(body)
             headers["content-length"] = str(len(body))
         resp = None
+        tried_slim = False
         for attempt in (0, 1):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
             try:
                 resp = urllib.request.urlopen(req, timeout=600)
+                if attempt == 1 and tried_slim:
+                    # the blind no-stream_options retry is what made this route work
+                    flags["drop_stream_options"] = True
                 break
             except urllib.error.HTTPError as e:
                 data = e.read()
@@ -2126,6 +2160,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         and stringified is not None and stringified != body):
                     flags["stringify_tool_content"] = True
                     body = stringified
+                    headers["content-length"] = str(len(body))
+                    continue
+                slim = _drop_stream_options(body) if body is not None else None
+                if attempt == 0 and e.code == 400 and slim is not None and slim != body:
+                    tried_slim = True
+                    # Generic 400 with stream_options aboard: blind single retry without it
+                    # (LLMTR's gpt-5.x upstream names nothing better). Sticks only if it works.
+                    body = slim
                     headers["content-length"] = str(len(body))
                     continue
                 # pass provider errors through verbatim
