@@ -1942,6 +1942,24 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
         return body
 
 
+def _rename_max_tokens(body: bytes) -> bytes:
+    """max_tokens -> max_completion_tokens in one chat-completions body.
+
+    OpenAI deprecated max_tokens for its reasoning models and Azure ENFORCES that: a gpt-5.x
+    deployment answers 400 'Unsupported parameter: max_tokens is not supported with this model.
+    Use max_completion_tokens instead.' (captured live 2026-08-27, opencode x custom-Azure).
+    Applied only after a provider says exactly that — aggregators that still take max_tokens
+    never see a renamed request."""
+    try:
+        obj = json.loads(body)
+        if isinstance(obj, dict) and "max_tokens" in obj and "max_completion_tokens" not in obj:
+            obj["max_completion_tokens"] = obj.pop("max_tokens")
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1959,7 +1977,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        base, key = route
+        base, key, flags = route
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
         drop = {"host", "content-length", "authorization", "connection",
                 "accept-encoding", "transfer-encoding"}
@@ -1968,19 +1986,33 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers.setdefault("accept", "*/*")
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
+            if flags.get("rename_max_tokens"):
+                body = _rename_max_tokens(body)
             headers["content-length"] = str(len(body))
-        req = urllib.request.Request(base.rstrip("/") + tail, data=body,
-                                     method=self.command, headers=headers)
-        try:
-            resp = urllib.request.urlopen(req, timeout=600)
-        except urllib.error.HTTPError as e:  # pass provider errors through verbatim
-            data = e.read()
-            self.send_response(e.code)
-            self.send_header("content-type", e.headers.get("content-type") or "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
+        resp = None
+        for attempt in (0, 1):
+            req = urllib.request.Request(base.rstrip("/") + tail, data=body,
+                                         method=self.command, headers=headers)
+            try:
+                resp = urllib.request.urlopen(req, timeout=600)
+                break
+            except urllib.error.HTTPError as e:
+                data = e.read()
+                renamed = _rename_max_tokens(body) if body is not None else None
+                if (attempt == 0 and e.code == 400 and b"max_completion_tokens" in data
+                        and renamed is not None and renamed != body):
+                    # The provider named the fix itself; apply it, remember it for this route.
+                    flags["rename_max_tokens"] = True
+                    body = renamed
+                    headers["content-length"] = str(len(body))
+                    continue
+                # pass provider errors through verbatim
+                self.send_response(e.code)
+                self.send_header("content-type", e.headers.get("content-type") or "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
         ctype = resp.headers.get("content-type") or ""
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
@@ -2018,7 +2050,7 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (base_url, api_key)
+        _HERMES_RELAY["routes"][tok] = (base_url, api_key, {"rename_max_tokens": False})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -2274,6 +2306,13 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
+    if auth.api_format == "openai" and auth.base_url and auth.api_key:
+        # A custom OpenAI endpoint rides the loopback relay, for the same two reasons hermes
+        # does: request shapes ai-sdk emits but strict endpoints refuse are repaired in flight
+        # (Azure's gpt-5.x deployments 400 on max_tokens — captured live 2026-08-27), and the
+        # real key stays in this process; opencode's env gets a per-turn placeholder.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
         env[_OPENCODE_KEY_ENV] = auth.api_key
     qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr)
