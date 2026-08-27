@@ -325,12 +325,17 @@ app = FastAPI(title="harness-gateway", docs_url=None, redoc_url=None, openapi_ur
 # by /v1/ is rewritten — every real route (/v1, /a, /w, /share, /healthz, /readyz, /internal) has a
 # reserved first segment that cannot match a chrn_<32hex> / builtin slug, so this is a NO-OP behind
 # today's nginx (paths already arrive stripped to /v1/*) and only activates once api. targets ACA.
-_HID_PREFIX_RE = re.compile(r"^/(chrn_[0-9a-f]{32}|codex|claude-code|pi|hermes)(/v1/.*)$")
+# Compiled below, AFTER _BASE_CATALOG exists, from the catalog itself. It was a hardcoded
+# alternation here, and it drifted twice: /dsh/v1/* and /opencode/v1/* answered FastAPI's bare 404
+# because nobody added the new base ids (found live on the hosted side, first /opencode/v1 call).
+# The middleware reads the global at request time, so the late assignment is safe — every
+# module-level statement runs before uvicorn serves a request.
+_HID_PREFIX_RE: re.Pattern | None = None
 
 
 @app.middleware("http")
 async def _harness_path_prefix(request: Request, call_next):
-    m = _HID_PREFIX_RE.match(request.scope.get("path", ""))
+    m = _HID_PREFIX_RE.match(request.scope.get("path", "")) if _HID_PREFIX_RE else None
     if m:
         hid, rest = m.group(1), m.group(2)
         request.scope["path"] = rest
@@ -948,12 +953,18 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "opencode"): "openai-api",
     ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
     ("llmtr", "opencode"): "tokenrouter",
+    ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
+    ("azure-foundry", "qwen"): "azure",
+    ("openrouter", "qwen"): "openai-api",
+    ("tokenrouter", "qwen"): "tokenrouter",    ("vercel", "qwen"): "tokenrouter",
+    ("llmtr", "qwen"): "tokenrouter",
     # custom: user-supplied endpoint + model + key. Maps to runner providers that can actually
     # drive a bring-your-own OpenAI/Anthropic endpoint — NOT codex, whose current releases speak
     # only the OpenAI Responses API and so cannot reach a custom chat/completions endpoint.
     ("custom", "claude"): "tokenrouter",
     ("custom", "hermes"): "openai-api",        ("custom", "opencode"): "tokenrouter",
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
+    ("custom", "qwen"): "openai-api",
 }
 
 
@@ -3597,7 +3608,9 @@ def _provider_backends(provider: str) -> list[str]:
 # speak is a promise the router breaks at the first call, so these sets drive the picker's
 # grey-out.
 _CUSTOM_FORMAT_BACKENDS = {
-    "openai": {"hermes", "opencode", "pi", "dsh"},
+    # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
+    # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen"},
     "anthropic": {"claude", "opencode", "pi", "dsh"},
 }
 
@@ -4605,6 +4618,17 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash"]},
+    # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
+    # Unprobed per-model on this backend (one live turn each of qwen3.7-max and gpt-5.4 verified,
+    # 2026-08-25) — substitution-check before leaning on any single row.
+    "qwen": {"default": "qwen3.7-max",
+             "models": ["qwen3.7-max", "qwen3.8-max",
+                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                        "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                        "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4890,7 +4914,10 @@ def _strip_internal(d: dict) -> dict:
 # Harness-internal seed/config files the runner writes into the workspace to drive the agent
 # (e.g. AGENTS.md surfaces installed skills for codex; CLAUDE.md is the claude equivalent). They are
 # never user-facing artifacts, so they must never appear in a turn's output file list.
-_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md"}
+# Instruction files WE write into the workspace — one per backend family. A new backend that
+# introduces a new context-file name must add it here or the harness's own instructions get
+# collected as a "produced" deliverable on the first turn (QWEN.md did, 2026-08-25).
+_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md"}
 
 
 def _is_internal_output(name: str) -> bool:
@@ -11252,11 +11279,30 @@ _BASE_CATALOG: dict[str, dict] = {
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
         "tool_enforcement": "hard",
     },
+    "qwen": {
+        "label": "Qwen Code", "backend": "qwen", "status": "ready",
+        "system_prompt": ("You are Qwen Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # From the live init event's tool list under --yolo (0.22.1) — shell/write/edit exist
+        # ONLY in yolo mode, which the runner always passes. No per-tool kill switch on the CLI,
+        # so disabling is an instruction to the model — same tier as codex/hermes/dsh.
+        "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("edit", "Edit"),
+                  ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
+                  ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
 }
 
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
 # `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
 _SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
+
+# The per-harness URL (/{hid}/v1/*) accepts every base id the catalog declares, plus stored chrn
+# ids — DERIVED, so adding a base to _BASE_CATALOG routes its public URL with no second edit.
+_HID_PREFIX_RE = re.compile(
+    r"^/(chrn_[0-9a-f]{32}|" + "|".join(re.escape(b) for b in sorted(_SUPPORTED_BASES, key=len, reverse=True)) + r")(/v1/.*)$")
 
 
 def _require_supported_base(base: str) -> str:
