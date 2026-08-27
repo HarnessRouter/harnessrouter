@@ -62,6 +62,7 @@ import stat
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -832,6 +833,9 @@ class Auth(BaseModel):
     gcp_sa_json: str | None = None         # service-account JSON (string) → file
     # Codex provider tuning
     wire_api: str | None = None            # responses | chat (default responses)
+    # Custom provider
+    api_format: str | None = None          # "openai" | "anthropic" (custom integration)
+    full_url: str | None = None            # "1" when the URL is a complete request URL
 
 
 # ── canonical-event normalizers ──────────────────────────────────────────────────
@@ -1158,6 +1162,11 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
             sa.write_text(auth.gcp_sa_json)
             env["GOOGLE_APPLICATION_CREDENTIALS"] = str(sa)
     elif p == "tokenrouter":
+        # tokenrouter speaks Anthropic on the claude backend. A custom integration with
+        # api_format=openai cannot be served here — the CLI only speaks Anthropic Messages.
+        if auth.api_format == "openai":
+            raise HTTPException(400, "claude backend cannot serve an OpenAI-format custom integration "
+                                 "(use a backend that supports openai-api, like hermes or opencode)")
         if auth.base_url:
             # Claude Code appends /v1/messages itself — a base_url stored with /v1 (the
             # OpenAI-compat form) would double the segment and 404 every call.
@@ -1260,6 +1269,11 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     # why codex state used to vanish. (auth.json inside is still creds-excluded.)
     cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".codex"
     cfg_dir.mkdir(parents=True, exist_ok=True)
+    # codex only speaks the OpenAI Responses API now — current releases removed
+    # `wire_api = "chat"` entirely, so a custom chat-completions endpoint cannot be driven by
+    # codex at all (the gateway greys codex out for those integrations). Always the supported
+    # "responses" value; a custom-endpoint turn against chat-only would 404 clearly rather than
+    # crash on config load.
     cfg = _CODEX_CONFIG_TMPL.format(
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
@@ -1426,7 +1440,10 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     base = auth.base_url or _DSH_DEFAULT_BASE.get(pr, "")
     if not base:
         raise HTTPException(400, f"dsh provider '{pr}' needs a base_url (none configured)")
-    if not base.rstrip("/").endswith("/v1"):
+    # The relay joins upstream paths against a /v1 base for known providers. But a CUSTOM
+    # openai endpoint carries its own version path (https://host/api/coding/v3) — appending
+    # /v1 would make /v3/v1 and 404, so a custom base is used as-is.
+    if auth.api_format != "openai" and not base.rstrip("/").endswith("/v1"):
         base = base.rstrip("/") + "/v1"   # the relay joins upstream paths against a /v1 base
     # HR_DSH_*: consumed and scrubbed by the driver before the runtime starts. The runtime gets
     # a loopback relay URL and a placeholder key — the credential never enters its environment.
@@ -1441,8 +1458,13 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
         # Family decides the route, not the integration's name: deepseek models keep the
         # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
         # family rides the pi-ai route. api by family — the same routing the pi backend
-        # live-verified on these channels.
-        if pr == "anthropic" or _PI_CLAUDE_MODEL.search(model or ""):
+        # live-verified on these channels. When api_format is set (custom integration), the
+        # user's explicit choice wins.
+        if auth.api_format == "anthropic":
+            api = "anthropic-messages"
+        elif auth.api_format == "openai":
+            api = "openai-completions"
+        elif pr == "anthropic" or _PI_CLAUDE_MODEL.search(model or ""):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
             api = "openai-responses"
@@ -1583,7 +1605,7 @@ _PI_CLAUDE_MODEL = re.compile(r"(?:^|/)(?:us\.anthropic\.)?claude", re.I)
 
 
 def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
-                    vision: bool = True) -> str:
+                    vision: bool = True, custom_openai: bool = False) -> str:
     """A one-provider ~/.pi/agent/models.json ("hr") for a custom endpoint. Pi's anthropic client
     appends /v1/messages to baseUrl while its openai clients expect the /v1 to already be there
     (both read straight off pi's own docs/models.md examples), so the /v1 suffix is normalized
@@ -1594,11 +1616,15 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
     message with an image part — verified against a capturing sink. Declared text-only, pi drops
     the image and the turn runs; declared vision on a model whose channel refuses images, the
     whole turn dies on the provider's 400. The gateway says which models are text-only, from
-    live probes, so vision stays the default."""
+    live probes, so vision stays the default.
+
+    `custom_openai`: a CUSTOM OpenAI endpoint carries its own version path (e.g. https://host/
+    api/coding/v3) — appending our own /v1 would make /v3/v1 and 404. So for a custom endpoint
+    the base_url is used as-is and only /chat/completions is joined."""
     base = (base_url or "").rstrip("/")
     if api == "anthropic-messages":
         base = base.removesuffix("/v1")
-    elif not base.endswith("/v1"):
+    elif not custom_openai and not base.endswith("/v1"):
         base += "/v1"
     return json.dumps({"providers": {"hr": {
         "baseUrl": base, "api": api, "apiKey": api_key,
@@ -1652,14 +1678,21 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
     if use_custom:
         if not auth.base_url:
             raise HTTPException(400, f"pi provider '{pr}' needs a base_url (none configured)")
-        if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+        # When api_format is set (custom integration), use the user's explicit choice. Otherwise
+        # pick by model family — the same routing the hermes backend already proved.
+        if auth.api_format == "anthropic":
+            api = "anthropic-messages"
+        elif auth.api_format == "openai":
+            api = "openai-completions"
+        elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
             api = "openai-responses"
         else:
             api = "openai-completions"
         (home / ".pi" / "agent" / "models.json").write_text(
-            _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision))
+            _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
+                            custom_openai=bool(auth.api_format)))
         pname = "hr"
     else:
         pname = pr
@@ -1910,6 +1943,99 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
         return body
 
 
+def _rename_max_tokens(body: bytes) -> bytes:
+    """max_tokens -> max_completion_tokens in one chat-completions body.
+
+    OpenAI deprecated max_tokens for its reasoning models and Azure ENFORCES that: a gpt-5.x
+    deployment answers 400 'Unsupported parameter: max_tokens is not supported with this model.
+    Use max_completion_tokens instead.' (captured live 2026-08-27, opencode x custom-Azure).
+    Applied only after a provider says exactly that — aggregators that still take max_tokens
+    never see a renamed request."""
+    try:
+        obj = json.loads(body)
+        if isinstance(obj, dict) and "max_tokens" in obj and "max_completion_tokens" not in obj:
+            obj["max_completion_tokens"] = obj.pop("max_tokens")
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+def _pop_json_path(obj, path: str) -> bool:
+    """Remove the value at a dotted path; -> True if anything was removed.
+
+    A numeric segment ('tools.0.custom.x') strips the leaf from EVERY element of that list,
+    not just the named index: the provider complains about the first offending entry, but a
+    client that sends the field sends it on all of them (dsh puts eager_input_streaming on
+    every tool — measured live), and stripping one per round trip never converges."""
+    def walk(node, parts) -> bool:
+        if not parts:
+            return False
+        head, rest = parts[0], parts[1:]
+        if isinstance(node, list):
+            if head.isdigit() and not rest:
+                try:
+                    del node[int(head)]
+                    return True
+                except IndexError:
+                    return False
+            hit = False
+            for item in node:
+                hit = walk(item, rest if head.isdigit() else parts) or hit
+            return hit
+        if not isinstance(node, dict):
+            return False
+        if not rest:
+            if head in node:
+                del node[head]
+                return True
+            return False
+        if head in node:
+            return walk(node[head], rest)
+        # A segment that is not a real key is the validator's UNION DISCRIMINATOR leaking into
+        # the path: Bedrock reports tools.0.custom.eager_input_streaming for a tool whose JSON
+        # has no "custom" wrapper at all (measured live). Skip the phantom segment and keep
+        # walking at the same node.
+        return walk(node, rest)
+    return walk(obj, path.split("."))
+
+
+def _aws_eventstream_frames(resp):
+    """Yield (headers, payload) per AWS eventstream frame, from a streaming HTTP response.
+
+    Frame: [4B total len][4B headers len][4B prelude CRC][headers][payload][4B message CRC],
+    big-endian; header entries are {1B name len, name, 1B type, value}. Bedrock only sends
+    string-typed (7) headers, so anything else conservatively ends header parsing for that
+    frame. CRCs are skipped on purpose: TLS already guarantees integrity end-to-end, and a
+    stdlib-only parser that verifies CRC32 buys nothing but code."""
+    import struct
+    buf = b""
+    while True:
+        chunk = resp.read(65536)
+        buf += chunk
+        while len(buf) >= 16:
+            total = struct.unpack(">I", buf[:4])[0]
+            if len(buf) < total:
+                break
+            hlen = struct.unpack(">I", buf[4:8])[0]
+            raw = buf[12:12 + hlen]
+            payload = buf[12 + hlen:total - 4]
+            buf = buf[total:]
+            headers = {}
+            i = 0
+            while i + 2 <= len(raw):
+                nlen = raw[i]; i += 1
+                name = raw[i:i + nlen].decode("utf-8", "replace"); i += nlen
+                if i >= len(raw) or raw[i] != 7:   # not a string header: bail for this frame
+                    break
+                i += 1
+                vlen = struct.unpack(">H", raw[i:i + 2])[0]; i += 2
+                headers[name] = raw[i:i + vlen].decode("utf-8", "replace"); i += vlen
+            yield headers, payload
+        if not chunk:
+            return
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1927,28 +2053,49 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        base, key = route
+        base, key, flags = route
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
         drop = {"host", "content-length", "authorization", "connection",
                 "accept-encoding", "transfer-encoding"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        # Compare the PATH only: anthropic clients append query strings (claude-code sends
+        # /v1/messages?beta=true on streaming requests), and matching the raw tail let those
+        # fall through to a generic forward against a host with no such route.
+        if (flags.get("bedrock_anthropic") and tail.split("?", 1)[0] == "/messages"
+                and body is not None):
+            self._bedrock_anthropic(base, key, body)
+            return
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
+            if flags.get("rename_max_tokens"):
+                body = _rename_max_tokens(body)
             headers["content-length"] = str(len(body))
-        req = urllib.request.Request(base.rstrip("/") + tail, data=body,
-                                     method=self.command, headers=headers)
-        try:
-            resp = urllib.request.urlopen(req, timeout=600)
-        except urllib.error.HTTPError as e:  # pass provider errors through verbatim
-            data = e.read()
-            self.send_response(e.code)
-            self.send_header("content-type", e.headers.get("content-type") or "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
+        resp = None
+        for attempt in (0, 1):
+            req = urllib.request.Request(base.rstrip("/") + tail, data=body,
+                                         method=self.command, headers=headers)
+            try:
+                resp = urllib.request.urlopen(req, timeout=600)
+                break
+            except urllib.error.HTTPError as e:
+                data = e.read()
+                renamed = _rename_max_tokens(body) if body is not None else None
+                if (attempt == 0 and e.code == 400 and b"max_completion_tokens" in data
+                        and renamed is not None and renamed != body):
+                    # The provider named the fix itself; apply it, remember it for this route.
+                    flags["rename_max_tokens"] = True
+                    body = renamed
+                    headers["content-length"] = str(len(body))
+                    continue
+                # pass provider errors through verbatim
+                self.send_response(e.code)
+                self.send_header("content-type", e.headers.get("content-type") or "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
         ctype = resp.headers.get("content-type") or ""
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
@@ -1968,6 +2115,94 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
 
+    def _bedrock_anthropic(self, origin: str, key: str, body: bytes) -> None:
+        """Anthropic Messages -> Bedrock InvokeModel, both directions.
+
+        Bedrock has NO bearer-auth /v1/messages surface (the path answers HTTP 200 wrapping
+        UnknownOperationException - measured 2026-08-27). Its InvokeModel API takes the SAME
+        Anthropic Messages body with exactly three differences, all applied here: the model
+        moves from the body into the URL path, anthropic_version moves into the body, and
+        stream becomes a different endpoint whose reply is AWS binary eventstream framing -
+        each frame's payload is {"bytes": base64(<anthropic SSE event JSON>)}, re-emitted
+        here as ordinary SSE so every Messages client streams unchanged."""
+        model, stream, obj = "", False, {}
+        try:
+            obj = json.loads(body)
+            model = str(obj.pop("model", "") or "")
+            stream = bool(obj.pop("stream", False))
+            obj["anthropic_version"] = "bedrock-2023-05-31"
+        except Exception:  # noqa: BLE001
+            model = ""
+        if not model:
+            data = (b'{"type":"error","error":{"type":"invalid_request_error",'
+                    b'"message":"bedrock adapter: request body needs a model"}}')
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        op = "invoke-with-response-stream" if stream else "invoke"
+        url = f"{origin.rstrip('/')}/model/{urllib.parse.quote(model, safe='')}/{op}"
+        # Bedrock's InvokeModel schema trails the first-party Messages API: fields the CLI
+        # sends for newer features get '<field>: Extra inputs are not permitted' (measured:
+        # claude-code's context_management, 2026-08-27). Strip exactly the field the provider
+        # names and retry — a fixed strip-list would silently rot as either side moves.
+        resp = None
+        for _ in range(4):
+            req = urllib.request.Request(url, data=json.dumps(obj).encode(), method="POST",
+                                         headers={"authorization": f"Bearer {key}",
+                                                  "content-type": "application/json",
+                                                  "accept": "*/*"})
+            try:
+                resp = urllib.request.urlopen(req, timeout=600)
+                break
+            except urllib.error.HTTPError as e:
+                data = e.read()
+                m = (re.search(rb'"?([\w.]+)"?: Extra inputs are not permitted', data)
+                     if e.code == 400 else None)
+                # The complaint names a dotted path (tools.0.custom.eager_input_streaming was
+                # measured live from dsh's client); walk it — ints are list indices — and pop
+                # the leaf. A path that no longer resolves means we already stripped it and the
+                # provider is complaining about something else: fall through and surface it.
+                if m and _pop_json_path(obj, m.group(1).decode()):
+                    continue
+                self.send_response(e.code)
+                self.send_header("content-type", e.headers.get("content-type") or "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+        if not stream:
+            data = resp.read()   # already an Anthropic message response, verbatim
+            self.send_response(resp.status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("transfer-encoding", "chunked")
+        self.end_headers()
+
+        def emit(block: bytes) -> None:
+            self.wfile.write(f"{len(block):x}\r\n".encode() + block + b"\r\n")
+            self.wfile.flush()
+
+        for headers, payload in _aws_eventstream_frames(resp):
+            try:
+                ev_raw = base64.b64decode(json.loads(payload)["bytes"])
+                ev_type = json.loads(ev_raw).get("type", "message")
+            except Exception:  # noqa: BLE001 - an exception frame, or a shape we don't know
+                err = json.dumps({"type": "error", "error": {
+                    "type": headers.get(":exception-type", "api_error"),
+                    "message": payload.decode("utf-8", "replace")[:300]}}).encode()
+                emit(b"event: error\ndata: " + err + b"\n\n")
+                continue
+            emit(b"event: " + ev_type.encode() + b"\ndata: " + ev_raw + b"\n\n")
+        self.wfile.write(b"0\r\n\r\n")
+
     def do_POST(self):  # noqa: N802
         self._forward(self.rfile.read(int(self.headers.get("content-length") or 0)))
 
@@ -1978,6 +2213,34 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def _bedrock_anthropic_route(origin: str, api_key: str) -> tuple[str, str]:
+    """Register a Bedrock-Anthropic adapter route; -> (relay base_url, placeholder bearer)."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = (origin, api_key, {"bedrock_anthropic": True})
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
+def _adapt_custom_auth(auth):
+    """An anthropic-format custom integration pointing at bedrock-runtime rides the adapter.
+
+    Every anthropic-format backend path converges on POST <base>/v1/messages (claude's CLI and
+    pi's client append it themselves; dsh chains its own relay into ours), so rewriting the auth
+    ONCE here covers all of them - and the real Bedrock key stays in this process, the same
+    credential win the hermes and dsh relays already have."""
+    if auth.api_format != "anthropic" or not (auth.base_url and auth.api_key):
+        return auth
+    host = urllib.parse.urlsplit(auth.base_url).hostname or ""
+    if not (host.startswith("bedrock-runtime.") and host.endswith(".amazonaws.com")):
+        return auth
+    base, tok = _bedrock_anthropic_route(f"https://{host}", auth.api_key)
+    return auth.model_copy(update={"base_url": base, "api_key": tok})
+
+
 def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI)."""
     with _HERMES_RELAY["lock"]:
@@ -1986,7 +2249,7 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (base_url, api_key)
+        _HERMES_RELAY["routes"][tok] = (base_url, api_key, {"rename_max_tokens": False})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -2191,7 +2454,13 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     # The split MIRRORS _pi_models_json, because both reach the same relays over the same wire
     # formats: a claude model on an anthropic-native connection speaks Messages, not
     # chat/completions, and sending it to the openai-compatible package fails at the first call.
-    if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+    # When api_format is set (custom integration), the user's explicit choice wins over any
+    # model-family heuristic — the endpoint is the one they told us to reach.
+    if auth.api_format == "anthropic":
+        npm = "@ai-sdk/anthropic"
+    elif auth.api_format == "openai":
+        npm = "@ai-sdk/openai-compatible"
+    elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
         npm = "@ai-sdk/anthropic"
     elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
         npm = "@ai-sdk/openai"          # /v1/responses
@@ -2236,6 +2505,13 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
+    if auth.api_format == "openai" and auth.base_url and auth.api_key:
+        # A custom OpenAI endpoint rides the loopback relay, for the same two reasons hermes
+        # does: request shapes ai-sdk emits but strict endpoints refuse are repaired in flight
+        # (Azure's gpt-5.x deployments 400 on max_tokens — captured live 2026-08-27), and the
+        # real key stays in this process; opencode's env gets a per-turn placeholder.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
         env[_OPENCODE_KEY_ENV] = auth.api_key
     qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr)
@@ -3356,7 +3632,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # opaque UnknownError. Proven by env bisection on a live failure: with 40 inherited variables,
     # removing or correcting PWD alone flips the turn from failing to passing.
     env["PWD"] = cwd
-    auth = req.auth or Auth()
+    auth = _adapt_custom_auth(req.auth or Auth())
     model = req.model or spec["default_model"]
     use_appserver = backend == "codex" and bool(req.codex_appserver)
     cmd = None

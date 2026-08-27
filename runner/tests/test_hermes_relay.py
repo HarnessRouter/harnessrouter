@@ -107,3 +107,62 @@ def test_relay_refuses_an_unknown_token():
         raise AssertionError("expected 401")
     except urllib.error.HTTPError as e:
         assert e.code == 401
+
+
+# ── max_tokens rename-on-rejection (opencode x custom-Azure, 2026-08-27) ───────────────────────
+# Azure's gpt-5.x deployments 400 on max_tokens and name the fix in the error body. The relay
+# applies exactly that fix, once, and remembers it for the route.
+
+def test_rename_max_tokens_helper():
+    from server import _rename_max_tokens
+    body = json.dumps({"model": "m", "max_tokens": 64, "messages": []}).encode()
+    out = json.loads(_rename_max_tokens(body))
+    assert out["max_completion_tokens"] == 64 and "max_tokens" not in out
+    already = json.dumps({"max_tokens": 1, "max_completion_tokens": 2}).encode()
+    assert _rename_max_tokens(already) == already          # never clobber an explicit value
+    assert _rename_max_tokens(b"not json") == b"not json"
+
+
+def test_relay_retries_a_max_tokens_rejection_and_sticks():
+    calls = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            calls.append(body)
+            if "max_tokens" in body:
+                data = (b'{"error": {"message": "Unsupported parameter: max_tokens is not '
+                        b'supported with this model. Use max_completion_tokens instead."}}')
+                self.send_response(400)
+            else:
+                data = b'{"ok": true}'
+                self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _hermes_relay_route(f"http://127.0.0.1:{up.server_address[1]}/v1", "sk-real")
+        body = json.dumps({"model": "m", "max_tokens": 64,
+                           "messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json"})
+        assert json.loads(urllib.request.urlopen(req, timeout=10).read()) == {"ok": True}
+        assert len(calls) == 2                              # rejected once, renamed, succeeded
+        assert "max_completion_tokens" in calls[1] and "max_tokens" not in calls[1]
+        # The route remembers: the next request renames preemptively — one call, not two.
+        urllib.request.urlopen(urllib.request.Request(
+            base + "/chat/completions", data=body, method="POST",
+            headers={"authorization": f"Bearer {tok}", "content-type": "application/json"}), timeout=10)
+        assert len(calls) == 3 and "max_completion_tokens" in calls[2]
+    finally:
+        up.shutdown()

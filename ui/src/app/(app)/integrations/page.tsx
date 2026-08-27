@@ -252,7 +252,7 @@ export default function IntegrationsPage() {
                       <button key={c.id} type="button"
                         className={'itg-provider' + (editing.provider === c.id ? ' on' : '')}
                         disabled={Boolean(editingOriginal)}
-                        onClick={() => setEditing({ ...editing, provider: c.id, config: {} })}>
+                        onClick={() => setEditing({ ...editing, provider: c.id, config: c.id === 'custom' ? { api_format: 'openai' } : {} })}>
                         {c.label}
                       </button>
                     ))}
@@ -261,6 +261,7 @@ export default function IntegrationsPage() {
                 {(() => {
                   const meta = metaFor(editing.provider);
                   if (!meta) return null;
+                  const isCustom = editing.provider === 'custom';
                   // Only what varies by deployment. A provider with a known endpoint never
                   // shows a Base URL field — the server fills it in.
                   const fields = [...meta.fields,
@@ -271,12 +272,72 @@ export default function IntegrationsPage() {
                       {fields.map((f) => {
                         const secret = f.key === meta.secret;
                         const saved = secret && editing.config[f.key] === SECRET;
+                        // Special rendering for custom provider fields
+                        if (isCustom && f.key === 'api_format') {
+                          return (
+                            <div className="field" key={f.key}>
+                              <label htmlFor={`itg-${f.key}`}>{f.label}</label>
+                              <select id={`itg-${f.key}`} className="select"
+                                value={editing.config[f.key] || ''}
+                                onChange={(e) => setEditing({
+                                  ...editing,
+                                  config: { ...editing.config, [f.key]: e.target.value },
+                                })}>
+                                <option value="openai">OpenAI Chat Completions</option>
+                                <option value="anthropic">Anthropic Messages</option>
+                              </select>
+                              <p className="field-help">
+                                {editing.config['api_format'] === 'anthropic'
+                                  ? 'Anthropic Messages format works with Claude Code, OpenCode, Pi, and DSH backends.'
+                                  : editing.config['api_format'] === 'openai'
+                                  ? 'OpenAI Chat Completions format works with Hermes, OpenCode, Pi, and DSH backends. Codex and Claude Code cannot drive a custom OpenAI endpoint.'
+                                  : 'If you use Claude Code, choose Anthropic Messages format.'}
+                              </p>
+                            </div>
+                          );
+                        }
+                        if (isCustom && f.key === 'full_url') {
+                          const fullUrlOn = editing.config[f.key] === '1' || editing.config[f.key] === 'true';
+                          return (
+                            <div className="field" key={f.key}>
+                              <label>{f.label}</label>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <button type="button" role="switch" aria-checked={fullUrlOn}
+                                  className="toggle-button"
+                                  onClick={() => setEditing({
+                                    ...editing,
+                                    config: { ...editing.config, [f.key]: fullUrlOn ? '' : '1' },
+                                  })}
+                                  style={{ minWidth: 44, minHeight: 26, padding: 0, borderRadius: 999,
+                                    border: fullUrlOn ? '1px solid var(--accent)' : '1px solid var(--line)',
+                                    background: fullUrlOn ? 'var(--accent)' : 'var(--surface-subtle)',
+                                    cursor: 'pointer', position: 'relative', transition: 'background .15s' }}>
+                                  <span style={{ display: 'block', width: 18, height: 18, borderRadius: 999,
+                                    background: fullUrlOn ? '#fff' : 'var(--line)',
+                                    position: 'absolute', top: 3, left: fullUrlOn ? 21 : 3,
+                                    transition: 'left .15s' }} />
+                                </button>
+                                <span style={{ fontSize: 13, color: fullUrlOn ? 'var(--ink)' : 'var(--muted)' }}>
+                                  {fullUrlOn ? 'On — the URL is used as-is' : 'Off — /chat/completions is appended'}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }
+                        // Dynamic placeholder for base_url based on full_url toggle
+                        let placeholder = f.placeholder || '';
+                        if (isCustom && f.key === 'base_url') {
+                          const fullUrl = editing.config['full_url'] === '1' || editing.config['full_url'] === 'true';
+                          placeholder = fullUrl
+                            ? 'Enter the full request URL, including the path. The request will use this URL directly.'
+                            : 'Enter an OpenAI-compatible API endpoint, without a trailing slash. /chat/completions will be appended to your endpoint.';
+                        }
                         return (
                           <div className="field" key={f.key}>
                             <label htmlFor={`itg-${f.key}`}>{f.label}</label>
                             <input id={`itg-${f.key}`} type={secret ? 'password' : 'text'}
                               value={saved ? '' : (editing.config[f.key] || '')}
-                              placeholder={saved ? '•••••••• (saved, leave blank to keep)' : f.placeholder || ''}
+                              placeholder={saved ? '•••••••• (saved, leave blank to keep)' : placeholder}
                               autoComplete="off"
                               onChange={(e) => setEditing({
                                 ...editing,
@@ -292,7 +353,20 @@ export default function IntegrationsPage() {
                   );
                 })()}
                 {(() => {
-                  const models = metaFor(editing.provider)?.models || [];
+                  const meta = metaFor(editing.provider);
+                  const isCustom = editing.provider === 'custom';
+                  const models = meta?.models || [];
+                  if (isCustom) {
+                    return (
+                      <div className="field">
+                        <label>Model</label>
+                        <p className="field-help">
+                          This integration serves the model ID you entered above. Add it in the
+                          mapping table below after saving.
+                        </p>
+                      </div>
+                    );
+                  }
                   return (
                     <div className="field">
                       <label>Supported models</label>
