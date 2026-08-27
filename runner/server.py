@@ -2407,6 +2407,13 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         raise HTTPException(400, f"unknown qwen provider '{pr}' (one of {sorted(QWEN_PROVIDERS)})")
     if not auth.base_url:
         raise HTTPException(400, "qwen needs a base_url (none configured)")
+    if auth.api_format == "openai" and auth.api_key:
+        # A custom OpenAI endpoint rides the loopback relay, exactly like opencode's: request
+        # shapes strict endpoints refuse are repaired in flight (Azure's gpt-5.x deployments 400
+        # on max_tokens), and the real key never enters the CLI's environment — which matters
+        # more here than anywhere, because qwen takes its credential ONLY via env.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
