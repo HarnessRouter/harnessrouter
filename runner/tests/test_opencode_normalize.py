@@ -197,9 +197,41 @@ def test_argv_requests_thinking_or_reasoning_never_arrives():
     assert "--thinking" in cmd
 
 
-def test_resume_passes_the_session_id():
-    cmd, _, _ = _argv(resume_session_id="ses_abc")
+def test_resume_passes_the_session_id_when_that_session_is_here():
+    """The conversation is in this workspace's database, so resume it."""
+    d = tempfile.mkdtemp()
+    env: dict = {"HOME": d}
+    db = pathlib.Path(d) / ".local" / "share" / "opencode"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "opencode.db").write_bytes(b"sqlite-ish bytes ses_abc more bytes")
+    auth = Auth(api_key="sk-test", base_url="https://relay.example/v1")
+    cmd = _build_opencode("openai-api", auth, "gpt-5.4", "do it", d, env, resume_session_id="ses_abc")
     assert "--session" in cmd and "ses_abc" in cmd
+
+
+def test_resume_is_dropped_when_the_session_is_not_in_this_workspace():
+    """opencode exits 1 with no output when told to resume a session its database does not hold,
+    and every later turn passes the same dead id, so the conversation stays broken rather than
+    failing once. Start a fresh CLI thread in the same workspace instead."""
+    d = tempfile.mkdtemp()
+    env: dict = {"HOME": d}          # no database at all: a recycled sandbox
+    auth = Auth(api_key="sk-test", base_url="https://relay.example/v1")
+    cmd = _build_opencode("openai-api", auth, "gpt-5.4", "do it", d, env, resume_session_id="ses_gone")
+    assert "--session" not in cmd and "ses_gone" not in cmd
+    assert cmd[-1] == "do it"        # the turn still runs
+
+
+def test_resume_finds_a_session_still_sitting_in_the_write_ahead_log():
+    """The previous turn's write may not have been checkpointed into the main database yet."""
+    d = tempfile.mkdtemp()
+    env: dict = {"HOME": d}
+    db = pathlib.Path(d) / ".local" / "share" / "opencode"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "opencode.db").write_bytes(b"header only")
+    (db / "opencode.db-wal").write_bytes(b"wal frame ses_wal payload")
+    auth = Auth(api_key="sk-test", base_url="https://relay.example/v1")
+    cmd = _build_opencode("openai-api", auth, "gpt-5.4", "do it", d, env, resume_session_id="ses_wal")
+    assert "--session" in cmd and "ses_wal" in cmd
 
 
 def test_key_goes_to_the_environment_and_never_into_the_config_file():
