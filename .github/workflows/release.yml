@@ -25,7 +25,8 @@
 #   2. This repo → Settings → Secrets and variables → Actions → New repository secret:
 #        DOCKERHUB_USERNAME = harnessrouter
 #        DOCKERHUB_TOKEN    = the token from step 1
-#   Nothing after that: a tag is a release.
+#   Nothing after that: the tag drives the build, and the last step turns it into a GitHub
+#   Release so the Releases page matches what is actually on Docker Hub.
 name: release
 
 on:
@@ -40,6 +41,10 @@ on:
         description: 'Also move the :latest tag'
         type: boolean
         default: true
+
+# The manifest job creates the GitHub Release at the end, so it needs write access to them.
+permissions:
+  contents: write
 
 env:
   IMAGE: harnessrouter/harnessrouter
@@ -235,3 +240,26 @@ jobs:
             echo '```'
             echo "$PLAT" | sed 's/^/- /'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # A git tag is NOT a GitHub Release. This file said "a tag is a release", which is true of
+      # how we publish — the tag is what triggers the build — but the Releases page lists Release
+      # objects only, so it silently stopped at v0.9.1 while v0.10.0 and v0.11.0 shipped to Docker
+      # Hub. Anyone reading the repo saw a project that looked four days stale and two versions
+      # behind what it actually served.
+      #
+      # Created LAST, after the manifest has been read back from the registry: a Release that
+      # exists for an image nobody can pull is worse than no Release, because it is the page
+      # people trust. Skipped for a workflow_dispatch run, which has no tag to attach to.
+      - name: Publish the GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V='${{ needs.plan.outputs.version }}'
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "release v$V already exists"; exit 0
+          fi
+          gh release create "v$V" --title "v$V" --generate-notes \
+            --notes-start-tag "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)" \
+            || gh release create "v$V" --title "v$V" --generate-notes
