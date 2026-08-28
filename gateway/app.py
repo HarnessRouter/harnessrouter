@@ -126,23 +126,51 @@ def _report_usage(org: str, metric: str, amount: float) -> None:
 # amount — and the AUTHORITATIVE charge still flows through the harvest's own priced consume.
 _pricing_table: dict[str, dict[str, float]] = {}
 _pricing_fetched_at = 0.0
+_pricing_warned = False              # so a persistent failure warns once, not once per refresh
 _PRICING_TTL_S = 300.0
 
 
 async def _refresh_pricing_table() -> None:
-    global _pricing_table, _pricing_fetched_at
+    """Load credits-per-unit prices, and SAY SO when it does not work.
+
+    An unpriced table is indistinguishable from a free run: every _price_of() answers 0.0, the
+    console shows 0 credits for every session, and nothing anywhere looks broken. That is exactly
+    how this hid for months on the hosted deployment — the price endpoint was refusing with 403
+    (its ingress is IP-locked and the gateway was not on the allowlist), the refusal was swallowed
+    as "keep the stale table", and the table it was keeping had never been populated once.
+
+    So: no pricing configured is silent, because that is a real and normal self-hosted state.
+    Configured-but-not-working is LOUD, once per failure transition rather than every refresh.
+    A 200 carrying an empty table counts as not working — accepting it would cache emptiness for
+    the whole TTL and make a broken deployment look like a free one."""
+    global _pricing_table, _pricing_fetched_at, _pricing_warned
     if not ENGINE_URL or not BILLING_INTERNAL_KEY:
-        return
+        return                       # billing not wired: prices are genuinely unset, not missing
     if time.time() - _pricing_fetched_at < _PRICING_TTL_S and _pricing_table:
         return
+    why = ""
     try:
         r = await _client().get(f"{ENGINE_URL}/v1/billing/pricing/table",
                                 headers={"x-internal-key": BILLING_INTERNAL_KEY}, timeout=10)
-        if r.status_code < 400:
-            _pricing_table = (r.json() or {}).get("table") or {}
-            _pricing_fetched_at = time.time()
-    except Exception:  # noqa: BLE001 — keep the stale table; credits are advisory, not the charge
-        pass
+        if r.status_code >= 400:
+            why = f"HTTP {r.status_code}"
+        else:
+            table = (r.json() or {}).get("table") or {}
+            if table:
+                _pricing_table = table
+                _pricing_fetched_at = time.time()
+                if _pricing_warned:      # recovered — say that too, so the log has both edges
+                    print("[pricing] price table loaded; credit figures are real again", flush=True)
+                    _pricing_warned = False
+            else:
+                why = "the response carried no table"
+    except Exception as e:  # noqa: BLE001 — a refresh must never take a turn down with it
+        why = f"{type(e).__name__}: {str(e)[:120]}"
+    if why and not _pricing_warned:
+        _pricing_warned = True
+        print(f"[pricing] WARNING: could not load the price table ({why}). Every credit figure "
+              f"will read 0 until this is fixed — that is a missing price list, NOT a free run.",
+              flush=True)
 
 
 def _price_of(metric: str) -> float:
