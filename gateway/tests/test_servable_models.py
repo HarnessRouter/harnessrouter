@@ -9,6 +9,17 @@ Both halves of the union below are load-bearing, and each was learned by breakin
   * chain only — greys out models an org runs daily through an explicit integration mapping.
   * map only   — the original bug: a chain-served org gets its entire catalog offered.
 
+Measured on a real org (hosted, hermes, 2026-08-28), which is why the union is not theoretical:
+
+    chain   -> 15 models (the gpt/claude families, from a direct provider table)
+    map     -> 11 models (the frontier set the TokenRouter integration serves)
+    neither ->  5 models (_TOKENROUTER_NO_CHANNEL)          = 31 total, 26 offered
+
+The intermediate chain-only version greyed 16 — the whole frontier set, including kimi-k3,
+glm-5.3 and the qwen and deepseek lines — while gpt and claude stayed available. The two routes
+genuinely carry different halves there, so dropping either one hides a different set of working
+models. These tests are the durable form of that observation; the production numbers will drift.
+
 NOTE ON RUNNING THESE: gateway tests import app.py, which needs hashlib.scrypt. macOS system
 python does not have it, so a local run here fails at COLLECTION with an AttributeError that has
 nothing to do with the code under test. Run them in a container (docker exec <c> sh -lc 'cd
