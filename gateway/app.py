@@ -6833,6 +6833,28 @@ async def _ws_files(sid: str) -> dict[str, bytes] | None:
     return out
 
 
+async def _cfile_by_name(sid: str) -> dict[str, str]:
+    """filename -> captured `cfile_…` id for this session, from the blob metas.
+
+    ONE resolver for both file routes. The listing built this inline while the by-path read knew
+    nothing about it, which is how a session could LIST dashboard.json and 404 it in the same
+    breath once the live workspace aged out."""
+    out: dict[str, str] = {}
+    listing = await _blob_list(f"containers/{sid}/", limit=200, kb=RESP_BLOB_KB)
+    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")]
+    for it in metas[:200]:
+        meta_b = await _blob_get(it["file_id"], kb=RESP_BLOB_KB)
+        if not meta_b:
+            continue
+        try:
+            fname = json.loads(meta_b).get("filename")
+        except Exception:  # noqa: BLE001
+            continue
+        if fname:
+            out[str(fname)] = it["file_id"].rsplit("/", 1)[-1][: -len(".meta")]
+    return out
+
+
 async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes, str, str] | None:
     """→ (data, media_type, filename) for either id form: a captured `cfile_…` blob, or a synthetic
     `wf_…` workspace-path id extracted from the session checkpoint."""
@@ -6964,6 +6986,27 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
     await _owned_session(request, sid)
     data = await BACKING.workspace.read(sid, path)
     if data is None:
+        # FALL BACK TO THE DURABLE COPY. The live workspace is reaped after HR_WORKSPACE_TTL_HOURS,
+        # but a file this session PRODUCED was captured to a blob and is still listed by the route
+        # next door — so the listing showed dashboard.json while this route 404'd it, and the
+        # dashboard kit (which fetches by path) said "no dashboard has been built for this
+        # conversation" about a dashboard that existed. Seen live on a 12-day-old session.
+        # Also accepts a file id as the path, so an id from the listing round-trips here.
+        got = None
+        if path.startswith(("cfile_", "wf_")):
+            got = await _container_file_bytes(sid, path)
+        else:
+            try:
+                byname = await _cfile_by_name(sid)
+            except Exception:  # noqa: BLE001 — blob store unavailable: keep the honest 404
+                byname = {}
+            cid = byname.get(path) or byname.get(path.rsplit("/", 1)[-1])
+            if cid:
+                got = await _container_file_bytes(sid, cid)
+        if got is not None:
+            data, media, _fname = got
+            return Response(content=data, media_type=media,
+                            headers={"cache-control": "no-store"})
         raise uhp_error(404, "file_not_found",
                         f"No file '{path}' in this session's workspace.", "path")
     media = mimetypes.guess_type(path)[0] or "application/octet-stream"
