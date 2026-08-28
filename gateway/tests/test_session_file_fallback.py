@@ -6,6 +6,12 @@ by-path route read only the live directory, so one session could LIST dashboard.
 the same breath — and the dashboard kit, which fetches by path, told the user "no dashboard has
 been built for this conversation" about a dashboard that existed. Seen live on a 12-day-old
 session on the public VM.
+
+NOTE ON RUNNING THESE: gateway tests import app.py, which needs hashlib.scrypt. macOS system
+python does not have it, so a local run here fails at COLLECTION with an AttributeError that has
+nothing to do with the code under test. Run them in a container (docker exec <c> sh -lc 'cd
+/app/gateway && python3 -m pytest') or let CI be the gate — CI pins the interpreter this tree
+targets. A red local run is not evidence of a broken branch.
 """
 import pathlib
 import sys
