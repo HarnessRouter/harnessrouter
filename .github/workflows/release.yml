@@ -254,12 +254,17 @@ jobs:
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           V='${{ needs.plan.outputs.version }}'
-          if gh release view "v$V" >/dev/null 2>&1; then
+          # --repo is REQUIRED here: this job never checks the source out (it only downloads the
+          # per-arch digests and talks to the registry), so gh has no git remote to infer from and
+          # every call dies "not a git repository". Adding a checkout just to satisfy gh would
+          # clone the tree for nothing.
+          if gh release view "v$V" --repo "$REPO" >/dev/null 2>&1; then
             echo "release v$V already exists"; exit 0
           fi
-          gh release create "v$V" --title "v$V" --generate-notes \
-            --notes-start-tag "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)" \
-            || gh release create "v$V" --title "v$V" --generate-notes
+          # --generate-notes works out the previous tag itself; passing --notes-start-tag from a
+          # `gh release list` subshell added a second thing that needed the repo and could fail.
+          gh release create "v$V" --repo "$REPO" --title "v$V" --generate-notes
