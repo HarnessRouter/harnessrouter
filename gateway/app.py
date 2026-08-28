@@ -126,23 +126,51 @@ def _report_usage(org: str, metric: str, amount: float) -> None:
 # amount — and the AUTHORITATIVE charge still flows through the harvest's own priced consume.
 _pricing_table: dict[str, dict[str, float]] = {}
 _pricing_fetched_at = 0.0
+_pricing_warned = False              # so a persistent failure warns once, not once per refresh
 _PRICING_TTL_S = 300.0
 
 
 async def _refresh_pricing_table() -> None:
-    global _pricing_table, _pricing_fetched_at
+    """Load credits-per-unit prices, and SAY SO when it does not work.
+
+    An unpriced table is indistinguishable from a free run: every _price_of() answers 0.0, the
+    console shows 0 credits for every session, and nothing anywhere looks broken. That is exactly
+    how this hid for months on the hosted deployment — the price endpoint was refusing with 403
+    (its ingress is IP-locked and the gateway was not on the allowlist), the refusal was swallowed
+    as "keep the stale table", and the table it was keeping had never been populated once.
+
+    So: no pricing configured is silent, because that is a real and normal self-hosted state.
+    Configured-but-not-working is LOUD, once per failure transition rather than every refresh.
+    A 200 carrying an empty table counts as not working — accepting it would cache emptiness for
+    the whole TTL and make a broken deployment look like a free one."""
+    global _pricing_table, _pricing_fetched_at, _pricing_warned
     if not ENGINE_URL or not BILLING_INTERNAL_KEY:
-        return
+        return                       # billing not wired: prices are genuinely unset, not missing
     if time.time() - _pricing_fetched_at < _PRICING_TTL_S and _pricing_table:
         return
+    why = ""
     try:
         r = await _client().get(f"{ENGINE_URL}/v1/billing/pricing/table",
                                 headers={"x-internal-key": BILLING_INTERNAL_KEY}, timeout=10)
-        if r.status_code < 400:
-            _pricing_table = (r.json() or {}).get("table") or {}
-            _pricing_fetched_at = time.time()
-    except Exception:  # noqa: BLE001 — keep the stale table; credits are advisory, not the charge
-        pass
+        if r.status_code >= 400:
+            why = f"HTTP {r.status_code}"
+        else:
+            table = (r.json() or {}).get("table") or {}
+            if table:
+                _pricing_table = table
+                _pricing_fetched_at = time.time()
+                if _pricing_warned:      # recovered — say that too, so the log has both edges
+                    print("[pricing] price table loaded; credit figures are real again", flush=True)
+                    _pricing_warned = False
+            else:
+                why = "the response carried no table"
+    except Exception as e:  # noqa: BLE001 — a refresh must never take a turn down with it
+        why = f"{type(e).__name__}: {str(e)[:120]}"
+    if why and not _pricing_warned:
+        _pricing_warned = True
+        print(f"[pricing] WARNING: could not load the price table ({why}). Every credit figure "
+              f"will read 0 until this is fixed — that is a missing price list, NOT a free run.",
+              flush=True)
 
 
 def _price_of(metric: str) -> float:
@@ -4316,6 +4344,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshotai/kimi-k3",
+        "glm-5.3":            "z-ai/glm-5.3",
+        "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
@@ -4404,6 +4434,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshot/kimi-k3",
+        "glm-5.3":            "z-ai/glm-5.3",
+        "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
         "kimi-k2.7-code":     "moonshot/kimi-k2.7-code",
@@ -4465,6 +4497,9 @@ _VERCEL_RESLUG = {
     "qwen3.8-max":        "alibaba/qwen3.8-max",
     "qwen3.7-flash":      "alibaba/qwen3.7-flash",
     "mistral-medium-3.5": "mistral/mistral-medium-3.5",
+    # Vercel publishes the z-ai models under `zai/`, not the `z-ai/` the other aggregators use.
+    "glm-5.3":            "zai/glm-5.3",
+    "glm-5.3-flash":      "zai/glm-5.3-flash",
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
@@ -4571,7 +4606,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
-                          "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                          "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
@@ -4600,7 +4635,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                       "gemini-3.6-flash", "kimi-k3", "kimi-k2.7-code",
+                       "gemini-3.6-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
@@ -4615,7 +4650,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                            "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                            "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
@@ -4814,22 +4849,35 @@ async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, o
 async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     """Canonical models something can actually run on this backend.
 
-    None means "no restriction": a policy chain exists, and a chain's connections are
-    provider-level rather than per-model, so the backend can attempt its whole catalog.
+    The answer is the UNION of the two ways a turn can actually be served: the vendor tables of
+    the policy chain's connections, and the model→integration map. Offering a model nothing can
+    serve is a promise the router then breaks — the picker accepts it and the turn fails at the
+    point of no return.
 
-    Otherwise the only thing that can serve a turn is a model→integration mapping, so the
-    answer is exactly those canonicals whose integration's provider is wired to this backend.
-    Offering a model nothing can serve is a promise the router then breaks — the picker would
-    accept it and the turn would fail at the point of no return."""
-    if await _resolve_chain(org, backend, None):
-        return None
+    A chain used to mean "no restriction", on the reasoning that a chain is provider-level rather
+    than per-model. The vendor tables are per-model and deliberately differ:
+    _TOKENROUTER_NO_CHANNEL removes five models from TokenRouter's table precisely because it
+    serves no channel for them. A user picked one and the turn died after the point of no return.
+
+    Both halves of the union are load-bearing, each learned by breaking it:
+      • chain only  — greys out models an org runs daily through an explicit integration mapping.
+      • map only    — the original bug; a chain-served org gets its whole catalog offered.
+    An unknown vendor still means no restriction: not-in-our-tables is ignorance, not evidence
+    that a model cannot be served, and restricting on ignorance silently hides working models."""
     integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
     servable: set[str] = set()
+    # A chain names VAULT connections (harness-conn-<name>), NOT entries in the integrations doc.
+    # Looking them up in the doc misses every time, and "not found" then reads as "unknown vendor",
+    # so the restriction silently restricts nothing.
+    for name in await _resolve_chain(org, backend, None):
+        conn, _tenant = await _get_connection(org, name)
+        table = _vendor_models(str((conn or {}).get("provider") or "").lower())
+        if not table:
+            return None
+        servable |= set(table)
     for canonical, iname in (await _effective_model_map()).items():
         integ = integrations.get(iname)
-        if not integ:
-            continue
-        if _integration_serves_backend(integ, backend):
+        if integ and _integration_serves_backend(integ, backend):
             servable.add(canonical)
     return servable
 
@@ -6833,6 +6881,28 @@ async def _ws_files(sid: str) -> dict[str, bytes] | None:
     return out
 
 
+async def _cfile_by_name(sid: str) -> dict[str, str]:
+    """filename -> captured `cfile_…` id for this session, from the blob metas.
+
+    ONE resolver for both file routes. The listing built this inline while the by-path read knew
+    nothing about it, which is how a session could LIST dashboard.json and 404 it in the same
+    breath once the live workspace aged out."""
+    out: dict[str, str] = {}
+    listing = await _blob_list(f"containers/{sid}/", limit=200, kb=RESP_BLOB_KB)
+    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")]
+    for it in metas[:200]:
+        meta_b = await _blob_get(it["file_id"], kb=RESP_BLOB_KB)
+        if not meta_b:
+            continue
+        try:
+            fname = json.loads(meta_b).get("filename")
+        except Exception:  # noqa: BLE001
+            continue
+        if fname:
+            out[str(fname)] = it["file_id"].rsplit("/", 1)[-1][: -len(".meta")]
+    return out
+
+
 async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes, str, str] | None:
     """→ (data, media_type, filename) for either id form: a captured `cfile_…` blob, or a synthetic
     `wf_…` workspace-path id extracted from the session checkpoint."""
@@ -6964,6 +7034,27 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
     await _owned_session(request, sid)
     data = await BACKING.workspace.read(sid, path)
     if data is None:
+        # FALL BACK TO THE DURABLE COPY. The live workspace is reaped after HR_WORKSPACE_TTL_HOURS,
+        # but a file this session PRODUCED was captured to a blob and is still listed by the route
+        # next door — so the listing showed dashboard.json while this route 404'd it, and the
+        # dashboard kit (which fetches by path) said "no dashboard has been built for this
+        # conversation" about a dashboard that existed. Seen live on a 12-day-old session.
+        # Also accepts a file id as the path, so an id from the listing round-trips here.
+        got = None
+        if path.startswith(("cfile_", "wf_")):
+            got = await _container_file_bytes(sid, path)
+        else:
+            try:
+                byname = await _cfile_by_name(sid)
+            except Exception:  # noqa: BLE001 — blob store unavailable: keep the honest 404
+                byname = {}
+            cid = byname.get(path) or byname.get(path.rsplit("/", 1)[-1])
+            if cid:
+                got = await _container_file_bytes(sid, cid)
+        if got is not None:
+            data, media, _fname = got
+            return Response(content=data, media_type=media,
+                            headers={"cache-control": "no-store"})
         raise uhp_error(404, "file_not_found",
                         f"No file '{path}' in this session's workspace.", "path")
     media = mimetypes.guess_type(path)[0] or "application/octet-stream"

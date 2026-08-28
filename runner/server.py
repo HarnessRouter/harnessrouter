@@ -2689,6 +2689,31 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     return f"hr/{model}"
 
 
+def _opencode_has_session(env: dict, session_id: str) -> bool:
+    """Is this opencode session actually in this workspace's database?
+
+    opencode stores conversations in SQLite rather than one file per session, so there is no path
+    to stat the way claude's .jsonl or codex's rollout allows. The id is a distinctive token, so
+    the check is whether the database bytes contain it — the same shape of evidence as globbing
+    for a filename, and schema independent, which matters for a CLI pinned to a preview build.
+    Both the main database and its write-ahead log are searched: a session written by the previous
+    turn can still be sitting in the WAL.
+    """
+    home = pathlib.Path(env.get("HOME") or "")
+    if not home or not session_id:
+        return False
+    base = home / ".local" / "share" / "opencode"
+    needle = session_id.encode()
+    for name in ("opencode.db", "opencode.db-wal"):
+        f = base / name
+        try:
+            if f.exists() and needle in f.read_bytes():
+                return True
+        except Exception:  # noqa: BLE001 — unreadable is "not there", never a crash
+            continue
+    return False
+
+
 def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                     skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
@@ -2720,8 +2745,20 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
            # `part.type === "reasoning" && part.time?.end && thinking`. Without it the normalizer's
            # reasoning branch is unreachable and thinking silently never reaches the user.
            "--thinking"]
-    if resume_session_id:
-        cmd += ["--session", resume_session_id]
+    if resume_session_id and _opencode_has_session(env, resume_session_id):
+        cmd += ["--session", resume_session_id]   # continue the prior turn's conversation
+    elif resume_session_id:
+        # Same guard claude and codex already carry, and for the same reason. opencode keeps its
+        # conversations in a SQLite database under $HOME/.local/share/opencode. When that database
+        # is not the one the id was written to — the checkpoint did not carry it, the sandbox was
+        # recycled, a prior turn died before it was written — `--session <id>` names a session that
+        # is not there and opencode exits 1 IMMEDIATELY, before its init event, printing nothing.
+        # The runner then reports "opencode exited 1 without reporting an error", and since every
+        # later turn passes the same dead id, the conversation is wedged for good rather than for
+        # one turn. Starting a fresh CLI thread in the SAME workspace keeps the files and lets the
+        # follow-up run.
+        print(f"[resume] opencode: session {resume_session_id} not in this workspace — starting fresh",
+              flush=True)
     cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
     return cmd
 
