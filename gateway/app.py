@@ -4316,6 +4316,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshotai/kimi-k3",
+        "glm-5.3":            "z-ai/glm-5.3",
+        "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
@@ -4404,6 +4406,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshot/kimi-k3",
+        "glm-5.3":            "z-ai/glm-5.3",
+        "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
         "kimi-k2.7-code":     "moonshot/kimi-k2.7-code",
@@ -4465,6 +4469,9 @@ _VERCEL_RESLUG = {
     "qwen3.8-max":        "alibaba/qwen3.8-max",
     "qwen3.7-flash":      "alibaba/qwen3.7-flash",
     "mistral-medium-3.5": "mistral/mistral-medium-3.5",
+    # Vercel publishes the z-ai models under `zai/`, not the `z-ai/` the other aggregators use.
+    "glm-5.3":            "zai/glm-5.3",
+    "glm-5.3-flash":      "zai/glm-5.3-flash",
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
@@ -4571,7 +4578,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
-                          "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                          "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
@@ -4600,7 +4607,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                       "gemini-3.6-flash", "kimi-k3", "kimi-k2.7-code",
+                       "gemini-3.6-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
@@ -4615,7 +4622,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                            "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                            "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
@@ -4814,22 +4821,35 @@ async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, o
 async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     """Canonical models something can actually run on this backend.
 
-    None means "no restriction": a policy chain exists, and a chain's connections are
-    provider-level rather than per-model, so the backend can attempt its whole catalog.
+    The answer is the UNION of the two ways a turn can actually be served: the vendor tables of
+    the policy chain's connections, and the model→integration map. Offering a model nothing can
+    serve is a promise the router then breaks — the picker accepts it and the turn fails at the
+    point of no return.
 
-    Otherwise the only thing that can serve a turn is a model→integration mapping, so the
-    answer is exactly those canonicals whose integration's provider is wired to this backend.
-    Offering a model nothing can serve is a promise the router then breaks — the picker would
-    accept it and the turn would fail at the point of no return."""
-    if await _resolve_chain(org, backend, None):
-        return None
+    A chain used to mean "no restriction", on the reasoning that a chain is provider-level rather
+    than per-model. The vendor tables are per-model and deliberately differ:
+    _TOKENROUTER_NO_CHANNEL removes five models from TokenRouter's table precisely because it
+    serves no channel for them. A user picked one and the turn died after the point of no return.
+
+    Both halves of the union are load-bearing, each learned by breaking it:
+      • chain only  — greys out models an org runs daily through an explicit integration mapping.
+      • map only    — the original bug; a chain-served org gets its whole catalog offered.
+    An unknown vendor still means no restriction: not-in-our-tables is ignorance, not evidence
+    that a model cannot be served, and restricting on ignorance silently hides working models."""
     integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
     servable: set[str] = set()
+    # A chain names VAULT connections (harness-conn-<name>), NOT entries in the integrations doc.
+    # Looking them up in the doc misses every time, and "not found" then reads as "unknown vendor",
+    # so the restriction silently restricts nothing.
+    for name in await _resolve_chain(org, backend, None):
+        conn, _tenant = await _get_connection(org, name)
+        table = _vendor_models(str((conn or {}).get("provider") or "").lower())
+        if not table:
+            return None
+        servable |= set(table)
     for canonical, iname in (await _effective_model_map()).items():
         integ = integrations.get(iname)
-        if not integ:
-            continue
-        if _integration_serves_backend(integ, backend):
+        if integ and _integration_serves_backend(integ, backend):
             servable.add(canonical)
     return servable
 
