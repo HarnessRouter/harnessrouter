@@ -8,6 +8,12 @@ provider-level rather than per-model. The vendor tables ARE per-model and delibe
 Both halves of the union below are load-bearing, and each was learned by breaking it:
   * chain only — greys out models an org runs daily through an explicit integration mapping.
   * map only   — the original bug: a chain-served org gets its entire catalog offered.
+
+NOTE ON RUNNING THESE: gateway tests import app.py, which needs hashlib.scrypt. macOS system
+python does not have it, so a local run here fails at COLLECTION with an AttributeError that has
+nothing to do with the code under test. Run them in a container (docker exec <c> sh -lc 'cd
+/app/gateway && python3 -m pytest') or let CI be the gate — CI pins the interpreter this tree
+targets. A red local run is not evidence of a broken branch.
 """
 import pathlib
 import sys

@@ -4,6 +4,12 @@ On the hosted deployment the price endpoint refused with 403 for months. The ref
 as "keep the stale table", the table had never been populated, every _price_of() answered 0.0, and
 the console showed 0 credits per session while the harvest billed the real amount. Nothing looked
 broken anywhere. These pin the three states apart.
+
+NOTE ON RUNNING THESE: gateway tests import app.py, which needs hashlib.scrypt. macOS system
+python does not have it, so a local run here fails at COLLECTION with an AttributeError that has
+nothing to do with the code under test. Run them in a container (docker exec <c> sh -lc 'cd
+/app/gateway && python3 -m pytest') or let CI be the gate — CI pins the interpreter this tree
+targets. A red local run is not evidence of a broken branch.
 """
 import pathlib
 import sys
