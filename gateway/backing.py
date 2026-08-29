@@ -30,6 +30,7 @@ import hashlib
 import secrets as secrets_mod
 import io
 import json
+import mimetypes
 import os
 import posixpath
 import re
@@ -381,9 +382,10 @@ class RunnerWorkspaceFiles:
     Live, unlike the checkpoint the listing route reads: an app sees a file the moment a tool call
     creates it, rather than when the turn ends."""
 
-    def __init__(self, endpoint: str, key: str):
+    def __init__(self, endpoint: str, key: str, blob=None, kb: str = ""):
         self.endpoint = (endpoint or "").rstrip("/")
         self.key = key
+        self.blob, self.kb = blob, kb
         self._client: httpx.AsyncClient | None = None
 
     def _c(self) -> httpx.AsyncClient:
@@ -415,7 +417,42 @@ class RunnerWorkspaceFiles:
                                     content=data)
         except Exception:      # noqa: BLE001
             return False
-        return r.status_code == 200
+        if r.status_code != 200:
+            return False
+        await self._capture(sid, member, data)
+        return True
+
+    async def _capture(self, sid: str, member: str, data: bytes) -> None:
+        """Persist the app's copy of this file so it outlives the live directory.
+
+        THIS is why the class takes a blob store. The live workspace is reaped after
+        HR_WORKSPACE_TTL_HOURS and is only ever refreshed by a TURN's checkpoint, so a file an app
+        wrote BETWEEN turns lived in exactly one place and was deleted with it: a sheet somebody
+        typed into and never asked the agent about again came back empty, and so did every agent
+        column they had bound by hand. The hosted sibling writes straight into the durable tarball
+        and never had the hole, which is the tell — one Protocol, two meanings for `write`.
+
+        The id is derived from the path, so a sheet saved a thousand times keeps ONE blob instead
+        of leaking one per save. `written_at` is what makes the read side deterministic: the
+        agent's own capture of the same filename carries one too, and the newer of the two wins
+        rather than whichever the blob listing happened to return last."""
+        if not self.blob or not self.kb:
+            return
+        cfile = "cfile_" + hashlib.sha256(f"app:{member}".encode()).hexdigest()[:32]
+        meta = json.dumps({"filename": member,
+                           "media_type": mimetypes.guess_type(member)[0] or "application/octet-stream",
+                           "written_at": time.time(),
+                           "source": "app"}).encode()
+        try:
+            if await self.blob.put(self.kb, f"containers/{sid}/{cfile}", data):
+                await self.blob.put(self.kb, f"containers/{sid}/{cfile}.meta", meta)
+                return
+        except Exception as e:   # noqa: BLE001
+            print(f"[workspace] durable capture failed sid={sid} path={member}: {e}", flush=True)
+            return
+        # A live write that was not captured is the old silent-loss shape. Say so rather than
+        # letting it look like a clean save.
+        print(f"[workspace] durable capture rejected sid={sid} path={member}", flush=True)
 
 
 class CheckpointWorkspaceFiles:
@@ -505,10 +542,13 @@ def make_backing(*, client_getter, vg_url: str, vg_key: str, vg_tenant: str,
             mode="vg",
             workspace=CheckpointWorkspaceFiles(blob, os.environ.get("HARNESS_BLOB_KB", "harness-sessions"), ws_key))
     data = os.environ.get("HR_DATA_DIR", ".hr-data")
+    local_blob = FileBlobStore(os.path.join(data, "blobs"))
     return Backing(
         graph=SqliteGraphStore(os.path.join(data, "graph.db")),
-        blob=FileBlobStore(os.path.join(data, "blobs")),
+        blob=local_blob,
         secrets=FileSecretStore(os.path.join(data, "secrets")),
         mode="local",
         workspace=RunnerWorkspaceFiles(os.environ.get("POOL_MGMT_ENDPOINT", "http://127.0.0.1:8081"),
-                                       os.environ.get("HARNESS_INTERNAL_KEY", "")))
+                                       os.environ.get("HARNESS_INTERNAL_KEY", ""),
+                                       local_blob,
+                                       os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")))
