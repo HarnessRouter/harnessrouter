@@ -1826,6 +1826,12 @@ async def _hydrate(sid: str, rec: dict) -> None:
         r = await _hydrate_relay(sid, params)
         rec["hydrated"] = r.status_code < 400
         rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+        if rec["hydrated"]:
+            # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
+            # turn. Anything an app wrote since then has just been wiped out of it, so put it back
+            # before the agent opens the file. The warm-resume branch above returns early and never
+            # reaches this: that workspace was never wiped, so it still holds those writes.
+            rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
         if not rec["hydrated"] and want_sha:
             # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed. Do NOT let this
             # turn checkpoint over the good blob from a workspace that isn't that checkpoint.
@@ -2264,6 +2270,14 @@ _RESP_STATUS_MAP = {"done": "completed", "completed": "completed", "failed": "fa
                     "incomplete": "incomplete", "error": "failed"}
 
 
+def _hb_seconds(v: dict) -> float:
+    """When the owning replica last said it was alive. 0 (⇒ infinitely stale) when unreadable."""
+    try:
+        return float(v.get("heartbeat") or 0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 async def _reconcile_response(rid: str, rec: dict) -> dict:
     """Durable settler for an async (background) response record. GET /v1/responses/{id} is the
     ONLY completion signal a background poller has, so a record left at 'running' by a replica that
@@ -2286,12 +2300,22 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         # invents a success: the turn list showed 'continue finish the work' as completed when it
         # never produced a byte. An empty settled record is 'incomplete' — terminal, honest.
         if settled == "completed" and not (rec.get("output") or []):
+            # EMPTY IS NOT EMPTY-FOREVER. The session vertex goes terminal BEFORE this record is
+            # rewritten with its output, so a poll landing in that window sees a finished session
+            # and a record holding nothing — indistinguishable, on those two facts alone, from a
+            # finalize that died. Only the heartbeat separates them: while the owner is still
+            # renewing it the finalize is in flight and the output is moments away.
+            #
+            # Settling 'incomplete' here does real damage, because this function PERSISTS it: the
+            # sheets kit polled mid-finalize, was handed a terminal 'incomplete', and wrote "the
+            # turn ended without an answer" into every cell of a run whose answers the agent had
+            # already produced. Leave a live turn alone; the sweep still settles a dead one once
+            # the heartbeat goes stale.
+            if time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
+                return rec
             settled = "incomplete"
     else:
-        try:
-            hb = float(v.get("heartbeat") or 0)
-        except Exception:  # noqa: BLE001
-            hb = 0
+        hb = _hb_seconds(v)
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
             ts = await _trace_terminal_status(v.get("trace_blob"))
             if ts:
@@ -4999,7 +5023,8 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
             fname = path.lstrip("./")
             if await _blob_put(f"containers/{sid}/{cfile}", fr.content, kb=RESP_BLOB_KB):
                 await _blob_put(f"containers/{sid}/{cfile}.meta",
-                                json.dumps({"filename": fname, "media_type": media}).encode(), kb=RESP_BLOB_KB)
+                                json.dumps({"filename": fname, "media_type": media,
+                                            "written_at": time.time()}).encode(), kb=RESP_BLOB_KB)
                 out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(fr.content)})
         except Exception:  # noqa: BLE001
             continue
@@ -6881,13 +6906,19 @@ async def _ws_files(sid: str) -> dict[str, bytes] | None:
     return out
 
 
-async def _cfile_by_name(sid: str) -> dict[str, str]:
-    """filename -> captured `cfile_…` id for this session, from the blob metas.
+async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
+    """filename -> (captured `cfile_…` id, written_by_an_app) for this session, from the blob metas.
 
-    ONE resolver for both file routes. The listing built this inline while the by-path read knew
+    ONE resolver for every caller. The listing built this inline while the by-path read knew
     nothing about it, which is how a session could LIST dashboard.json and 404 it in the same
-    breath once the live workspace aged out."""
-    out: dict[str, str] = {}
+    breath once the live workspace aged out.
+
+    NEWEST WINS. Two captures can name the same file — the agent's, taken when a turn ended, and
+    the app's, taken when somebody saved between turns — and serving the older one hands back work
+    the person already replaced. Ties keep the previous last-one-wins order, so a pair of legacy
+    metas with no stamp resolves exactly as it did before."""
+    out: dict[str, tuple[str, bool]] = {}
+    newest: dict[str, float] = {}
     listing = await _blob_list(f"containers/{sid}/", limit=200, kb=RESP_BLOB_KB)
     metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")]
     for it in metas[:200]:
@@ -6895,12 +6926,55 @@ async def _cfile_by_name(sid: str) -> dict[str, str]:
         if not meta_b:
             continue
         try:
-            fname = json.loads(meta_b).get("filename")
+            meta = json.loads(meta_b)
         except Exception:  # noqa: BLE001
             continue
-        if fname:
-            out[str(fname)] = it["file_id"].rsplit("/", 1)[-1][: -len(".meta")]
+        fname = meta.get("filename")
+        if not fname:
+            continue
+        ts = float(meta.get("written_at") or 0.0)
+        if str(fname) in newest and ts < newest[str(fname)]:
+            continue
+        newest[str(fname)] = ts
+        out[str(fname)] = (it["file_id"].rsplit("/", 1)[-1][: -len(".meta")],
+                           meta.get("source") == "app")
     return out
+
+
+async def _cfile_by_name(sid: str) -> dict[str, str]:
+    """filename -> newest captured `cfile_…` id. The file routes want only the id."""
+    return {name: cid for name, (cid, _app) in (await _newest_captures(sid)).items()}
+
+
+async def _reapply_app_writes(sid: str) -> int:
+    """Put back the files an APP wrote since the last checkpoint, into a freshly hydrated workspace.
+
+    Hydrate restores the checkpoint, and the checkpoint is only ever taken when a TURN ends. So a
+    sheet somebody edited between turns is not in it: without this the agent would open the older
+    copy, write it back, and the person's rows would be gone — the same loss the durable capture
+    fixes for reads, arriving one turn later instead.
+
+    The test is deliberately conservative: re-apply ONLY where the app's capture is the newest one
+    for that filename. If the agent touched the same file in its last turn, its capture is newer,
+    the checkpoint already holds it, and this leaves it alone. That way the repair can never be the
+    thing that overwrites the agent's work."""
+    try:
+        caps = await _newest_captures(sid)
+    except Exception:  # noqa: BLE001 — blob store unavailable: the turn still runs
+        return 0
+    n = 0
+    for name, (cid, from_app) in caps.items():
+        if not from_app:
+            continue
+        try:
+            got = await _container_file_bytes(sid, cid)
+            if got and await BACKING.workspace.write(sid, name, got[0]):
+                n += 1
+        except Exception:  # noqa: BLE001
+            continue
+    if n:
+        print(f"[hydrate] re-applied {n} app write(s) sid={sid}", flush=True)
+    return n
 
 
 async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes, str, str] | None:
@@ -6977,20 +7051,10 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
     if tf is None:
         raise HTTPException(404, "no workspace for this session yet — run a task first")
     # Captured-output ids by filename (so listed entries reuse the id the response already cited).
-    cfile_by_name: dict[str, str] = {}
-    listing = await _blob_list(f"containers/{sid}/", limit=200, kb=RESP_BLOB_KB)
-    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")]
-    for it in metas[:200]:
-        meta_b = await _blob_get(it["file_id"], kb=RESP_BLOB_KB)
-        if not meta_b:
-            continue
-        try:
-            fname = json.loads(meta_b).get("filename")
-        except Exception:  # noqa: BLE001
-            continue
-        cfile = it["file_id"].rsplit("/", 1)[-1][: -len(".meta")]
-        if fname:
-            cfile_by_name.setdefault(str(fname), cfile)
+    # THE SHARED RESOLVER, not a second copy of it. This route used to walk the metas itself and
+    # keep the FIRST id per filename while the by-path read kept the NEWEST, so the listing could
+    # hand out the id of a superseded capture and the two routes disagreed about the same file.
+    cfile_by_name = await _cfile_by_name(sid)
     files = []
     with tf:
         for m in tf.getmembers():
