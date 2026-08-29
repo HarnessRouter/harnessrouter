@@ -2270,6 +2270,14 @@ _RESP_STATUS_MAP = {"done": "completed", "completed": "completed", "failed": "fa
                     "incomplete": "incomplete", "error": "failed"}
 
 
+def _hb_seconds(v: dict) -> float:
+    """When the owning replica last said it was alive. 0 (⇒ infinitely stale) when unreadable."""
+    try:
+        return float(v.get("heartbeat") or 0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 async def _reconcile_response(rid: str, rec: dict) -> dict:
     """Durable settler for an async (background) response record. GET /v1/responses/{id} is the
     ONLY completion signal a background poller has, so a record left at 'running' by a replica that
@@ -2292,12 +2300,22 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         # invents a success: the turn list showed 'continue finish the work' as completed when it
         # never produced a byte. An empty settled record is 'incomplete' — terminal, honest.
         if settled == "completed" and not (rec.get("output") or []):
+            # EMPTY IS NOT EMPTY-FOREVER. The session vertex goes terminal BEFORE this record is
+            # rewritten with its output, so a poll landing in that window sees a finished session
+            # and a record holding nothing — indistinguishable, on those two facts alone, from a
+            # finalize that died. Only the heartbeat separates them: while the owner is still
+            # renewing it the finalize is in flight and the output is moments away.
+            #
+            # Settling 'incomplete' here does real damage, because this function PERSISTS it: the
+            # sheets kit polled mid-finalize, was handed a terminal 'incomplete', and wrote "the
+            # turn ended without an answer" into every cell of a run whose answers the agent had
+            # already produced. Leave a live turn alone; the sweep still settles a dead one once
+            # the heartbeat goes stale.
+            if time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
+                return rec
             settled = "incomplete"
     else:
-        try:
-            hb = float(v.get("heartbeat") or 0)
-        except Exception:  # noqa: BLE001
-            hb = 0
+        hb = _hb_seconds(v)
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
             ts = await _trace_terminal_status(v.get("trace_blob"))
             if ts:
