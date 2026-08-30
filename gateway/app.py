@@ -3460,9 +3460,18 @@ async def delete_trace(sid: str, request: Request) -> dict:
     try:
         # Mark deleted but DON'T blank trace_blob — a blank prefix silently disables the trace if the
         # session is later resumed (the prefix is deterministic from created_at_inv anyway).
-        await _vg_upsert("HarnessSession", sid, {"status": "deleted"})
+        #
+        # `shared: "0"` is part of the tombstone, not hygiene. The share resolver matches on
+        # {share_token, shared: "1"} and never looks at status, so a deleted session's link kept
+        # resolving — and the turns behind it are rebuilt from response records, which this
+        # function does not remove. Verified live: DELETE answered 200 and the share link went on
+        # serving the full conversation. Sessions §6 says deletion MUST make the session
+        # unreadable, and the published link is the reader its owner is least likely to remember.
+        await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
     except Exception:  # noqa: BLE001
         pass
+    _SHARE_STATE_CACHE.pop(sid, None)
+    _SHARE_TOKEN_CACHE.clear()
     _session_trace.pop(sid, None)
     return {"id": sid, "object": "session", "deleted": True}
 
@@ -6542,26 +6551,62 @@ async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
 
 
 class ShareBody(BaseModel):
-    enabled: bool
+    enabled: bool = True
+
+
+def _share_out(enabled: bool, token: str) -> dict:
+    """The share object, self-describing. Sessions §5 names the mint endpoint but not where the
+    view is served, so the object says so itself: `url` is where this share reads back, relative
+    to whatever base the caller is already using — the gateway cannot know its public origin (the
+    console proxy deliberately strips Host and x-forwarded-*), and a path survives every fronting
+    (direct, or via /api/harness which relays /share/* through). `id` is the token because the
+    token IS the share's identity; a conformance probe that presents it as an API bearer must be
+    refused, and giving it a second name would only hide that from the check."""
+    out = {"object": "session.share", "enabled": enabled, "token": token}
+    if token:
+        out["id"] = token
+        out["url"] = f"/share/{token}"
+    return out
 
 
 @app.post("/v1/sessions/{sid}/share")
-async def set_session_share(sid: str, body: ShareBody, request: Request) -> dict:
+async def set_session_share(sid: str, request: Request, body: ShareBody | None = None) -> dict:
+    """Publish (or with enabled:false, revoke) the read-only shared view of a session.
+
+    The body is OPTIONAL, defaulting to enabled. Sessions §5 documents `POST .../share` with no
+    body — publishing is the whole meaning of the request — and requiring `{"enabled": true}`
+    made this endpoint 422 a caller speaking the specification's own dialect (the conformance
+    suite among them)."""
     p = await _principal(request)
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
-    if body.enabled:
+    if body is None or body.enabled:
         token = str(v.get("share_token") or "") or ("shr" + uuid.uuid4().hex)
         await _vertex_upsert(sid, {"share_token": token, "shared": "1",
                                    "shared_at": str(time.time())})
         _SHARE_STATE_CACHE.pop(sid, None)
         _SHARE_TOKEN_CACHE.clear()
-        return {"enabled": True, "token": token}
+        return _share_out(True, token)
     await _vertex_upsert(sid, {"shared": "0"})
     _SHARE_STATE_CACHE.pop(sid, None)
     _SHARE_TOKEN_CACHE.clear()
-    return {"enabled": False, "token": str(v.get("share_token") or "")}
+    return _share_out(False, str(v.get("share_token") or ""))
+
+
+@app.delete("/v1/sessions/{sid}/share")
+async def revoke_session_share(sid: str, request: Request) -> dict:
+    """Revocation, at the address of the thing being revoked. §5 says a share MUST be revocable
+    and names no path; DELETE on the share endpoint is the reading a client tries first, and it
+    was answering 405 while the real revocation hid inside POST {"enabled": false}. Both work."""
+    p = await _principal(request)
+    v = await _vertex_get(sid)
+    if not v or str(v.get("tenant") or "") != p.get("org"):
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    await _vertex_upsert(sid, {"shared": "0"})
+    _SHARE_STATE_CACHE.pop(sid, None)
+    _SHARE_TOKEN_CACHE.clear()
+    return _share_out(False, str(v.get("share_token") or "")) | {"deleted": True}
 
 
 @app.get("/v1/sessions/{sid}/share")
@@ -6570,7 +6615,7 @@ async def get_session_share(sid: str, request: Request) -> dict:
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != p.get("org"):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
-    return {"enabled": str(v.get("shared") or "") == "1", "token": str(v.get("share_token") or "")}
+    return _share_out(str(v.get("shared") or "") == "1", str(v.get("share_token") or ""))
 
 
 async def _share_sid(token: str) -> str | None:
@@ -6595,6 +6640,14 @@ async def _share_sid(token: str) -> str | None:
 
 _SHARE_META_FIELDS = ("session_id", "title", "status", "model", "backend",
                       "harness_id", "harness_name", "event_count", "elapsed", "finished_at")
+
+
+@app.get("/share/{token}")
+async def share_view(token: str) -> dict:
+    """The shared view's root: what the published URL opens. The subroutes carry the pieces
+    (meta / turns / files); this is the object a link-holder lands on, and the address every
+    read-only guarantee in Sessions §5 is measured at."""
+    return {"object": "session.shared", **(await share_meta(token))}
 
 
 @app.get("/share/{token}/meta")
