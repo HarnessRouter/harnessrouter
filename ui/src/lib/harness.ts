@@ -88,9 +88,9 @@ export const OOB: OobHarness[] = [
     systemPrompt: 'You are Qwen Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'cline', name: 'Cline', version: 'v3.0.60', backend: 'cline', status: 'ready',
-    // Placeholder only, like every list above: the gateway's catalog wins once fetched. These two
-    // are the rows that completed live turns through the gateway before shipping.
-    models: ['gpt-5.4', 'gpt-5.4-mini'], defaultModel: 'gpt-5.4', moreModels: 0,
+    // Placeholder only, like every list above: the gateway's catalog wins once fetched. Every
+    // row completed a live substitution-checked turn through the gateway (2026-08-30 sweep).
+    models: ['gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.7-max', 'qwen3.8-max', 'mistral-medium-3.5', 'step-3.7-flash'], defaultModel: 'gpt-5.4', moreModels: 0,
     systemPrompt: 'You are Cline, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
 ];

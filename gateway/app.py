@@ -4721,10 +4721,18 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash"]},
-    # cline: deliberately short. A model earns its row here only after a real turn completed
-    # against the live provider through this backend, substitution-checked — these two were.
+    # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
+    # shape repair in flight). Every row below completed a real turn through the gateway against
+    # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
+    # earned their absence: gpt-5.3-codex is refused by the aggregator on this surface, and
+    # gemini-3.6-flash fails on request shape through the relay — retest before adding either).
     "cline": {"default": "gpt-5.4",
-              "models": ["gpt-5.4", "gpt-5.4-mini"]},
+              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+                         "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5",
+                         "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
+                         "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
+                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                         "mistral-medium-3.5", "step-3.7-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -5240,6 +5248,16 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
     agent_doc = str((hv or {}).get("system_prompt") or "")
     status = "failed"
+    # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
+    # from the durable turn records; a read failure degrades to a fresh turn rather than failing
+    # the request — the workspace and AGENTS.md still carry the working context.
+    runner_prompt = prompt
+    if backend in _NO_RESUME_BACKENDS and resume:
+        try:
+            _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS)).get("turns") or []
+            runner_prompt = _history_prompt(_hist, prompt)
+        except Exception:  # noqa: BLE001
+            pass
     # Model→integration mapping (global token-provider routing): a mapped model runs on its
     # integration FIRST; the backend's policy chain stays as the failure fallback.
     mapped_conn = await _mapped_integration_conn(backend, model_req)
@@ -5272,7 +5290,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             continue
         body = {"backend": conn.get("backend", backend), "provider": conn.get("provider"),
                 "model": (conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req)),
-                "prompt": prompt, "max_turns": max_step,
+                "prompt": runner_prompt, "max_turns": max_step,
                 "timeout_seconds": timeout_s,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "agent_doc": agent_doc,
@@ -7024,6 +7042,44 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
         out[str(fname)] = (it["file_id"].rsplit("/", 1)[-1][: -len(".meta")],
                            meta.get("source") == "app")
     return out
+
+
+# Backends whose CLI cannot resume a conversation headless. cline 3.0.60: `--json --id` refuses
+# a prompt in every form (argument, =form, piped stdin — each verified live, and the identical
+# argv without --id runs), so the CLI starts every turn fresh. The GATEWAY owns the conversation
+# (the response records), so the gateway hands it back: a follow-up turn's runner prompt carries
+# a bounded transcript of the session so far. The user-facing record stays the raw message — the
+# transcript rides ONLY the runner prompt, never the trace card or the turn list.
+_NO_RESUME_BACKENDS = {"cline"}
+_HISTORY_MAX_TURNS = 12
+_HISTORY_CLIP = 4000          # per message; a pasted novel is context, not a transcript
+_HISTORY_MAX_BYTES = 16000    # whole block; beyond this the oldest turns fall off first
+
+
+def _history_prompt(turns: list[dict], new_prompt: str) -> str:
+    """The runner prompt for a follow-up on a backend that cannot resume.
+
+    Most recent turns win: the block is built newest-first against the byte budget, then emitted
+    oldest-first so the model reads it in order. Empty history returns the prompt unchanged."""
+    rows: list[str] = []
+    used = 0
+    for t in reversed(turns[-_HISTORY_MAX_TURNS:]):
+        u = (t.get("user") or "").strip()[:_HISTORY_CLIP]
+        a = (t.get("assistant") or "").strip()[:_HISTORY_CLIP]
+        piece = (f"user: {u}\n" if u else "") + (f"assistant: {a}\n" if a else "")
+        if not piece:
+            continue
+        if used + len(piece) > _HISTORY_MAX_BYTES:
+            break
+        rows.append(piece)
+        used += len(piece)
+    if not rows:
+        return new_prompt
+    body = "".join(reversed(rows))
+    return ("<conversation_so_far>\n"
+            "This is the conversation in this session so far. Continue it; do not repeat it.\n"
+            f"{body}"
+            "</conversation_so_far>\n\n" + new_prompt)
 
 
 async def _cfile_by_name(sid: str) -> dict[str, str]:
