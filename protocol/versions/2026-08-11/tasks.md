@@ -36,12 +36,22 @@ Content-Type: application/json
 | `max_output_tokens` | integer | no | Upper bound on generated tokens. |
 | `max_step` | integer | no | Upper bound on agent steps (tool-call rounds) for this task. |
 | `timeout_seconds` | integer | no | Wall-clock budget for this task. |
-| `tools` | array | no | Additional tools offered for this task. |
-| `include` | string[] | no | Optional extra content to include in the result. |
+| `tools` | array | no | **Reserved and ignored.** Accepted, never acted on. See §1.4. |
+| `include` | string[] | no | **Reserved and ignored.** Accepted, never acted on. See §1.4. |
 | `background` | boolean | no | Return as soon as the task is accepted; follow it with the events endpoint. |
 
 A server MUST ignore request fields it does not understand rather than rejecting the request. A
 client MUST NOT rely on an unknown field having an effect.
+
+Ignoring MUST be observable. When a server does not act on a field the request carried, it MUST
+name that field in `metadata.ignored_fields` on the response — an array of request-field names, in
+any order. This is the same principle as model substitution in §1.3: where the server did not do
+what the request literally said, the response says so. A silently ignored field is
+indistinguishable from an honoured one, and a client cannot tell which it got.
+
+`tools` and `include` are reserved and ignored (§1.4), so a server MUST name them in
+`metadata.ignored_fields` whenever a request carries them. A server MUST NOT reject a request for
+carrying either.
 
 `max_step` and `timeout_seconds` are budgets, not guarantees of precision: a server MUST stop the
 task at or after the budget, MUST report `incomplete`, and MUST NOT report `completed` for work it
@@ -97,6 +107,49 @@ with `metadata.requested_model`.
 > This rule exists because its absence is expensive. A server that substitutes silently makes every
 > measurement downstream wrong — benchmarks, cost attribution, quality comparisons — and the client
 > has no way to detect it. Reporting the substitution costs two fields.
+
+### 1.4 Reserved fields: `tools` and `include`
+
+Both fields arrived with the OpenAI Responses wire shape this version stays compatible with. Neither
+was designed for UHP, and neither has ever had defined semantics here. They are **reserved**: a
+server accepts them, never acts on them, and reports them under `metadata.ignored_fields` (§1.1).
+
+This is a decision rather than a gap left open, so implementers can stop carrying them as unfinished
+work and client authors can stop building on them.
+
+**`tools` cannot mean what it means in the Responses API.** There, the field exists because the
+*client* executes tools: the model emits a `function_call`, the client runs it, and returns a
+`function_call_output` as input on the next request. UHP puts both of those in `output` (§3.1). The
+harness invokes and executes tools itself and reports them as observability. There is no input path
+for a tool result, so the loop `tools` implies cannot be completed by a conformant server — not
+because implementations are immature, but because the object model has no place for the return leg.
+
+**`tools` also cannot mean "MCP servers for this task", which is the other plausible reading.**
+[Harnesses](harnesses.md) §4.1 already specifies MCP servers on the harness, with a
+field table and the semantics that matter: a disabled entry MUST NOT be contacted, an unreachable
+server MUST NOT fail the task. A request-level form would be a second mechanism for one behaviour.
+
+More importantly, it would be an **escalation primitive**. If a request can attach an MCP server,
+anyone holding an API key can point the agent at an endpoint of their choosing, and the agent
+executes tools server-side with the harness's credentials and workspace access. The harness owner
+and the API caller are routinely different parties — a product configures a harness, and its end
+users drive tasks against it. Request-level declaration silently moves a capability decision from
+the accountable party to any caller. The configured harness is a first-class object precisely so
+that decision is made once, deliberately, by whoever owns the consequences.
+
+The durable rule underneath, which applies beyond this field: **narrowing is safe, widening is
+escalation.** A future version could reasonably add a typed per-request tool *disable* list. It
+should never add a per-request *grant*.
+
+**`include` has no vocabulary.** It is `array of string` with no enumerated values, so any string a
+server recognises is one that server named itself. Recognising a value would be inventing a
+vocabulary no other implementation shares.
+
+**How an agent gets tools:** configure them on the harness. See
+[Harnesses](harnesses.md) §4.1 for MCP servers and §4.2 for skills.
+
+Removal is a question for the next version. This one is additive-only and cannot drop a field, so
+the honest form here is to say plainly that these two do nothing.
 
 ## 2. Input
 

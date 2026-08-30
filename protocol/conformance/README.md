@@ -37,11 +37,11 @@ anything that only inspects a schema.
 
 ## What it checks
 
-59 checks across three classes.
+62 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
-| **Core** | 37 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation |
+| **Core** | 40 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
 | **Extended** | +8 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
 | **Full** | +14 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing |
 
@@ -64,6 +64,10 @@ A few of them are worth calling out, because they catch things a schema check ne
   own origin.
 - **X-08** — artifact ids do not traverse out of their container. Probes for `../` and its
   percent-encoded form.
+- **T-08/T-09/T-10** — the reserved fields `tools` and `include` are accepted, and reported as
+  ignored. Both halves matter: before these, the suite sent neither field, so a server that
+  rejected them outright and a server that silently acted on them scored the same as a correct
+  one. T-10 covers the third mistake, a server that reports fields the request never sent.
 - **R-01…R-07** — session sharing, which is mostly a set of refusals. Sessions §5 requires that a
   shared view be read-only, revocable, and free of credentials, and a check that merely opens a
   link and reads the conversation passes against a server that also lets that link continue the
@@ -113,14 +117,18 @@ a live instance on 2026-08-11:
     CONFORMANT — UHP 2026-08-11 (full)
 ```
 
-That run predates the `R-` series, so it is a 52-check result. The R-series itself has been
-measured against the reference implementation directly: at the commit this note ships in,
-`R-01`…`R-07` all pass against a live self-hosted instance. Getting there took changes on both
-sides, which is the strongest argument this suite has for itself — against the reference as it
-stood, all seven checks skipped (its share dialect wanted `{"enabled": true}` and published no
-view URL), and behind those skips sat a real Sessions §6 violation: a session's share link kept
-serving the full conversation after `DELETE /v1/traces/{id}`, verified live before the fix. A
-suite that had shipped happy-path checks would have called that server conformant.
+That run predates the `T-` additions and the `R-` series, so it is a 52-check result. Both have
+since been measured against the reference implementation directly, live on a self-hosted
+instance, and both measured a real defect before passing:
+
+- `R-01`…`R-07` all pass. Against the reference as it stood, all seven skipped (its share
+  dialect wanted `{"enabled": true}` and published no view URL), and behind those skips sat a
+  real Sessions §6 violation: a session's share link kept serving the full conversation after
+  `DELETE /v1/traces/{id}`, verified live before the fix.
+- `T-08`–`T-10` pass, with `T-09` failing against the reference as it stood: `tools` fed the
+  idempotency hash and nothing reported it ignored — the silent drop §1.1 now forbids.
+
+A suite that had shipped happy-path checks would have called that server conformant both times.
 
 The suite is developed against that implementation, which is exactly why the specification says
 conformance is defined by the suite and not by the implementation: anything the reference does that

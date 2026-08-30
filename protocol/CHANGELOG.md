@@ -2,6 +2,42 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Unreleased — additive to 2026-08-11
+
+### Clarified
+
+- **`tools` and `include` are reserved and ignored** ([Tasks §1.4](versions/2026-08-11/tasks.md#14-reserved-fields-tools-and-include)).
+  Both arrived with the OpenAI Responses wire shape this version stays compatible with, and neither
+  ever had defined semantics in UHP. A server accepts them and does not act on them.
+
+  `tools` cannot mean what it means in the Responses API, where the *client* executes tools and
+  returns the result as input: UHP puts both the call and its result in `output`, so there is no
+  input path for the return leg and the loop the field implies cannot be completed. The other
+  plausible reading — per-request MCP servers — is already covered by
+  [Harnesses §4.1](versions/2026-08-11/harnesses.md#41-mcp-servers), and would be an escalation
+  primitive besides: it would let any caller point the agent at an endpoint of their choosing,
+  executed with the harness owner's credentials and workspace. The rule underneath, stated so it
+  can be applied again: **narrowing is safe, widening is escalation.**
+
+- **`metadata.ignored_fields` is specified** ([Tasks §1.1](versions/2026-08-11/tasks.md#11-request-fields)),
+  and required when a request carries a reserved field. Ignoring has to be observable, for the same
+  reason model substitution is reported in §1.3: a silently dropped field is indistinguishable from
+  an honoured one.
+
+- **GOVERNANCE.md records "a declined field is not a pending one"** — the general rule these two
+  fields are the worked example of. Due to @aenawi in
+  [#42](https://github.com/HarnessRouter/harnessrouter/issues/42).
+
+Nothing is removed and no client breaks: a request sending either field was already accepted and
+already had no effect. Removal is a question for the next version.
+
+### Conformance
+
+Three checks at class Core, in both directions, where the suite previously sent neither field:
+**T-08** a request carrying them is accepted, **T-09** they are reported in
+`metadata.ignored_fields`, **T-10** a request that sent neither is not told one was ignored. Core
+goes from 37 checks to 40.
+
 ## 2026-08-11 — first published version
 
 The initial specification, extracted from the shipping HarnessRouter implementation rather than
