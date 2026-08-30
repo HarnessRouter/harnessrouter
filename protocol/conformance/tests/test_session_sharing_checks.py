@@ -47,11 +47,12 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _run_series(defect: str) -> dict[str, Outcome]:
+def _run_series(defect: str, dialect: str = "plain") -> dict[str, Outcome]:
     """Every R- check against a stub carrying `defect`, in registration order."""
     port = _free_port()
     srv = subprocess.Popen([sys.executable, str(STUB)],
-                           env={"DEFECT": defect, "PORT": str(port), "PATH": "/usr/bin:/bin"},
+                           env={"DEFECT": defect, "DIALECT": dialect, "PORT": str(port),
+                                "PATH": "/usr/bin:/bin"},
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.time() + 10
@@ -119,3 +120,30 @@ def test_no_check_errors_on_any_defect():
     for defect in ["none", *CAUGHT_BY]:
         out = _run_series(defect)
         assert Outcome.ERROR not in out.values(), f"{defect}: {out}"
+
+
+# ── the toggle dialect ────────────────────────────────────────────────────────────────
+# The reference implementation does not speak §5's bodyless POST: the body carries the target
+# state, an empty body is a validation error, and revocation is {"enabled": false}. The series
+# must drive that dialect too — it skipped all seven against the reference until it did — and
+# driving it must not cost any detection.
+
+
+def test_a_conformant_toggle_dialect_server_passes_every_check():
+    out = _run_series("none", dialect="enabled")
+    assert all(o is Outcome.PASS for o in out.values()), out
+
+
+def test_the_toggle_dialects_revocation_is_still_a_real_probe():
+    """R-06's last attempt believes a 200 only when it speaks revocation's vocabulary, so a
+    toggle server whose revocation lies must still be caught through that path."""
+    out = _run_series("revoke_lies", dialect="enabled")
+    assert out["R-06"] is Outcome.FAIL, out
+    assert [i for i, o in out.items() if o is Outcome.FAIL] == ["R-06"], out
+
+
+def test_the_dialect_retry_does_not_hide_a_missing_feature():
+    """A server with no sharing at all still skips, never fails: the retry only fires on a
+    validation error, and 404/405/501 mean today what they meant before it existed."""
+    out = _run_series("none", dialect="plain")   # the plain stub already proves pass; this
+    assert Outcome.ERROR not in out.values()     # guards the retry against breaking it
