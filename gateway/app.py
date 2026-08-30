@@ -986,6 +986,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "qwen"): "openai-api",
     ("tokenrouter", "qwen"): "tokenrouter",    ("vercel", "qwen"): "tokenrouter",
     ("llmtr", "qwen"): "tokenrouter",
+    # cline is a pure openai-compatible client through the runner's loopback relay (3.0.60,
+    # verified: the relay repairs shapes in flight, so every provider on an OpenAI-or-repairable
+    # surface drives it) — wired like qwen for the same reason.
+    ("anthropic", "cline"): "anthropic",       ("openai", "cline"): "openai",
+    ("azure-foundry", "cline"): "azure",
+    ("openrouter", "cline"): "openai-api",
+    ("tokenrouter", "cline"): "tokenrouter",   ("vercel", "cline"): "tokenrouter",
+    ("llmtr", "cline"): "tokenrouter",
     # custom: user-supplied endpoint + model + key. Maps to runner providers that can actually
     # drive a bring-your-own OpenAI/Anthropic endpoint — NOT codex, whose current releases speak
     # only the OpenAI Responses API and so cannot reach a custom chat/completions endpoint.
@@ -993,6 +1001,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "hermes"): "openai-api",        ("custom", "opencode"): "tokenrouter",
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
+    ("custom", "cline"): "openai-api",
 }
 
 
@@ -3678,7 +3687,7 @@ def _provider_backends(provider: str) -> list[str]:
 _CUSTOM_FORMAT_BACKENDS = {
     # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen"},
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline"},
     "anthropic": {"claude", "opencode", "pi", "dsh"},
 }
 
@@ -4712,6 +4721,10 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash"]},
+    # cline: deliberately short. A model earns its row here only after a real turn completed
+    # against the live provider through this backend, substitution-checked — these two were.
+    "cline": {"default": "gpt-5.4",
+              "models": ["gpt-5.4", "gpt-5.4-mini"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4830,6 +4843,8 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "claude"
     if base == "hermes":
         return "hermes"
+    if base == "cline":
+        return "cline"
     if base == "pi":
         return "pi"
     if base in ("dsh", "deepseek-harness"):
@@ -11516,6 +11531,20 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
+    "cline": {
+        "label": "Cline", "backend": "cline", "status": "ready",
+        "system_prompt": ("You are Cline, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # From the tools array a live 3.0.60 run sent its provider (captured at a stub upstream).
+        # The CLI exposes no per-tool kill switch headless, so disabling is an instruction to the
+        # model — the codex/hermes/dsh/qwen tier, not claude's hard deny.
+        "tools": [("run_commands", "Shell"), ("read_files", "File Read"),
+                  ("editor", "Editor"), ("search_codebase", "Search"),
+                  ("fetch_web_content", "Web Fetch"), ("ask_question", "Question"),
+                  ("spawn_agent", "Subagent")],
         "tool_enforcement": "instruction",
     },
 }
