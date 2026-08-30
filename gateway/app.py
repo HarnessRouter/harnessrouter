@@ -2071,7 +2071,14 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     model = str(v.get("model") or "")
     harness_id = tr["harness_id"]
     member = tr["member"]
-    translator = _RespTranslator(resp_id, model, None, True, time.time(), sid=sid)
+    translator = _RespTranslator(resp_id, model, None, True, time.time(), sid=sid,
+                                 # The original owner computed this from the request body, which
+                                 # this replica never saw. Without it, the settle below overwrites
+                                 # the stored record and the marker vanishes exactly when a turn is
+                                 # adopted — a client that sent `tools` would see ignored_fields on
+                                 # the running snapshot and then not on the terminal record, which
+                                 # reads as the field having been honoured after all (tasks.md 1.1).
+                                 ignored=((_orig_rec or {}).get("metadata") or {}).get("ignored_fields"))
     # Resume at the PER-TURN harvest cursor (the sandbox indexes /turn/{rt}?since=N in THIS turn's
     # own event space — NOT the session-wide trace count). The primary loop persists it after each
     # ack'd flush; poll since=cursor so no already-flushed event is re-written or re-emitted. If it
