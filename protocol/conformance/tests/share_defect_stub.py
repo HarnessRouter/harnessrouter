@@ -20,6 +20,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 DEFECT = os.environ.get("DEFECT", "none")
+# plain    — §5's literal dialect: a bodyless POST publishes, DELETE on the endpoint revokes.
+# enabled  — the toggle dialect the reference implementation speaks: the body carries the target
+#            state, an empty body is a validation error, and revocation is {"enabled": false}.
+# The R-series must drive both, so the matrix runs both.
+DIALECT = os.environ.get("DIALECT", "plain")
+assert DIALECT in ("plain", "enabled"), f"unknown dialect {DIALECT!r}"
 PORT = int(os.environ.get("PORT", "8931"))
 KEY = "stub-key"
 
@@ -77,10 +83,9 @@ class H(BaseHTTPRequestHandler):
             return True
         return DEFECT == "share_id_is_token" and tok in SHARES
 
-    def read_body(self):
+    def read_body(self) -> bytes:
         n = int(self.headers.get("content-length") or 0)
-        if n:
-            self.rfile.read(n)
+        return self.rfile.read(n) if n else b""
 
     def path_parts(self):
         return [p for p in urlsplit(self.path).path.split("/") if p]
@@ -102,7 +107,7 @@ class H(BaseHTTPRequestHandler):
         self.route("DELETE")
 
     def route(self, method: str):
-        self.read_body()
+        self.body = self.read_body()
         p = self.path_parts()
 
         # Discovery, unauthenticated.
@@ -149,6 +154,17 @@ class H(BaseHTTPRequestHandler):
         existing = BY_SESSION.get(sid) or []
 
         if method == "POST" and not rest:
+            if DIALECT == "enabled":
+                try:
+                    body = json.loads(self.body or b"")
+                except Exception:
+                    body = None
+                if not isinstance(body, dict) or "enabled" not in body:
+                    return self.send(422, {"detail": [{"type": "missing",
+                                                       "loc": ["body", "enabled"],
+                                                       "msg": "Field required"}]})
+                if body["enabled"] is False:
+                    return self.revoke(sid, existing)
             if existing and DEFECT != "multi_mint":
                 return self.send(200, self.share_body(existing[-1], sid))
             share_id = f"share_{uuid.uuid4().hex[:12]}"
@@ -165,22 +181,35 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, self.share_body(existing[-1], sid))
 
         if method == "DELETE" and not rest:
+            if DIALECT == "enabled":
+                # This dialect's revocation lives in the POST body, nowhere else — which is
+                # exactly the shape R-06's last attempt exists for.
+                return self.send(405, {"error": {"code": "method_not_allowed", "message": "no"}})
             if not existing:
                 return self.send(404, {"error": {"code": "share_not_found", "message": "none"}})
-            newest = existing[-1]
-            if DEFECT != "revoke_lies":
-                doomed = [newest] if DEFECT == "multi_mint" else list(existing)
-                for s in doomed:
-                    SHARES.pop(s, None)
-                BY_SESSION[sid] = [s for s in existing if s not in doomed]
-            return self.send(200, {"id": newest, "object": "session.share", "deleted": True})
+            return self.revoke(sid, existing)
 
         return self.send(405, {"error": {"code": "method_not_allowed", "message": "no"}})
 
+    def revoke(self, sid: str, existing: list[str]):
+        newest = existing[-1] if existing else ""
+        if DEFECT != "revoke_lies":
+            doomed = [newest] if DEFECT == "multi_mint" else list(existing)
+            for s in doomed:
+                SHARES.pop(s, None)
+            BY_SESSION[sid] = [s for s in existing if s not in doomed]
+        out = {"id": newest, "object": "session.share", "deleted": True}
+        if DIALECT == "enabled":
+            out["enabled"] = False
+        return self.send(200, out)
+
     def share_body(self, share_id: str, sid: str) -> dict:
-        return {"id": share_id, "object": "session.share", "session_id": sid,
-                "url": f"http://127.0.0.1:{PORT}/v1/shares/{share_id}",
-                "created_at": int(time.time())}
+        out = {"id": share_id, "object": "session.share", "session_id": sid,
+               "url": f"http://127.0.0.1:{PORT}/v1/shares/{share_id}",
+               "created_at": int(time.time())}
+        if DIALECT == "enabled":
+            out["enabled"] = True
+        return out
 
     def shared_view(self, method: str, share_id: str):
         if DEFECT == "view_needs_auth" and self.bearer() != KEY:
@@ -208,5 +237,5 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"stub: defect={DEFECT} port={PORT}", flush=True)
+    print(f"stub: defect={DEFECT} dialect={DIALECT} port={PORT}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

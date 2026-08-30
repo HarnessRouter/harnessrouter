@@ -113,8 +113,14 @@ a live instance on 2026-08-11:
     CONFORMANT — UHP 2026-08-11 (full)
 ```
 
-That run predates the `R-` series, so it is a 52-check result and has not been re-measured
-against the 59.
+That run predates the `R-` series, so it is a 52-check result. The R-series itself has been
+measured against the reference implementation directly: at the commit this note ships in,
+`R-01`…`R-07` all pass against a live self-hosted instance. Getting there took changes on both
+sides, which is the strongest argument this suite has for itself — against the reference as it
+stood, all seven checks skipped (its share dialect wanted `{"enabled": true}` and published no
+view URL), and behind those skips sat a real Sessions §6 violation: a session's share link kept
+serving the full conversation after `DELETE /v1/traces/{id}`, verified live before the fix. A
+suite that had shipped happy-path checks would have called that server conformant.
 
 The suite is developed against that implementation, which is exactly why the specification says
 conformance is defined by the suite and not by the implementation: anything the reference does that
