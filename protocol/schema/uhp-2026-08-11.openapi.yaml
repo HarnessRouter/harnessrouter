@@ -750,8 +750,22 @@ components:
         max_output_tokens: { type: [integer, 'null'] }
         max_step: { type: [integer, 'null'], description: Agent step (tool-call round) budget }
         timeout_seconds: { type: [integer, 'null'], description: Wall-clock budget }
-        tools: { type: array, items: { type: object, additionalProperties: true } }
-        include: { type: array, items: { type: string } }
+        tools:
+          type: array
+          items: { type: object, additionalProperties: true }
+          description: |
+            Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in
+            `metadata.ignored_fields` on the response. A UHP harness invokes and executes tools
+            itself and reports them in `output`; there is no input path for a tool result, so the
+            client-executed tool loop this field implies cannot be completed by a conformant server.
+            Configure tools on the harness instead — see Harnesses §4.1. Tasks §1.4.
+        include:
+          type: array
+          items: { type: string }
+          description: |
+            Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in
+            `metadata.ignored_fields` on the response. No values are enumerated, so any string a
+            server recognised would be one it named itself. Tasks §1.4.
         background: { type: boolean, default: false }
       additionalProperties: true
 
@@ -791,6 +805,13 @@ components:
               description: Present when the server ran a different model than was requested.
             model_fallback: { type: boolean }
             model_fallback_reason: { type: string }
+            ignored_fields:
+              type: array
+              items: { type: string }
+              description: |
+                Request fields the server did not act on, by name, in any order. Required when the
+                request carried `tools` or `include`, which are reserved and ignored. A silently
+                ignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.
           additionalProperties: true
       additionalProperties: true
 

@@ -478,13 +478,15 @@
           "items": {
             "type": "object",
             "additionalProperties": true
-          }
+          },
+          "description": "Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in\n`metadata.ignored_fields` on the response. A UHP harness invokes and executes tools\nitself and reports them in `output`; there is no input path for a tool result, so the\nclient-executed tool loop this field implies cannot be completed by a conformant server.\nConfigure tools on the harness instead — see Harnesses §4.1. Tasks §1.4.\n"
         },
         "include": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in\n`metadata.ignored_fields` on the response. No values are enumerated, so any string a\nserver recognised would be one it named itself. Tasks §1.4.\n"
         },
         "background": {
           "type": "boolean",
@@ -582,6 +584,13 @@
             },
             "model_fallback_reason": {
               "type": "string"
+            },
+            "ignored_fields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Request fields the server did not act on, by name, in any order. Required when the\nrequest carried `tools` or `include`, which are reserved and ignored. A silently\nignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.\n"
             }
           },
           "additionalProperties": true
