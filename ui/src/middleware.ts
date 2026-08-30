@@ -54,6 +54,11 @@ function isPublic(path: string): boolean {
     // only for a token whose owner has sharing switched on, and with nothing but that session.
     || path.startsWith('/share/')
     || path.startsWith('/api/share/')
+    // The same share surface through the API base: a share object's `url` is relative to the
+    // base the client already uses, so a conformance client on /api/harness resolves it to
+    // /api/harness/share/{token} — the gateway's own public share routes, relayed. The token is
+    // the credential there exactly as it is on /share/ and /api/share/ above.
+    || path.startsWith('/api/harness/share/')
     || path.startsWith('/_next/')
     // An /api path is never a static asset, whatever it ends with. Neither is /data — those are
     // files a TASK produced, and agents write .png, .svg, .css and .js routinely. Matching those
