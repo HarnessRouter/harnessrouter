@@ -12,6 +12,7 @@ const LOGO: Record<string, string> = {
   dsh: '/logos/deepseek.png',
   opencode: '/logos/opencode.png',
   qwen: '/logos/qwen.png',
+  cline: '/logos/cline.png',
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {
