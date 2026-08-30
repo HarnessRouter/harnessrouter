@@ -825,3 +825,323 @@ def f02(ctx):
         "accepts a base it cannot run fails at task time instead, after the client has committed.")
     if r.status == 200:  # defensive: clean up if the server accepted it after all
         ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Full — session sharing
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Sessions §5 is the Full requirement this suite could not see, and it is the one where a
+# happy-path check would be worse than no check at all: almost every sentence in §5 is about
+# what the server REFUSES. A check that minted a link and read the conversation back would
+# pass against a server that also let that link continue the task, cancel the run, or upload
+# into the working directory — and an unauthenticated write path into someone's working
+# directory is about as bad as a defect in this protocol gets.
+#
+# §5 says a server MAY publish a shared view, so every check below skips — never fails — on a
+# server that does not implement sharing. What is not optional is the shape of it once it does.
+#
+# §5 names two endpoints and no others: it does not say where the view is served, and it does
+# not name a revocation path. So these checks discover both from what the server itself
+# returned, rather than assuming any one implementation's URLs. Where discovery is impossible
+# the check skips and names the missing sentence, because that is a gap in the specification
+# rather than a defect in the server being tested.
+
+# Keys whose non-empty presence in a shared view would breach §5's third bullet. `headers` and
+# `env` are here because that is where an MCP server's credentials live (Harnesses §4.1).
+_SECRET_KEYS = {"auth", "authorization", "api_key", "apikey", "token", "access_token",
+                "refresh_token", "secret", "password", "credentials", "env", "headers"}
+
+
+def _walk(node, path="$"):
+    """Every (json-path, key, value) pair in a document, so a finding can say where it is."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            here = f"{path}.{k}"
+            yield here, k, v
+            yield from _walk(v, here)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _walk(v, f"{path}[{i}]")
+
+
+def _view_path(ctx, url: str) -> str:
+    """The client-relative path for a URL the server handed back.
+
+    The share URL may be absolute or relative, and the base URL may carry a path prefix
+    (`https://host/api/harness`), so neither can simply be concatenated. A view on a different
+    origin is not something this suite can attest, and says so rather than guessing.
+    """
+    from urllib.parse import urlsplit
+    base, u = urlsplit(ctx.client.base_url), urlsplit(url)
+    if u.netloc and u.netloc != base.netloc:
+        raise Skip(f"the shared view is served on another origin ({u.netloc}), which this suite "
+                   "cannot reach or attest")
+    prefix = base.path.rstrip("/")
+    path = u.path if not prefix or not u.path.startswith(prefix) else u.path[len(prefix):]
+    return path + (f"?{u.query}" if u.query else "")
+
+
+def _shared_session_id(ctx) -> str:
+    sid = ctx.state.get("session_id")
+    if sid:
+        return sid
+    sid = ((_run_blocking(ctx).json or {}).get("metadata") or {}).get("session_id")
+    if not sid:
+        raise Skip("no session id from an earlier task, so there is nothing to share")
+    return sid
+
+
+def _mint_share(ctx, sid: str):
+    """POST the share, speaking both dialects §5's silence allows.
+
+    §5 documents POST with no body, but a server that models sharing as a toggle carries the
+    target state in the body and refuses an empty one with a validation error (the reference
+    implementation among them, verified live). A 4xx naming a missing body field is a dialect
+    answer, not a refusal to share — while 404/405/501 stay exactly what they were: not
+    implemented. ONE function, because R-07 mints its own disposable share and a second copy of
+    this decision already drifted once (R-07 skipped on servers _share could drive)."""
+    r = ctx.client.post(f"/v1/sessions/{sid}/share")
+    if r.status in (400, 422):
+        r = ctx.client.post(f"/v1/sessions/{sid}/share", body={"enabled": True})
+    return r
+
+
+def _share(ctx) -> dict:
+    """Mint the share once and cache it, or skip with the reason it could not be minted."""
+    if "share" in ctx.state:
+        got = ctx.state["share"]
+        if isinstance(got, str):        # a cached skip reason: do not re-POST on every check
+            raise Skip(got)
+        return got
+
+    def _skip(reason):
+        ctx.state["share"] = reason
+        raise Skip(reason)
+
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if caps.get("session_sharing") is False:
+        _skip("this server reports session_sharing false, and Sessions §5 is a MAY")
+    sid = _shared_session_id(ctx)
+    r = _mint_share(ctx, sid)
+    if r.status in (404, 405, 501):
+        _skip(f"POST /v1/sessions/{{id}}/share returned HTTP {r.status}: this server does not "
+              "publish shared views, which Sessions §5 permits")
+    if r.status != 200 or not isinstance(r.json, dict):
+        _skip(f"POST /v1/sessions/{{id}}/share returned HTTP {r.status}, which is neither a share "
+              f"nor a refusal this check can read: {r.body[:160]!r}")
+    d = r.json
+    url = next((d[k] for k in ("url", "share_url", "href", "link", "location")
+                if isinstance(d.get(k), str) and d[k]), "") or r.header("location")
+    if not url:
+        _skip("the share carries no URL, and Sessions §5 does not say where a shared view is "
+              f"served, so this check cannot locate it (keys: {sorted(d)[:8]}). The specification "
+              "should name the view's endpoint, or the share object should be schema'd with a "
+              "field that does.")
+    share = {"id": d.get("id") or "", "url": url, "path": _view_path(ctx, url), "session_id": sid,
+             "body": d}
+    ctx.state["share"] = share
+    return share
+
+
+@check("R-01", "A shared session is published, and the link alone opens it", "full",
+       f"{SPEC}/sessions.md#5-session-sharing")
+def r01(ctx):
+    sh = _share(ctx)
+    r = ctx.client.get(sh["path"], auth=False)
+    assert r.status == 200, (
+        f"the URL the server published for this share returned HTTP {r.status} when opened with no "
+        "credential. Sessions §5 is about publishing a view: one that only the principal who minted "
+        "it can open has not been published to anyone.")
+    ctx.state["share_readable"] = True
+    body = r.json
+    assert body is not None, f"the shared view is not JSON: {r.body[:120]!r}"
+    return f"readable unauthenticated at {sh['path']}"
+
+
+@check("R-02", "The share can be read back from the endpoint that minted it", "full",
+       f"{SPEC}/sessions.md#5-session-sharing")
+def r02(ctx):
+    sh = _share(ctx)
+    r = ctx.client.get(f"/v1/sessions/{sh['session_id']}/share")
+    assert r.status == 200, (
+        f"GET /v1/sessions/{{id}}/share returned HTTP {r.status} for a session that has a share. §5 "
+        "names this endpoint, and a client that has lost the link has nowhere else to ask.")
+    d = r.json or {}
+    got = next((d[k] for k in ("url", "share_url", "href", "link", "location")
+                if isinstance(d.get(k), str) and d[k]), "")
+    assert got, f"the share read back carries no URL (keys: {sorted(d)[:8]})"
+    assert _view_path(ctx, got) == sh["path"], (
+        f"GET reports a different view ({_view_path(ctx, got)}) from the one POST published "
+        f"({sh['path']}). A client cannot revoke, or even name, a link it is told two versions of.")
+    if sh["id"] and d.get("id"):
+        assert d["id"] == sh["id"], f"share id changed between POST and GET: {sh['id']} → {d['id']}"
+    return "GET agrees with POST"
+
+
+@check("R-03", "A share id is not a credential for the API", "full",
+       f"{SPEC}/sessions.md#5-session-sharing")
+def r03(ctx):
+    sh = _share(ctx)
+    ident = sh["id"] or sh["path"].rstrip("/").rsplit("/", 1)[-1]
+    if not ident:
+        raise Skip("the share exposes no id to present as a token")
+    # Only endpoints this server actually serves to the real credential can say anything about a
+    # wrong one: a 404 or a 405 is the router declining a path, not the guard declining a token.
+    guarded = [p for p in ("/v1/sessions", "/v1/responses", "/v1/harnesses")
+               if 200 <= ctx.client.get(p).status < 300]
+    if not guarded:
+        raise Skip("no authenticated GET endpoint answered the real credential, so nothing here "
+                   "can distinguish a refused token from an absent route")
+    accepted = [f"{p} → HTTP {r.status}" for p, r in
+                ((p, ctx.client.get(p, headers={"authorization": f"Bearer {ident}"}))
+                 for p in guarded)
+                if 200 <= r.status < 300]
+    assert not accepted, (
+        "the share id is accepted as a bearer token: " + "; ".join(accepted) + ". §5 forbids a "
+        "shared view exposing another principal's data, and a link that authenticates the API "
+        "exposes all of it — every session, every response, every configured harness.")
+    return f"refused on {len(guarded)} endpoint(s)"
+
+
+@check("R-04", "The shared view is read-only", "full", f"{SPEC}/sessions.md#5-session-sharing")
+def r04(ctx):
+    sh = _share(ctx)
+    if not ctx.state.get("share_readable"):
+        raise Skip("the shared view did not resolve (see R-01), so what it refuses cannot be read")
+    view = sh["path"].split("?")[0].rstrip("/")
+    probes = [("POST", view), ("PUT", view), ("PATCH", view), ("DELETE", view),
+              # The three §5 names outright, at the paths this protocol uses for them elsewhere.
+              ("POST", f"{view}/cancel"), ("POST", f"{view}/responses"), ("POST", f"{view}/files")]
+    accepted = []
+    for method, path in probes:
+        body = {} if method != "DELETE" else None
+        r = ctx.client.request(method, path, body=body, auth=False)
+        if 200 <= r.status < 300:
+            accepted.append(f"{method} {path} → HTTP {r.status}")
+    assert not accepted, (
+        "the shared view accepted a write from a caller holding only the link: "
+        + "; ".join(accepted) + ". §5: the view MUST NOT permit continuing, cancelling, or "
+        "uploading. This is an unauthenticated write into someone else's session.")
+    return f"{len(probes)} write probes refused"
+
+
+@check("R-05", "The shared view exposes no credentials", "full",
+       f"{SPEC}/sessions.md#5-session-sharing")
+def r05(ctx):
+    sh = _share(ctx)
+    if not ctx.state.get("share_readable"):
+        raise Skip("the shared view did not resolve (see R-01), so its contents cannot be read")
+    r = ctx.client.get(sh["path"], auth=False)
+    raw = r.body.decode("utf-8", "replace")
+    if ctx.client.api_key:
+        assert ctx.client.api_key not in raw, (
+            "the shared view contains this client's API key verbatim. §5: a shared view MUST NOT "
+            "expose provider credentials or tokens.")
+    leaks = [p for p, k, v in _walk(r.json)
+             if k.lower() in _SECRET_KEYS and v not in (None, "", {}, [], False)]
+    assert not leaks, (
+        f"the shared view carries credential-shaped fields with values: {leaks[:5]}. §5 forbids "
+        "exposing provider credentials or tokens; Harnesses §4.1 puts an MCP server's `auth` and "
+        "`headers` among them, and the holder of a link is a client that presented nothing.")
+    return "no credential-shaped fields"
+
+
+@check("R-06", "Revocation kills every link minted for the session", "full",
+       f"{SPEC}/sessions.md#5-session-sharing")
+def r06(ctx):
+    sh = _share(ctx)
+    if not ctx.state.get("share_readable"):
+        raise Skip("the shared view never resolved (see R-01), so 'stops resolving' cannot be "
+                   "distinguished from 'never resolved'")
+    sid = sh["session_id"]
+
+    # Share the session a second time before revoking. §5 does not say whether a second POST
+    # returns the first link or mints another, and this check does not require either — but
+    # whichever it did, revocation has to reach what it produced. A server that hands out a
+    # second link and then revokes only the newest has told the operator the session is private
+    # while a live link to it is still in someone's hands.
+    live = [sh["path"]]
+    again = ctx.client.post(f"/v1/sessions/{sid}/share")
+    if again.status == 200 and isinstance(again.json, dict):
+        url = next((again.json[k] for k in ("url", "share_url", "href", "link", "location")
+                    if isinstance(again.json.get(k), str) and again.json[k]), "")
+        if url and _view_path(ctx, url) not in live:
+            live.append(_view_path(ctx, url))
+
+    # §5 requires revocation and names no path, so the endpoint has to be searched for.
+    attempts = [("DELETE", f"/v1/sessions/{sid}/share", None),
+                ("POST", f"/v1/sessions/{sid}/share/revoke", None),
+                ("DELETE", f"/v1/shares/{sh['id']}" if sh["id"] else "", None),
+                # The toggle dialect (the reference implementation's native form). Tried LAST,
+                # and believed only when the answer speaks revocation's own vocabulary: a
+                # bodyless-dialect server would 200 this by MINTING — it ignores the body — and
+                # a mint mistaken for a revocation would fail this check with a false message.
+                ("POST", f"/v1/sessions/{sid}/share", {"enabled": False})]
+    done = ""
+    for method, path, payload in attempts:
+        if not path:
+            continue
+        r = ctx.client.request(method, path, body=payload)
+        if not 200 <= r.status < 300:
+            continue
+        if payload is not None:
+            d = r.json if isinstance(r.json, dict) else {}
+            if not (d.get("enabled") is False or d.get("deleted") is True):
+                continue
+        done = f"{method} {path}"
+        break
+    if not done:
+        raise Skip(
+            "Sessions §5 requires that a share be revocable and names no endpoint for it, so this "
+            "check cannot locate one. The specification should name a path: a MUST with no "
+            "endpoint is a MUST that every implementation satisfies differently, and no portable "
+            "check can confirm it.")
+
+    ctx.state["share"] = "the share minted for this run was revoked by R-06"
+    ctx.state["share_readable"] = False
+    alive = [(p, ctx.client.get(p, auth=False).status) for p in live]
+    bad = [f"{p} → HTTP {s}" for p, s in alive if s not in (404, 410)]
+    assert not bad, (
+        f"a published link still resolves after {done} reported success: " + "; ".join(bad) +
+        ". A revocation that answers 200 and leaves a link live is worse than none, because the "
+        "operator has been told the session is no longer published.")
+    return (f"revoked via {done}; {len(live)} link(s) minted, all now "
+            f"{'/'.join(str(s) for _, s in alive)}")
+
+
+@check("R-07", "Deleting a session takes its shared view with it", "full",
+       f"{SPEC}/sessions.md#6-deleting")
+def r07(ctx):
+    # A session this check may destroy: deleting the one the rest of the suite shares would make
+    # every later check fail for the wrong reason. That costs one extra agent run on a full pass.
+    h = _harness(ctx)
+    body = {"input": PROMPT, "metadata": {"harness_id": h["id"]}, "stream": False}
+    if ctx.model:
+        body["model"] = ctx.model
+    started = ctx.client.post("/v1/responses", body=body)
+    sid = ((started.json or {}).get("metadata") or {}).get("session_id")
+    if started.status != 200 or not sid:
+        raise Skip(f"could not start a disposable session (HTTP {started.status})")
+
+    minted = _mint_share(ctx, sid)
+    if minted.status != 200 or not isinstance(minted.json, dict):
+        raise Skip(f"could not share the disposable session (HTTP {minted.status})")
+    url = next((minted.json[k] for k in ("url", "share_url", "href", "link", "location")
+                if isinstance(minted.json.get(k), str) and minted.json[k]), "")
+    if not url:
+        raise Skip("the share carries no URL, so the view cannot be located (see R-01)")
+    path = _view_path(ctx, url)
+    if ctx.client.get(path, auth=False).status != 200:
+        raise Skip("the disposable share's view did not resolve, so its disappearance proves nothing")
+
+    gone = ctx.client.delete(f"/v1/traces/{sid}")
+    if gone.status in (404, 405, 501):
+        raise Skip(f"DELETE /v1/traces/{{id}} returned HTTP {gone.status}, so a session cannot be "
+                   "deleted here and this check has nothing to observe")
+    assert 200 <= gone.status < 300, f"deleting the session returned HTTP {gone.status}"
+    after = ctx.client.get(path, auth=False)
+    assert after.status in (404, 410), (
+        f"the shared link still returns HTTP {after.status} for a session that was deleted. §6 "
+        "requires the session be unreadable after deletion, and a published link is the one way "
+        "in that its owner is least likely to remember.")
+    return f"session deleted, then HTTP {after.status}"
