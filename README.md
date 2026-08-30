@@ -504,6 +504,13 @@ Describe a film and get one back: it plans the shots, renders each, lays them ou
 can rearrange, and assembles them into a single video you can download. Clips render in the
 background, so you keep working while they arrive.
 
+![The Videos kit: the brief at the top of the conversation, every shot on the canvas, and the finished film above the timeline that assembled it](docs/images/kit-video.png)
+
+The conversation on the right is the whole job: what was asked for, what the agent found it could
+actually generate and at what price, the storyboard it settled on, and what it wants you to check
+before the film goes out. It costs what it says it costs, per clip, and it tells you before it
+spends.
+
 > [!WARNING]
 > This is the one kit that spends real money per second of output rather than per turn, because
 > every shot is a generation. Try it once you already know what the console is doing.
