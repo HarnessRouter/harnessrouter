@@ -37,13 +37,13 @@ anything that only inspects a schema.
 
 ## What it checks
 
-52 checks across three classes.
+59 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
 | **Core** | 37 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation |
 | **Extended** | +8 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
-| **Full** | +7 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence |
+| **Full** | +14 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing |
 
 Every check names the section of the specification it enforces, so a failure points at the sentence
 it violates rather than at a test name.
@@ -64,6 +64,15 @@ A few of them are worth calling out, because they catch things a schema check ne
   own origin.
 - **X-08** — artifact ids do not traverse out of their container. Probes for `../` and its
   percent-encoded form.
+- **R-01…R-07** — session sharing, which is mostly a set of refusals. Sessions §5 requires that a
+  shared view be read-only, revocable, and free of credentials, and a check that merely opens a
+  link and reads the conversation passes against a server that also lets that link continue the
+  task, cancel the run, or upload into the working directory. §5 makes sharing optional, so these
+  skip rather than fail on a server that does not implement it; and because §5 names no endpoint
+  for the view or for revocation, they discover both from what the server returned and skip with
+  the missing sentence as the reason. `tests/test_session_sharing_checks.py` runs the series
+  against a deliberately wrong server, one defect at a time, so each of them is known to fail on
+  the mistake it describes.
 - **F-03/F-04** — a skill is a folder, and it survives an unrelated edit. A server that stores only
   `SKILL.md`, or that empties a bundle when the harness is renamed, passes every other check: the
   config still looks right, and the loss only shows up later as an agent behaving oddly.
@@ -103,6 +112,9 @@ a live instance on 2026-08-11:
     52/52 passed · 0 failed · 0 skipped · 0 errored
     CONFORMANT — UHP 2026-08-11 (full)
 ```
+
+That run predates the `R-` series, so it is a 52-check result and has not been re-measured
+against the 59.
 
 The suite is developed against that implementation, which is exactly why the specification says
 conformance is defined by the suite and not by the implementation: anything the reference does that
