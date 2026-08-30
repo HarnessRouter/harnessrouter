@@ -891,6 +891,21 @@ def _shared_session_id(ctx) -> str:
     return sid
 
 
+def _mint_share(ctx, sid: str):
+    """POST the share, speaking both dialects §5's silence allows.
+
+    §5 documents POST with no body, but a server that models sharing as a toggle carries the
+    target state in the body and refuses an empty one with a validation error (the reference
+    implementation among them, verified live). A 4xx naming a missing body field is a dialect
+    answer, not a refusal to share — while 404/405/501 stay exactly what they were: not
+    implemented. ONE function, because R-07 mints its own disposable share and a second copy of
+    this decision already drifted once (R-07 skipped on servers _share could drive)."""
+    r = ctx.client.post(f"/v1/sessions/{sid}/share")
+    if r.status in (400, 422):
+        r = ctx.client.post(f"/v1/sessions/{sid}/share", body={"enabled": True})
+    return r
+
+
 def _share(ctx) -> dict:
     """Mint the share once and cache it, or skip with the reason it could not be minted."""
     if "share" in ctx.state:
@@ -907,7 +922,7 @@ def _share(ctx) -> dict:
     if caps.get("session_sharing") is False:
         _skip("this server reports session_sharing false, and Sessions §5 is a MAY")
     sid = _shared_session_id(ctx)
-    r = ctx.client.post(f"/v1/sessions/{sid}/share")
+    r = _mint_share(ctx, sid)
     if r.status in (404, 405, 501):
         _skip(f"POST /v1/sessions/{{id}}/share returned HTTP {r.status}: this server does not "
               "publish shared views, which Sessions §5 permits")
@@ -1054,17 +1069,27 @@ def r06(ctx):
             live.append(_view_path(ctx, url))
 
     # §5 requires revocation and names no path, so the endpoint has to be searched for.
-    attempts = [("DELETE", f"/v1/sessions/{sid}/share"),
-                ("POST", f"/v1/sessions/{sid}/share/revoke"),
-                ("DELETE", f"/v1/shares/{sh['id']}" if sh["id"] else "")]
+    attempts = [("DELETE", f"/v1/sessions/{sid}/share", None),
+                ("POST", f"/v1/sessions/{sid}/share/revoke", None),
+                ("DELETE", f"/v1/shares/{sh['id']}" if sh["id"] else "", None),
+                # The toggle dialect (the reference implementation's native form). Tried LAST,
+                # and believed only when the answer speaks revocation's own vocabulary: a
+                # bodyless-dialect server would 200 this by MINTING — it ignores the body — and
+                # a mint mistaken for a revocation would fail this check with a false message.
+                ("POST", f"/v1/sessions/{sid}/share", {"enabled": False})]
     done = ""
-    for method, path in attempts:
+    for method, path, payload in attempts:
         if not path:
             continue
-        r = ctx.client.request(method, path)
-        if 200 <= r.status < 300:
-            done = f"{method} {path}"
-            break
+        r = ctx.client.request(method, path, body=payload)
+        if not 200 <= r.status < 300:
+            continue
+        if payload is not None:
+            d = r.json if isinstance(r.json, dict) else {}
+            if not (d.get("enabled") is False or d.get("deleted") is True):
+                continue
+        done = f"{method} {path}"
+        break
     if not done:
         raise Skip(
             "Sessions §5 requires that a share be revocable and names no endpoint for it, so this "
@@ -1098,7 +1123,7 @@ def r07(ctx):
     if started.status != 200 or not sid:
         raise Skip(f"could not start a disposable session (HTTP {started.status})")
 
-    minted = ctx.client.post(f"/v1/sessions/{sid}/share")
+    minted = _mint_share(ctx, sid)
     if minted.status != 200 or not isinstance(minted.json, dict):
         raise Skip(f"could not share the disposable session (HTTP {minted.status})")
     url = next((minted.json[k] for k in ("url", "share_url", "href", "link", "location")
