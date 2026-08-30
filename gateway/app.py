@@ -4035,9 +4035,15 @@ class _RespTranslator:
     usage so the non-streaming path and the stored record reuse the same assembly. sequence_number
     is monotonic across the whole stream; each output item gets its own increasing output_index."""
 
-    def __init__(self, resp_id: str, model: str, prev: str | None, store: bool, created_at: float, sid: str = ""):
+    def __init__(self, resp_id: str, model: str, prev: str | None, store: bool, created_at: float,
+                 sid: str = "", ignored: list[str] | None = None):
         self.resp_id, self.model, self.prev, self.store, self.created_at = resp_id, model, prev, store, created_at
         self.sid = sid   # surfaced in response.metadata so the client can highlight/track the session
+        # Request fields we accepted and did not act on (tasks.md 1.1). `tools` and `include` are
+        # reserved and ignored (1.4), and ignoring has to be observable: a silently dropped field
+        # is indistinguishable from an honoured one, which is the same reasoning that puts model
+        # substitution in metadata.
+        self.ignored: list[str] = list(ignored or [])
         # run metadata (CT-124): the model the caller asked for, and whether the gateway substituted
         # the harness's authorized default because the request was unavailable for this backend.
         self.requested_model = ""
@@ -4068,6 +4074,8 @@ class _RespTranslator:
             meta["model_fallback"] = True
             if self.fallback_reason:
                 meta["model_fallback_reason"] = self.fallback_reason
+        if self.ignored:
+            meta["ignored_fields"] = self.ignored
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
                 "status": status, "error": self.error, "incomplete_details": None,
                 "previous_response_id": self.prev, "model": self.model,
@@ -5982,7 +5990,9 @@ async def create_response(body: CreateResponseBody, request: Request):
     try:
         # remember this turn's response id on the trace + session so a loaded session can resume
         _session_trace.setdefault(sid, {}).update(last_response_id=resp_id)
-        tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid)
+        # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
+        _ignored = [f for f in ("tools", "include") if getattr(body, f, None) is not None]
+        tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
         tr.requested_model, tr.model_fallback, tr.fallback_reason = requested_model, model_fallback, model_fallback_reason
 
         # Broadcast a synthetic turn-start so the bus alone can render a conversation turn from

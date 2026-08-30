@@ -828,6 +828,89 @@ def f02(ctx):
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
+# Core — reserved request fields
+# ══════════════════════════════════════════════════════════════════════════════════════
+# `tools` and `include` are reserved and ignored (Tasks §1.4), which is two requirements and
+# not one. A server must accept a request carrying them, and it must say that it ignored them.
+# Both directions are currently unmeasured: no other check sends either field, so a server that
+# rejected them outright and a server that silently honoured them would both pass the suite.
+#
+# The second direction is the one with teeth. §1.1 requires ignoring to be observable for the
+# same reason §1.3 requires model substitution to be reported: a client that cannot tell a
+# dropped field from an honoured one has to assume the worst about every field it sends.
+
+def _run_with_reserved(ctx) -> dict:
+    """One task carrying both reserved fields, run once and cached."""
+    if "reserved" in ctx.state:
+        return ctx.state["reserved"]
+    h = _harness(ctx)
+    body = {"input": PROMPT, "metadata": {"harness_id": h["id"]}, "stream": False,
+            # Deliberately plausible under both readings of `tools` that implementers have
+            # reached for, so a server that quietly acts on either is exercised rather than
+            # merely handed something it can dismiss as malformed.
+            "tools": [{"type": "function", "name": "uhp_conformance_probe",
+                       "description": "Must never be offered to the agent.",
+                       "parameters": {"type": "object", "properties": {}}},
+                      {"name": "uhp-conformance-mcp", "url": "https://mcp.example.invalid/mcp",
+                       "transport": "http"}],
+            "include": ["uhp.conformance.not_a_real_value"]}
+    if ctx.model:
+        body["model"] = ctx.model
+    r = ctx.client.post("/v1/responses", body=body)
+    ctx.state["reserved"] = r
+    return r
+
+
+@check("T-08", "A request carrying reserved fields is accepted, not rejected", "core",
+       f"{SPEC}/tasks.md#11-request-fields")
+def t08(ctx):
+    r = _run_with_reserved(ctx)
+    assert r.status == 200, (
+        f"a task sending `tools` and `include` returned HTTP {r.status}: {r.body[:200]!r}. §1.1 "
+        "requires a server to ignore rather than reject, and §1.4 makes both fields reserved — a "
+        "client that sends them for wire compatibility with another API must not be refused.")
+    d = r.json or {}
+    assert d.get("status") in {"completed", "incomplete"}, (
+        f"the task carrying reserved fields ended {d.get('status')!r}; accepting a request means "
+        "running it, not failing it later for the same reason")
+    return "accepted and ran"
+
+
+@check("T-09", "Reserved fields are reported in metadata.ignored_fields", "core",
+       f"{SPEC}/tasks.md#14-reserved-fields-tools-and-include")
+def t09(ctx):
+    r = _run_with_reserved(ctx)
+    if r.status != 200:
+        raise Skip("the request carrying reserved fields was not accepted (see T-08)")
+    meta = ((r.json or {}).get("metadata") or {})
+    got = meta.get("ignored_fields")
+    assert got is not None, (
+        "the response has no `metadata.ignored_fields` for a request that sent `tools` and "
+        "`include`. §1.1 requires ignoring to be observable: silently dropping a field is "
+        "indistinguishable from acting on it, and the client cannot tell which happened.")
+    assert isinstance(got, list) and all(isinstance(x, str) for x in got), (
+        f"metadata.ignored_fields is {type(got).__name__}, expected an array of field names")
+    missing = [f for f in ("tools", "include") if f not in got]
+    assert not missing, (
+        f"the request sent `tools` and `include`, and ignored_fields names {got} — missing "
+        f"{missing}. §1.4 makes both reserved, so both must be reported whenever they are sent.")
+    return f"ignored_fields={got}"
+
+
+@check("T-10", "A task that sends no reserved field is not told one was ignored", "core",
+       f"{SPEC}/tasks.md#11-request-fields")
+def t10(ctx):
+    """The other half of T-09. A server that hardcodes the list reports fields the client never
+    sent, which is a different lie in the same place: it tells a client its request was altered
+    when it was not."""
+    d = (_run_blocking(ctx).json or {})
+    got = ((d.get("metadata") or {}).get("ignored_fields")) or []
+    over = [f for f in ("tools", "include") if f in got]
+    assert not over, (
+        f"the response names {over} in ignored_fields for a request that sent neither. "
+        "ignored_fields reports what this request carried and the server dropped, not a "
+        "catalogue of what the server would drop.")
+
 # Full — session sharing
 # ══════════════════════════════════════════════════════════════════════════════════════
 # Sessions §5 is the Full requirement this suite could not see, and it is the one where a
