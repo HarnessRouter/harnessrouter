@@ -59,6 +59,37 @@ per [VERSIONING.md](VERSIONING.md), published with a migration note.
 - **Implementers** — anyone shipping a UHP server or client. Implementer feedback outranks
   theoretical elegance in every design argument.
 
+## A declined field is not a pending one
+
+An implementation may choose not to carry a field. That choice is a **decision**, and it should be
+recorded as one — not left on a list that reads as work nobody has got to yet.
+
+The distinction matters because the two look identical from outside. A field an implementation
+intends to support later and a field it has decided never to support both show up the same way: as
+something the request asked for and did not get. Left unstated, the second quietly becomes the
+first, and a question that was actually settled gets re-opened by every new reader, every new
+implementer, and every issue triage.
+
+So:
+
+- **Say which it is.** A declined field is closed. Say why, once, somewhere durable, and stop
+  carrying it as an open item.
+- **Declining is about implementation, never about validation.** [Tasks
+  §1.1](versions/2026-08-11/tasks.md#11-request-fields) requires ignore-don't-reject, so a declined
+  field is still accepted, and a request carrying it still runs.
+- **Tell the caller.** A field that was dropped is named in `metadata.ignored_fields`. A silently
+  ignored field is indistinguishable from an honoured one, and the caller cannot tell which they
+  got. This is the same principle as reporting model substitution in [Tasks
+  §1.3](versions/2026-08-11/tasks.md#13-model-selection-and-substitution).
+
+This applies to the specification too, and `tools` and `include` are the worked example: rather than
+leaving them under-specified and letting each implementer guess, they are declared reserved and
+ignored in [Tasks §1.4](versions/2026-08-11/tasks.md#14-reserved-fields-tools-and-include), with the
+reason written down.
+
+The framing, and the phrase, are due to @aenawi in [#42](https://github.com/HarnessRouter/harnessrouter/issues/42),
+from ADR-0007 of an independent UHP implementation.
+
 ## Reporting problems
 
 - **Specification bugs** — ambiguity, a rule that cannot be implemented, disagreement between the
