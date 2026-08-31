@@ -77,6 +77,20 @@ GET /v1/sessions/{session_id}/turns
 not store. Each turn identifies its response id, so a client can fetch the full response for any of
 them.
 
+Each item in `turns` MUST carry at least:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The response id of the turn, usable with `GET /v1/responses/{id}`. |
+| `status` | string | The turn's status, in the response-status vocabulary of [Tasks §1](tasks.md). |
+
+and SHOULD carry, when the server has them: `user` (string, the user message), `assistant` (string,
+the assistant's final text), `tools` (array, the tool calls of the turn), and `files` (array, the
+files the turn produced). A server MAY add fields; a client MUST ignore fields it does not
+understand. This was previously an object with no stated shape, which meant no conformance check
+could assert anything past the status code, and every client that rebuilt a transcript did so
+against one implementation's habits.
+
 ## 4. Cancelling
 
 Two scopes, deliberately distinct:
@@ -105,15 +119,39 @@ seconds reads as broken.
 Conformance class **Full**. A server MAY let a client publish a read-only view of a session.
 
 ```http
-POST /v1/sessions/{session_id}/share
-GET  /v1/sessions/{session_id}/share
+POST   /v1/sessions/{session_id}/share      # publish (a body is OPTIONAL; no body means publish)
+GET    /v1/sessions/{session_id}/share      # read the share back
+DELETE /v1/sessions/{session_id}/share      # revoke
 ```
 
-If implemented:
+If implemented, the share object returned by `POST` and `GET` MUST carry:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The share's identity. |
+| `url` | string | Where the shared view is served. May be relative, in which case it resolves against the base URL the caller is already using — a server behind a proxy cannot know its public origin, and a base-relative path survives every fronting. |
+
+`object` SHOULD be `"session.share"`. A server MAY carry additional fields (the reference also
+returns an `enabled` toggle and accepts `{"enabled": bool}` bodies); a client MUST ignore fields it
+does not understand. A second `POST` MAY return the existing share or mint a new one, but
+revocation MUST reach every link minted for the session — revoking only the newest tells an
+operator the session is private while somebody still holds a working link.
+
+The rules, unchanged:
 
 - the shared view MUST be read-only — it MUST NOT permit continuing, cancelling, or uploading;
-- the server MUST allow revocation;
-- the server MUST NOT expose provider credentials, tokens, or another principal's data through it.
+- `GET` on the published `url` MUST serve the view to a holder of the link with no other
+  credential — a view only its creator can open has not been published to anyone;
+- after `DELETE`, and after the session itself is deleted (§6), the published `url` MUST stop
+  resolving (404 or 410);
+- the share's id MUST NOT function as a credential for the rest of the API;
+- the server MUST NOT expose provider credentials, tokens, or another principal's data through the
+  view.
+
+These were previously behaviors the conformance suite had to discover by probing (the endpoints and
+the object had no stated shape, so a portable check could only guess at paths and skip when the
+guesses missed). They are codified from the shapes the reference implementation demonstrates and
+the R-series measures; the suite now asserts them.
 
 ## 6. Deleting
 
