@@ -39,6 +39,8 @@ DEFECTS = {
     "revoke_lies",           # revocation answers 200 and revokes nothing
     "multi_mint",            # every POST mints a new link; revocation kills only the newest
     "share_outlives_session",  # the link survives the deletion of its session
+    "no_delete_revocation",  # revocation exists only as the {"enabled": false} toggle; the
+                             # endpoint §5 NAMES (DELETE on /share) answers 405
 }
 assert DEFECT in DEFECTS, f"unknown defect {DEFECT!r}; one of {sorted(DEFECTS)}"
 
@@ -155,15 +157,13 @@ class H(BaseHTTPRequestHandler):
 
         if method == "POST" and not rest:
             if DIALECT == "enabled":
+                # §5: a body is OPTIONAL and no body means publish. This dialect ALSO accepts the
+                # toggle body, which §5 permits ("a server MAY accept {"enabled": bool}").
                 try:
-                    body = json.loads(self.body or b"")
+                    body = json.loads(self.body or b"null")
                 except Exception:
                     body = None
-                if not isinstance(body, dict) or "enabled" not in body:
-                    return self.send(422, {"detail": [{"type": "missing",
-                                                       "loc": ["body", "enabled"],
-                                                       "msg": "Field required"}]})
-                if body["enabled"] is False:
+                if isinstance(body, dict) and body.get("enabled") is False:
                     return self.revoke(sid, existing)
             if existing and DEFECT != "multi_mint":
                 return self.send(200, self.share_body(existing[-1], sid))
@@ -181,9 +181,10 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, self.share_body(existing[-1], sid))
 
         if method == "DELETE" and not rest:
-            if DIALECT == "enabled":
-                # This dialect's revocation lives in the POST body, nowhere else — which is
-                # exactly the shape R-06's last attempt exists for.
+            if DEFECT == "no_delete_revocation":
+                # The toggle still works; the endpoint §5 NAMES does not. R-06 must refuse to
+                # call that conformant — a named MUST that answers 405 is per-implementation
+                # folklore again.
                 return self.send(405, {"error": {"code": "method_not_allowed", "message": "no"}})
             if not existing:
                 return self.send(404, {"error": {"code": "share_not_found", "message": "none"}})
