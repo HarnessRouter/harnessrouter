@@ -557,7 +557,7 @@ def x03(ctx):
     assert r.status == 200, f"GET /v1/sessions/{{id}} returned HTTP {r.status}"
 
 
-@check("X-04", "A session's turn history is available", "extended",
+@check("X-04", "A session's turn history is available, in the specified shape", "extended",
        f"{SPEC}/sessions.md#3-inspecting-a-session")
 def x04(ctx):
     sid = ctx.state.get("session_id")
@@ -565,6 +565,16 @@ def x04(ctx):
         raise Skip("no session id from an earlier task")
     r = ctx.client.get(f"/v1/sessions/{sid}/turns")
     assert r.status == 200, f"GET /v1/sessions/{{id}}/turns returned HTTP {r.status}"
+    # Sessions §3 now states the item shape (id + status at least), so this asserts it instead of
+    # stopping at the status code — the check that could previously only "check for a 200".
+    turns = (r.json or {}).get("turns")
+    assert isinstance(turns, list), f"the body carries no `turns` array (keys: {sorted(r.json or {})})"
+    if not turns:
+        raise Skip("the session reports no turns to inspect, so the item shape cannot be observed")
+    for i, t in enumerate(turns):
+        ctx.validate(t, "TurnItem")
+        assert t.get("id") and isinstance(t.get("id"), str), f"turns[{i}] has no response id"
+        assert t.get("status"), f"turns[{i}] has no status"
 
 
 @check("X-05", "A file can be sent as task input", "extended", f"{SPEC}/files.md#1-sending-files-in")
@@ -1015,11 +1025,18 @@ def _share(ctx) -> dict:
     d = r.json
     url = next((d[k] for k in ("url", "share_url", "href", "link", "location")
                 if isinstance(d.get(k), str) and d[k]), "") or r.header("location")
-    if not url:
-        _skip("the share carries no URL, and Sessions §5 does not say where a shared view is "
-              f"served, so this check cannot locate it (keys: {sorted(d)[:8]}). The specification "
-              "should name the view's endpoint, or the share object should be schema'd with a "
-              "field that does.")
+    assert url, (
+        f"the share object carries no `url` (keys: {sorted(d)[:8]}). Sessions §5 requires the "
+        "share to say where its view is served; without it a client cannot open, audit, or "
+        "revoke what it just published.")
+    try:
+        ctx.validate(d, "SessionShare")
+    except Skip:
+        # Validator unavailable (no jsonschema, or the schema file is not alongside an installed
+        # wheel). The structural asserts above already ran; degrading here is the difference
+        # between one weaker check and the ENTIRE R-series cascade-skipping through this cached
+        # mint. A real schema VIOLATION is an AssertionError and still fails.
+        pass
     share = {"id": d.get("id") or "", "url": url, "path": _view_path(ctx, url), "session_id": sid,
              "body": d}
     ctx.state["share"] = share
@@ -1151,34 +1168,14 @@ def r06(ctx):
         if url and _view_path(ctx, url) not in live:
             live.append(_view_path(ctx, url))
 
-    # §5 requires revocation and names no path, so the endpoint has to be searched for.
-    attempts = [("DELETE", f"/v1/sessions/{sid}/share", None),
-                ("POST", f"/v1/sessions/{sid}/share/revoke", None),
-                ("DELETE", f"/v1/shares/{sh['id']}" if sh["id"] else "", None),
-                # The toggle dialect (the reference implementation's native form). Tried LAST,
-                # and believed only when the answer speaks revocation's own vocabulary: a
-                # bodyless-dialect server would 200 this by MINTING — it ignores the body — and
-                # a mint mistaken for a revocation would fail this check with a false message.
-                ("POST", f"/v1/sessions/{sid}/share", {"enabled": False})]
-    done = ""
-    for method, path, payload in attempts:
-        if not path:
-            continue
-        r = ctx.client.request(method, path, body=payload)
-        if not 200 <= r.status < 300:
-            continue
-        if payload is not None:
-            d = r.json if isinstance(r.json, dict) else {}
-            if not (d.get("enabled") is False or d.get("deleted") is True):
-                continue
-        done = f"{method} {path}"
-        break
-    if not done:
-        raise Skip(
-            "Sessions §5 requires that a share be revocable and names no endpoint for it, so this "
-            "check cannot locate one. The specification should name a path: a MUST with no "
-            "endpoint is a MUST that every implementation satisfies differently, and no portable "
-            "check can confirm it.")
+    # §5 names the endpoint: DELETE on the share endpoint revokes. What used to be a search
+    # over guessed paths, ending in a skip that blamed the specification, is now an assertion.
+    r = ctx.client.delete(f"/v1/sessions/{sid}/share")
+    assert 200 <= r.status < 300, (
+        f"DELETE /v1/sessions/{{id}}/share returned HTTP {r.status}. §5 names this endpoint for "
+        "revocation; a server may keep other forms besides, but the named one must work — that "
+        "is what makes revocation portable instead of per-implementation folklore.")
+    done = f"DELETE /v1/sessions/{sid}/share"
 
     ctx.state["share"] = "the share minted for this run was revoked by R-06"
     ctx.state["share_readable"] = False
