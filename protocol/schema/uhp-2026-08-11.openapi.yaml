@@ -338,7 +338,56 @@ paths:
               schema:
                 type: object
                 properties:
-                  turns: { type: array, items: { type: object, additionalProperties: true } }
+                  turns: { type: array, items: { $ref: '#/components/schemas/TurnItem' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/share:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [Sessions]
+      operationId: shareSession
+      summary: Publish a read-only view of the session (Sessions §5, class Full)
+      description: |
+        A body is OPTIONAL; no body means publish. A server MAY accept `{"enabled": bool}` as a
+        toggle. Sharing itself is a MAY; a server that does not implement it answers 404/405/501.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean, default: true }
+              additionalProperties: true
+      responses:
+        '200':
+          description: The share
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionShare' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Sessions]
+      operationId: getSessionShare
+      summary: Read the session's share back
+      responses:
+        '200':
+          description: The share, agreeing with what POST published
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionShare' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Sessions]
+      operationId: revokeSessionShare
+      summary: Revoke — every link minted for the session stops resolving
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionShare' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /v1/sessions/{session_id}/cancel:
@@ -880,6 +929,37 @@ components:
         total_tokens: { type: integer, minimum: 0 }
         cache_read_tokens: { type: integer, minimum: 0 }
         cache_write_tokens: { type: integer, minimum: 0 }
+      additionalProperties: true
+
+    SessionShare:
+      type: object
+      description: |
+        A published read-only view of a session (Sessions §5). `url` may be relative, resolving
+        against the base URL the caller is already using — a server behind a proxy cannot know its
+        public origin, and a base-relative path survives every fronting. The share's id MUST NOT
+        function as a credential for the rest of the API.
+      required: [id, url]
+      properties:
+        id: { type: string }
+        url: { type: string }
+        object: { type: string, description: 'SHOULD be "session.share"' }
+        enabled: { type: boolean }
+      additionalProperties: true
+
+    TurnItem:
+      type: object
+      description: |
+        One turn of a session's history (Sessions §3). Previously an object with no stated shape,
+        which kept every conformance check at "the endpoint answered 200" and made transcript
+        rebuilding an exercise in one implementation's habits.
+      required: [id, status]
+      properties:
+        id: { type: string, description: "The response id, usable with GET /v1/responses/{id}" }
+        status: { type: string }
+        user: { type: string }
+        assistant: { type: string }
+        tools: { type: array, items: { type: object, additionalProperties: true } }
+        files: { type: array, items: { type: object, additionalProperties: true } }
       additionalProperties: true
 
     Session:

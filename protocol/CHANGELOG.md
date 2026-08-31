@@ -6,6 +6,27 @@ All notable changes to the Unified Harness Protocol.
 
 ### Clarified
 
+- **Session sharing is codified** ([Sessions §5](versions/2026-08-11/sessions.md#5-session-sharing)),
+  closing the four gaps of [#44](https://github.com/HarnessRouter/harnessrouter/issues/44): the
+  share object is schema'd (`SessionShare`: `id` and `url` required, `url` may be base-relative),
+  `DELETE /v1/sessions/{id}/share` is the named revocation endpoint (other forms MAY be kept), a
+  bodyless `POST` publishes, and revocation MUST reach every link minted. Sharing itself remains a
+  MAY. These are the shapes the reference implementation already demonstrates and the R-series
+  already measures; the suite now asserts them instead of probing for them.
+
+- **Turn items have a shape** ([Sessions §3](versions/2026-08-11/sessions.md#3-inspecting-a-session)):
+  each item of `GET /v1/sessions/{id}/turns` MUST carry `id` (the response id) and `status`, and
+  SHOULD carry `user` / `assistant` / `tools` / `files`. Previously `additionalProperties: true`
+  and nothing else, which held X-04 at "the endpoint answered 200".
+
+### Conformance
+
+- `R-01`/`R-02` validate the share object against the schema and FAIL (no longer skip) when it
+  carries no `url`; `R-06` asserts the named `DELETE` revocation endpoint and FAILs (no longer
+  skips) when it does not work; `X-04` validates every turn item. New defect stub mode:
+  a server whose revocation exists only as a toggle now fails `R-06`.
+
+
 - **`tools` and `include` are reserved and ignored** ([Tasks §1.4](versions/2026-08-11/tasks.md#14-reserved-fields-tools-and-include)).
   Both arrived with the OpenAI Responses wire shape this version stays compatible with, and neither
   ever had defined semantics in UHP. A server accepts them and does not act on them.
