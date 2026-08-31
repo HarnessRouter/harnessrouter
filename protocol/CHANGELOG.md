@@ -26,6 +26,16 @@ All notable changes to the Unified Harness Protocol.
   skips) when it does not work; `X-04` validates every turn item. New defect stub mode:
   a server whose revocation exists only as a toggle now fails `R-06`.
 
+- **`R-08`: a bodyless `POST` publishes.** The sentence was written into §5 above and left
+  unenforced, named as a known gap rather than hidden. The rest of the R-series mints through a
+  helper that retries a 400/422 with `{"enabled": true}` — the retry is what lets the series
+  measure a toggle-dialect server at all, and it is also what let this sentence go untested: such
+  a server passes `R-01`…`R-07` on a request §5 does not require anyone to accept, while refusing
+  the one it does. `R-08` is the one check that does not retry. New defect stub mode,
+  `bodyless_rejected`, is what the reference implementation was before this series existed; the
+  matrix proves `R-08` is the only check that reddens on it. No specification or schema change:
+  this enforces a sentence that is already written.
+
 
 - **`tools` and `include` are reserved and ignored** ([Tasks §1.4](versions/2026-08-11/tasks.md#14-reserved-fields-tools-and-include)).
   Both arrived with the OpenAI Responses wire shape this version stays compatible with, and neither
