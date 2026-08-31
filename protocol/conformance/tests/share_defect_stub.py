@@ -41,6 +41,10 @@ DEFECTS = {
     "share_outlives_session",  # the link survives the deletion of its session
     "no_delete_revocation",  # revocation exists only as the {"enabled": false} toggle; the
                              # endpoint §5 NAMES (DELETE on /share) answers 405
+    "bodyless_rejected",     # a bodyless POST is a validation error; only {"enabled": true}
+                             # publishes. This is what the reference implementation was before
+                             # #45, and every other R- check still passes on it, because the
+                             # mint helper retries. R-08 is the one that must not.
 }
 assert DEFECT in DEFECTS, f"unknown defect {DEFECT!r}; one of {sorted(DEFECTS)}"
 
@@ -156,6 +160,20 @@ class H(BaseHTTPRequestHandler):
         existing = BY_SESSION.get(sid) or []
 
         if method == "POST" and not rest:
+            if DEFECT == "bodyless_rejected":
+                # §5 makes the body OPTIONAL. This server makes it mandatory, which is a
+                # narrower contract wearing a conformant one's clothes: R-01…R-07 are all
+                # reachable through the mint helper's retry, so only a check that refuses to
+                # retry can see it.
+                try:
+                    body = json.loads(self.body or b"null")
+                except Exception:
+                    body = None
+                if not isinstance(body, dict) or "enabled" not in body:
+                    return self.send(422, {"error": {"code": "invalid_request",
+                                                     "message": "field required: enabled"}})
+                if body.get("enabled") is False:
+                    return self.revoke(sid, existing)
             if DIALECT == "enabled":
                 # §5: a body is OPTIONAL and no body means publish. This dialect ALSO accepts the
                 # toggle body, which §5 permits ("a server MAY accept {"enabled": bool}").
