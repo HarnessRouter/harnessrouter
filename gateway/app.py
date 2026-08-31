@@ -2334,12 +2334,13 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             if time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
                 return rec
             settled = "incomplete"
-            # The turn was CUT (replica death, container restart), not capped. Without a reason
-            # the console blamed "step or time limit" for a turn that hit neither — a wrong
-            # diagnosis shown confidently, live on 2026-08-31 when a deploy restart landed under
-            # a running turn.
-            rec.setdefault("incomplete_details", None)
-            rec["incomplete_details"] = {"reason": "interrupted"}
+            # NO reason is claimed here, deliberately. This branch cannot tell a turn that was
+            # CUT (finalize died before the output landed) from one that ended cleanly having
+            # produced no text at all — the SaaS port shipped "interrupted" on its equivalent
+            # branch and caught it within the hour: a max_step=1 turn ended cleanly 'done' in
+            # 71s with empty output, nothing cut, and the API confidently called it interrupted.
+            # That is the invented-diagnosis bug this field exists to remove, one layer down.
+            # Unknown stays absent, and the console renders the neutral badge with no line.
     else:
         hb = _hb_seconds(v)
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
