@@ -956,3 +956,7 @@ body.hr-resizing iframe { pointer-events: none; }
   .kit-db .mcp-test-row .hr-btn { flex: 1 1 auto; justify-content: center; }
 }
 
+
+/* Why an incomplete turn is incomplete — one quiet line under the neutral badge, only when the
+   record actually knows the cause. */
+.wbx-incomplete-why { font-size: 12.5px; color: var(--mut, #6b7280); margin: 4px 0 0 2px; }
