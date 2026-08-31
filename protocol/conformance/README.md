@@ -37,13 +37,13 @@ anything that only inspects a schema.
 
 ## What it checks
 
-62 checks across three classes.
+63 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
 | **Core** | 40 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
 | **Extended** | +8 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
-| **Full** | +14 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing |
+| **Full** | +15 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing |
 
 Every check names the section of the specification it enforces, so a failure points at the sentence
 it violates rather than at a test name.
@@ -68,15 +68,22 @@ A few of them are worth calling out, because they catch things a schema check ne
   ignored. Both halves matter: before these, the suite sent neither field, so a server that
   rejected them outright and a server that silently acted on them scored the same as a correct
   one. T-10 covers the third mistake, a server that reports fields the request never sent.
-- **R-01…R-07** — session sharing, which is mostly a set of refusals. Sessions §5 requires that a
+- **R-01…R-08** — session sharing, which is mostly a set of refusals. Sessions §5 requires that a
   shared view be read-only, revocable, and free of credentials, and a check that merely opens a
   link and reads the conversation passes against a server that also lets that link continue the
   task, cancel the run, or upload into the working directory. §5 makes sharing optional, so these
-  skip rather than fail on a server that does not implement it; and because §5 names no endpoint
-  for the view or for revocation, they discover both from what the server returned and skip with
-  the missing sentence as the reason. `tests/test_session_sharing_checks.py` runs the series
-  against a deliberately wrong server, one defect at a time, so each of them is known to fail on
-  the mistake it describes.
+  skip rather than fail on a server that does not implement it. Since §5 named the share object's
+  `url` and `DELETE` on the mint endpoint, `R-01`, `R-02` and `R-06` assert both rather than
+  discovering them — they used to skip with the missing sentence as the reason.
+  `tests/test_session_sharing_checks.py` runs the series against a deliberately wrong server, one
+  defect at a time, so each of them is known to fail on the mistake it describes.
+- **R-08** — a bodyless `POST` publishes. The series mints through a helper that retries a 400/422
+  with `{"enabled": true}`, because a server speaking only that dialect would otherwise skip all
+  seven of the checks above — so the retry is what makes the series portable, and it is also what
+  hides this sentence: a toggle-only server passes `R-01`…`R-07` on the strength of a request §5
+  does not require anyone to accept, while refusing the one it does. `R-08` is the one check that
+  does not retry. Its stub defect, `bodyless_rejected`, is what the reference implementation was
+  before this series existed.
 - **F-03/F-04** — a skill is a folder, and it survives an unrelated edit. A server that stores only
   `SKILL.md`, or that empties a bundle when the harness is renamed, passes every other check: the
   config still looks right, and the loss only shows up later as an agent behaving oddly.
@@ -130,6 +137,14 @@ self-hosted instance, and both measured a real defect before passing:
   idempotency hash and nothing reported it ignored — the silent drop §1.1 now forbids.
 
 A suite that had shipped happy-path checks would have called that server conformant both times.
+
+`R-08` was added afterwards, from a gap the PR that closed those two named in its own body rather
+than left to be found: *"a body is OPTIONAL; no body means publish" has no dedicated check yet.*
+It passes against the reference and against an independent Go implementation (63/63 `full`, zero
+skipped, on the latter). Neither server can currently fail it — which is the argument for the
+check, not against it: two implementations agreeing by coincidence is what a specification
+sentence is supposed to stop being true by, and nothing in either tree would have noticed one of
+them stopping.
 
 The suite is developed against that implementation, which is exactly why the specification says
 conformance is defined by the suite and not by the implementation: anything the reference does that

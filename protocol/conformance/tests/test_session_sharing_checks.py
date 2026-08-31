@@ -39,6 +39,7 @@ CAUGHT_BY = {
     "multi_mint": "R-06",
     "no_delete_revocation": "R-06",
     "share_outlives_session": "R-07",
+    "bodyless_rejected": "R-08",
 }
 
 
@@ -77,7 +78,7 @@ def _run_series(defect: str, dialect: str = "plain") -> dict[str, Outcome]:
 
 def test_the_series_is_registered_at_full():
     ids = [c.id for c in REGISTRY if c.id.startswith("R-")]
-    assert ids == [f"R-0{i}" for i in range(1, 8)]
+    assert ids == [f"R-0{i}" for i in range(1, 9)]
     assert {c.cls for c in REGISTRY if c.id.startswith("R-")} == {"full"}
 
 
@@ -148,3 +149,19 @@ def test_the_dialect_retry_does_not_hide_a_missing_feature():
     validation error, and 404/405/501 mean today what they meant before it existed."""
     out = _run_series("none", dialect="plain")   # the plain stub already proves pass; this
     assert Outcome.ERROR not in out.values()     # guards the retry against breaking it
+
+
+def test_the_toggle_dialect_is_not_a_licence_to_refuse_a_bodyless_post():
+    """The retry exists so a toggle server can be MEASURED, not so it can be excused.
+
+    `enabled` is the dialect of a server that also accepts §5's bodyless POST — the reference
+    implementation since #53 — so it must pass R-08 like everything else. `bodyless_rejected` is
+    the server that only accepts the toggle, and it must fail R-08 and nothing else: every other
+    check reaches it through the retry, which is exactly the hiding this check was written to
+    undo.
+    """
+    assert _run_series("none", dialect="enabled")["R-08"] is Outcome.PASS
+
+    out = _run_series("bodyless_rejected")
+    assert out["R-08"] is Outcome.FAIL, out
+    assert [i for i, o in out.items() if o is Outcome.FAIL] == ["R-08"], out
