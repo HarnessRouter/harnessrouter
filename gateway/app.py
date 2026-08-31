@@ -4775,11 +4775,17 @@ _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes
 #   qwen3.7-max  -> 400 InvalidParameter "Unexpected item type in content"  (rejects the TYPE)
 #   qwen3.8-max  -> 400 about image DIMENSIONS (a 1x1 probe) — i.e. it accepts images
 #   gemini-3.6-flash, deepseek-v4-pro, kimi-k3, mistral-medium-3.5, step-3.7-flash -> all 200
+# 2026-08-30, both measured through the product rather than probed (pi's pdf skill reads its own
+# rendered preview back, which is exactly the image-bearing tool-result this set exists for):
+#   glm-5.3        -> 400 {"message":"..type is invalid, allowed values: ['text']","code":"1210"}
+#                     at the preview read; the turn died at its own verification step.
+#   glm-5.3-flash  -> the SAME task, same preview read, completed. Accepts images; NOT listed.
+# Echo sweeps never catch this class: the image only appears when a TOOL returns one.
 # Consumed by the pi backend: pi replays a session's image tool-results to the CURRENT model
 # (a cross-model conversation is one session), so a text-only channel turns every follow-up in
 # an image-bearing session into a hard 400. Declared text-only, pi drops the image instead —
 # a degraded answer beats a dead conversation.
-_TEXT_ONLY_INPUT = {"qwen3.7-max"}
+_TEXT_ONLY_INPUT = {"qwen3.7-max", "glm-5.3"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
 # values win), silently rejecting the us.anthropic.* ids this set exists to allow.
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
