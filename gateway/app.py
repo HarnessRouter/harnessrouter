@@ -4720,7 +4720,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash"]},
+                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
     # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
@@ -4732,7 +4732,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                         "mistral-medium-3.5", "step-3.7-flash"]},
+                         "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4740,7 +4740,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                       "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                      "mistral-medium-3.5", "step-3.7-flash"]},
+                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -4843,23 +4843,22 @@ def _backend_of_builtin(harness_id: str) -> str:
 
 
 def _backend_of_harness(hv: dict | None) -> str:
-    """The backend a harness is pinned to, from its base. Empty when unknown (caller-inferred)."""
+    """The backend a harness is pinned to, from its base. Empty when unknown (caller-inferred).
+
+    DERIVED from _BASE_CATALOG, the same way _backend_of_builtin already is, because the
+    hand-written if-chain this replaces silently missed qwen: a user-created harness pinned to
+    base "qwen" returned "" here, fell through to _route_backend, and gpt-5.4 on that harness
+    ran on CODEX — the exact model-name-guessing failure _backend_of_builtin's docstring warns
+    about, reintroduced one function up. Found by the SaaS port's review, present since the qwen
+    base shipped, and invisible to every sweep because sweeps drive the BUILT-IN harnesses,
+    which resolve through the catalog. A new base added to _BASE_CATALOG now routes user
+    harnesses with no second edit — the property that would have made the bug inexpressible."""
     base = str((hv or {}).get("base") or "").lower()
-    if base == "codex":
-        return "codex"
-    if base in ("claude-code", "claude"):
-        return "claude"
-    if base == "hermes":
-        return "hermes"
-    if base == "cline":
-        return "cline"
-    if base == "pi":
-        return "pi"
-    if base in ("dsh", "deepseek-harness"):
-        return "dsh"
-    if base == "opencode":
-        return "opencode"
-    return ""
+    if base in ("claude", "claude-code"):
+        return "claude"                      # stored alias: existing harnesses carry either
+    if base == "deepseek-harness":
+        return "dsh"                         # legacy display-name base from early dsh harnesses
+    return str((_BASE_CATALOG.get(base) or {}).get("backend") or "")
 
 
 def _model_authorized(requested: str, backend: str) -> bool:
