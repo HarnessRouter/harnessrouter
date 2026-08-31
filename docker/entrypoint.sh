@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,cline}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -187,6 +187,7 @@ backend_bin() {
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
     opencode) echo "$TOOLS/bin/opencode" ;;
     qwen)   echo "$TOOLS/bin/qwen" ;;
+    cline)  echo "$TOOLS/bin/cline" ;;
   esac
 }
 
@@ -252,6 +253,14 @@ install_backends() {
   if wanted qwen && [ ! -x "$(backend_bin qwen)" ]; then
     echo "[harnessrouter] installing Qwen Code (Apache-2.0)…"
     try_install "Qwen Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund @qwen-code/qwen-code || true
+  fi
+
+  if wanted cline && [ ! -x "$(backend_bin cline)" ]; then
+    echo "[harnessrouter] installing Cline (Apache-2.0)…"
+    # Pinned: 3.0.60 is the release every behavior in runner/server.py was verified against —
+    # the settings-file auth wiring, the one-word-prompt parse, and the broken --json --id resume
+    # this port deliberately does not use. A silent major bump would re-gamble all three.
+    try_install "Cline" npm install -g --prefix "$TOOLS" --no-audit --no-fund "cline@${HR_CLINE_VERSION:-3.0.60}" || true
   fi
 
   if wanted codex && [ ! -x "$(backend_bin codex)" ]; then

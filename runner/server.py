@@ -360,6 +360,7 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
+CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
@@ -659,6 +660,13 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # dsh has no skill loader; the AGENTS.md block below is the only door
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    # cline lands in the else on purpose, with the evidence written down so nobody "fixes" it:
+    # its own `skill list` attributes ~/.agents/skills to agent "Cline" and .claude/skills to
+    # "Claude Code", but a headless 3.0.60 run injects NEITHER into the system prompt — probed
+    # with skills installed at .claude/skills, ~/.agents/skills and ./.agents/skills against a
+    # stub upstream that dumps the system message: zero mentions, all three locations. So the
+    # loader that its tooling implies does not run headless, and the AGENTS.md advertisement is
+    # the one mechanism that verifiably reaches the model.
     installed: list[dict] = []
     for sk in skills or []:
         name = _skill_dir_name((sk or {}).get("name") or (sk or {}).get("id") or "")
@@ -774,7 +782,8 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     if backend == "qwen":
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     return pathlib.Path(cwd) / (
-        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode") else "CLAUDE.md")
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline")
+        else "CLAUDE.md")
 
 
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
@@ -2546,6 +2555,189 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     return cmd
 
 
+CLINE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+
+def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
+                    mcp_servers: list[dict] | None) -> None:
+    """~/.cline/data/settings/{providers.json, cline_mcp_settings.json} under the redirected HOME.
+
+    Written directly rather than through `cline auth` — the file is trivial, and a subprocess per
+    turn to produce four JSON fields is a second mechanism for one behaviour. Shapes verified
+    against what 3.0.60's own `auth` and `mcp install --yes` write, not inferred from source.
+
+    The apiKey that lands on disk is the per-turn loopback relay token, never the provider key:
+    every cline turn rides the hermes relay exactly as qwen's does. cline was verified to IGNORE
+    CLINE_API_KEY/CLINE_API_BASE_URL for this provider (a stub upstream never saw the request;
+    api.openai.com did), so the settings file is the only wiring that actually works — and inside
+    the per-session sandbox it is readable only by the session's own uid, which can read its own
+    process environment anyway.
+    """
+    sdir = home / ".cline" / "data" / "settings"
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "providers.json").write_text(json.dumps({
+        "version": 1,
+        "lastUsedProvider": "openai-compatible",
+        "modes": {},
+        "providers": {"openai-compatible": {
+            "settings": {"provider": "openai-compatible", "apiKey": api_key,
+                         "model": model, "baseUrl": base_url},
+            # REQUIRED, not decoration: without updatedAt 3.0.60's settings schema rejects the
+            # whole provider entry — silently — and the CLI dials api.openai.com with no key.
+            # Bisected live: the identical file with only this field added runs; without it the
+            # entry is rewritten down to {provider, model} and the turn dies on OpenAI's 401.
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+            "tokenSource": "manual"}},
+    }, indent=2))
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict) or sv.get("enabled") is False:
+            continue
+        url = (sv.get("url") or "").strip()
+        if not url:
+            continue                      # cline's file also takes stdio; the harness config is URL-only
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        entry: dict = {"transport": {"type": "streamableHttp", "url": url}}
+        hdrs = sv.get("headers")
+        if isinstance(hdrs, dict) and hdrs:
+            entry["transport"]["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        servers[name] = entry
+    (sdir / "cline_mcp_settings.json").write_text(json.dumps({"mcpServers": servers}, indent=2))
+
+
+def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None,
+                 mcp_servers: list[dict] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in CLINE_PROVIDERS:
+        raise HTTPException(400, f"unknown cline provider '{pr}' (one of {sorted(CLINE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "cline needs a base_url (none configured)")
+    if auth.api_key:
+        # Every cline turn rides the loopback relay (the qwen rationale, verbatim): request shapes
+        # strict endpoints refuse are repaired in flight, and the real key never reaches the CLI —
+        # what lands in its settings file is a placeholder valid for this turn, from loopback only.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    home = pathlib.Path(cwd) / ".harness" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)          # sessions/settings/db live INSIDE the checkpointed workspace
+    _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers)
+    # A prompt with no whitespace is parsed as a SUBCOMMAND ("Unknown command or unquoted
+    # prompt: hi") and `--` does not rescue it. A trailing newline does, verified on 3.0.60,
+    # and is invisible to the model.
+    if prompt and not any(ch.isspace() for ch in prompt):
+        prompt = prompt + "\n"
+    # NO resume flag, deliberately. 3.0.60's `--json --id <session>` refuses every way of passing
+    # a prompt (argument, =form, piped stdin — all verified individually, and the identical argv
+    # without --id runs), so headless resume is unusable in this release. A follow-up turn starts
+    # a fresh conversation over the same workspace: the files, AGENTS.md and the session store
+    # under HOME all persist through the checkpoint, so when a release fixes the flag, resume
+    # lights up here with no storage work.
+    # `-z` (background hub daemon) must never be added: one process per turn is the runner's
+    # execution model, and the hub is a resident service with its own update/restart lifecycle.
+    return ["cline", prompt, "--json", "--auto-approve", "true",
+            "-c", cwd, "-P", "openai-compatible", "-m", model]
+
+
+def _cline_eof(state: dict, rc: int) -> list[dict]:
+    """Synthesize the terminal result if the process dies before its own run_result event.
+
+    cline DOES emit a terminal run_result (unlike opencode), so on a healthy turn this adds
+    nothing — _cline_to_claude marks the state done and this returns []. It exists for the
+    crash-mid-turn case, where otherwise the trace would end without a result event at all."""
+    if state.get("_cl_done"):
+        return []
+    usage = state.get("_cl_usage") or {}
+    err = state.get("_cl_error", "")
+    if rc == 0 and not err:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": usage}]
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": err or f"cline exited {rc} without reporting a result", "usage": usage}]
+
+
+def _cline_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `cline --json` line to zero+ canonical claude stream-json events.
+
+    The emitter writes {ts, type, ...} per line, three types that matter here (verified on 3.0.60
+    against a stub upstream, tool round-trip included):
+
+      hook_event   agent_start/tool_call/tool_result/agent_end/agent_error — lifecycle markers;
+                   agent_start carries taskId, the only session-ish id the stream has.
+      agent_event  {event:{type: iteration_start|content_start|content_update|content_end|usage|
+                   iteration_end|done|error}}. content_* carry contentType "text" or "tool";
+                   text arrives WHOLE on content_start and again on content_end (chunk-level, not
+                   token-level — do not advertise token streaming); tool carries toolName,
+                   toolCallId and full input on start, output on end.
+      run_result   the terminal event: finishReason, text, usage {inputTokens, outputTokens,
+                   cacheReadTokens, cacheWriteTokens}.
+    """
+    t = obj.get("type")
+    pre: list[dict] = []
+    if t == "hook_event":
+        if obj.get("hookEventName") == "agent_start" and not state.get("_cl_init"):
+            state["_cl_init"] = True
+            pre = [{"type": "system", "subtype": "init",
+                    "session_id": str(obj.get("taskId") or ""), "model": state.get("model")}]
+        return pre
+    if t == "agent_event":
+        e = obj.get("event") if isinstance(obj.get("event"), dict) else {}
+        et = e.get("type")
+        ct = e.get("contentType")
+        if et == "content_end" and ct == "text":
+            txt = e.get("text") or ""
+            if not txt:
+                return []
+            state["final"] = txt        # claude result semantics: the LAST assistant text
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+        if et == "content_end" and ct in ("reasoning", "thinking"):
+            txt = e.get("text") or ""
+            return ([{"type": "assistant",
+                      "message": {"content": [{"type": "thinking", "thinking": txt}]}}]
+                    if txt else [])
+        if et == "content_start" and ct == "tool":
+            return [{"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": e.get("toolCallId") or "tool",
+                 "name": e.get("toolName") or "tool", "input": e.get("input") or {}}]}}]
+        if et == "content_end" and ct == "tool":
+            out = e.get("output")
+            body = out if isinstance(out, str) else json.dumps(out or [])
+            return [{"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": e.get("toolCallId") or "tool",
+                 "content": body}]}}]
+        if et == "error":
+            err = e.get("error")
+            msg = str((err or {}).get("message") or err or "cline error")                 if isinstance(err, (dict, str)) else "cline error"
+            state["_cl_error"] = msg
+            return []
+        return []
+    if t == "run_result":
+        u = obj.get("usage") or {}
+        usage = {"input_tokens": int(u.get("inputTokens") or 0),
+                 "output_tokens": int(u.get("outputTokens") or 0),
+                 "cache_read_tokens": int(u.get("cacheReadTokens") or 0),
+                 "cache_write_tokens": int(u.get("cacheWriteTokens") or 0)}
+        state["_cl_usage"] = usage
+        state["_cl_done"] = True
+        reason = str(obj.get("finishReason") or "")
+        ok = reason == "completed"
+        txt = obj.get("text") or state.get("final", "")
+        if ok:
+            state["final"] = txt
+        return [{"type": "result", "subtype": "success" if ok else "error",
+                 "is_error": not ok,
+                 "result": txt if ok else (state.get("_cl_error") or txt or f"cline ended: {reason}"),
+                 "usage": usage}]
+    if t == "error":
+        state["_cl_error"] = str(obj.get("message") or "cline error")
+        return []
+    return []
+
+
+_cline_to_claude.eof = _cline_eof   # type: ignore[attr-defined]
+
+
 def _opencode_eof(state: dict, rc: int) -> list[dict]:
     """Synthesize the turn's result at end of stream.
 
@@ -2867,6 +3059,8 @@ BACKENDS = {
     # names) — so its normalizer IS the claude passthrough.
     "qwen": {"providers": sorted(QWEN_PROVIDERS), "default_model": QWEN_DEFAULT_MODEL,
              "normalize": _claude_passthrough},
+    "cline": {"providers": sorted(CLINE_PROVIDERS), "default_model": CLINE_DEFAULT_MODEL,
+              "normalize": _cline_to_claude},
 }
 
 
@@ -3898,6 +4092,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or QWEN_DEFAULT_MODEL
         cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+    elif backend == "cline":
+        model = model or CLINE_DEFAULT_MODEL
+        cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
     elif backend == "opencode":
         model = model or OPENCODE_DEFAULT_MODEL
         # _write_skills already ran for this backend, so the directory it produced is on disk and
