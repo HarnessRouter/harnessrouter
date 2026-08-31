@@ -1225,3 +1225,56 @@ def r07(ctx):
         "requires the session be unreadable after deletion, and a published link is the one way "
         "in that its owner is least likely to remember.")
     return f"session deleted, then HTTP {after.status}"
+
+
+@check("R-08", "A bodyless POST publishes, as §5 says it does", "full",
+       f"{SPEC}/sessions.md#5-session-sharing")
+def r08(ctx):
+    """§5: "a body is OPTIONAL; no body means publish."
+
+    Named in harnessrouter#53 as the one sentence of the chapter nothing enforced. The R-series
+    mints through a helper that retries a 400/422 with {"enabled": true}, because a server
+    speaking only the toggle dialect would otherwise skip all seven checks — so the retry is what
+    makes the series portable, and it is also what hides this sentence. A toggle-only server
+    passes R-01 through R-07 on the strength of a request §5 does not require anyone to accept,
+    while refusing the one it does.
+
+    That is worth a check rather than a note because the two servers this suite is measured
+    against both happen to publish on a bodyless POST today, so nothing in either tree would
+    notice if one stopped. A sentence enforced by coincidence is enforced until the coincidence
+    ends.
+
+    Deliberately NOT using _mint_share: the retry is the thing under test. And deliberately not
+    gated on _share either — that helper caches "revoked by R-06" once R-06 has run, so gating on
+    it would make this check skip on every conformant server, which is the failure mode it exists
+    to catch. The two skip conditions are restated here instead, from discovery and from the
+    status code, so the answer does not depend on what ran before."""
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if caps.get("session_sharing") is False:
+        raise Skip("this server reports session_sharing false, and Sessions §5 is a MAY")
+    sid = _shared_session_id(ctx)
+
+    r = ctx.client.post(f"/v1/sessions/{sid}/share")
+    if r.status in (404, 405, 501):
+        # Not-implemented answers, exactly as _share reads them. A server refusing only the
+        # *body* answers 400/422 — a method-level refusal cannot be the toggle dialect — so
+        # this is not an escape hatch for the mistake below.
+        raise Skip(f"POST /v1/sessions/{{id}}/share returned HTTP {r.status}: this server does "
+                   "not publish shared views, which Sessions §5 permits")
+    assert 200 <= r.status < 300, (
+        f"POST /v1/sessions/{{id}}/share with no body returned HTTP {r.status}: {r.body[:160]!r}. "
+        "§5 makes the body OPTIONAL and says no body means publish. A server that accepts only "
+        "{\"enabled\": true} has made a field mandatory that the specification made optional, so "
+        "a conformant client written against §5 cannot publish here at all.")
+    d = r.json if isinstance(r.json, dict) else {}
+    assert d.get("id") and d.get("url"), (
+        f"the bodyless POST answered HTTP {r.status} but not a share object (keys: "
+        f"{sorted(d)[:8]}). Accepting the request and returning something else is the same "
+        "failure one step later: the caller still cannot open what it just published.")
+
+    # Best-effort tidy-up, unasserted. This check publishes a link on a real server and R-06 has
+    # already proved DELETE revokes, so leaving one live would be a surprise for whoever ran the
+    # suite — but a failure here is R-06's finding to report, not this one's, and asserting it
+    # would diagnose one bug twice.
+    ctx.client.delete(f"/v1/sessions/{sid}/share")
+    return "published with no body"
