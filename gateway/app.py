@@ -986,6 +986,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "qwen"): "openai-api",
     ("tokenrouter", "qwen"): "tokenrouter",    ("vercel", "qwen"): "tokenrouter",
     ("llmtr", "qwen"): "tokenrouter",
+    # cline is a pure openai-compatible client through the runner's loopback relay (3.0.60,
+    # verified: the relay repairs shapes in flight, so every provider on an OpenAI-or-repairable
+    # surface drives it) — wired like qwen for the same reason.
+    ("anthropic", "cline"): "anthropic",       ("openai", "cline"): "openai",
+    ("azure-foundry", "cline"): "azure",
+    ("openrouter", "cline"): "openai-api",
+    ("tokenrouter", "cline"): "tokenrouter",   ("vercel", "cline"): "tokenrouter",
+    ("llmtr", "cline"): "tokenrouter",
     # custom: user-supplied endpoint + model + key. Maps to runner providers that can actually
     # drive a bring-your-own OpenAI/Anthropic endpoint — NOT codex, whose current releases speak
     # only the OpenAI Responses API and so cannot reach a custom chat/completions endpoint.
@@ -993,6 +1001,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "hermes"): "openai-api",        ("custom", "opencode"): "tokenrouter",
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
+    ("custom", "cline"): "openai-api",
 }
 
 
@@ -3678,7 +3687,7 @@ def _provider_backends(provider: str) -> list[str]:
 _CUSTOM_FORMAT_BACKENDS = {
     # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen"},
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline"},
     "anthropic": {"claude", "opencode", "pi", "dsh"},
 }
 
@@ -4712,6 +4721,18 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash"]},
+    # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
+    # shape repair in flight). Every row below completed a real turn through the gateway against
+    # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
+    # earned their absence: gpt-5.3-codex is refused by the aggregator on this surface, and
+    # gemini-3.6-flash fails on request shape through the relay — retest before adding either).
+    "cline": {"default": "gpt-5.4",
+              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+                         "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5",
+                         "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
+                         "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
+                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                         "mistral-medium-3.5", "step-3.7-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4830,6 +4851,8 @@ def _backend_of_harness(hv: dict | None) -> str:
         return "claude"
     if base == "hermes":
         return "hermes"
+    if base == "cline":
+        return "cline"
     if base == "pi":
         return "pi"
     if base in ("dsh", "deepseek-harness"):
@@ -5225,6 +5248,16 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
     agent_doc = str((hv or {}).get("system_prompt") or "")
     status = "failed"
+    # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
+    # from the durable turn records; a read failure degrades to a fresh turn rather than failing
+    # the request — the workspace and AGENTS.md still carry the working context.
+    runner_prompt = prompt
+    if backend in _NO_RESUME_BACKENDS and resume:
+        try:
+            _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS)).get("turns") or []
+            runner_prompt = _history_prompt(_hist, prompt)
+        except Exception:  # noqa: BLE001
+            pass
     # Model→integration mapping (global token-provider routing): a mapped model runs on its
     # integration FIRST; the backend's policy chain stays as the failure fallback.
     mapped_conn = await _mapped_integration_conn(backend, model_req)
@@ -5257,7 +5290,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             continue
         body = {"backend": conn.get("backend", backend), "provider": conn.get("provider"),
                 "model": (conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req)),
-                "prompt": prompt, "max_turns": max_step,
+                "prompt": runner_prompt, "max_turns": max_step,
                 "timeout_seconds": timeout_s,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "agent_doc": agent_doc,
@@ -7009,6 +7042,44 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
         out[str(fname)] = (it["file_id"].rsplit("/", 1)[-1][: -len(".meta")],
                            meta.get("source") == "app")
     return out
+
+
+# Backends whose CLI cannot resume a conversation headless. cline 3.0.60: `--json --id` refuses
+# a prompt in every form (argument, =form, piped stdin — each verified live, and the identical
+# argv without --id runs), so the CLI starts every turn fresh. The GATEWAY owns the conversation
+# (the response records), so the gateway hands it back: a follow-up turn's runner prompt carries
+# a bounded transcript of the session so far. The user-facing record stays the raw message — the
+# transcript rides ONLY the runner prompt, never the trace card or the turn list.
+_NO_RESUME_BACKENDS = {"cline"}
+_HISTORY_MAX_TURNS = 12
+_HISTORY_CLIP = 4000          # per message; a pasted novel is context, not a transcript
+_HISTORY_MAX_BYTES = 16000    # whole block; beyond this the oldest turns fall off first
+
+
+def _history_prompt(turns: list[dict], new_prompt: str) -> str:
+    """The runner prompt for a follow-up on a backend that cannot resume.
+
+    Most recent turns win: the block is built newest-first against the byte budget, then emitted
+    oldest-first so the model reads it in order. Empty history returns the prompt unchanged."""
+    rows: list[str] = []
+    used = 0
+    for t in reversed(turns[-_HISTORY_MAX_TURNS:]):
+        u = (t.get("user") or "").strip()[:_HISTORY_CLIP]
+        a = (t.get("assistant") or "").strip()[:_HISTORY_CLIP]
+        piece = (f"user: {u}\n" if u else "") + (f"assistant: {a}\n" if a else "")
+        if not piece:
+            continue
+        if used + len(piece) > _HISTORY_MAX_BYTES:
+            break
+        rows.append(piece)
+        used += len(piece)
+    if not rows:
+        return new_prompt
+    body = "".join(reversed(rows))
+    return ("<conversation_so_far>\n"
+            "This is the conversation in this session so far. Continue it; do not repeat it.\n"
+            f"{body}"
+            "</conversation_so_far>\n\n" + new_prompt)
 
 
 async def _cfile_by_name(sid: str) -> dict[str, str]:
@@ -11516,6 +11587,20 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
+    "cline": {
+        "label": "Cline", "backend": "cline", "status": "ready",
+        "system_prompt": ("You are Cline, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # From the tools array a live 3.0.60 run sent its provider (captured at a stub upstream).
+        # The CLI exposes no per-tool kill switch headless, so disabling is an instruction to the
+        # model — the codex/hermes/dsh/qwen tier, not claude's hard deny.
+        "tools": [("run_commands", "Shell"), ("read_files", "File Read"),
+                  ("editor", "Editor"), ("search_codebase", "Search"),
+                  ("fetch_web_content", "Web Fetch"), ("ask_question", "Question"),
+                  ("spawn_agent", "Subagent")],
         "tool_enforcement": "instruction",
     },
 }
