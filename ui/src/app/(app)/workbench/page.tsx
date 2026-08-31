@@ -104,7 +104,8 @@ function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boolean } 
       : (t.status === 'incomplete' || t.status === 'max_turns' || t.status === 'timeout') ? 'incomplete'
         : (t.status === 'running' || t.status === 'starting' || t.status === 'in_progress') ? 'running' : 'done';
     if (st === 'running') running = true;
-    m.push({ role: 'assistant', blocks, files: t.files || [], status: st });
+    m.push({ role: 'assistant', blocks, files: t.files || [], status: st,
+             incompleteReason: (t as { incomplete_reason?: string }).incomplete_reason || undefined });
   }
   return { msgs: m, running };
 }
@@ -783,7 +784,10 @@ interface ToolStep { name: string; args: string; result?: string; callId?: strin
 // An assistant turn is an ORDERED list of blocks appended as events arrive, so tool activity is
 // interleaved with prose in real time (not all tools hoisted to the top).
 type Block = { kind: 'text'; text: string } | { kind: 'tools'; reasoning: string; steps: ToolStep[] };
-interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]; status: 'running' | 'done' | 'failed' | 'cancelled' | 'incomplete' }
+interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]; status: 'running' | 'done' | 'failed' | 'cancelled' | 'incomplete';
+  /** Why an incomplete turn is incomplete (max_steps | timeout | interrupted) — from the
+   *  gateway's incomplete_details. Absent on records from before the field existed. */
+  incompleteReason?: string }
 // AGENTS.md / CLAUDE.md are harness-internal instruction files the runner seeds into the workspace
 // (they surface installed skills to the agent). They are never user-facing outputs, so they must
 // never render as output file cards, including on older sessions that captured them before the
@@ -1239,6 +1243,15 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
           <ChatMessages
             messages={msgs}
             renderMarkdown={mdRenderer}
+            // The default incomplete badge asserted "step or time limit" for EVERY incomplete —
+            // including turns that hit neither (a deploy restart under a live turn settles as
+            // incomplete). The badge now claims only what is true of all causes; the specific
+            // cause, when the record carries one, renders per turn in the footer below.
+            statusLabels={{
+              failed: '✕ Failed — see the output above for the reason',
+              cancelled: '◼ Stopped by you',
+              incomplete: '◔ Stopped before finishing — Continue to resume',
+            }}
             userExtras={(m: UserMsg) => (m.attachments && m.attachments.length > 0 ? (
               <div className="wbx-attach-row">
                 {m.attachments.map((f, j) => <AttachCard key={j} name={f.name} dataUri={f.dataUri} />)}
@@ -1246,6 +1259,15 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
             ) : null)}
             assistantFooter={(m: AsstMsg, i: number) => (
               <>
+                {m.status === 'incomplete' && m.incompleteReason && (
+                  <div className="wbx-incomplete-why">
+                    {m.incompleteReason === 'max_steps' ? 'It hit its step limit.'
+                      : m.incompleteReason === 'timeout' ? 'It hit its time limit.'
+                      : m.incompleteReason === 'interrupted'
+                        ? 'The turn was interrupted before it finished — for example by a server restart. No limit was hit.'
+                        : null}
+                  </div>
+                )}
                 {m.files.filter((f) => !isInternalOutput(f.filename)).length > 0 && (
                   <div className="wbx-files">
                     {m.files.filter((f) => !isInternalOutput(f.filename)).map((f, j) => (
