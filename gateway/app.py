@@ -2154,6 +2154,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             terminal = ("completed" if st == "done" else "incomplete" if st == "max_turns"
                         else "cancelled" if st == "cancelled" else "incomplete" if st == "timeout"
                         else "failed")
+            if st == "max_turns":
+                translator.incomplete_reason = "max_steps"
+            elif st == "timeout":
+                translator.incomplete_reason = "timeout"
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -2330,6 +2334,13 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             if time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
                 return rec
             settled = "incomplete"
+            # NO reason is claimed here, deliberately. This branch cannot tell a turn that was
+            # CUT (finalize died before the output landed) from one that ended cleanly having
+            # produced no text at all — the SaaS port shipped "interrupted" on its equivalent
+            # branch and caught it within the hour: a max_step=1 turn ended cleanly 'done' in
+            # 71s with empty output, nothing cut, and the API confidently called it interrupted.
+            # That is the invented-diagnosis bug this field exists to remove, one layer down.
+            # Unknown stays absent, and the console renders the neutral badge with no line.
     else:
         hb = _hb_seconds(v)
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
@@ -4060,6 +4071,12 @@ class _RespTranslator:
         # is indistinguishable from an honoured one, which is the same reasoning that puts model
         # substitution in metadata.
         self.ignored: list[str] = list(ignored or [])
+        # WHY an incomplete turn is incomplete. The console showed one banner for every
+        # incomplete — "hit its step or time limit" — including turns that hit neither (a
+        # replica restart under a live turn settles as incomplete). A wrong diagnosis shown
+        # confidently sent an operator debugging a 400-step default that was never reached.
+        # "max_steps" | "timeout" | "interrupted"; empty = unknown (old records).
+        self.incomplete_reason: str = ""
         # run metadata (CT-124): the model the caller asked for, and whether the gateway substituted
         # the harness's authorized default because the request was unavailable for this backend.
         self.requested_model = ""
@@ -4093,7 +4110,9 @@ class _RespTranslator:
         if self.ignored:
             meta["ignored_fields"] = self.ignored
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
-                "status": status, "error": self.error, "incomplete_details": None,
+                "status": status, "error": self.error,
+                "incomplete_details": ({"reason": self.incomplete_reason}
+                                       if status == "incomplete" and self.incomplete_reason else None),
                 "previous_response_id": self.prev, "model": self.model,
                 "output": self.output, "store": self.store, "usage": self.usage,
                 "metadata": meta}
@@ -4720,19 +4739,28 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash"]},
+                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
     # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
     # earned their absence: gpt-5.3-codex is refused by the aggregator on this surface, and
     # gemini-3.6-flash fails on request shape through the relay — retest before adding either).
+    #
+    # INTEGRATION-PATH CAVEAT (measured on SaaS 2026-08-31, both qwen and cline): the gpt-5.6
+    # line (sol/terra/luna) fails through aggregator chat/completions when the request carries
+    # function tools — "400 Function tools with reasoning_effort are not supported … in
+    # /v1/chat/completions" — while the same rows pass here, where an Azure OpenAI integration
+    # serves them. The rows stay listed because they are measured working on this path, but an
+    # operator whose integration reaches gpt-5.6 via a plain chat/completions aggregator will
+    # see every agent turn fail, not an edge case. Same trap class as _TOKENROUTER_NO_CHANNEL:
+    # the CHANNEL decides, not the model.
     "cline": {"default": "gpt-5.4",
               "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5",
                          "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                         "mistral-medium-3.5", "step-3.7-flash"]},
+                         "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -4740,7 +4768,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                       "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                      "mistral-medium-3.5", "step-3.7-flash"]},
+                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -4748,11 +4776,17 @@ _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes
 #   qwen3.7-max  -> 400 InvalidParameter "Unexpected item type in content"  (rejects the TYPE)
 #   qwen3.8-max  -> 400 about image DIMENSIONS (a 1x1 probe) — i.e. it accepts images
 #   gemini-3.6-flash, deepseek-v4-pro, kimi-k3, mistral-medium-3.5, step-3.7-flash -> all 200
+# 2026-08-30, both measured through the product rather than probed (pi's pdf skill reads its own
+# rendered preview back, which is exactly the image-bearing tool-result this set exists for):
+#   glm-5.3        -> 400 {"message":"..type is invalid, allowed values: ['text']","code":"1210"}
+#                     at the preview read; the turn died at its own verification step.
+#   glm-5.3-flash  -> the SAME task, same preview read, completed. Accepts images; NOT listed.
+# Echo sweeps never catch this class: the image only appears when a TOOL returns one.
 # Consumed by the pi backend: pi replays a session's image tool-results to the CURRENT model
 # (a cross-model conversation is one session), so a text-only channel turns every follow-up in
 # an image-bearing session into a hard 400. Declared text-only, pi drops the image instead —
 # a degraded answer beats a dead conversation.
-_TEXT_ONLY_INPUT = {"qwen3.7-max"}
+_TEXT_ONLY_INPUT = {"qwen3.7-max", "glm-5.3"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
 # values win), silently rejecting the us.anthropic.* ids this set exists to allow.
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
@@ -4843,23 +4877,22 @@ def _backend_of_builtin(harness_id: str) -> str:
 
 
 def _backend_of_harness(hv: dict | None) -> str:
-    """The backend a harness is pinned to, from its base. Empty when unknown (caller-inferred)."""
+    """The backend a harness is pinned to, from its base. Empty when unknown (caller-inferred).
+
+    DERIVED from _BASE_CATALOG, the same way _backend_of_builtin already is, because the
+    hand-written if-chain this replaces silently missed qwen: a user-created harness pinned to
+    base "qwen" returned "" here, fell through to _route_backend, and gpt-5.4 on that harness
+    ran on CODEX — the exact model-name-guessing failure _backend_of_builtin's docstring warns
+    about, reintroduced one function up. Found by the SaaS port's review, present since the qwen
+    base shipped, and invisible to every sweep because sweeps drive the BUILT-IN harnesses,
+    which resolve through the catalog. A new base added to _BASE_CATALOG now routes user
+    harnesses with no second edit — the property that would have made the bug inexpressible."""
     base = str((hv or {}).get("base") or "").lower()
-    if base == "codex":
-        return "codex"
-    if base in ("claude-code", "claude"):
-        return "claude"
-    if base == "hermes":
-        return "hermes"
-    if base == "cline":
-        return "cline"
-    if base == "pi":
-        return "pi"
-    if base in ("dsh", "deepseek-harness"):
-        return "dsh"
-    if base == "opencode":
-        return "opencode"
-    return ""
+    if base in ("claude", "claude-code"):
+        return "claude"                      # stored alias: existing harnesses carry either
+    if base == "deepseek-harness":
+        return "dsh"                         # legacy display-name base from early dsh harnesses
+    return str((_BASE_CATALOG.get(base) or {}).get("backend") or "")
 
 
 def _model_authorized(requested: str, backend: str) -> bool:
@@ -5429,11 +5462,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     terminal = "completed"
                 elif st == "max_turns":
                     terminal = "incomplete"
+                    translator.incomplete_reason = "max_steps"
                 elif st in ("cancelled", "timeout"):
                     # user cancel / wall-clock cap end the SESSION's turn — never retry it
                     # on the next connection in the chain (that would re-run the whole task)
                     terminal = "cancelled" if st == "cancelled" else "incomplete"
                     if st == "timeout":
+                        translator.incomplete_reason = "timeout"
                         rec["tried"].append({"connection": name, "status": st,
                                              "error": "turn hit its wall-clock cap"})
                 else:
@@ -6458,6 +6493,11 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         asst, tools, files = _output_to_turn_fields(rec.get("output") or [])
         turns.append({"id": rid, "status": rec.get("status"), "user": user_text,
                       "user_files": user_files, "assistant": asst, "tools": tools, "files": files,
+                      # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
+                      # "interrupted"), so the console can say what actually happened instead of
+                      # one banner for every cause. Absent on records from before the field.
+                      "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
+                                            or None),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
