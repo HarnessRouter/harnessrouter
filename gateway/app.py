@@ -2154,6 +2154,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             terminal = ("completed" if st == "done" else "incomplete" if st == "max_turns"
                         else "cancelled" if st == "cancelled" else "incomplete" if st == "timeout"
                         else "failed")
+            if st == "max_turns":
+                translator.incomplete_reason = "max_steps"
+            elif st == "timeout":
+                translator.incomplete_reason = "timeout"
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -2330,6 +2334,12 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             if time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
                 return rec
             settled = "incomplete"
+            # The turn was CUT (replica death, container restart), not capped. Without a reason
+            # the console blamed "step or time limit" for a turn that hit neither — a wrong
+            # diagnosis shown confidently, live on 2026-08-31 when a deploy restart landed under
+            # a running turn.
+            rec.setdefault("incomplete_details", None)
+            rec["incomplete_details"] = {"reason": "interrupted"}
     else:
         hb = _hb_seconds(v)
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
@@ -4060,6 +4070,12 @@ class _RespTranslator:
         # is indistinguishable from an honoured one, which is the same reasoning that puts model
         # substitution in metadata.
         self.ignored: list[str] = list(ignored or [])
+        # WHY an incomplete turn is incomplete. The console showed one banner for every
+        # incomplete — "hit its step or time limit" — including turns that hit neither (a
+        # replica restart under a live turn settles as incomplete). A wrong diagnosis shown
+        # confidently sent an operator debugging a 400-step default that was never reached.
+        # "max_steps" | "timeout" | "interrupted"; empty = unknown (old records).
+        self.incomplete_reason: str = ""
         # run metadata (CT-124): the model the caller asked for, and whether the gateway substituted
         # the harness's authorized default because the request was unavailable for this backend.
         self.requested_model = ""
@@ -4093,7 +4109,9 @@ class _RespTranslator:
         if self.ignored:
             meta["ignored_fields"] = self.ignored
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
-                "status": status, "error": self.error, "incomplete_details": None,
+                "status": status, "error": self.error,
+                "incomplete_details": ({"reason": self.incomplete_reason}
+                                       if status == "incomplete" and self.incomplete_reason else None),
                 "previous_response_id": self.prev, "model": self.model,
                 "output": self.output, "store": self.store, "usage": self.usage,
                 "metadata": meta}
@@ -5428,11 +5446,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     terminal = "completed"
                 elif st == "max_turns":
                     terminal = "incomplete"
+                    translator.incomplete_reason = "max_steps"
                 elif st in ("cancelled", "timeout"):
                     # user cancel / wall-clock cap end the SESSION's turn — never retry it
                     # on the next connection in the chain (that would re-run the whole task)
                     terminal = "cancelled" if st == "cancelled" else "incomplete"
                     if st == "timeout":
+                        translator.incomplete_reason = "timeout"
                         rec["tried"].append({"connection": name, "status": st,
                                              "error": "turn hit its wall-clock cap"})
                 else:
@@ -6457,6 +6477,11 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         asst, tools, files = _output_to_turn_fields(rec.get("output") or [])
         turns.append({"id": rid, "status": rec.get("status"), "user": user_text,
                       "user_files": user_files, "assistant": asst, "tools": tools, "files": files,
+                      # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
+                      # "interrupted"), so the console can say what actually happened instead of
+                      # one banner for every cause. Absent on records from before the field.
+                      "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
+                                            or None),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
