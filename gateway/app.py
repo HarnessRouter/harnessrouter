@@ -4744,6 +4744,15 @@ _MODEL_CATALOG: dict[str, dict] = {
     # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
     # earned their absence: gpt-5.3-codex is refused by the aggregator on this surface, and
     # gemini-3.6-flash fails on request shape through the relay — retest before adding either).
+    #
+    # INTEGRATION-PATH CAVEAT (measured on SaaS 2026-08-31, both qwen and cline): the gpt-5.6
+    # line (sol/terra/luna) fails through aggregator chat/completions when the request carries
+    # function tools — "400 Function tools with reasoning_effort are not supported … in
+    # /v1/chat/completions" — while the same rows pass here, where an Azure OpenAI integration
+    # serves them. The rows stay listed because they are measured working on this path, but an
+    # operator whose integration reaches gpt-5.6 via a plain chat/completions aggregator will
+    # see every agent turn fail, not an edge case. Same trap class as _TOKENROUTER_NO_CHANNEL:
+    # the CHANNEL decides, not the model.
     "cline": {"default": "gpt-5.4",
               "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5",
