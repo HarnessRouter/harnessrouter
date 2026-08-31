@@ -1005,6 +1005,68 @@
         }
       },
       "additionalProperties": true
+    },
+    "SessionShare": {
+      "type": "object",
+      "description": "A published read-only view of a session (Sessions §5). `url` may be relative, resolving against the base URL the caller is already using — a server behind a proxy cannot know its public origin, and a base-relative path survives every fronting. The share's id MUST NOT function as a credential for the rest of the API.",
+      "required": [
+        "id",
+        "url"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "object": {
+          "type": "string",
+          "description": "SHOULD be \"session.share\""
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "TurnItem": {
+      "type": "object",
+      "description": "One turn of a session's history (Sessions §3). Previously an object with no stated shape, which kept every conformance check at 'the endpoint answered 200'.",
+      "required": [
+        "id",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The response id, usable with GET /v1/responses/{id}"
+        },
+        "status": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "assistant": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
     }
   }
 }
