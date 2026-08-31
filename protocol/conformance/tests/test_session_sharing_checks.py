@@ -37,6 +37,7 @@ CAUGHT_BY = {
     "leaks_credentials": "R-05",
     "revoke_lies": "R-06",
     "multi_mint": "R-06",
+    "no_delete_revocation": "R-06",
     "share_outlives_session": "R-07",
 }
 
@@ -134,9 +135,9 @@ def test_a_conformant_toggle_dialect_server_passes_every_check():
     assert all(o is Outcome.PASS for o in out.values()), out
 
 
-def test_the_toggle_dialects_revocation_is_still_a_real_probe():
-    """R-06's last attempt believes a 200 only when it speaks revocation's vocabulary, so a
-    toggle server whose revocation lies must still be caught through that path."""
+def test_a_lying_revocation_is_caught_in_the_toggle_dialect_too():
+    """§5 now NAMES the revocation endpoint, and the dialect stub serves it; a server whose
+    DELETE answers 200 and revokes nothing must still fail R-06 whichever dialect minted."""
     out = _run_series("revoke_lies", dialect="enabled")
     assert out["R-06"] is Outcome.FAIL, out
     assert [i for i, o in out.items() if o is Outcome.FAIL] == ["R-06"], out
