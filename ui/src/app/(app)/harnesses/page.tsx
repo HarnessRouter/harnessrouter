@@ -247,8 +247,12 @@ export default function HarnessesPage() {
                   const credits = card?.credits != null && card.credits > 0 ? card.credits
                     : totals && totals.costed > 0 ? totals.credits : null;
                   const creditsPartial = !(card?.credits != null && card.credits > 0) && !!totals && totals.costed < totals.finished;
-                  const latency = totals && totals.timed > 0 ? totals.elapsed : null;
-                  const latencyPartial = !!totals && totals.timed < totals.finished;
+                  // This box's gateway stamps elapsed on the task record, not (yet) on each
+                  // turn — so when no turn carries latency, the record's own total is the truth,
+                  // same preference order the credits line above already uses.
+                  const latency = totals && totals.timed > 0 ? totals.elapsed
+                    : card?.elapsed != null && card.elapsed > 0 ? card.elapsed : null;
+                  const latencyPartial = !!totals && totals.timed > 0 && totals.timed < totals.finished;
                   if (credits == null && latency == null) return null;
                   return (
                     <span className="hx-badges" aria-label="Task totals">
