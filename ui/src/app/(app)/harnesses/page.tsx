@@ -158,7 +158,12 @@ export default function HarnessesPage() {
 
   const openIndex = () => { setMobileDetail(true); go({ view: 'index' }); };
   const openTask = (hid: string, s: string) => { setMobileDetail(true); go({ h: hid, sid: s }); };
-  const openNew = (hid: string) => { setMobileDetail(true); go({ h: hid }); };
+  const openNew = (hid: string) => {
+    setMobileDetail(true);
+    // already on this harness's fresh draft: there is nowhere to go, so put the caret back in the box
+    if (hid === h && !sid && view === 'chat') { (document.querySelector('.wbx-conv-main .wbx-composer textarea') as HTMLTextAreaElement | null)?.focus(); return; }
+    go({ h: hid });
+  };
   const openSettings = (hid: string) => { setMobileDetail(true); go({ h: hid, view: 'settings' }); };
   const toggle = (hid: string) => setOpen((s) => (s === hid ? null : hid));
 
@@ -247,11 +252,9 @@ export default function HarnessesPage() {
                   const credits = card?.credits != null && card.credits > 0 ? card.credits
                     : totals && totals.costed > 0 ? totals.credits : null;
                   const creditsPartial = !(card?.credits != null && card.credits > 0) && !!totals && totals.costed < totals.finished;
-                  // This box's gateway stamps elapsed on the task record, not (yet) on each
-                  // turn — so when no turn carries latency, the record's own total is the truth,
-                  // same preference order the credits line above already uses.
-                  const latency = totals && totals.timed > 0 ? totals.elapsed
-                    : card?.elapsed != null && card.elapsed > 0 ? card.elapsed : null;
+                  // latency from the turns that carry it; a record from before per-turn stamping still
+                  // knows its own elapsed, so fall back to that rather than show nothing
+                  const latency = totals && totals.timed > 0 ? totals.elapsed : (card?.elapsed != null && card.elapsed > 0 ? card.elapsed : null);
                   const latencyPartial = !!totals && totals.timed > 0 && totals.timed < totals.finished;
                   if (credits == null && latency == null) return null;
                   return (
