@@ -11,7 +11,7 @@
 .ch-new-wrap { position: relative; }
 .ch-new {
   width: 30px; height: 30px; border-radius: 7px; border: none; cursor: pointer;
-  background: rgba(255,255,255,.08); color: #C7CCDA;
+  background: rgba(255,255,255,.08); color: #e7e5e4;
   display: inline-flex; align-items: center; justify-content: center;
 }
 .ch-new:hover { background: rgba(255,255,255,.16); color: #fff; }
@@ -36,7 +36,7 @@
 .ch-search:focus-within { border-color: rgba(183,172,255,.55); background: rgba(255,255,255,.09); }
 .ch-search-input {
   flex: 1; min-width: 0; border: 0; background: none; outline: none;
-  color: #E5E7EB; font-size: 13px; font-family: inherit;
+  color: #e7e5e4; font-size: 13px; font-family: inherit;
 }
 .ch-search-input::placeholder { color: var(--sidebar-mute); }
 .ch-search-clear { border: 0; background: none; color: var(--sidebar-mute); cursor: pointer; display: inline-flex; }
@@ -76,7 +76,7 @@
 .ch-row {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
   padding: 7px 8px; border: 0; background: none; border-radius: 8px; cursor: pointer;
-  color: #C7CCDA; font-family: inherit;
+  color: #e7e5e4; font-family: inherit;
 }
 .ch-row:hover { background: rgba(255,255,255,.05); }
 .ch-row.active { background: rgba(94,78,190,.22); }
@@ -84,7 +84,7 @@
 .ch-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .ch-row-top { display: flex; align-items: baseline; gap: 6px; }
 .ch-row-title {
-  flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: #E5E7EB;
+  flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: #e7e5e4;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   display: flex; align-items: center; gap: 4px;
 }
@@ -94,10 +94,10 @@
 .ch-row-prev { flex: 1; min-width: 0; font-size: 12px; color: var(--sidebar-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Unread: brighten the row + a count pill (Slack style). */
 .ch-row.unread .ch-row-title { color: #fff; font-weight: 700; }
-.ch-row.unread .ch-row-prev { color: #C7CCDA; }
+.ch-row.unread .ch-row-prev { color: #e7e5e4; }
 .ch-unread {
   flex-shrink: 0; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
-  background: var(--brand, #42309C); color: #fff; font-size: 11px; font-weight: 700;
+  background: var(--brand, #1a5cf5); color: #fff; font-size: 11px; font-weight: 700;
   line-height: 18px; text-align: center;
 }
 
@@ -107,7 +107,7 @@
   position: absolute; top: -6px; right: -8px; min-width: 18px; height: 18px; padding: 0 5px;
   box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 9px; background: #EF4444; color: #fff; font-size: 10.5px; font-weight: 700;
+  border-radius: 9px; background: #b4460f; color: #fff; font-size: 10.5px; font-weight: 700;
   line-height: 1; border: 2px solid var(--dock-bg, #1B1530);
   box-shadow: 0 0 0 .5px rgba(0,0,0,.3);
 }
@@ -118,10 +118,10 @@
 .ch-av-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
 .ch-av {
   border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
-  background: #42309C; color: #fff;
+  background: #1a5cf5; color: #fff;
   font-size: 12px; font-weight: 600;
 }
-.ch-av.bot { background: #0E9488; }
+.ch-av.bot { background: #15803d; }
 .ch-badge {
   position: absolute; right: -3px; bottom: -3px; min-width: 15px; height: 15px; padding: 0 3px;
   border-radius: 5px; color: #fff; font-size: 8px; font-weight: 700; line-height: 15px;
@@ -139,14 +139,14 @@
 
 .ch-agent-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px;
-  background: var(--brand-soft, #ECE9F7); color: var(--brand-ink, #332578); font-size: 12px; font-weight: 600;
+  background: var(--brand-soft, #f7f8fe); color: var(--brand-ink, #1447c4); font-size: 12px; font-weight: 600;
 }
 /* the agent "AI Agent" pill is the shared .ai-tag; .ch-agent-chip .ai-tag in page.css
    makes it solid so it reads on the soft chip. */
 
 .ch-extbar {
   display: flex; align-items: center; gap: 8px; flex-shrink: 0;
-  padding: 8px 24px; background: #FFFBEB; color: #92400E; font-size: 12.5px;
+  padding: 8px 24px; background: #fdf9f4; color: #8a6a3c; font-size: 12.5px;
   border-bottom: 1px solid #FDE68A;
 }
 .ch-extbar-badge {
@@ -167,7 +167,7 @@
   display: flex; align-items: center; justify-content: center; margin: 14px 0 6px; position: relative;
   font-size: 12px; font-weight: 700; color: var(--ink-2);
 }
-.ch-day::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--line-soft, #EFF1F4); }
+.ch-day::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--line-soft, #f4f2f0); }
 .ch-day span { position: relative; background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 3px 13px; box-shadow: 0 1px 2px rgba(17,24,39,.04); }
 .ch-new-divider {
   display: flex; align-items: center; margin: 8px 0; padding: 0 20px;
@@ -179,7 +179,7 @@
 /* System/event line (joined / left a channel): centered, muted, actor highlighted. */
 .ch-event { display: flex; justify-content: center; padding: 9px 16px; }
 .ch-event-line { font-size: 13px; color: var(--mute, #8b919b); text-align: center; line-height: 1.5; }
-.ch-event-actor { color: var(--brand, #42309C); font-weight: 600; }
+.ch-event-actor { color: var(--brand, #1a5cf5); font-weight: 600; }
 
 /* ── Message row (Slack-style left-aligned) ──────────────────────────────── */
 .ch-m {
@@ -193,9 +193,9 @@
 .ch-m-av {
   width: 36px; height: 36px; border-radius: 8px; overflow: hidden; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
-  background: #42309C; color: #fff; font-size: 12px; font-weight: 600;
+  background: #1a5cf5; color: #fff; font-size: 12px; font-weight: 600;
 }
-.ch-m-av.bot { background: #0E9488; }
+.ch-m-av.bot { background: #15803d; }
 .ch-m-time-hover {
   font-size: 10px; color: var(--mute-2); opacity: 0; line-height: 21px; user-select: none;
 }
@@ -206,7 +206,7 @@
 .ch-m-time { font-size: 11px; color: var(--mute-2); }
 .ch-cust-tag {
   font-size: 8.5px; font-weight: 700; letter-spacing: .03em; padding: 1px 5px; border-radius: 4px;
-  background: #FEF3C7; color: #92400E;
+  background: #fdf9f4; color: #8a6a3c;
 }
 /* Body + "(edited)" share a baseline flow: short messages get the marker inline
    to the right (Slack); long wrapped text degrades to the next line. */
@@ -223,7 +223,7 @@
 .ch-rich p { margin: 0 0 4px; }
 .ch-rich ul, .ch-rich ol { margin: 2px 0 4px; padding-left: 22px; }
 .ch-rich li { margin: 1px 0; }
-.ch-rich a.ch-link { color: var(--brand, #42309C); text-decoration: none; }
+.ch-rich a.ch-link { color: var(--brand, #1a5cf5); text-decoration: none; }
 .ch-rich a.ch-link:hover { text-decoration: underline; }
 .ch-rich code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
@@ -240,9 +240,9 @@
 .ch-rich img { max-width: 100%; border-radius: 8px; }
 .ch-rich hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
 .ch-mention {
-  background: #E3DFF3; color: #332578; font-weight: 600; border-radius: 4px; padding: 0 3px; white-space: nowrap;
+  background: #E3DFF3; color: #1447c4; font-weight: 600; border-radius: 4px; padding: 0 3px; white-space: nowrap;
 }
-.ch-mention.me { background: #FDECC8; color: #92400E; }
+.ch-mention.me { background: #FDECC8; color: #8a6a3c; }
 
 /* ── Attachments ─────────────────────────────────────────────────────────── */
 .ch-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
@@ -268,16 +268,16 @@
    row of attachments reads at a glance instead of one wall of brand purple. */
 .ch-file-ico {
   width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0; display: inline-flex;
-  align-items: center; justify-content: center; background: #EEF1F5; color: #5A6472;
+  align-items: center; justify-content: center; background: #f4f2f0; color: #6b6560;
 }
-.ch-file-ico.tone-red    { background: #FDEBEC; color: #D8373F; }
+.ch-file-ico.tone-red    { background: #fdf9f4; color: #D8373F; }
 .ch-file-ico.tone-green  { background: #E5F3EC; color: #1F845A; }
-.ch-file-ico.tone-amber  { background: #FBF0D7; color: #A66B00; }
-.ch-file-ico.tone-violet { background: #F1ECFF; color: #5F4DC7; }
+.ch-file-ico.tone-amber  { background: #fdf9f4; color: #A66B00; }
+.ch-file-ico.tone-violet { background: #f7f8fe; color: #5F4DC7; }
 .ch-file-ico.tone-pink   { background: #FBEAF3; color: #C4357F; }
-.ch-file-ico.tone-indigo { background: #E9EEFC; color: #3E63DD; }
+.ch-file-ico.tone-indigo { background: #f7f8fe; color: #3E63DD; }
 .ch-file-ico.tone-blue   { background: #E7F0FA; color: #2674BA; }
-.ch-file-ico.tone-slate  { background: #EEF1F5; color: #5A6472; }
+.ch-file-ico.tone-slate  { background: #f4f2f0; color: #6b6560; }
 .ch-file-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .ch-file-name { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ch-file-sub { font-size: 11px; color: var(--mute); }
@@ -298,21 +298,21 @@
 .ch-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: center; }
 .ch-react-pill {
   display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; cursor: pointer;
-  border: 1px solid transparent; border-radius: 11px; background: #F2F2F6; font-family: inherit;
+  border: 1px solid transparent; border-radius: 11px; background: #f5f5f4; font-family: inherit;
   transition: background .1s ease, border-color .1s ease;
 }
 .ch-react-pill:hover { background: #fff; border-color: #C9C9D6; }
-.ch-react-pill.mine { background: var(--brand-soft, #ECE9F7); border-color: #B0A6DE; }
-.ch-react-pill.mine:hover { border-color: var(--brand, #42309C); }
+.ch-react-pill.mine { background: var(--brand-soft, #f7f8fe); border-color: #B0A6DE; }
+.ch-react-pill.mine:hover { border-color: var(--brand, #1a5cf5); }
 .ch-react-emoji { font-size: 13px; line-height: 1; }
 .ch-react-count { font-size: 11.5px; font-weight: 700; color: #55555E; }
-.ch-react-pill.mine .ch-react-count { color: var(--brand-ink, #332578); }
+.ch-react-pill.mine .ch-react-count { color: var(--brand-ink, #1447c4); }
 /* The bare add-reaction button only shows while hovering the message — at rest
    the row is just content (Slack). */
 .ch-react-add-wrap { position: relative; }
 .ch-react-add {
   width: 26px; height: 22px; border: 1px solid transparent; border-radius: 11px; cursor: pointer;
-  background: #F2F2F6; color: var(--mute); display: inline-flex; align-items: center; justify-content: center;
+  background: #f5f5f4; color: var(--mute); display: inline-flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity .1s ease;
 }
 .ch-m:hover .ch-react-add { opacity: 1; }
@@ -329,7 +329,7 @@
   width: 30px; height: 28px; border: 0; background: none; border-radius: 6px; cursor: pointer;
   color: #5C5C66; display: inline-flex; align-items: center; justify-content: center; font-size: 15px;
 }
-.ch-tool-btn:hover { background: #F2F2F6; color: var(--ink); }
+.ch-tool-btn:hover { background: #f5f5f4; color: var(--ink); }
 .ch-tool-emoji { font-size: 15px; }
 .ch-tool-anchor { position: relative; display: inline-flex; }
 .ch-tool-menu {
@@ -343,9 +343,9 @@
 }
 .ch-tool-menu button:hover { background: var(--line-soft); color: var(--ink); }
 .ch-tool-menu button svg { color: var(--mute); }
-.ch-tool-menu button.danger { color: #DC2626; }
-.ch-tool-menu button.danger svg { color: #DC2626; }
-.ch-tool-menu button.danger:hover { background: #FEF2F2; }
+.ch-tool-menu button.danger { color: #b4460f; }
+.ch-tool-menu button.danger svg { color: #b4460f; }
+.ch-tool-menu button.danger:hover { background: #fdf9f4; }
 
 /* ── Thread chip + read receipts ─────────────────────────────────────────── */
 /* Slack's reply bar: brand count + gray time at rest; hovering reveals a card
@@ -354,7 +354,7 @@
   display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; padding: 4px 9px 4px 7px;
   min-width: 240px; max-width: 480px;
   border: 1px solid transparent; border-radius: 8px; background: none; cursor: pointer; font-family: inherit;
-  font-size: 12.5px; font-weight: 600; color: var(--brand, #42309C); text-align: left;
+  font-size: 12.5px; font-weight: 600; color: var(--brand, #1a5cf5); text-align: left;
 }
 .ch-thread-chip:hover { background: #fff; border-color: var(--line); box-shadow: 0 1px 3px rgba(17,24,39,.07); }
 .ch-thread-chip-time { color: var(--mute); font-weight: 500; }
@@ -368,10 +368,10 @@
 .ch-read-av {
   width: 15px; height: 15px; border-radius: 4px; overflow: hidden; margin-left: -3px;
   border: 1.5px solid #fff; display: inline-flex; align-items: center; justify-content: center;
-  background: #42309C; color: #fff; font-size: 7px; font-weight: 700;
+  background: #1a5cf5; color: #fff; font-size: 7px; font-weight: 700;
 }
 .ch-read-av:first-child { margin-left: 0; }
-.ch-read-av.bot { background: #0E9488; }
+.ch-read-av.bot { background: #15803d; }
 .ch-read-more { font-size: 10px; color: var(--mute); margin-left: 4px; }
 
 /* ── Typing indicator ────────────────────────────────────────────────────── */
@@ -393,13 +393,13 @@
    read as template, not product. */
 .ch-composer-rich:focus-within { border-color: #A3A6B3; box-shadow: none; }
 .ch-composer-rich.inline { border-radius: 10px; margin: 2px 0; }
-.ch-fmt-bar { display: flex; align-items: center; gap: 1px; padding: 4px 6px; border-bottom: 1px solid var(--line-soft, #EFF1F4); }
+.ch-fmt-bar { display: flex; align-items: center; gap: 1px; padding: 4px 6px; border-bottom: 1px solid var(--line-soft, #f4f2f0); }
 .ch-fmt-btn {
   width: 28px; height: 26px; border: 0; background: none; border-radius: 6px; cursor: pointer; color: #71717C;
   display: inline-flex; align-items: center; justify-content: center;
 }
-.ch-fmt-btn:hover { background: #F2F2F6; color: var(--ink); }
-.ch-fmt-btn.active { background: var(--brand-soft, #ECE9F7); color: var(--brand, #42309C); }
+.ch-fmt-btn:hover { background: #f5f5f4; color: var(--ink); }
+.ch-fmt-btn.active { background: var(--brand-soft, #f7f8fe); color: var(--brand, #1a5cf5); }
 .ch-editor-wrap { max-height: 220px; overflow: auto; }
 .ch-editor .ProseMirror {
   padding: 10px 13px; min-height: 22px; outline: none; font-size: 14.5px; line-height: 1.46; color: var(--ink);
@@ -413,7 +413,7 @@
 .ch-editor .ProseMirror pre { background: #1E1B2E; color: #E6E1FF; border-radius: 8px; padding: 9px 11px; }
 .ch-editor .ProseMirror ul, .ch-editor .ProseMirror ol { padding-left: 20px; margin: 2px 0; }
 .ch-editor .ProseMirror blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--ink-2); }
-.ch-editor .ProseMirror .ch-mention { background: #E3DFF3; color: #332578; font-weight: 600; border-radius: 4px; padding: 0 3px; }
+.ch-editor .ProseMirror .ch-mention { background: #E3DFF3; color: #1447c4; font-weight: 600; border-radius: 4px; padding: 0 3px; }
 
 .ch-attach-tray { display: flex; flex-wrap: wrap; gap: 7px; padding: 4px 11px 7px; }
 .ch-attach-chip {
@@ -423,7 +423,7 @@
 .ch-attach-chip.up { opacity: .7; }
 .ch-attach-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ch-attach-x { border: 0; background: none; cursor: pointer; color: var(--mute); display: inline-flex; padding: 0; }
-.ch-attach-x:hover { color: #DC2626; }
+.ch-attach-x:hover { color: #b4460f; }
 .ch-attach-spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: ch-spin .7s linear infinite; }
 @keyframes ch-spin { to { transform: rotate(360deg); } }
 
@@ -434,19 +434,19 @@
   width: 30px; height: 28px; border: 0; background: none; border-radius: 7px; cursor: pointer; color: #71717C;
   display: inline-flex; align-items: center; justify-content: center;
 }
-.ch-ca-btn:hover { background: #F2F2F6; color: var(--ink); }
-.ch-ca-btn.on { background: var(--brand-soft, #ECE9F7); color: var(--brand); }
+.ch-ca-btn:hover { background: #f5f5f4; color: var(--ink); }
+.ch-ca-btn.on { background: var(--brand-soft, #f7f8fe); color: var(--brand); }
 .ch-emoji-anchor { position: relative; display: inline-flex; }
 .ch-btn-ghost { border: 0; background: none; cursor: pointer; font-family: inherit; font-size: 13px; color: var(--mute); padding: 6px 10px; border-radius: 8px; }
-.ch-btn-ghost:hover { background: #F2F2F6; color: var(--ink); }
+.ch-btn-ghost:hover { background: #f5f5f4; color: var(--ink); }
 /* Send: gray ghost while empty, brand fill once there is content (Slack). */
 .ch-send {
   height: 28px; min-width: 32px; padding: 0 8px; border-radius: 7px; border: 0; cursor: pointer; flex-shrink: 0;
-  background: var(--brand, #42309C); color: #fff; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--brand, #1a5cf5); color: #fff; display: inline-flex; align-items: center; justify-content: center;
   transition: background .12s ease, color .12s ease;
 }
 .ch-send:disabled { background: transparent; color: #B6B6C0; cursor: default; }
-.ch-send:not(:disabled):hover { background: var(--brand-ink, #332578); }
+.ch-send:not(:disabled):hover { background: var(--brand-ink, #1447c4); }
 
 /* ── Emoji popover + mention list ────────────────────────────────────────── */
 .ch-emoji-pop { position: absolute; bottom: calc(100% + 8px); z-index: 80; }
@@ -464,12 +464,12 @@ em-emoji-picker { --rgb-background: 255,255,255; --border-radius: 12px; box-shad
   display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 9px; border: 0; background: none;
   border-radius: 7px; cursor: pointer; font-family: inherit; text-align: left;
 }
-.ch-mention-item.active { background: #ECE9F7; }
+.ch-mention-item.active { background: #f7f8fe; }
 .ch-mention-av {
   width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0; display: inline-flex; align-items: center;
-  justify-content: center; background: #42309C; color: #fff; font-size: 9.5px; font-weight: 700;
+  justify-content: center; background: #1a5cf5; color: #fff; font-size: 9.5px; font-weight: 700;
 }
-.ch-mention-av.bot { background: #0E9488; }
+.ch-mention-av.bot { background: #15803d; }
 .ch-mention-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--ink); }
 
 /* ── Thread side-pane ────────────────────────────────────────────────────── */
@@ -482,4 +482,4 @@ em-emoji-picker { --rgb-background: 255,255,255; --border-radius: 12px; box-shad
 .ch-thread-count { font-size: 11.5px; font-weight: 600; color: var(--mute); padding: 8px 20px 4px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .ch-thread-composer { flex-shrink: 0; padding: 8px 16px 12px; border-top: 1px solid var(--line); }
 .ch-also-send { display: flex; align-items: center; gap: 7px; margin-top: 7px; font-size: 12px; color: var(--mute); cursor: pointer; }
-.ch-also-send input { accent-color: var(--brand, #42309C); }
+.ch-also-send input { accent-color: var(--brand, #1a5cf5); }

@@ -6,6 +6,8 @@
 // Extracted from workbench/page.tsx (page files must not carry extra named exports).
 import { useRef, useState } from 'react';
 import { testMcp, storeMcpSecret, type McpServer } from '@/lib/harness';
+// Re-exported: pages ported from the hosted console import the type from here.
+export type { McpServer };
 import { Svg, Chevron, IcSkill } from 'reifyui';
 
 const IcTrash = () => <Svg s={15}><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6" /></Svg>;
@@ -389,7 +391,7 @@ export function McpModal({ server, declaredHeaders = [], onClose, onSave }: {
         <h1>{server ? 'Edit MCP server' : 'Add MCP server'}</h1>
         <p className="sub">Connect a remote MCP server (a set of tools) by endpoint and an optional bearer token. Tokens are encrypted at rest and never shown again.</p>
         <div className="hr-field"><label>Name</label>
-          <input value={name} autoFocus onChange={(e) => setName(e.target.value)} placeholder="stanford-sis" /></div>
+          <input value={name} autoFocus onChange={(e) => setName(e.target.value)} placeholder="docs-search" /></div>
         <div className="hr-field"><label>Endpoint URL</label>
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/mcp" /></div>
         <div className="hr-field">

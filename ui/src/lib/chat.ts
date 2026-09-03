@@ -89,6 +89,8 @@ export async function downloadFile(url: string, filename: string): Promise<void>
 
 export interface SessionTurn {
   id: string; status: string; user: string; assistant: string;
+  /** What this turn alone took and cost; absent on turns from before the gateway kept them. */
+  elapsed?: number | null; credits?: number | null;
   user_files?: { name: string }[];   // caller-attached input files (names; bytes live in the workspace)
   tools: { name: string; arguments: string; result?: string }[]; files: RespFile[];
 }

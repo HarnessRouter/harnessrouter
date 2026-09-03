@@ -110,7 +110,7 @@
 .ai-tag {
   font-size: 9px; font-weight: 700; letter-spacing: .05em; line-height: 1.6;
   padding: 1.5px 5px; border-radius: 5px; white-space: nowrap; margin-left: 2px;
-  background: var(--brand-soft, #ECE9F7); color: var(--brand, #42309C);
+  background: var(--brand-soft, #f7f8fe); color: var(--brand, #1a5cf5);
 }
 .app-side .ai-tag { background: rgba(40,90,255, .3); color: #9FC0FF; }
-.ch-agent-chip .ai-tag { background: var(--brand, #42309C); color: #fff; }
+.ch-agent-chip .ai-tag { background: var(--brand, #1a5cf5); color: #fff; }
