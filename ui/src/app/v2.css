@@ -546,6 +546,9 @@ body {
    the bar never engaged and only appeared after scrolling to the end. Let the page flow and the
    bar pins to the settings pane's bottom edge from the first paint. */
 #view-harnesses #view-harness .page { overflow: visible; }
+/* The pane's own bottom padding otherwise shows a band of scrolled content under the pinned
+   bar; with the bar carrying the spacing, it sits flush on the pane's true bottom edge. */
+#view-harnesses .hx-body:has(#view-harness) { padding-bottom: 0; }
 /* The embedded settings drop the page frame: no back link, no detail header, the host has both. */
 #view-harness.is-embedded .page { padding: 0; max-width: none; }
 
