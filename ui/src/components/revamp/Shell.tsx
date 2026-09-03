@@ -363,7 +363,6 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
           </span>
         </div>
 
-        {SELF_HOSTED ? null : (
         <div className="switcher-wrap" ref={wsRef}>
           <button className="v2-wscard" type="button" aria-expanded={wsMenu} onClick={() => setWsMenu((v) => !v)}
             title={railed ? current.name : undefined}>
@@ -406,7 +405,6 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
             </div>
           )}
         </div>
-        )}
 
         <nav className="v2-nav">
           {NAV_GROUPS.map((g, gi) => (
