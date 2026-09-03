@@ -132,7 +132,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           <div className="detail-metric"><span>Credits / Task</span><strong>{creditsPerTask ?? '—'}</strong><small>Avg over priced runs</small></div>
         </div>
 
-        <form className="settings-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+        <form id="hs-form" className="settings-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
           <div className="settings-form-head">
             <div><h2>Harness Settings</h2><p>Configure the instructions, capabilities, and execution limits inherited by every Task on this Harness.</p></div>
             <div className="header-actions"><span className="save-state">{readOnly ? 'Built-in · read-only' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></div>
@@ -322,6 +322,11 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           </section>
 
           {err && <div className="notice"><iconify-icon icon="tabler:alert-triangle"></iconify-icon><div><strong>Save failed</strong>{err}</div></div>}
+        </form>
+
+        {/* The action bar lives OUTSIDE the form on purpose: the form is capped at 980px, and
+            the bar must span the settings pane edge to edge, pinned to its bottom. The submit
+            button still drives the form via the form attribute. */}
           {!readOnly && (
             <div className="settings-form-footer settings-footer-sticky">
               <button className="button danger" type="button" onClick={() => setConfirmDelete(true)}>Delete Harness</button>
@@ -330,7 +335,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                 <button className="button" type="button" disabled={busy} onClick={() => setDraft(saved)}>Discard Changes</button>
               )}
               {dirty ? (
-                <button className="button primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
+                <button className="button primary" type="submit" form="hs-form" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
               ) : (
                 <button className="button primary" type="button"
                   onClick={() => go('tasks')}>
@@ -355,7 +360,6 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                 <iconify-icon icon="tabler:list-details"></iconify-icon>Run Task</button>
             </div>
           )}
-        </form>
       </div>
 
       {editSkillIdx !== null && draft?.skills?.[editSkillIdx] && (

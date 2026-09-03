@@ -535,20 +535,23 @@ body {
 .hx-body.is-chat .run-layout.is-embedded { height: 100%; max-height: none; min-height: 0; border: 0; border-radius: 0; grid-template-columns: minmax(0, 1fr); }
 .hx-body.is-chat .run-layout.is-embedded .task-detail-shell { padding: 0 28px; }
 .hx-body.is-chat .run-layout.is-embedded .task-detail-shell .tabs { margin: 14px 0 0; }
-/* Embedded in the unified page, the settings action bar belongs to the settings pane: sticky at
-   the bottom of the scrolling .hx-body, never fixed across the viewport — the old standalone
-   rule (#view-harness … position: fixed; left: var(--sidebar-w)) overlaid the task panel and
-   clipped Delete Harness under the nav. The task panel keeps the full height beside it. */
-#view-harnesses #view-harness .settings-footer-sticky { position: sticky; left: auto; right: auto;
-  bottom: 0; margin: 0; padding: 12px 0; background: var(--v2-bg); border-top: 1px solid var(--v2-line); z-index: 5; }
+/* Embedded in the unified page, the settings action bar belongs to the settings pane: white,
+   pinned to the pane's bottom edge from first paint, spanning it edge to edge — never fixed
+   across the viewport (the old standalone rule overlaid the task panel and clipped Delete under
+   the nav). Three parts make that true: the pane's padding moves onto .page so the bar can
+   escape it with matching negative margins; .page stops being an overflow context so the sticky
+   scrollport is .hx-body, the thing that actually scrolls; and the bar itself sits OUTSIDE the
+   980px form in the markup, so its box is the pane, not the form. */
+#view-harnesses .hx-body:has(#view-harness) { padding: 0; }
+#view-harnesses #view-harness .page { overflow: visible; padding: 22px 28px 0; max-width: none; }
 #view-harnesses #view-harness .settings-form { padding-bottom: 0; }
-/* .page's own overflow:auto made IT the sticky scrollport — but .hx-body is what scrolls, so
-   the bar never engaged and only appeared after scrolling to the end. Let the page flow and the
-   bar pins to the settings pane's bottom edge from the first paint. */
-#view-harnesses #view-harness .page { overflow: visible; }
-/* The pane's own bottom padding otherwise shows a band of scrolled content under the pinned
-   bar; with the bar carrying the spacing, it sits flush on the pane's true bottom edge. */
-#view-harnesses .hx-body:has(#view-harness) { padding-bottom: 0; }
+#view-harnesses #view-harness .settings-footer-sticky { position: sticky; left: auto; right: auto;
+  bottom: 0; margin: 18px -28px 0; padding: 12px 28px; background: #fff;
+  border-top: 1px solid var(--v2-line); z-index: 5; }
+@media (max-width: 1024px) {
+  #view-harnesses #view-harness .page { padding: 14px 16px 0; }
+  #view-harnesses #view-harness .settings-footer-sticky { margin: 14px -16px 0; padding: 12px 16px; }
+}
 /* The embedded settings drop the page frame: no back link, no detail header, the host has both. */
 #view-harness.is-embedded .page { padding: 0; max-width: none; }
 
