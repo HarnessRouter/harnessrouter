@@ -567,7 +567,7 @@ body {
 /* The index table. */
 .hx-index-note { font-family: var(--v2-mono); font-size: 11px; color: var(--v2-cap); margin: 0 0 12px 2px; }
 .hx-card { border: 1px solid var(--v2-line); border-radius: 10px; background: #fff; overflow: hidden; }
-.hx-thead, .hx-row { display: grid; grid-template-columns: minmax(200px, 1.6fr) 118px 92px 150px 56px 68px 62px 70px 84px 14px; align-items: center; gap: 14px; padding: 12px 20px; }
+.hx-thead, .hx-row { display: grid; grid-template-columns: minmax(200px, 1.6fr) 168px 92px 150px 56px 68px 62px 70px 84px 14px; align-items: center; gap: 14px; padding: 12px 20px; }
 .hx-thead { padding: 11px 20px; background: var(--v2-bg); border-bottom: 1px solid var(--v2-line); font-family: var(--v2-mono); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--v2-cap); }
 .hx-row { width: 100%; border: 0; border-bottom: 1px solid #f4f2f0; background: #fff; cursor: pointer; font: inherit; text-align: left; color: inherit; }
 .hx-row:last-child { border-bottom: 0; }
@@ -576,7 +576,7 @@ body {
 .hx-row-name b { display: block; font-size: 13.5px; font-weight: 600; color: var(--v2-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hx-row-name small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--v2-cap); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hx-row-id { min-width: 0; display: flex; font-family: var(--v2-mono); font-size: 11.5px; color: var(--v2-sec); }
-.hx-row-id .mono-id { max-width: 100%; }
+.hx-row-id .mono-id { max-width: 100%; min-width: 0; }   /* the chip shrinks to its column and truncates; never past it */
 .hx-health { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--v2-green); }
 .hx-health i { width: 6px; height: 6px; border-radius: 50%; background: var(--v2-green); flex: none; }
 .hx-health.is-idle { color: var(--v2-cap); } .hx-health.is-idle i { background: #c4beba; }
@@ -611,7 +611,7 @@ body {
 /* The table sheds columns by the width it actually has (the main area, which depends on the nav
    and the panel), never by the viewport: container queries on the index wrap. */
 .hx-index-wrap { container-type: inline-size; }
-@container (max-width: 1040px) {
+@container (max-width: 1140px) {   /* the full grid needs 1130px; shed the id column before it can overflow */
   .hx-thead, .hx-row { grid-template-columns: minmax(170px, 1.6fr) 92px 130px 56px 68px 62px 70px 78px 14px; gap: 12px; }
   .hx-th-id { display: none; }
 }
