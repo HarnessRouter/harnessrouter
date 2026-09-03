@@ -76,7 +76,7 @@ export function ApiReference({ harnessId, additionalHeaders, model: modelIn }: {
       </div>
 
       <h3 className="apidoc-h3">Authentication</h3>
-      <p className="hr-meta">Every request carries a per-org API key (mint one under API Keys) as a Bearer
+      <p className="hr-meta">Every request carries a per-org API key (mint one under API keys) as a Bearer
         token. Keys are scoped to your organization; the harness is chosen by the path, the LLM by the
         model field. Task runs use the per-agent form <code>/{'{harness_id}'}/v1/…</code>; management
         routes (harness CRUD, secrets, sessions) are plain <code>/v1/…</code>. Wire all of this behind a
