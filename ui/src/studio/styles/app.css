@@ -52,14 +52,14 @@ body {
 .wf-crumb-input {
   font-size: 14px; font-weight: 600; letter-spacing: -.005em;
   color: var(--ink); background: #fff;
-  border: 1px solid var(--brand, #42309C); border-radius: 4px;
+  border: 1px solid var(--brand, #1a5cf5); border-radius: 4px;
   padding: 2px 6px; outline: none;
   min-width: 240px;
 }
 .wf-crumb-err {
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px; border-radius: 50%;
-  background: #FEE2E2; color: #B91C1C; font-weight: 700; font-size: 11px;
+  background: #fdf9f4; color: #b4460f; font-weight: 700; font-size: 11px;
 }
 
 /* ── Body / shell ─────────────────────────────────────────────────────── */

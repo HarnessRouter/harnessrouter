@@ -30,7 +30,7 @@ own data. Configure a harness, give it work, watch it run, with no account, no c
 > [!TIP]
 > New here? Start with [What it is](#what-it-is), or read the protocol at [unifiedharnessprotocol.org](https://unifiedharnessprotocol.org).
 
-![The console after signing in: five built-in harnesses, ready to run](docs/images/02-first-screen-v2.png)
+![The console after signing in: eight built-in harnesses, ready to run](docs/images/02-first-screen-v2.png)
 
 ---
 
@@ -311,9 +311,10 @@ Forthcoming about it, which is what you get if you skip this step entirely:
 
 ### 6. Give it something to do
 
-**Tasks → New Task.** Pick a harness in the switcher on the left, choose a model next to the
-message box, and type. The turn streams back as it happens: every command the agent runs, every
-file it touches, and the answer at the end.
+**Agent harnesses → pick a harness → New task.** Every harness lists its own tasks; a fresh
+draft opens with the caret in the box. Choose a model on the chip under the message, and type.
+The turn streams back as it happens: every command the agent runs, every file it touches, and
+the answer at the end.
 
 ![A task: the request, the commands, the files it wrote, and the test result](docs/images/task-run.png)
 
@@ -324,7 +325,7 @@ the instance is gone; copy it and you have moved the instance, harnesses, transc
 <summary>What is happening in that screenshot</summary>
 
 That one asked for a small utility with tests. The agent wrote it, built a fixture tree with
-duplicates planted in it, ran the suite, and came back with `2 tests ran, OK`, which is an answer
+duplicates planted in it, ran the suite, and came back with `OK (3 tests passed)`, which is an answer
 you can check rather than one you have to trust. Everything it produced is on the transcript to
 take away, a file at a time or the lot as a zip.
 

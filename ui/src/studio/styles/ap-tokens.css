@@ -5,20 +5,20 @@
 */
 
 :root {
-  --state-queued:    #94A3B8;
-  --state-running:   #42309C;
-  --state-success:   #10B981;
-  --state-failed:    #EF4444;
+  --state-queued:    #a8a29e;
+  --state-running:   #1a5cf5;
+  --state-success:   #15803d;
+  --state-failed:    #b4460f;
   --state-skipped:   #CBD0DA;
-  --state-suspended: #F59E0B;
+  --state-suspended: #8a6a3c;
 }
 
-.pill.state-queued    { background: #EEF1F5; color: #475569; }
-.pill.state-running   { background: #ECE9F7; color: #332578; }
-.pill.state-success   { background: #DFF6EC; color: #047857; }
-.pill.state-failed    { background: #FEE4E4; color: #B91C1C; }
-.pill.state-skipped   { background: #EEF1F5; color: #6B7280; }
-.pill.state-suspended { background: #FEF1D6; color: #92400E; }
+.pill.state-queued    { background: #f4f2f0; color: #57534e; }
+.pill.state-running   { background: #f7f8fe; color: #1447c4; }
+.pill.state-success   { background: #DFF6EC; color: #15803d; }
+.pill.state-failed    { background: #FEE4E4; color: #b4460f; }
+.pill.state-skipped   { background: #f4f2f0; color: #6b6560; }
+.pill.state-suspended { background: #FEF1D6; color: #8a6a3c; }
 
 /* AdminPortal is English-first; bump density a hair from the Chinese console */
 .ap-app, .ap-app body { font-size: 13px; }

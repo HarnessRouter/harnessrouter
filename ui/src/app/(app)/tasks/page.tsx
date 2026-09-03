@@ -1,11 +1,14 @@
-'use client';
-// Tasks, the Workspace's execution/observation surface, rendered per the HIG prototype's
-// run-layout master-detail: page header (title + harness select + New Task), bordered
-// list/detail card, task rows with status chips + updated times, detail head with run-meta,
-// Conversation | Trace tabs. One unified list (no Live/Test split, product decision
-// 2026-07-18); end-user↔session permission modeling belongs to the host application.
-import Workbench from '../workbench/page';
+// Tasks are part of the Agent harnesses page now (v2): each harness lists its tasks, and a
+// task opens in place. Old links, with their harness and session, land there.
+import { redirect } from 'next/navigation';
 
-export default function TasksPage() {
-  return <Workbench />;
+export default async function TasksRedirect({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const sp = await searchParams;
+  const q = new URLSearchParams();
+  const h = typeof sp.h === 'string' ? sp.h : '';
+  const sid = typeof sp.sid === 'string' ? sp.sid : '';
+  if (h) q.set('h', h);
+  if (sid) q.set('sid', sid);
+  const qs = q.toString();
+  redirect(qs ? `/harnesses?${qs}` : '/harnesses');
 }

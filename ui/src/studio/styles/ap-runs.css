@@ -19,7 +19,7 @@
 .runs-tbl-row:hover { background: var(--surface-2); }
 .runs-tbl-row.row-warm { background: #FEF7EB; }
 .runs-tbl-row.row-warm:hover { background: #FCEAC8; }
-.runs-tbl-row.row-hot { background: #FEF2F2; }
+.runs-tbl-row.row-hot { background: #fdf9f4; }
 .runs-tbl-row.row-hot:hover { background: #FBE4E4; }
 .runs-tbl-row.row-dim { opacity: 0.6; }
 

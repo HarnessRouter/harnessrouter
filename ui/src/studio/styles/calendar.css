@@ -50,12 +50,12 @@
 /* Drag-to-select range preview */
 .cal-selbox { position: absolute; left: 2px; right: 2px; background: color-mix(in srgb, var(--brand) 18%, #fff); border: 1px solid var(--brand); border-radius: 5px; z-index: 6; pointer-events: none; }
 .cal-selbox-t { position: absolute; top: 2px; left: 6px; font-size: 10px; font-weight: 600; color: var(--brand-ink); }
-.cal-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid #EF4444; z-index: 5; pointer-events: none; }
-.cal-now::before { content: ''; position: absolute; left: -4px; top: -4px; width: 7px; height: 7px; border-radius: 999px; background: #EF4444; }
+.cal-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid #b4460f; z-index: 5; pointer-events: none; }
+.cal-now::before { content: ''; position: absolute; left: -4px; top: -4px; width: 7px; height: 7px; border-radius: 999px; background: #b4460f; }
 
 /* ── Event chip ──────────────────────────────────────────────────────────── */
 .cal-evt { --evt: var(--brand); display: flex; align-items: center; gap: 5px; width: 100%; text-align: left; overflow: hidden; border: 0; cursor: pointer;
-  background: color-mix(in srgb, var(--evt) 14%, #fff); color: color-mix(in srgb, var(--evt) 72%, #111); border-left: 3px solid var(--evt);
+  background: color-mix(in srgb, var(--evt) 14%, #fff); color: color-mix(in srgb, var(--evt) 72%, #1c1917); border-left: 3px solid var(--evt);
   border-radius: 5px; padding: 2px 6px; font-size: 12px; line-height: 1.25; box-sizing: border-box; }
 .cal-evt:hover { background: color-mix(in srgb, var(--evt) 22%, #fff); }
 .cal-evt.is-compact { padding: 1px 6px; font-size: 11px; }
@@ -63,7 +63,7 @@
 .cal-evt-time { font-size: 10px; opacity: .8; flex-shrink: 0; }
 /* Workflow tasks: dashed border, tinted by their RUN STATUS color (--evt set per
    event by the backend: green=succeeded, red=failed, amber=running, slate=scheduled). */
-.cal-evt.is-wf { background: color-mix(in srgb, var(--evt) 13%, #fff); color: color-mix(in srgb, var(--evt) 72%, #111); border-left-style: dashed; }
+.cal-evt.is-wf { background: color-mix(in srgb, var(--evt) 13%, #fff); color: color-mix(in srgb, var(--evt) 72%, #1c1917); border-left-style: dashed; }
 .cal-evt-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--evt); flex-shrink: 0; }
 /* Draggable timed events: grab to move, ns-resize on the bottom grip. */
 .cal-body .cal-evt { cursor: grab; }
@@ -115,15 +115,15 @@
 .cal-run-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
 .cal-run-row:last-child { border-bottom: 0; }
 .cal-run-time { color: var(--ink-2); }
-.cal-run-st { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: color-mix(in srgb, var(--evt) 78%, #111); }
+.cal-run-st { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: color-mix(in srgb, var(--evt) 78%, #1c1917); }
 .cal-run-st::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--evt); }
 .cal-run-view { font-size: 12px; font-weight: 600; color: var(--brand); text-decoration: none; padding: 2px 8px; border-radius: 6px; }
 .cal-run-view:hover { background: var(--brand-50); }
 .cal-run-view.is-dim { color: var(--mute-2); pointer-events: none; }
 /* Run-count badge on a grouped workflow chip */
-.cal-evt-count { flex-shrink: 0; font-size: 10px; font-weight: 700; background: color-mix(in srgb, var(--evt) 26%, #fff); color: color-mix(in srgb, var(--evt) 80%, #111); border-radius: 999px; padding: 0 6px; min-width: 16px; text-align: center; }
+.cal-evt-count { flex-shrink: 0; font-size: 10px; font-weight: 700; background: color-mix(in srgb, var(--evt) 26%, #fff); color: color-mix(in srgb, var(--evt) 80%, #1c1917); border-radius: 999px; padding: 0 6px; min-width: 16px; text-align: center; }
 .cal-st { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 600; margin-top: 3px;
-  color: color-mix(in srgb, var(--evt) 78%, #111); background: color-mix(in srgb, var(--evt) 15%, #fff); }
+  color: color-mix(in srgb, var(--evt) 78%, #1c1917); background: color-mix(in srgb, var(--evt) 15%, #fff); }
 .cal-st::before { content: ''; width: 7px; height: 7px; border-radius: 999px; background: var(--evt); }
 .cal-pop-ro-note { font-size: 12px; color: var(--mute); padding-left: 25px; }
 .cal-pop-row { display: flex; align-items: flex-start; gap: 10px; color: var(--mute); }
@@ -149,8 +149,8 @@
 .cal-swatch.on { box-shadow: 0 0 0 2px var(--brand); }
 .cal-pop-foot { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-top: 1px solid var(--line-soft); }
 .cal-pop-foot-r { display: flex; gap: 8px; }
-.cal-del { color: #B91C1C; border-color: #FECACA; }
-.cal-del:hover { background: #FEF2F2; }
+.cal-del { color: #b4460f; border-color: #f0e2d4; }
+.cal-del:hover { background: #fdf9f4; }
 
 /* ── Sidebar (dock app left rail) — sits on the DARK app sidebar (--sidebar-2),
    so text/controls use light-on-dark colors, not the light-theme ink tokens. ── */

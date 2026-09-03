@@ -7552,6 +7552,7 @@ async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
                      "member": body.member_id or "", "name": body.name or "default",
                      "workspace": body.workspace or "",
                      "workspace_default": "1" if body.workspace_default else "",
+                     "tail": tok[-4:],
                      "revoked": "0", "created_at": str(time.time())}, raise_on_fail=True)
     # Then dual-write the control-store hot-read doc SYNCHRONOUSLY — the key is shown once and used
     # on the very next request. If this fails, the graph write already succeeded, so the first
@@ -7563,7 +7564,7 @@ async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
         except Exception:  # noqa: BLE001 — graph is authoritative; resolve backfills on miss
             pass
     return {"id": h, "org": org, "name": body.name or "default", "created_at": int(time.time()),
-            "workspace": body.workspace or "",
+            "workspace": body.workspace or "", "tail": tok[-4:],
             "key": tok, "note": "store this key now; it is shown only once"}
 
 
@@ -7576,7 +7577,7 @@ async def list_keys(org: str, request: Request) -> dict:
         rows = []
     keys = [{"id": x.get("id"), "name": x.get("name"), "created_at": x.get("created_at"),
              "revoked": str(x.get("revoked")) in ("1", "true", "True"), "member": x.get("member"),
-             "workspace": x.get("workspace") or "", "last_used": x.get("last_used") or ""}
+             "workspace": x.get("workspace") or "", "last_used": x.get("last_used") or "", "tail": x.get("tail") or ""}
             for x in rows]
     return {"keys": keys}
 
@@ -9091,7 +9092,22 @@ def _media_job_out(v: dict | None) -> dict | None:
 
 async def _media_job_save(job: dict) -> None:
     job["updated_at"] = int(time.time() * 1000)
+    _media_meter_once(job)
     await _vg_upsert(_MEDIA_JOB_LABEL, job["id"], _media_job_props(job))
+
+
+def _media_meter_once(job: dict) -> None:
+    """Bill a finished media job exactly once: what the winning render cost plus every failed
+    candidate that billed upstream (banked in billed_usd). Pass-through at the provider's price
+    as one `media.usd` meter, the same rule as tokens. Reported the moment the job goes terminal;
+    the flag is a job property, so a later save of the same job never reports it twice."""
+    if job.get("status") not in ("succeeded", "failed") or str(job.get("metered") or "") == "1":
+        return
+    won = float(job.get("usd") or 0.0) if job.get("status") == "succeeded" else 0.0
+    total = round(won + float(job.get("billed_usd") or 0.0), 6)
+    job["metered"] = "1"
+    if total > 0 and job.get("org"):
+        _report_usage(str(job["org"]), "media.usd", total)
 
 
 async def _media_job_get(jid: str) -> dict | None:

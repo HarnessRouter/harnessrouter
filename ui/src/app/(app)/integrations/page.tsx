@@ -150,7 +150,7 @@ export default function IntegrationsPage() {
         <div className="page-header">
           <div>
             <button className="back-link" type="button" onClick={() => router.push('/keys')}>
-              <iconify-icon icon="tabler:arrow-left"></iconify-icon><span>API Keys</span></button>
+              <iconify-icon icon="tabler:arrow-left"></iconify-icon><span>API keys</span></button>
             <h1>Integrations</h1>
             <p>Connect model providers and choose which one serves each model, applies to every Harness.</p>
           </div>

@@ -33,7 +33,7 @@
   content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
   background: transparent; transition: background .12s ease;
 }
-.app-side-resize:hover::after { background: var(--brand, #42309C); }
+.app-side-resize:hover::after { background: var(--brand, #1a5cf5); }
 
 /* ── Dock ─────────────────────────────────────────────────────────────── */
 .os-dock {
@@ -104,7 +104,7 @@
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, .06);
-  color: #C7CCDA;
+  color: #e7e5e4;
   transition: background .14s ease, color .14s ease, border-radius .14s ease;
 }
 .os-app:hover .os-app-ic {
@@ -123,7 +123,7 @@
   white-space: nowrap;
 }
 .os-app.active .os-app-ic {
-  background: #42309C;
+  background: #1a5cf5;
   color: #fff;
   box-shadow: 0 4px 12px rgba(74, 55, 204, .4);
 }
@@ -159,7 +159,7 @@
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, .06);
-  color: #C7CCDA;
+  color: #e7e5e4;
 }
 .os-dock-btn:hover { background: rgba(255, 255, 255, .12); color: #fff; }
 .os-dock-avatar {
@@ -171,7 +171,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #42309C;
+  background: #1a5cf5;
   color: #fff;
   font-size: 14px;
   font-weight: 600;
@@ -218,7 +218,7 @@
 .os-acct-av {
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
-  background: #42309C; color: #fff;
+  background: #1a5cf5; color: #fff;
   font-size: 13px; font-weight: 600;
 }
 .os-acct-id { min-width: 0; }
@@ -243,8 +243,8 @@
 .os-acct-item.os-acct-item-static { color: var(--mute-2); cursor: default; }
 .os-acct-item.os-acct-item-static:hover { background: none; }
 .os-acct-caret { color: var(--mute-2); flex: 0 0 auto !important; }
-.os-acct-danger { color: #DC2626; }
-.os-acct-danger:hover { background: var(--hot-soft); color: #B91C1C; }
+.os-acct-danger { color: #b4460f; }
+.os-acct-danger:hover { background: var(--hot-soft); color: #b4460f; }
 .os-acct-orglist { padding: 2px 6px 4px; }
 .os-acct-orgrow {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
@@ -272,8 +272,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--brand-soft, #ECE9F7);
-  color: var(--brand, #42309C);
+  background: var(--brand-soft, #f7f8fe);
+  color: var(--brand, #1a5cf5);
 }
 
 /* ── Help → Chatra modal ──────────────────────────────────────────────────
