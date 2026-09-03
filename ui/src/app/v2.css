@@ -542,6 +542,10 @@ body {
 #view-harnesses #view-harness .settings-footer-sticky { position: sticky; left: auto; right: auto;
   bottom: 0; margin: 0; padding: 12px 0; background: var(--v2-bg); border-top: 1px solid var(--v2-line); z-index: 5; }
 #view-harnesses #view-harness .settings-form { padding-bottom: 0; }
+/* .page's own overflow:auto made IT the sticky scrollport — but .hx-body is what scrolls, so
+   the bar never engaged and only appeared after scrolling to the end. Let the page flow and the
+   bar pins to the settings pane's bottom edge from the first paint. */
+#view-harnesses #view-harness .page { overflow: visible; }
 /* The embedded settings drop the page frame: no back link, no detail header, the host has both. */
 #view-harness.is-embedded .page { padding: 0; max-width: none; }
 
