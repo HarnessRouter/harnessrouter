@@ -134,7 +134,7 @@ export default function OverviewPage() {
     if (harnessId) q.set('h', harnessId);
     if (sid) q.set('sid', sid);
     const qs = q.toString();
-    router.push(qs ? `/tasks?${qs}` : '/tasks');
+    router.push(qs ? `/harnesses?${qs}` : '/harnesses');
   };
 
   return (

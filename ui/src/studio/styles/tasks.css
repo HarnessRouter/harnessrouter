@@ -1,4 +1,4 @@
-/* Tasks app — Linear-grade. Flat iris (#42309C) on studio tokens. */
+/* Tasks app — Linear-grade. Flat iris (#1a5cf5) on studio tokens. */
 
 .tk-root { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--bg); }
 .tk-embed { position: relative; height: 100%; min-height: 0; }
@@ -73,13 +73,13 @@
 .tk-stage-note { font-size: 12px; color: var(--mute); line-height: 1.4; padding: 4px 2px 2px; }
 
 /* Loading skeletons (shown while switching views, so no stale flash). */
-.tk-skel-line { display: inline-block; height: 10px; border-radius: 5px; background: var(--surface-2, #EEF0F4); animation: tk-pulse 1.3s infinite; }
-.tk-skel-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--surface-2, #EEF0F4); animation: tk-pulse 1.3s infinite; flex-shrink: 0; }
+.tk-skel-line { display: inline-block; height: 10px; border-radius: 5px; background: var(--surface-2, #f4f2f0); animation: tk-pulse 1.3s infinite; }
+.tk-skel-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--surface-2, #f4f2f0); animation: tk-pulse 1.3s infinite; flex-shrink: 0; }
 .tk-skel-card { display: flex; flex-direction: column; gap: 9px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 13px 11px; }
 .tk-skel-row { display: flex; align-items: center; padding: 13px 16px; border-bottom: 1px solid var(--line-soft, #F0F1F4); }
 .tk-skel .tk-col-head { gap: 8px; }
 .tk-skel .tk-lgroup-head { gap: 8px; }
-.tk-title-skel { display: inline-block; width: 128px; height: 18px; border-radius: 6px; background: var(--surface-2, #EEF0F4); animation: tk-pulse 1.3s infinite; }
+.tk-title-skel { display: inline-block; width: 128px; height: 18px; border-radius: 6px; background: var(--surface-2, #f4f2f0); animation: tk-pulse 1.3s infinite; }
 
 /* Label picker: shared registry options + create */
 .tk-label-opts { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; max-height: 200px; overflow-y: auto; }
@@ -120,7 +120,7 @@
 .tk-bb-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface);
   color: var(--ink); border-radius: 999px; padding: 5px 11px 5px 7px; font-size: 12.5px; cursor: pointer; }
 .tk-bb-chip:hover { background: var(--surface-2); }
-.tk-bb-chip.on { border-color: var(--brand); background: var(--brand-soft, #ECE9F7); color: var(--brand); font-weight: 550; }
+.tk-bb-chip.on { border-color: var(--brand); background: var(--brand-soft, #f7f8fe); color: var(--brand); font-weight: 550; }
 .tk-bb-chip .tk-label-dot { width: 9px; height: 9px; border-radius: 50%; }
 .tk-bb-empty { font-size: 12.5px; color: var(--mute); }
 .tk-bb-dates { display: flex; gap: 16px; }
@@ -130,7 +130,7 @@
 
 .tk-card { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px 8px;
   cursor: pointer; display: flex; flex-direction: column; gap: 6px; box-shadow: var(--shadow-1); transition: border-color .12s, box-shadow .12s; }
-.tk-card:hover { border-color: #C9C2EE; box-shadow: var(--shadow-2); }
+.tk-card:hover { border-color: #c9d5f7; box-shadow: var(--shadow-2); }
 .tk-card.is-dragging { opacity: .35; }
 .tk-card-parent { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--mute);
   font-family: var(--mono); letter-spacing: .02em; margin-bottom: -1px; }

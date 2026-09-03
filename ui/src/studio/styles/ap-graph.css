@@ -81,7 +81,7 @@
 .dg-canvas {
   flex: 1; min-width: 0; min-height: 0;
   position: relative;
-  background: #FAFBFD;
+  background: #fafaf9;
   overflow: hidden;
 }
 
@@ -424,7 +424,7 @@
   cursor: pointer;
   color: var(--mute);
 }
-.dg-conn-x:hover { color: #B91C1C; border-color: #FECACA; background: #FEF2F2; }
+.dg-conn-x:hover { color: #b4460f; border-color: #f0e2d4; background: #fdf9f4; }
 .dg-conn-x:disabled { opacity: .3; cursor: not-allowed; }
 
 .prop-edge-row {
@@ -448,7 +448,7 @@
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 .dg-label-eye:hover { color: var(--ink); border-color: var(--mute-2); }
-.dg-label-eye.on { color: #fff; background: var(--brand, #42309C); border-color: var(--brand, #42309C); }
+.dg-label-eye.on { color: #fff; background: var(--brand, #1a5cf5); border-color: var(--brand, #1a5cf5); }
 
 /* Flat per-property list (one row per property) for the node/edge detail. */
 .dg-prop-list { display: flex; flex-direction: column; }
@@ -548,7 +548,7 @@
 .cy-ctx-menu {
   min-width: 180px;
   background: #fff;
-  border: 1px solid var(--line, #E5E7EB);
+  border: 1px solid var(--line, #e7e5e4);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
   padding: 4px;
@@ -571,19 +571,19 @@
 .cy-ctx-item:hover,
 .cy-ctx-item.open { background: var(--bg-soft, #F3F4F6); }
 .cy-ctx-has-sub  { padding-right: 22px; }
-.cy-ctx-chev     { color: var(--mute, #6B7280); font-size: 14px; line-height: 1; margin-left: 8px; }
+.cy-ctx-chev     { color: var(--mute, #6b6560); font-size: 14px; line-height: 1; margin-left: 8px; }
 .cy-ctx-sub {
   position: absolute;
   top: -4px; left: 100%;
   margin-left: 2px;
   min-width: 240px;
   background: #fff;
-  border: 1px solid var(--line, #E5E7EB);
+  border: 1px solid var(--line, #e7e5e4);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
   padding: 4px;
 }
-.cy-ctx-empty { padding: 6px 10px; color: var(--mute, #6B7280); font-size: 12px; }
+.cy-ctx-empty { padding: 6px 10px; color: var(--mute, #6b6560); font-size: 12px; }
 
 /* Edge → target leaf items in the 2nd-level submenu */
 .cy-ctx-leaf {
@@ -616,7 +616,7 @@
   min-width: 18px; height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--brand, #42309C);
+  background: var(--brand, #1a5cf5);
   color: #fff;
   font-size: 11px;
   font-weight: 600;

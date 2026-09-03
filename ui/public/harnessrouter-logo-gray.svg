@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title description">
+  <title id="title">HarnessRouter logo</title>
+  <desc id="description">The HarnessRouter mark in greyscale, for the navigation.</desc>
+  <path d="M14 10V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
+  <path d="M14 30Q14 20 24 20Q34 20 34 30V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
+  <path d="M34 36Q34 28 42 28H46" fill="none" stroke="#494949" stroke-width="6" stroke-linecap="round"/>
+  <path d="M45 20.5L56 28L45 35.5Z" fill="#494949"/>
+</svg>
