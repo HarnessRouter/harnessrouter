@@ -17,7 +17,7 @@ function ResetInner() {
 
   async function enter(orgId: string) {
     await switchOrg(orgId);
-    window.location.assign('/workbench');
+    window.location.assign('/harnesses');
   }
   async function afterAuth(s: Session) {
     const orgs = hrSubscribed(s.orgs);

@@ -1,4 +1,4 @@
-/* HarnessRouter app chrome — built on AgentStudio tokens (deep iris --brand #42309C). */
+/* HarnessRouter app chrome — built on AgentStudio tokens (deep iris --brand #1a5cf5). */
 
 /* UI Core token mapping — the shared conversational surface (frontend-ui-core/styles/chat.css,
    the wbx-* chat rules extracted from this file) reads --uic-*; map them onto HR's palette so
@@ -58,8 +58,8 @@ a { color: inherit; text-decoration: none; }
 .hr-btn.primary { background: var(--brand); color: #fff; border-color: var(--brand);
   box-shadow: 0 10px 22px -6px rgba(40,90,255,.40); }
 .hr-btn.primary:hover:not(:disabled) { background: var(--brand-ink); box-shadow: 0 12px 26px -6px rgba(40,90,255,.48); }
-.hr-btn.danger { color: #B91C1C; border-color: #FECACA; }
-.hr-btn.danger:hover:not(:disabled) { background: #FEF2F2; color: #B91C1C; border-color: #FCA5A5; }
+.hr-btn.danger { color: #b4460f; border-color: #f0e2d4; }
+.hr-btn.danger:hover:not(:disabled) { background: #fdf9f4; color: #b4460f; border-color: #FCA5A5; }
 .hr-btn.ghost { border-color: transparent; background: transparent; }
 /* Disabled state: every .hr-btn (Send while generating, Save when not dirty, etc.) must LOOK
    disabled, not just be inert. Dim + not-allowed cursor + no hover. */
@@ -111,7 +111,7 @@ a { color: inherit; text-decoration: none; }
 .hr-field label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; }
 .hr-field input { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 14px; }
 .hr-field input:focus { outline: 2px solid var(--brand-soft); border-color: var(--brand); }
-.hr-err { color: #B91C1C; font-size: 13px; margin: 8px 0; }
+.hr-err { color: #b4460f; font-size: 13px; margin: 8px 0; }
 .hr-gwrap { display: flex; justify-content: center; margin: 4px 0 2px; min-height: 44px; }
 .hr-gbtn { display: flex; justify-content: center; }
 .hr-or { display: flex; align-items: center; gap: 12px; color: var(--mute); font-size: 12px; margin: 14px 0; }
@@ -220,7 +220,7 @@ a { color: inherit; text-decoration: none; }
   border: none; background: transparent; color: var(--sidebar-mute); border-radius: 6px; cursor: pointer;
   opacity: 0; transition: opacity .12s, background .12s, color .12s; }
 .wbx-recent:hover .wbx-recent-del { opacity: 1; }
-.wbx-recent-del:hover { background: color-mix(in srgb, #DC2626 12%, transparent); color: #DC2626; }
+.wbx-recent-del:hover { background: color-mix(in srgb, #b4460f 12%, transparent); color: #b4460f; }
 
 /* conversation */
 .wbx-conv { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; min-height: 0; }
@@ -280,7 +280,7 @@ a { color: inherit; text-decoration: none; }
 .wbx-iconbtn { font-size: 12px; color: var(--sidebar-mute); background: transparent; border: none; cursor: pointer;
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 6px; }
 .wbx-iconbtn:hover { color: var(--ink); background: var(--brand-50); }
-.wbx-act-fail { font-size: 12px; color: #dc2626; font-weight: 600; }
+.wbx-act-fail { font-size: 12px; color: #b4460f; font-weight: 600; }
 
 /* "new harness" add card: a single large, vertically-centered + (no label) */
 .hr-add { min-height: 168px; display: grid; place-items: center; }
@@ -314,8 +314,8 @@ a { color: inherit; text-decoration: none; }
 .apidoc-ep { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 14px 0; background: var(--surface); }
 .apidoc-ep-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .apidoc-m { font-size: 11px; font-weight: 800; letter-spacing: .04em; color: #fff; border-radius: 6px; padding: 3px 8px; }
-.apidoc-m-post { background: #16a34a; } .apidoc-m-get { background: #2563eb; }
-.apidoc-m-delete { background: #dc2626; } .apidoc-m-put { background: #d97706; }
+.apidoc-m-post { background: #15803d; } .apidoc-m-get { background: #1a5cf5; }
+.apidoc-m-delete { background: #b4460f; } .apidoc-m-put { background: #d97706; }
 .apidoc-path { font-size: 13.5px; font-weight: 700; background: none; border: none; padding: 0; color: var(--ink); }
 .apidoc-tbl { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 13px; }
 .apidoc-tbl th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
@@ -323,7 +323,7 @@ a { color: inherit; text-decoration: none; }
 .apidoc-tbl td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .apidoc-tbl tr:last-child td { border-bottom: none; }
 .apidoc-ty { color: var(--sidebar-mute); font-family: ui-monospace, monospace; font-size: 12px; }
-.apidoc-req { font-size: 11px; font-weight: 700; color: #b91c1c; }
+.apidoc-req { font-size: 11px; font-weight: 700; color: #b4460f; }
 .apidoc-opt { font-size: 11px; color: var(--sidebar-mute); }
 
 /* ════════ Cowork-faithful chat polish ════════ */
@@ -358,7 +358,7 @@ a { color: inherit; text-decoration: none; }
 .wbx-act-txt { height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 600;
   color: var(--sidebar-mute); background: transparent; border: none; cursor: pointer; font-family: inherit; }
 .wbx-act-txt:hover { background: var(--brand-50); color: var(--ink); }
-.wbx-act-fail { font-size: 12px; color: #dc2626; font-weight: 600; margin-left: 8px; }
+.wbx-act-fail { font-size: 12px; color: #b4460f; font-weight: 600; margin-left: 8px; }
 
 /* output file cards (under the answer) */
 .wbx-files { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-width: 560px; }
@@ -515,13 +515,6 @@ a { color: inherit; text-decoration: none; }
   padding: 8px; pointer-events: none;
   background: linear-gradient(to bottom, var(--surface) 60%, color-mix(in srgb, var(--surface) 40%, transparent)); }
 .wbx-conv-bar > * { pointer-events: auto; }
-.wbx-conv-bar-title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 13.5px; font-weight: 600;
-  display: inline-flex; align-items: center; gap: 7px;
-  color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
-.wbx-panel-tgl { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
-  border: none; background: transparent; color: var(--sidebar-mute); border-radius: 9px; cursor: pointer; transition: background .12s, color .12s; }
-.wbx-panel-tgl:hover { background: var(--brand-50); color: var(--brand); }
-.wbx-panel-tgl[aria-pressed="true"] { color: var(--brand); }
 /* messages clear the floating bar */
 .wbx-conv-msgs { padding-top: 50px; }
 
@@ -536,8 +529,8 @@ a { color: inherit; text-decoration: none; }
 /* quiet status: a small colored dot + neutral ink text (not a wall of green) */
 .mcp-test-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
 .mcp-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
-.mcp-test-status.ok .mcp-dot { background: #16a34a; }
-.mcp-test-status.err { color: #b91c1c; } .mcp-test-status.err .mcp-dot { background: #dc2626; }
+.mcp-test-status.ok .mcp-dot { background: #15803d; }
+.mcp-test-status.err { color: #b4460f; } .mcp-test-status.err .mcp-dot { background: #b4460f; }
 /* tools as a scrollable list of cards */
 .mcp-tools { margin-top: 10px; max-height: 240px; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
 .mcp-tool-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
@@ -690,7 +683,7 @@ body.hr-resizing iframe { pointer-events: none; }
 .mcp-authkind { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600;
   padding: 2px 8px; border-radius: 999px; margin-left: 8px; white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.mcp-authkind.hdr { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+.mcp-authkind.hdr { color: #1447c4; background: #eff6ff; border: 1px solid #bfdbfe; }
 
 /* MCP modal: one-click insert chips for declared Additional Headers */
 .mcp-hdr-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

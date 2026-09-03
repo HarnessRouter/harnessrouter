@@ -1,18 +1,18 @@
-/* HarnessRouter app tokens — unified with the marketing landing (paper + accent blue #285AFF). */
+/* HarnessRouter app tokens — unified with the marketing landing (paper + accent blue #1a5cf5). */
 :root {
-  --brand: #285AFF;
-  --brand-ink: #1641D8;
-  --brand-soft: #E1E9FF;
-  --brand-50: #EFF3FF;
+  --brand: #1a5cf5;
+  --brand-ink: #1447c4;
+  --brand-soft: #f7f8fe;
+  --brand-50: #f7f8fe;
   --accent-bright: #58A9FF;
 
-  --hot: #EF4444;
+  --hot: #b4460f;
   --hot-soft: #FEE4E4;
-  --warm: #F59E0B;
+  --warm: #8a6a3c;
   --warm-soft: #FEF1D6;
-  --cold: #94A3B8;
-  --cold-soft: #EEF1F5;
-  --ok: #10B981;
+  --cold: #a8a29e;
+  --cold-soft: #f4f2f0;
+  --ok: #15803d;
   --ok-soft: #DFF6EC;
   --info: #0EA5E9;
   --info-soft: #DCF1FB;
@@ -22,14 +22,14 @@
   --surface-2: #F5F7FB;
   --sidebar: #1F2433;
   --sidebar-2: #2A3145;
-  --sidebar-mute: #5B5D66;
-  --sidebar-active: #285AFF;
+  --sidebar-mute: #6b6560;
+  --sidebar-active: #1a5cf5;
 
-  --ink: #111317;
-  --ink-2: #3A3D45;
-  --mute: #5B5D66;
+  --ink: #1c1917;
+  --ink-2: #57534e;
+  --mute: #6b6560;
   --mute-2: #8A8D96;
-  --line: #DDDFE6;
+  --line: #e7e5e4;
   --line-soft: #E9EAEF;
 
   --r-card: 12px;
@@ -60,10 +60,10 @@ body { font-family: var(--font); color: var(--ink); background: var(--bg); -webk
   border: 1px solid transparent;
 }
 .pill .dot { width:6px; height:6px; border-radius: 999px; background: currentColor; }
-.pill.hot   { background: var(--hot-soft);  color: #B91C1C; }
-.pill.warm  { background: var(--warm-soft); color: #92400E; }
-.pill.cold  { background: var(--cold-soft); color: #475569; }
-.pill.ok    { background: var(--ok-soft);   color: #047857; }
+.pill.hot   { background: var(--hot-soft);  color: #b4460f; }
+.pill.warm  { background: var(--warm-soft); color: #8a6a3c; }
+.pill.cold  { background: var(--cold-soft); color: #57534e; }
+.pill.ok    { background: var(--ok-soft);   color: #15803d; }
 .pill.info  { background: var(--info-soft); color: #075985; }
 .pill.brand { background: var(--brand-soft); color: var(--brand-ink); }
 
@@ -139,13 +139,13 @@ body { font-family: var(--font); color: var(--ink); background: var(--bg); -webk
 }
 .av.sm { width: 24px; height: 24px; font-size: 10px; }
 .av.lg { width: 40px; height: 40px; font-size: 14px; }
-.av.client { background: #F59E0B; }
-.av.ai     { background: #10B981; }
-.av.me     { background: #3B82F6; }
+.av.client { background: #8a6a3c; }
+.av.ai     { background: #15803d; }
+.av.me     { background: #1a5cf5; }
 
 /* Striped placeholder backdrop */
 .placeholder-stripe {
-  background-image: repeating-linear-gradient(135deg, #EEF1F5 0 8px, #F7F8FB 8px 16px);
+  background-image: repeating-linear-gradient(135deg, #f4f2f0 0 8px, #fafaf9 8px 16px);
   border-radius: 8px;
 }
 

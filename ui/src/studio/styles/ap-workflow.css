@@ -64,7 +64,7 @@
 .wf-canvas {
   flex: 1; min-width: 0; min-height: 0;
   position: relative;
-  background: #FAFBFD;
+  background: #fafaf9;
 }
 
 /* Floating action bar on top of the canvas. No parent container —
@@ -105,14 +105,14 @@
   padding: 2px 8px; border-radius: 999px;
   text-transform: uppercase; letter-spacing: .04em;
 }
-.wf-run-queued    { background: #E2E8F0; color: #475569; }
-.wf-run-running   { background: #DBEAFE; color: #1E40AF; }
-.wf-run-succeeded { background: #D1FAE5; color: #047857; }
-.wf-run-failed    { background: #FEE2E2; color: #B91C1C; }
-.wf-run-suspended { background: #FEF3C7; color: #92400E; }
+.wf-run-queued    { background: #e7e5e4; color: #57534e; }
+.wf-run-running   { background: #f7f8fe; color: #1E40AF; }
+.wf-run-succeeded { background: #eaf5ee; color: #15803d; }
+.wf-run-failed    { background: #fdf9f4; color: #b4460f; }
+.wf-run-suspended { background: #fdf9f4; color: #8a6a3c; }
 .wf-run-err {
-  font-size: 10px; font-weight: 600; color: #B91C1C;
-  padding: 2px 6px; border-radius: 4px; background: #FEF2F2;
+  font-size: 10px; font-weight: 600; color: #b4460f;
+  padding: 2px 6px; border-radius: 4px; background: #fdf9f4;
 }
 
 /* Node status overlays — set by the SSE-driven run status effect. */
@@ -152,15 +152,15 @@
    * blocked making the actual border-width any larger. */
 }
 @keyframes wf-rainbow-border {
-    0% { box-shadow: 0 0 0 4px #EF4444, 0 0 12px 2px rgba(239, 68, 68,.55); }
-   17% { box-shadow: 0 0 0 4px #F59E0B, 0 0 12px 2px rgba(245,158, 11,.55); }
+    0% { box-shadow: 0 0 0 4px #b4460f, 0 0 12px 2px rgba(239, 68, 68,.55); }
+   17% { box-shadow: 0 0 0 4px #8a6a3c, 0 0 12px 2px rgba(245,158, 11,.55); }
    33% { box-shadow: 0 0 0 4px #EAB308, 0 0 12px 2px rgba(234,179,  8,.55); }
    50% { box-shadow: 0 0 0 4px #22C55E, 0 0 12px 2px rgba( 34,197, 94,.55); }
    67% { box-shadow: 0 0 0 4px #06B6D4, 0 0 12px 2px rgba(  6,182,212,.55); }
    83% { box-shadow: 0 0 0 4px #6366F1, 0 0 12px 2px rgba( 99,102,241,.55); }
-  100% { box-shadow: 0 0 0 4px #EF4444, 0 0 12px 2px rgba(239, 68, 68,.55); }
+  100% { box-shadow: 0 0 0 4px #b4460f, 0 0 12px 2px rgba(239, 68, 68,.55); }
 }
-.wf-canvas .react-flow__renderer { background: #FAFBFD; }
+.wf-canvas .react-flow__renderer { background: #fafaf9; }
 .wf-empty {
   position: absolute; left: 50%; top: 40%;
   transform: translate(-50%, -50%);
@@ -188,13 +188,13 @@
 .wf-canvas .react-flow__controls-button:hover { background: var(--surface-2); }
 .wf-canvas .react-flow__controls-button svg { fill: currentColor; }
 .wf-canvas .react-flow__minimap { box-shadow: var(--shadow-1); }
-.wf-canvas .react-flow__edge-path { stroke: #94A3B8; }
+.wf-canvas .react-flow__edge-path { stroke: #a8a29e; }
 .wf-canvas .react-flow__edge.selected .react-flow__edge-path,
 .wf-canvas .react-flow__edge:focus .react-flow__edge-path {
-  stroke: #42309C; stroke-width: 2;
+  stroke: #1a5cf5; stroke-width: 2;
 }
-.wf-canvas .react-flow__arrowhead { fill: #94A3B8; }
-.wf-canvas .react-flow__edge.selected .react-flow__arrowhead { fill: #42309C; }
+.wf-canvas .react-flow__arrowhead { fill: #a8a29e; }
+.wf-canvas .react-flow__edge.selected .react-flow__arrowhead { fill: #1a5cf5; }
 
 /* ── Sticky-note annotation ────────────────────────────────────────── */
 .wf-note {
@@ -273,7 +273,7 @@
 }
 .wf-node-tool-dot {
   width: 5px; height: 5px; border-radius: 50%;
-  background: var(--brand, #42309C);
+  background: var(--brand, #1a5cf5);
   flex-shrink: 0;
 }
 .wf-node-tool-name { color: var(--ink); font-weight: 600; }
@@ -358,7 +358,7 @@
   background: transparent; color: var(--mute);
   cursor: pointer; font-size: 14px; line-height: 1;
 }
-.wf-kv-x:hover { color: #B91C1C; border-color: #FECACA; background: #FEF2F2; }
+.wf-kv-x:hover { color: #b4460f; border-color: #f0e2d4; background: #fdf9f4; }
 .wf-kv-add { align-self: flex-start; margin-top: 2px; }
 .wf-cond-row { display: flex; align-items: center; gap: 6px; }
 
@@ -400,14 +400,14 @@
   font-size: 9px; font-weight: 600;
   padding: 2px 7px; border-radius: 999px;
   text-transform: uppercase; letter-spacing: .04em;
-  background: #E2E8F0; color: #475569;
+  background: #e7e5e4; color: #57534e;
   flex-shrink: 0;
 }
-.wf-rail-badge.wf-run-queued    { background: #E2E8F0; color: #475569; }
-.wf-rail-badge.wf-run-running   { background: #DBEAFE; color: #1E40AF; animation: wf-running-pulse 1.2s ease-in-out infinite; }
-.wf-rail-badge.wf-run-succeeded { background: #D1FAE5; color: #047857; }
-.wf-rail-badge.wf-run-failed    { background: #FEE2E2; color: #B91C1C; }
-.wf-rail-badge.wf-run-suspended { background: #FEF3C7; color: #92400E; }
+.wf-rail-badge.wf-run-queued    { background: #e7e5e4; color: #57534e; }
+.wf-rail-badge.wf-run-running   { background: #f7f8fe; color: #1E40AF; animation: wf-running-pulse 1.2s ease-in-out infinite; }
+.wf-rail-badge.wf-run-succeeded { background: #eaf5ee; color: #15803d; }
+.wf-rail-badge.wf-run-failed    { background: #fdf9f4; color: #b4460f; }
+.wf-rail-badge.wf-run-suspended { background: #fdf9f4; color: #8a6a3c; }
 .wf-rail-dur { font-size: 10px; }
 
 /* Run-inputs modal — opened by the Run button when the workflow

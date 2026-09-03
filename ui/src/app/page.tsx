@@ -13,7 +13,7 @@ export default function Root() {
   useEffect(() => {
     // Self-hosted has no sign-in and no workbench surface — harnesses is the front door.
     if (SELF_HOSTED) { router.replace('/harnesses'); return; }
-    router.replace(isAuthed() ? '/workbench' : '/login');
+    router.replace(isAuthed() ? '/harnesses' : '/login');
   }, [router]);
   return null;
 }
