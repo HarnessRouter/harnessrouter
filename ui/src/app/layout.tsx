@@ -9,6 +9,9 @@ import '@/studio/styles/page.css';
 import '@/studio/styles/dialog.css';
 import '@/studio/styles/traces.css';
 import 'reifyui/styles/chat.css';
+// chip.css carries the Chip / Popover / CascadeMenu skins (the hosted tree inlines them in its
+// chat.css; the package factors them out) — without it every chip menu renders bare.
+import 'reifyui/styles/chip.css';
 import './hr.css';
 import './hr-billing.css';
 // v2 re-skin: MUST load last — its :root remaps every legacy token (fonts, inks, accent) so

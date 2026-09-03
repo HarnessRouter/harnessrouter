@@ -33,7 +33,7 @@ export default function WorkspaceSettingsPage() {
   return (
     <section className="view is-active" id="view-settings">
       <div className="page">
-        <div className="page-header"><div><h1>Workspace Settings</h1><p>Manage the name and description used to identify <span className="workspace-name">{current.name}</span>.</p></div></div>
+        <div className="page-header"><div><h1>Workspace settings</h1><p>Manage the name and description used to identify <span className="workspace-name">{current.name}</span>.</p></div></div>
         <form className="settings-form" onSubmit={save}>
           <div className="settings-form-head">
             <div><h2>Workspace profile</h2><p>Shown in the Workspace selector, Dashboard, and Overview.</p></div>
