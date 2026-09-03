@@ -535,6 +535,13 @@ body {
 .hx-body.is-chat .run-layout.is-embedded { height: 100%; max-height: none; min-height: 0; border: 0; border-radius: 0; grid-template-columns: minmax(0, 1fr); }
 .hx-body.is-chat .run-layout.is-embedded .task-detail-shell { padding: 0 28px; }
 .hx-body.is-chat .run-layout.is-embedded .task-detail-shell .tabs { margin: 14px 0 0; }
+/* Embedded in the unified page, the settings action bar belongs to the settings pane: sticky at
+   the bottom of the scrolling .hx-body, never fixed across the viewport — the old standalone
+   rule (#view-harness … position: fixed; left: var(--sidebar-w)) overlaid the task panel and
+   clipped Delete Harness under the nav. The task panel keeps the full height beside it. */
+#view-harnesses #view-harness .settings-footer-sticky { position: sticky; left: auto; right: auto;
+  bottom: 0; margin: 0; padding: 12px 0; background: var(--v2-bg); border-top: 1px solid var(--v2-line); z-index: 5; }
+#view-harnesses #view-harness .settings-form { padding-bottom: 0; }
 /* The embedded settings drop the page frame: no back link, no detail header, the host has both. */
 #view-harness.is-embedded .page { padding: 0; max-width: none; }
 
