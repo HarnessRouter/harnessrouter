@@ -7577,7 +7577,7 @@ async def list_keys(org: str, request: Request) -> dict:
         rows = []
     keys = [{"id": x.get("id"), "name": x.get("name"), "created_at": x.get("created_at"),
              "revoked": str(x.get("revoked")) in ("1", "true", "True"), "member": x.get("member"),
-             "workspace": x.get("workspace") or "", "last_used": x.get("last_used") or ""}
+             "workspace": x.get("workspace") or "", "last_used": x.get("last_used") or "", "tail": x.get("tail") or ""}
             for x in rows]
     return {"keys": keys}
 
