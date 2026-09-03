@@ -583,7 +583,6 @@
     .mono-id-icon { flex: none; font-size: 13px; opacity: .7; }
     .mono-id:hover .mono-id-icon { opacity: 1; }
     /* In the inventory table the id cell is width-bounded so long chrn_ ids ellipsize, not wrap. */
-    #view-harnesses .mono-id { max-width: 190px; }
     .run-layout { display: grid; grid-template-columns: 330px minmax(0,1fr); height: calc(100vh - 204px); min-height: 500px; max-height: 760px; border: 1px solid var(--line); border-radius: 9px; background: #fff; overflow: hidden; }
     .list-scope { display: block; margin-top: 11px; color: var(--muted); font-size: 10.5px; }
     .task-mode-switch { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-subtle); }
