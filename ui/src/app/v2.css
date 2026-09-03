@@ -927,3 +927,19 @@ body {
 .tc-gate-title { margin-top: 6px; font-size: 16px; font-weight: 600; color: var(--v2-ink); }
 .tc-gate-body { margin: 8px 0 14px; font-size: 13px; line-height: 1.55; color: var(--v2-sec); }
 .b2-notice.is-error { background: #fdf3ec; color: #b4460f; }
+
+/* ── cloud upload (self-hosted only): the publish dialog and the uploaded chip. These classes
+   are this distribution's own; the hosted tree has no such surface, which is why they live
+   here and not in the shared revamp.css. ── */
+.cloud-includes { margin-top: -2px; }
+.cloud-keyrow { display: flex; gap: 8px; }
+.cloud-keyrow input { flex: 1; min-width: 0; }
+.cloud-rows { max-height: 44vh; overflow-y: auto; }
+.cloud-rows td { padding: 10px 12px; }
+.cloud-note { color: var(--v2-body, #57534e); font-size: 12px; }
+.cloud-remove { text-align: right; }
+#cloudTo { width: 100%; }
+.cloud-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--v2-body, #57534e); font-size: 12px; white-space: nowrap; }
+.cloud-chip iconify-icon { flex: 0 0 auto; font-size: 14px; }
+.cloud-chip.changed { color: var(--v2-ink, #1c1917); }
+.cloud-select-hint { margin: 10px 2px 0; }
