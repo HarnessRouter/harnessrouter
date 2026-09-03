@@ -7552,6 +7552,7 @@ async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
                      "member": body.member_id or "", "name": body.name or "default",
                      "workspace": body.workspace or "",
                      "workspace_default": "1" if body.workspace_default else "",
+                     "tail": tok[-4:],
                      "revoked": "0", "created_at": str(time.time())}, raise_on_fail=True)
     # Then dual-write the control-store hot-read doc SYNCHRONOUSLY — the key is shown once and used
     # on the very next request. If this fails, the graph write already succeeded, so the first
@@ -7563,7 +7564,7 @@ async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
         except Exception:  # noqa: BLE001 — graph is authoritative; resolve backfills on miss
             pass
     return {"id": h, "org": org, "name": body.name or "default", "created_at": int(time.time()),
-            "workspace": body.workspace or "",
+            "workspace": body.workspace or "", "tail": tok[-4:],
             "key": tok, "note": "store this key now; it is shown only once"}
 
 
