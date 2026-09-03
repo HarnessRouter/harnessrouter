@@ -68,6 +68,16 @@ export default function HarnessesPage() {
 
   const [custom, setCustom] = useState<CustomHarness[]>([]);
   const [rows, setRows] = useState<HarnessRow[] | null>(null);
+  // the two groups of the tree, yours first and the system's below; collapse is a per-viewer convenience
+  const [groupsOpen, setGroupsOpen] = useState<{ yours: boolean; system: boolean }>(() => {
+    try { const v = typeof window !== 'undefined' ? window.localStorage.getItem('hx.groups') : null; if (v) return JSON.parse(v); } catch { /* fresh */ }
+    return { yours: true, system: true };
+  });
+  const toggleGroup = (g: 'yours' | 'system') => setGroupsOpen((prev) => {
+    const next = { ...prev, [g]: !prev[g] };
+    try { window.localStorage.setItem('hx.groups', JSON.stringify(next)); } catch { /* private mode */ }
+    return next;
+  });
   const [cards, setCards] = useState<TraceCard[]>([]);
   const [q, setQ] = useState('');
   // One harness is expanded at a time (an accordion), so the task refresh has one folder to keep
@@ -190,47 +200,59 @@ export default function HarnessesPage() {
         <div className="hx-side-scroll">
           {!rows ? <SkelListItems rows={4} /> : panel.length === 0 ? (
             <div className="hx-empty">{needle ? 'Nothing matches that.' : 'No harnesses yet.'}</div>
-          ) : panel.map(({ r, tasks, loaded, more, loading }) => {
+          ) : ([
+            { key: 'yours' as const, label: 'Your harnesses', items: panel.filter((x) => x.r.kind !== 'builtin'), empty: needle ? '' : 'None yet. Fork a system harness, or create one from the dashboard.' },
+            { key: 'system' as const, label: 'System harnesses', items: panel.filter((x) => x.r.kind === 'builtin'), empty: '' },
+          ]).map((g) => (
+            <div key={g.key} className={'hx-group' + (groupsOpen[g.key] || needle ? ' is-open' : '')}>
+              <button type="button" className="hx-group-btn" aria-expanded={groupsOpen[g.key] || !!needle} onClick={() => toggleGroup(g.key)}>
+                <iconify-icon icon={groupsOpen[g.key] || needle ? 'tabler:chevron-down' : 'tabler:chevron-right'} className="hx-caret"></iconify-icon>
+                <span className="hx-group-label">{g.label}</span>
+                <span className="hx-group-count">{g.items.length}</span>
+              </button>
+              {(groupsOpen[g.key] || !!needle) && (g.items.length === 0 ? (g.empty ? <div className="hx-group-empty">{g.empty}</div> : null) : g.items.map(({ r, tasks, loaded, more, loading }) => {
             const isOpen = open === r.id || !!needle;
-            const running = tasks.filter((c) => RUNNING.has(c.status || '')).length;
-            return (
-              <div key={r.id} className={'hx-proj' + (r.id === h ? ' is-current' : '')}>
-                <div className="hx-proj-row">
-                  <button type="button" className="hx-proj-btn" aria-expanded={isOpen} onClick={() => toggle(r.id)}>
-                    <iconify-icon icon={isOpen ? 'tabler:chevron-down' : 'tabler:chevron-right'} className="hx-caret"></iconify-icon>
-                    <HarnessLogo id={r.kind === 'builtin' ? r.id : runtimeOf(r).baseId} size={14} />
-                    <span className="hx-proj-name">{r.name}</span>
-                    {running > 0 && <span className="hx-proj-badge" title={`${running} running`}>{running}</span>}
-                  </button>
-                  <button type="button" className="hx-ic" title="New task" aria-label={`New task in ${r.name}`} onClick={() => openNew(r.id)}>
-                    <iconify-icon icon="tabler:plus"></iconify-icon>
-                  </button>
-                  <button type="button" className="hx-ic" title="Harness settings" aria-label={`Settings for ${r.name}`} onClick={() => openSettings(r.id)}>
-                    <iconify-icon icon="tabler:settings"></iconify-icon>
-                  </button>
-                </div>
-                {isOpen && (
-                  <div className="hx-tasks">
-                    {tasks.length === 0 ? (loaded ? <div className="hx-tasks-empty">No tasks yet</div> : null) : tasks.map((c) => {
-                      const on = c.session_id === sid;
-                      return (
-                        <button key={c.session_id} type="button" className={'hx-task' + (on ? ' is-on' : '')}
-                          aria-current={on ? 'true' : undefined} onClick={() => openTask(r.id, c.session_id)}>
-                          <i className={'hx-dot is-' + taskState(c.status)} aria-hidden="true" />
-                          <span>{c.title || 'Task'}</span>
-                        </button>
-                      );
-                    })}
-                    {more && (
-                      <button type="button" className="hx-more" disabled={loading} onClick={() => void loadTasks(r.id, perHarness[r.id]?.cursor)}>
-                        {loading ? 'Loading' : 'Load more'}
-                      </button>
-                    )}
+              const running = tasks.filter((c) => RUNNING.has(c.status || '')).length;
+              return (
+                <div key={r.id} className={'hx-proj' + (r.id === h ? ' is-current' : '')}>
+                  <div className="hx-proj-row">
+                    <button type="button" className="hx-proj-btn" aria-expanded={isOpen} onClick={() => toggle(r.id)}>
+                      <iconify-icon icon={isOpen ? 'tabler:chevron-down' : 'tabler:chevron-right'} className="hx-caret"></iconify-icon>
+                      <HarnessLogo id={r.kind === 'builtin' ? r.id : runtimeOf(r).baseId} size={14} />
+                      <span className="hx-proj-name">{r.name}</span>
+                      {running > 0 && <span className="hx-proj-badge" title={`${running} running`}>{running}</span>}
+                    </button>
+                    <button type="button" className="hx-ic" title="New task" aria-label={`New task in ${r.name}`} onClick={() => openNew(r.id)}>
+                      <iconify-icon icon="tabler:plus"></iconify-icon>
+                    </button>
+                    <button type="button" className="hx-ic" title="Harness settings" aria-label={`Settings for ${r.name}`} onClick={() => openSettings(r.id)}>
+                      <iconify-icon icon="tabler:settings"></iconify-icon>
+                    </button>
                   </div>
-                )}
-              </div>
-            );
-          })}
+                  {isOpen && (
+                    <div className="hx-tasks">
+                      {tasks.length === 0 ? (loaded ? <div className="hx-tasks-empty">No tasks yet</div> : null) : tasks.map((c) => {
+                        const on = c.session_id === sid;
+                        return (
+                          <button key={c.session_id} type="button" className={'hx-task' + (on ? ' is-on' : '')}
+                            aria-current={on ? 'true' : undefined} onClick={() => openTask(r.id, c.session_id)}>
+                            <i className={'hx-dot is-' + taskState(c.status)} aria-hidden="true" />
+                            <span>{c.title || 'Task'}</span>
+                          </button>
+                        );
+                      })}
+                      {more && (
+                        <button type="button" className="hx-more" disabled={loading} onClick={() => void loadTasks(r.id, perHarness[r.id]?.cursor)}>
+                          {loading ? 'Loading' : 'Load more'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            }))}
+            </div>
+          ))}
         </div>
       </aside>
 
