@@ -59,7 +59,7 @@
     "react-markdown": "^9.1.0",
     "react-syntax-highlighter": "^16.1.1",
     "rehype-sanitize": "^6.0.0",
-    "reifyui": "git+https://github.com/epsilla-enterprise/ReifyUI.git#412db80fe217c3ba4a74b5f1255048830f203813",
+    "reifyui": "git+https://github.com/epsilla-enterprise/ReifyUI.git#3ceb3148517567f3eb249764c5976bf43eb1df89",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^3.4.1",

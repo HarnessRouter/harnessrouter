@@ -53,15 +53,15 @@
   cursor: pointer;
   transition: border-color .12s, background .12s, transform .04s;
 }
-.dlg-type:hover { background: var(--surface-2, #F8FAFC); }
-.dlg-type.on { border-color: var(--brand, #42309C); box-shadow: 0 0 0 2px rgba(40,90,255,.16); }
+.dlg-type:hover { background: var(--surface-2, #fafaf9); }
+.dlg-type.on { border-color: var(--brand, #1a5cf5); box-shadow: 0 0 0 2px rgba(40,90,255,.16); }
 .dlg-type:active { transform: translateY(1px); }
 .dlg-type-ic {
   width: 38px; height: 38px; border-radius: 10px;
   display: inline-flex; align-items: center; justify-content: center;
 }
 .dlg-type-lbl {
-  font-size: 12px; font-weight: 550; color: var(--ink, #0f172a);
+  font-size: 12px; font-weight: 550; color: var(--ink, #1c1917);
   text-align: center; line-height: 1.25;
 }
 
@@ -70,13 +70,13 @@
 }
 .dlg-title {
   font-size: 15px; font-weight: 600;
-  color: var(--ink, #0f172a);
+  color: var(--ink, #1c1917);
   line-height: 1.4;
 }
-.dlg-h-destructive .dlg-title { color: #B91C1C; }
-.dlg-h-error       .dlg-title { color: #B91C1C; }
+.dlg-h-destructive .dlg-title { color: #b4460f; }
+.dlg-h-error       .dlg-title { color: #b4460f; }
 .dlg-h-warning     .dlg-title { color: #B45309; }
-.dlg-h-success     .dlg-title { color: #047857; }
+.dlg-h-success     .dlg-title { color: #15803d; }
 
 .dlg-b {
   padding: 12px 20px 4px;
@@ -84,7 +84,7 @@
 }
 .dlg-msg {
   font-size: 13px; line-height: 1.55;
-  color: var(--mute, #475569);
+  color: var(--mute, #57534e);
   margin-bottom: 8px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -92,7 +92,7 @@
 .dlg-label {
   display: block;
   font-size: 11px; font-weight: 600;
-  color: var(--mute, #475569);
+  color: var(--mute, #57534e);
   text-transform: uppercase;
   letter-spacing: .04em;
   margin: 10px 0 6px;
@@ -102,7 +102,7 @@
   padding: 9px 11px;
   font-size: 13px;
   font-family: inherit;
-  color: var(--ink, #0f172a);
+  color: var(--ink, #1c1917);
   background: var(--surface, #fff);
   border: 1px solid var(--line, rgba(15,23,42,.16));
   border-radius: 8px;
@@ -110,22 +110,22 @@
   transition: border-color .12s ease, box-shadow .12s ease;
 }
 .dlg-input:focus {
-  border-color: var(--brand, #42309C);
+  border-color: var(--brand, #1a5cf5);
   box-shadow: 0 0 0 3px rgba(40,90,255,.14);
 }
 .dlg-input-err {
-  border-color: #DC2626;
+  border-color: #b4460f;
 }
 .dlg-input-err:focus {
   box-shadow: 0 0 0 3px rgba(220,38,38,.12);
 }
 textarea.dlg-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .dlg-help {
-  font-size: 11px; color: var(--mute, #475569);
+  font-size: 11px; color: var(--mute, #57534e);
   margin-top: 6px; line-height: 1.5;
 }
 .dlg-err {
-  font-size: 11px; color: #B91C1C;
+  font-size: 11px; color: #b4460f;
   margin-top: 6px; line-height: 1.5;
 }
 
@@ -144,22 +144,22 @@ textarea.dlg-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   border-radius: 8px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--ink, #0f172a);
+  color: var(--ink, #1c1917);
   transition: background .12s, border-color .12s, color .12s, transform .04s;
 }
-.dlg-btn:focus-visible { outline: 2px solid var(--brand, #42309C); outline-offset: 2px; }
+.dlg-btn:focus-visible { outline: 2px solid var(--brand, #1a5cf5); outline-offset: 2px; }
 .dlg-btn:active { transform: translateY(1px); }
 
 .dlg-secondary {
   border-color: var(--line, rgba(15,23,42,.18));
-  color: var(--ink, #0f172a);
+  color: var(--ink, #1c1917);
   background: var(--surface, #fff);
 }
-.dlg-secondary:hover { background: var(--surface-2, #F8FAFC); }
+.dlg-secondary:hover { background: var(--surface-2, #fafaf9); }
 
 .dlg-primary {
-  background: var(--brand, #42309C);
-  border-color: var(--brand, #42309C);
+  background: var(--brand, #1a5cf5);
+  border-color: var(--brand, #1a5cf5);
   color: #fff;
 }
 .dlg-primary:hover {
@@ -168,10 +168,10 @@ textarea.dlg-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 }
 
 .dlg-destructive {
-  background: #DC2626;
-  border-color: #DC2626;
+  background: #b4460f;
+  border-color: #b4460f;
 }
 .dlg-destructive:hover {
-  background: #B91C1C;
-  border-color: #B91C1C;
+  background: #b4460f;
+  border-color: #b4460f;
 }

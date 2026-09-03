@@ -23,6 +23,7 @@ export interface TraceCard {
   last_response_id?: string;
   workspace?: string;
   credits?: number;
+  created_at?: number;
 }
 
 const WINDOW = 200;
@@ -41,6 +42,21 @@ export async function fetchTraceWindow(harness?: string,
   if (!r.ok) return [];
   const d = await r.json().catch(() => null);
   return Array.isArray(d?.sessions) ? d.sessions : [];
+}
+
+/** One page of a harness's own tasks, newest first, from that harness's index. `cursor` continues
+ *  the listing; an empty cursor back means the end. Scoped to the active workspace like the window. */
+export const TASK_PAGE = 50;
+export async function fetchHarnessTasks(harness: string, cursor = ''): Promise<{ sessions: TraceCard[]; cursor: string }> {
+  const org = getSession()?.orgId;
+  if (!org) return { sessions: [], cursor: '' };
+  const q = new URLSearchParams({ org, limit: String(TASK_PAGE), harness });
+  if (cursor) q.set('cursor', cursor);
+  appendWorkspaceQuery(q);
+  const r = await harnessFetch(`/api/harness/v1/traces?${q.toString()}`);
+  if (!r.ok) return { sessions: [], cursor: '' };
+  const d = await r.json().catch(() => null);
+  return { sessions: Array.isArray(d?.sessions) ? d.sessions : [], cursor: typeof d?.cursor === 'string' ? d.cursor : '' };
 }
 
 export const TERMINAL_OK = new Set(['done', 'completed']);
@@ -88,6 +104,11 @@ export function avgCreditsOf(cards: TraceCard[] | undefined): string | null {
   return avg >= 100 ? Math.round(avg).toLocaleString() : avg.toFixed(avg < 10 ? 2 : 1);
 }
 
+/** When a task last did something: the settle of its latest turn, else its creation. */
+export function activityAt(c: TraceCard): number { return c.finished_at || c.created_at || 0; }
+
+/** Cards per harness, most recent activity first: a task that is running now leads, then the
+ *  rest by their latest settle, so a follow-up on an old task brings it back to the top. */
 export function groupByHarness(cards: TraceCard[]): Map<string, TraceCard[]> {
   const m = new Map<string, TraceCard[]>();
   for (const c of cards) {
@@ -95,7 +116,14 @@ export function groupByHarness(cards: TraceCard[]): Map<string, TraceCard[]> {
     if (!m.has(k)) m.set(k, []);
     m.get(k)!.push(c);
   }
+  for (const [k, list] of m) m.set(k, sortByActivity(list));
   return m;
+}
+
+/** Most recent activity first: running tasks lead, then the rest by their latest settle. */
+export function sortByActivity(list: TraceCard[]): TraceCard[] {
+  const live = (c: TraceCard) => (RUNNING.has(c.status || '') ? 1 : 0);
+  return [...list].sort((a, b) => live(b) - live(a) || activityAt(b) - activityAt(a));
 }
 
 /** Tasks-per-day buckets for the last `days`, oldest first. */
