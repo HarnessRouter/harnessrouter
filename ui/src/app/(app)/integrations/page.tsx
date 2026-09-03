@@ -600,6 +600,9 @@ function MediaChainTable({ chain, policy, busy, onChange }: {
             was asked, is the one that runs.</p>
         </div>
       </div>
+      {/* Wide on purpose (order, model, provider, blurb): on a phone the table scrolls inside
+          its own wrap instead of running past the page edge, like the other tables here. */}
+      <div className="table-wrap">
       <table className="table">
         <thead><tr><th>Order</th><th>Model</th><th>Provider</th><th>What it does</th><th /></tr></thead>
         <tbody>
@@ -627,6 +630,7 @@ function MediaChainTable({ chain, policy, busy, onChange }: {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
