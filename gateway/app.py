@@ -3507,6 +3507,23 @@ async def delete_trace(sid: str, request: Request) -> dict:
     tarball, and tombstone the session vertex. /v1/sessions/{sid} is the protocol's name for it;
     /v1/traces/{sid} is the older path the Traces app calls, the same handler."""
     org, v = await _owned_session(request, sid)
+    # The tombstone goes down FIRST. Stopping a live turn below triggers its finalize, and a
+    # reconcile can land at any moment; both write session cards, and the indexer drops a write
+    # whose session is tombstoned. Written last, the tombstone missed exactly those writes and
+    # the cards came back after the delete had cleared them.
+        # Mark deleted but DON'T blank trace_blob — a blank prefix silently disables the trace if the
+        # session is later resumed (the prefix is deterministic from created_at_inv anyway).
+        #
+        # `shared: "0"` is part of the tombstone, not hygiene. The share resolver matches on
+        # {share_token, shared: "1"} and never looks at status, so a deleted session's link kept
+        # resolving — and the turns behind it are rebuilt from response records, which this
+        # function does not remove. Verified live: DELETE answered 200 and the share link went on
+        # serving the full conversation. Sessions §6 says deletion MUST make the session
+        # unreadable, and the published link is the reader its owner is least likely to remember.
+    try:
+        await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
+    except Exception:  # noqa: BLE001
+        pass
     # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
     # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
@@ -3548,20 +3565,7 @@ async def delete_trace(sid: str, request: Request) -> dict:
         except Exception:  # noqa: BLE001
             pass
     await _media_session_purge(sid)
-    # 3) tombstone the session vertex + drop in-process state
-    try:
-        # Mark deleted but DON'T blank trace_blob — a blank prefix silently disables the trace if the
-        # session is later resumed (the prefix is deterministic from created_at_inv anyway).
-        #
-        # `shared: "0"` is part of the tombstone, not hygiene. The share resolver matches on
-        # {share_token, shared: "1"} and never looks at status, so a deleted session's link kept
-        # resolving — and the turns behind it are rebuilt from response records, which this
-        # function does not remove. Verified live: DELETE answered 200 and the share link went on
-        # serving the full conversation. Sessions §6 says deletion MUST make the session
-        # unreadable, and the published link is the reader its owner is least likely to remember.
-        await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
-    except Exception:  # noqa: BLE001
-        pass
+    # 3) drop in-process state (the vertex was tombstoned first, above)
     _SHARE_STATE_CACHE.pop(sid, None)
     _SHARE_TOKEN_CACHE.clear()
     _session_trace.pop(sid, None)

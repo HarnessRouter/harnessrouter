@@ -57,3 +57,18 @@ def test_a_reindex_without_scope_fields_inherits_them_and_rewrites_the_mirrors()
         return statuses
     statuses = asyncio.run(run())
     assert all(v == "done" for v in statuses.values()), f"a mirror kept the stale card: {statuses}"
+
+
+def test_a_card_written_for_a_tombstoned_session_is_dropped():
+    async def run():
+        sid = "hsesstombstonetest"
+        base = "local/98211493921626_" + sid
+        await A._vertex_upsert(sid, {"tenant": "local", "status": "deleted", "created_at_inv": "98211493921626",
+                                     "trace_blob": base})
+        await A._index_manifest(base, {"session_id": sid, "harness_id": "pi", "member_id": "m", "workspace": "dev", "status": "done"})
+        present = {}
+        for k in A._manifest_index_keys(base, "pi", "m", "dev"):
+            present[k] = bool(await A._blob_get(k, kb=A.TRACE_KB))
+        return present
+    present = asyncio.run(run())
+    assert not any(present.values()), f"a write for a deleted session landed: {[k for k, v in present.items() if v]}"
