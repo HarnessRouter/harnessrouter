@@ -485,48 +485,12 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
     }
     setFiles((p) => [...p, ...out]);
   }
-  // Drag-and-drop attach: dropping files anywhere on the conversation adds them to the composer.
-  // dragCount tracks nested enter/leave pairs (children fire their own events) so the highlight
-  // doesn't flicker off while moving across the pane.
-  const [dragOver, setDragOver] = useState(false);
-  const dragCount = useRef(0);
+  // Files dropped anywhere on the conversation attach to the composer: the composer owns the
+  // drop (ReifyUI), this pane is only its wider target.
+  const convRef = useRef<HTMLDivElement>(null);
   const canAttach = !!target.backend && !busy;
-  const onDragEnter = (e: React.DragEvent) => {
-    if (!canAttach || !Array.from(e.dataTransfer?.types || []).includes('Files')) return;
-    e.preventDefault();
-    dragCount.current += 1;
-    setDragOver(true);
-  };
-  const onDragOver = (e: React.DragEvent) => {
-    if (!canAttach || !Array.from(e.dataTransfer?.types || []).includes('Files')) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-  };
-  const onDragLeave = (e: React.DragEvent) => {
-    if (!dragOver) return;
-    e.preventDefault();
-    dragCount.current = Math.max(0, dragCount.current - 1);
-    if (dragCount.current === 0) setDragOver(false);
-  };
-  const onDrop = (e: React.DragEvent) => {
-    if (!canAttach) return;
-    e.preventDefault();
-    dragCount.current = 0;
-    setDragOver(false);
-    if (e.dataTransfer?.files?.length) void pickFiles(e.dataTransfer.files);
-  };
-
   return (
-    <div className={'wbx-conv' + (preview ? ' split' : '')}
-      onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
-      {dragOver && (
-        <div className="wbx-droparea" aria-hidden="true">
-          <div className="wbx-droparea-inner">
-            <iconify-icon icon="tabler:file-upload"></iconify-icon>
-            Drop files to attach
-          </div>
-        </div>
-      )}
+    <div ref={convRef} className={'wbx-conv' + (preview ? ' split' : '')}>
       {/* A fresh draft centers on what it is for: the harness, named under its base's mark, with
           the composer right under it. The first message turns it into the running thread. */}
       <div className={'wbx-conv-main' + (!loading && msgs.length === 0 && !busy ? ' is-hero' : '')}>
@@ -650,6 +614,8 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
         disabled={!target.backend || busy}
         placeholder={!target.backend ? 'This harness is coming soon' : (sessionId || msgs.length > 0) ? `Reply to ${target.name}…` : 'Describe a task…'}
         inputRef={taRef}
+        onFiles={canAttach ? (l: FileList) => { void pickFiles(l); } : undefined}
+        dropTargetRef={convRef}
         attachments={files.length > 0 ? (
           <div className="wbx-attach-row in-composer">
             {files.map((f, j) => (
