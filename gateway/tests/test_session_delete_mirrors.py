@@ -72,3 +72,16 @@ def test_a_card_written_for_a_tombstoned_session_is_dropped():
         return present
     present = asyncio.run(run())
     assert not any(present.values()), f"a write for a deleted session landed: {[k for k, v in present.items() if v]}"
+
+
+def test_a_status_write_after_the_tombstone_is_dropped_and_the_tombstone_stays():
+    async def run():
+        sid = "hsessfinaltombstone"
+        await A._vertex_upsert(sid, {"tenant": "local", "status": "running"})
+        await A._vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
+        await A._vertex_upsert(sid, {"status": "cancelled", "turn_status": "cancelled"})   # the late finalize
+        await A._vg_upsert("HarnessSession", sid, {"status": "done"})                       # a late reconcile
+        await A._vertex_upsert(sid, {"elapsed": "1.5"})                                     # a field write, not a revival
+        return await A._vertex_get(sid)
+    v = asyncio.run(run())
+    assert v and v.get("status") == "deleted", f"the tombstone was overwritten: {v}"
