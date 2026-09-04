@@ -85,3 +85,17 @@ def test_a_status_write_after_the_tombstone_is_dropped_and_the_tombstone_stays()
         return await A._vertex_get(sid)
     v = asyncio.run(run())
     assert v and v.get("status") == "deleted", f"the tombstone was overwritten: {v}"
+
+
+def test_an_orphaned_mirror_card_is_dropped_and_removed_on_list():
+    async def run():
+        base = "local/98211493921626_hsessorphanmirror"
+        card = {"session_id": "hsessorphanmirror", "harness_id": "orph", "member_id": "m", "workspace": "w", "status": "done", "title": "t"}
+        await A._index_manifest(base, dict(card))
+        flat, mirror = A._manifest_index_keys(base, "orph", "", "")
+        await A._blob_delete(flat, kb=A.TRACE_KB)          # what an old delete left behind
+        listed = await A._session_cards("local", 20, "", "", "orph", "", False)
+        return [c["session_id"] for c in listed["sessions"]], bool(await A._blob_get(mirror, kb=A.TRACE_KB))
+    sids, mirror_still_there = asyncio.run(run())
+    assert "hsessorphanmirror" not in sids, "an orphaned mirror card was listed"
+    assert not mirror_still_there, "the orphan was listed away but not removed"
