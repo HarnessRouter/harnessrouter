@@ -3186,6 +3186,17 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
         b = await _blob_get(item["file_id"], kb=TRACE_KB)
         if not b:
             return None
+        # A mirror card whose flat card is gone is an orphan: a delete on an older version
+        # removed the flat card and left the mirror (the delete now clears every mirror, but an
+        # install upgrading brings its orphans with it). It is dropped here, and removed so the
+        # next list does not pay for it either. Only mirrors are checked: the flat index IS the
+        # manifest, so the read above already answered for it.
+        fid = str(item["file_id"])
+        if "/idx/" not in fid:
+            flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
+            if not await _blob_get(flat, kb=TRACE_KB):
+                await _blob_delete(fid, kb=TRACE_KB)
+                return None
         try:
             m = json.loads(b)
         except Exception:  # noqa: BLE001
