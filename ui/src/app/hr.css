@@ -329,14 +329,10 @@ a { color: inherit; text-decoration: none; }
 /* ════════ Cowork-faithful chat polish ════════ */
 .wbx-conv { position: relative; }
 
-/* Drag-and-drop attach overlay: shown while files hover the conversation pane. */
-.wbx-droparea { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center;
   justify-content: center; background: rgba(110, 85, 255, .06); pointer-events: none;
   border: 2px dashed var(--brand); border-radius: 12px; }
-.wbx-droparea-inner { display: flex; align-items: center; gap: 10px; padding: 14px 22px;
   border-radius: 12px; background: #fff; border: 1px solid var(--line);
   box-shadow: 0 8px 28px rgba(15, 23, 42, .14); font-size: 14px; font-weight: 700; color: var(--ink); }
-.wbx-droparea-inner iconify-icon { font-size: 20px; color: var(--brand); }
 /* align the two header chevrons: config head + recents top share a height, centered */
 .wbx-pane-head { height: 52px; padding: 0 12px 0 16px; }
 .wbx-recents-top { height: 52px; padding: 0 12px; gap: 10px; align-items: center; }
