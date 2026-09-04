@@ -115,9 +115,16 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
       else if (window.innerWidth <= 1024) setNavW(64);
     } catch { /* storage unavailable -> keep the default */ }
   }, []);
+  // Agent harnesses and Arena want the width: they open with the rail, whatever the saved
+  // preference, and the preference is untouched by that. The toggle and a drag widen the rail
+  // for this visit; every other page shows the preference as it was.
+  const collapseHere = /^\/(harnesses|arena)(\/|$)/.test(pathname);
+  const [railHere, setRailHere] = useState(true);
+  useEffect(() => { setRailHere(true); }, [pathname]);
   const commitNavW = useCallback((w: number) => {
     const snapped = w < 150 ? 64 : Math.min(340, Math.max(150, w));
     setNavW(snapped);
+    setRailHere(snapped < 150);
     try { localStorage.setItem('hr.v2.navW', String(snapped)); } catch { /* ignore */ }
   }, []);
   const onDragStart = useCallback((e: React.PointerEvent) => {
@@ -146,14 +153,15 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
     sync(); mq.addEventListener('change', sync);
     return () => mq.removeEventListener('change', sync);
   }, []);
-  const railed = navW < 150 && !mobile;
+  const railed = (collapseHere ? railHere : navW < 150) && !mobile;
+  const width = railed ? 64 : navW < 150 ? 268 : navW;
   // The width variable must live on the ROOT, not on the aside: .v2-main is a sibling, and a
   // custom property set inline on the aside never cascades to it — so the content margin stayed
   // 268px with the rail collapsed, leaving exactly the dead gap the owner screenshotted.
   useEffect(() => {
-    document.documentElement.style.setProperty('--v2-navw', `${navW}px`);
+    document.documentElement.style.setProperty('--v2-navw', `${width}px`);
     return () => { document.documentElement.style.removeProperty('--v2-navw'); };
-  }, [navW]);
+  }, [width]);
   const [connectOpen, setConnectOpen] = useState(false);
   const wsRef = useRef<HTMLDivElement>(null);
   const acctRef = useRef<HTMLDivElement>(null);
@@ -338,7 +346,7 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
       </div>
 
       <aside className={'v2-side' + (railed ? ' is-rail' : '') + (dragging ? ' is-dragging' : '') + (mobileNav ? ' is-open' : '')}
-        style={{ ['--v2-navw' as string]: `${navW}px` }} aria-label="Product navigation">
+        aria-label="Product navigation">
         <div className="v2-resize" role="separator" aria-orientation="vertical" aria-label="Resize navigation"
           onPointerDown={onDragStart} onDoubleClick={() => commitNavW(railed ? 268 : 64)} />
 
