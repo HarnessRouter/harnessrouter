@@ -9,14 +9,17 @@ import pathlib
 import sys
 import tempfile
 
-_ROOT = tempfile.mkdtemp(prefix="hr-runner-ws-")
-os.environ["HARNESS_WORKSPACE"] = _ROOT
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server as S  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 
-def test_the_folder_goes_and_the_root_and_a_missing_folder_are_safe():
+def test_the_folder_goes_and_the_root_and_a_missing_folder_are_safe(monkeypatch):
+    # The module reads its root at import, and another test module may have imported it first:
+    # point the root at a fresh directory for this test rather than depend on import order.
+    _ROOT = tempfile.mkdtemp(prefix="hr-runner-ws-")
+    monkeypatch.setattr(S, "WORKSPACE_ROOT", _ROOT)
+    monkeypatch.setattr(S, "_SANDBOX_PER_SESSION", False)
     sid = "hsess0123456789abcdef0123456789abcdef"
     ws = S._ws(sid)
     os.makedirs(os.path.join(ws, "sub"), exist_ok=True)
