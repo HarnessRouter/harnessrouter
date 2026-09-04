@@ -6,6 +6,12 @@ All notable changes to the Unified Harness Protocol.
 
 ### Clarified
 
+- **Session deletion is named** ([Sessions §6](versions/2026-08-11/sessions.md#6-deleting)):
+  `DELETE /v1/sessions/{id}` is the protocol's session delete, with the semantics the old path
+  always had (transcript, trace and working folder go; the session stops counting toward any
+  allowance; a later `GET` is `404`). `DELETE /v1/traces/{id}` stays as an alias a server MAY keep,
+  which is what the reference implementation does with one handler behind both paths.
+
 - **Session sharing is codified** ([Sessions §5](versions/2026-08-11/sessions.md#5-session-sharing)),
   closing the four gaps of [#44](https://github.com/HarnessRouter/harnessrouter/issues/44): the
   share object is schema'd (`SessionShare`: `id` and `url` required, `url` may be base-relative),

@@ -319,6 +319,12 @@ export async function saveCustom(c: CustomHarness): Promise<CustomHarness> {
   return gw<CustomHarness>('PUT', `/v1/harnesses/${encodeURIComponent(c.id)}`, harnessBody(c));
 }
 
+/** Delete a session for good: transcript, trace, and working folder. The space it held stops
+ *  counting toward the org's agent memory at once. */
+export async function deleteSession(sid: string): Promise<void> {
+  await gw<{ deleted: boolean }>('DELETE', `/v1/sessions/${encodeURIComponent(sid)}`);
+}
+
 export async function deleteCustom(id: string): Promise<void> {
   await gw<{ deleted: boolean }>('DELETE', `/v1/harnesses/${encodeURIComponent(id)}`);
 }

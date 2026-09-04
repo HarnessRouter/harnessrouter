@@ -3452,11 +3452,12 @@ async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Respons
     return Response(content=body, media_type=media)
 
 
+@app.delete("/v1/sessions/{sid}")
 @app.delete("/v1/traces/{sid}")
 async def delete_trace(sid: str, request: Request) -> dict:
-    """Delete a whole conversation (session): its trace manifest + event chunks, its durable
-    workspace tarball, and tombstone the session vertex. This is what the Workbench Recents
-    'delete' uses — removing the card AND the underlying session workspace."""
+    """Delete a session for good: its trace manifest + event chunks, its durable workspace
+    tarball, and tombstone the session vertex. /v1/sessions/{sid} is the protocol's name for it;
+    /v1/traces/{sid} is the older path the Traces app calls, the same handler."""
     await _owned_session(request, sid)
     base = await _trace_base(sid)
     # 1) trace manifest + event chunks (drives the Recents/Traces list)

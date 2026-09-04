@@ -48,7 +48,8 @@ the [protocol README](../../README.md).
 | `DELETE` | `/v1/harnesses/{id}` | Full | [Harnesses](harnesses.md) |
 | `POST` | `/v1/sessions/{id}/share` | Full | [Sessions](sessions.md) |
 | `GET` | `/v1/sessions/{id}/share` | Full | [Sessions](sessions.md) |
-| `DELETE` | `/v1/traces/{id}` | Full | [Sessions](sessions.md) |
+| `DELETE` | `/v1/sessions/{id}` | Full | [Sessions](sessions.md) |
+| `DELETE` | `/v1/traces/{id}` | Full | [Sessions](sessions.md) (older path, same operation) |
 
 ## Conformance
 

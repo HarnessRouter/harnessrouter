@@ -37,7 +37,7 @@ anything that only inspects a schema.
 
 ## What it checks
 
-63 checks across three classes.
+64 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
