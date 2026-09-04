@@ -1944,7 +1944,25 @@ async def _checkpoint(sid: str, rec: dict) -> None:
 
 
 # ── HarnessSession vertex (best-effort; never blocks a turn) ──────────────────────
+async def _session_write_allowed(sid: str, props: dict) -> bool:
+    """A tombstone is final. Nothing after a delete may change a session's status: the finalize
+    of a turn the delete itself stopped, a reconcile, a cancel settling late — each used to land
+    "cancelled" or "done" over "deleted", and the session was readable again with fresh cards.
+    Only status writes are checked (the one field that can revive), so the hot per-event upserts
+    cost nothing extra."""
+    st = props.get("status")
+    if st is None or st == "deleted":
+        return True
+    try:
+        cur = await BACKING.graph.get(sid)
+    except Exception:  # noqa: BLE001
+        return True
+    return not (cur and str(cur.get("status") or "") == "deleted")
+
+
 async def _vertex_upsert(sid: str, props: dict) -> None:
+    if not await _session_write_allowed(sid, props):
+        return
     await BACKING.graph.upsert("HarnessSession", sid, props)
 
 
@@ -4059,6 +4077,8 @@ async def _vg_upsert(label: str, vid: str, props: dict, *, raise_on_fail: bool =
     Best-effort by default; VG is closed-world on labels so an unregistered label silently no-ops.
     raise_on_fail=True (the API-KEY mint/revoke path): a swallowed failure would make a revoke
     silently revert or a shown-once key permanently 401, so surface it as a 502 to the caller."""
+    if label == "HarnessSession" and not await _session_write_allowed(vid, props):
+        return
     try:
         await BACKING.graph.upsert(label, vid, props, raise_on_fail=raise_on_fail)
     except HTTPException:
