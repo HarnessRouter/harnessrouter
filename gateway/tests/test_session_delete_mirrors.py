@@ -1,0 +1,101 @@
+"""A deleted session leaves no card behind in any mirror.
+
+Session cards are mirrored per harness, per member and per workspace, and the delete used to
+derive the mirror keys from one manifest. A session deleted before its finalize (no manifest
+yet), or one whose finalize dropped a scope field, had its flat card removed and its mirrors
+left holding a "running" card for a session that no longer existed — the harness tree kept
+listing it. The delete now takes every source of the scope it can get, and the indexer carries
+scope fields forward so a rewrite never shrinks the mirror set.
+"""
+import asyncio
+import json
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+os.environ.setdefault("HR_BACKING", "local")
+import app as A  # noqa: E402
+
+BASE = "local/98211493921626_hsessmirrortest"
+CARD = {"session_id": "hsessmirrortest", "harness_id": "pi", "member_id": "local@localhost",
+        "workspace": "dev", "status": "running", "title": "t"}
+
+
+def _keys():
+    return A._manifest_index_keys(BASE, "pi", "local@localhost", "dev")
+
+
+async def _present():
+    out = {}
+    for k in _keys():
+        out[k] = bool(await A._blob_get(k, kb=A.TRACE_KB))
+    return out
+
+
+def test_a_delete_with_a_fieldless_manifest_still_clears_every_mirror():
+    async def run():
+        await A._index_manifest(BASE, dict(CARD))
+        assert all((await _present()).values()), "the accept-time card should sit in all four keys"
+        # the finalize that lost its scope: a manifest with none of the fields, as the delete sees it
+        await A._deindex_manifest(BASE, {"session_id": "hsessmirrortest", "status": "done"},
+                                  {"harness_id": "pi", "member": "local@localhost", "workspace": "dev"})
+        return await _present()
+    left = asyncio.run(run())
+    assert not any(left.values()), f"cards left behind after delete: {[k for k, v in left.items() if v]}"
+
+
+def test_a_reindex_without_scope_fields_inherits_them_and_rewrites_the_mirrors():
+    async def run():
+        await A._index_manifest(BASE, dict(CARD))
+        await A._index_manifest(BASE, {"session_id": "hsessmirrortest", "status": "done", "title": "t"})
+        statuses = {}
+        for k in _keys():
+            b = await A._blob_get(k, kb=A.TRACE_KB)
+            statuses[k] = json.loads(b)["status"] if b else None
+        await A._deindex_manifest(BASE, dict(CARD))
+        return statuses
+    statuses = asyncio.run(run())
+    assert all(v == "done" for v in statuses.values()), f"a mirror kept the stale card: {statuses}"
+
+
+def test_a_card_written_for_a_tombstoned_session_is_dropped():
+    async def run():
+        sid = "hsesstombstonetest"
+        base = "local/98211493921626_" + sid
+        await A._vertex_upsert(sid, {"tenant": "local", "status": "deleted", "created_at_inv": "98211493921626",
+                                     "trace_blob": base})
+        await A._index_manifest(base, {"session_id": sid, "harness_id": "pi", "member_id": "m", "workspace": "dev", "status": "done"})
+        present = {}
+        for k in A._manifest_index_keys(base, "pi", "m", "dev"):
+            present[k] = bool(await A._blob_get(k, kb=A.TRACE_KB))
+        return present
+    present = asyncio.run(run())
+    assert not any(present.values()), f"a write for a deleted session landed: {[k for k, v in present.items() if v]}"
+
+
+def test_a_status_write_after_the_tombstone_is_dropped_and_the_tombstone_stays():
+    async def run():
+        sid = "hsessfinaltombstone"
+        await A._vertex_upsert(sid, {"tenant": "local", "status": "running"})
+        await A._vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
+        await A._vertex_upsert(sid, {"status": "cancelled", "turn_status": "cancelled"})   # the late finalize
+        await A._vg_upsert("HarnessSession", sid, {"status": "done"})                       # a late reconcile
+        await A._vertex_upsert(sid, {"elapsed": "1.5"})                                     # a field write, not a revival
+        return await A._vertex_get(sid)
+    v = asyncio.run(run())
+    assert v and v.get("status") == "deleted", f"the tombstone was overwritten: {v}"
+
+
+def test_an_orphaned_mirror_card_is_dropped_and_removed_on_list():
+    async def run():
+        base = "local/98211493921626_hsessorphanmirror"
+        card = {"session_id": "hsessorphanmirror", "harness_id": "orph", "member_id": "m", "workspace": "w", "status": "done", "title": "t"}
+        await A._index_manifest(base, dict(card))
+        flat, mirror = A._manifest_index_keys(base, "orph", "", "")
+        await A._blob_delete(flat, kb=A.TRACE_KB)          # what an old delete left behind
+        listed = await A._session_cards("local", 20, "", "", "orph", "", False)
+        return [c["session_id"] for c in listed["sessions"]], bool(await A._blob_get(mirror, kb=A.TRACE_KB))
+    sids, mirror_still_there = asyncio.run(run())
+    assert "hsessorphanmirror" not in sids, "an orphaned mirror card was listed"
+    assert not mirror_still_there, "the orphan was listed away but not removed"

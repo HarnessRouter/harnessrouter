@@ -204,6 +204,17 @@ response.completed | response.failed | response.incomplete   # terminal`} />
 # -> { "session_id": "…", "status": "cancelled", "cancelled": true, "runner_killed": true }`} />
       </Endpoint>
 
+      <Endpoint method="DELETE" path="/v1/sessions/{session_id}">
+        <p className="hr-meta">Delete a session for good: its transcript, its trace, and its working
+          folder with every file in it. The space it held stops counting toward your agent memory
+          at once, so this is the way to make room under a plan&apos;s memory allowance. Not
+          undoable; a running turn is cancelled first. Returns
+          <code> {`{ "id": "…", "object": "session", "deleted": true }`}</code>.</p>
+        <CodeBlock lang="bash" code={`curl -X DELETE ${mgmtBase}/sessions/{session_id} \\
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY"
+# -> { "id": "…", "object": "session", "deleted": true }`} />
+      </Endpoint>
+
       {/* ── Files ───────────────────────────────────────────────────────── */}
       <h3 className="apidoc-h3">Files</h3>
       <Endpoint method="POST" path="/v1/files">

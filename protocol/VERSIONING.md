@@ -72,7 +72,7 @@ smooth ones.
 
 - **Mixed field casing.** The task surface is `snake_case`; the harness object is `camelCase`. Both
   are load-bearing in shipped clients. A future major version should unify them.
-- **Session deletion lives at `/v1/traces/{id}`.** The path predates the session vocabulary. It is
-  specified as-is rather than quietly renamed, because renaming it would break existing clients for
-  a cosmetic gain. A future version should move it to `/v1/sessions/{id}` and deprecate the old path
-  through the process above.
+- **Session deletion also lives at `/v1/traces/{id}`.** The path predates the session vocabulary.
+  The protocol now names `DELETE /v1/sessions/{id}` and keeps the old path as an alias rather than
+  renaming it, because renaming would break existing clients for a cosmetic gain. A future major
+  version may retire the old path through the process above.

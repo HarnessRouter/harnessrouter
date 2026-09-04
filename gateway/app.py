@@ -1433,10 +1433,35 @@ def _manifest_index_keys(base: str, harness_id: str, member_id: str, workspace: 
     return keys
 
 
+_SCOPE_FIELDS = ("harness_id", "member_id", "workspace")
+
+
 async def _index_manifest(base: str, manifest: dict) -> None:
     """Persist a manifest to the flat index and its narrow per-harness/per-member/per-workspace
     mirrors, so all read surfaces (unfiltered Recents, per-harness Traces, per-member 'my
-    sessions', per-workspace console views) agree."""
+    sessions', per-workspace console views) agree.
+
+    The scoping fields decide WHICH mirrors are written. A card that arrives without one (a
+    finalize or reconcile built from a turn record that lost it) used to rewrite only the flat
+    index, leaving the mirror it no longer named holding the previous card forever — a per-harness
+    list that still says "running" for a session that finished, or that lists one deleted. So a
+    missing scope field inherits from the card being replaced; the mirror set never shrinks by
+    accident."""
+    # A write that lands after the session's delete (a finalize or reconcile racing it) must not
+    # resurrect the card: the tombstone on the vertex is the durable, replica-safe answer.
+    _sid = str(manifest.get("session_id") or base.rsplit("_", 1)[-1])
+    try:
+        _v = await _vertex_get(_sid)
+    except Exception:  # noqa: BLE001
+        _v = None
+    if _v and str(_v.get("status") or "") == "deleted":
+        return
+    missing = [k for k in _SCOPE_FIELDS if not manifest.get(k)]
+    if missing:
+        prior = await _prior_manifest(base)
+        for k in missing:
+            if prior.get(k):
+                manifest[k] = prior[k]
     data = json.dumps(manifest, default=str).encode()
     keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
                                 str(manifest.get("member_id") or ""),
@@ -1506,12 +1531,35 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     })
 
 
-async def _deindex_manifest(base: str, manifest: dict) -> None:
-    """Remove a manifest from the flat index and its narrow mirrors (session delete)."""
-    keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
-                                str(manifest.get("member_id") or ""),
-                                str(manifest.get("workspace") or ""))
-    await asyncio.gather(*[_blob_delete(k, kb=TRACE_KB) for k in keys])
+async def _deindex_manifest(base: str, manifest: dict, *scopes: dict) -> None:
+    """Remove a session's card from the flat index and EVERY mirror it was ever written to.
+
+    The mirror keys are a function of the session's scope (harness, member, workspace). Deriving
+    them from one manifest is exactly one source short: a session deleted before its finalize has
+    no manifest yet, and one whose finalize dropped a scope field has a manifest that no longer
+    names the mirror its accept-time card sits in. Either way the delete removed the flat card and
+    left a mirror holding a "running" session that no longer exists. So every source that knows the
+    scope contributes (the manifest, the in-process turn record, the session vertex, whatever the
+    caller adds), and the union of keys is deleted; deleting a key that was never written is free."""
+    hs, ms, ws = set(), set(), set()
+    for src in (manifest, *scopes):
+        if not isinstance(src, dict):
+            continue
+        if src.get("harness_id"):
+            hs.add(str(src["harness_id"]))
+        for m in (src.get("member_id"), src.get("member")):
+            if m:
+                ms.add(str(m))
+        if src.get("workspace"):
+            ws.add(str(src["workspace"]))
+    keys = set(_manifest_index_keys(base, "", "", ""))
+    for h in hs:
+        keys.update(_manifest_index_keys(base, h, "", ""))
+    for m in ms:
+        keys.update(_manifest_index_keys(base, "", m, ""))
+    for w in ws:
+        keys.update(_manifest_index_keys(base, "", "", w))
+    await asyncio.gather(*[_blob_delete(k, kb=TRACE_KB) for k in sorted(keys)])
 
 
 async def _trace_put(file_id: str, data: bytes) -> bool:
@@ -1896,7 +1944,25 @@ async def _checkpoint(sid: str, rec: dict) -> None:
 
 
 # ── HarnessSession vertex (best-effort; never blocks a turn) ──────────────────────
+async def _session_write_allowed(sid: str, props: dict) -> bool:
+    """A tombstone is final. Nothing after a delete may change a session's status: the finalize
+    of a turn the delete itself stopped, a reconcile, a cancel settling late — each used to land
+    "cancelled" or "done" over "deleted", and the session was readable again with fresh cards.
+    Only status writes are checked (the one field that can revive), so the hot per-event upserts
+    cost nothing extra."""
+    st = props.get("status")
+    if st is None or st == "deleted":
+        return True
+    try:
+        cur = await BACKING.graph.get(sid)
+    except Exception:  # noqa: BLE001
+        return True
+    return not (cur and str(cur.get("status") or "") == "deleted")
+
+
 async def _vertex_upsert(sid: str, props: dict) -> None:
+    if not await _session_write_allowed(sid, props):
+        return
     await BACKING.graph.upsert("HarnessSession", sid, props)
 
 
@@ -3120,6 +3186,17 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
         b = await _blob_get(item["file_id"], kb=TRACE_KB)
         if not b:
             return None
+        # A mirror card whose flat card is gone is an orphan: a delete on an older version
+        # removed the flat card and left the mirror (the delete now clears every mirror, but an
+        # install upgrading brings its orphans with it). It is dropped here, and removed so the
+        # next list does not pay for it either. Only mirrors are checked: the flat index IS the
+        # manifest, so the read above already answered for it.
+        fid = str(item["file_id"])
+        if "/idx/" not in fid:
+            flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
+            if not await _blob_get(flat, kb=TRACE_KB):
+                await _blob_delete(fid, kb=TRACE_KB)
+                return None
         try:
             m = json.loads(b)
         except Exception:  # noqa: BLE001
@@ -3452,12 +3529,37 @@ async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Respons
     return Response(content=body, media_type=media)
 
 
+@app.delete("/v1/sessions/{sid}")
 @app.delete("/v1/traces/{sid}")
 async def delete_trace(sid: str, request: Request) -> dict:
-    """Delete a whole conversation (session): its trace manifest + event chunks, its durable
-    workspace tarball, and tombstone the session vertex. This is what the Workbench Recents
-    'delete' uses — removing the card AND the underlying session workspace."""
-    await _owned_session(request, sid)
+    """Delete a session for good: its trace manifest + event chunks, its durable workspace
+    tarball, and tombstone the session vertex. /v1/sessions/{sid} is the protocol's name for it;
+    /v1/traces/{sid} is the older path the Traces app calls, the same handler."""
+    org, v = await _owned_session(request, sid)
+    # The tombstone goes down FIRST. Stopping a live turn below triggers its finalize, and a
+    # reconcile can land at any moment; both write session cards, and the indexer drops a write
+    # whose session is tombstoned. Written last, the tombstone missed exactly those writes and
+    # the cards came back after the delete had cleared them.
+        # Mark deleted but DON'T blank trace_blob — a blank prefix silently disables the trace if the
+        # session is later resumed (the prefix is deterministic from created_at_inv anyway).
+        #
+        # `shared: "0"` is part of the tombstone, not hygiene. The share resolver matches on
+        # {share_token, shared: "1"} and never looks at status, so a deleted session's link kept
+        # resolving — and the turns behind it are rebuilt from response records, which this
+        # function does not remove. Verified live: DELETE answered 200 and the share link went on
+        # serving the full conversation. Sessions §6 says deletion MUST make the session
+        # unreadable, and the published link is the reader its owner is least likely to remember.
+    try:
+        await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
+    except Exception:  # noqa: BLE001
+        pass
+    # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
+    # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
+    if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
+        try:
+            await _stop_session(org, sid, v)
+        except Exception:  # noqa: BLE001
+            pass
     base = await _trace_base(sid)
     # 1) trace manifest + event chunks (drives the Recents/Traces list)
     if base:
@@ -3479,24 +3581,20 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _blob_delete(f"{base}/all.compact.jsonl", kb=TRACE_KB)
         # remove the flat index AND the per-harness/per-member mirrors (harness/member from the
         # manifest we just read; falls back to a bare flat-key delete if the manifest was unreadable)
-        await _deindex_manifest(base, manifest)
+        await _deindex_manifest(base, manifest, _session_trace.get(sid) or {}, v or {})
     # 2) durable session workspace tarball, and anything the media server holds for it
     await _blob_delete(_ws_blob(sid), kb=BLOB_KB)
+    # The live working folder is the session's memory on this box (the tarball above is its
+    # durable copy); §6 says deletion frees it. Only the runner can remove it: the folder belongs
+    # to the session's own uid, and this process is not root. Best effort, never the reason a
+    # delete fails — the session is already unreadable by the time this runs.
+    if POOL_ENDPOINT:
+        try:
+            await _sandbox("/workspace", sid, "DELETE")
+        except Exception:  # noqa: BLE001
+            pass
     await _media_session_purge(sid)
-    # 3) tombstone the session vertex + drop in-process state
-    try:
-        # Mark deleted but DON'T blank trace_blob — a blank prefix silently disables the trace if the
-        # session is later resumed (the prefix is deterministic from created_at_inv anyway).
-        #
-        # `shared: "0"` is part of the tombstone, not hygiene. The share resolver matches on
-        # {share_token, shared: "1"} and never looks at status, so a deleted session's link kept
-        # resolving — and the turns behind it are rebuilt from response records, which this
-        # function does not remove. Verified live: DELETE answered 200 and the share link went on
-        # serving the full conversation. Sessions §6 says deletion MUST make the session
-        # unreadable, and the published link is the reader its owner is least likely to remember.
-        await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
-    except Exception:  # noqa: BLE001
-        pass
+    # 3) drop in-process state (the vertex was tombstoned first, above)
     _SHARE_STATE_CACHE.pop(sid, None)
     _SHARE_TOKEN_CACHE.clear()
     _session_trace.pop(sid, None)
@@ -3990,6 +4088,8 @@ async def _vg_upsert(label: str, vid: str, props: dict, *, raise_on_fail: bool =
     Best-effort by default; VG is closed-world on labels so an unregistered label silently no-ops.
     raise_on_fail=True (the API-KEY mint/revoke path): a swallowed failure would make a revoke
     silently revert or a shown-once key permanently 401, so surface it as a 502 to the caller."""
+    if label == "HarnessSession" and not await _session_write_allowed(vid, props):
+        return
     try:
         await BACKING.graph.upsert(label, vid, props, raise_on_fail=raise_on_fail)
     except HTTPException:
