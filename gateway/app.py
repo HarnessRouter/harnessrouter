@@ -1433,10 +1433,26 @@ def _manifest_index_keys(base: str, harness_id: str, member_id: str, workspace: 
     return keys
 
 
+_SCOPE_FIELDS = ("harness_id", "member_id", "workspace")
+
+
 async def _index_manifest(base: str, manifest: dict) -> None:
     """Persist a manifest to the flat index and its narrow per-harness/per-member/per-workspace
     mirrors, so all read surfaces (unfiltered Recents, per-harness Traces, per-member 'my
-    sessions', per-workspace console views) agree."""
+    sessions', per-workspace console views) agree.
+
+    The scoping fields decide WHICH mirrors are written. A card that arrives without one (a
+    finalize or reconcile built from a turn record that lost it) used to rewrite only the flat
+    index, leaving the mirror it no longer named holding the previous card forever — a per-harness
+    list that still says "running" for a session that finished, or that lists one deleted. So a
+    missing scope field inherits from the card being replaced; the mirror set never shrinks by
+    accident."""
+    missing = [k for k in _SCOPE_FIELDS if not manifest.get(k)]
+    if missing:
+        prior = await _prior_manifest(base)
+        for k in missing:
+            if prior.get(k):
+                manifest[k] = prior[k]
     data = json.dumps(manifest, default=str).encode()
     keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
                                 str(manifest.get("member_id") or ""),
@@ -1506,12 +1522,35 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     })
 
 
-async def _deindex_manifest(base: str, manifest: dict) -> None:
-    """Remove a manifest from the flat index and its narrow mirrors (session delete)."""
-    keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
-                                str(manifest.get("member_id") or ""),
-                                str(manifest.get("workspace") or ""))
-    await asyncio.gather(*[_blob_delete(k, kb=TRACE_KB) for k in keys])
+async def _deindex_manifest(base: str, manifest: dict, *scopes: dict) -> None:
+    """Remove a session's card from the flat index and EVERY mirror it was ever written to.
+
+    The mirror keys are a function of the session's scope (harness, member, workspace). Deriving
+    them from one manifest is exactly one source short: a session deleted before its finalize has
+    no manifest yet, and one whose finalize dropped a scope field has a manifest that no longer
+    names the mirror its accept-time card sits in. Either way the delete removed the flat card and
+    left a mirror holding a "running" session that no longer exists. So every source that knows the
+    scope contributes (the manifest, the in-process turn record, the session vertex, whatever the
+    caller adds), and the union of keys is deleted; deleting a key that was never written is free."""
+    hs, ms, ws = set(), set(), set()
+    for src in (manifest, *scopes):
+        if not isinstance(src, dict):
+            continue
+        if src.get("harness_id"):
+            hs.add(str(src["harness_id"]))
+        for m in (src.get("member_id"), src.get("member")):
+            if m:
+                ms.add(str(m))
+        if src.get("workspace"):
+            ws.add(str(src["workspace"]))
+    keys = set(_manifest_index_keys(base, "", "", ""))
+    for h in hs:
+        keys.update(_manifest_index_keys(base, h, "", ""))
+    for m in ms:
+        keys.update(_manifest_index_keys(base, "", m, ""))
+    for w in ws:
+        keys.update(_manifest_index_keys(base, "", "", w))
+    await asyncio.gather(*[_blob_delete(k, kb=TRACE_KB) for k in sorted(keys)])
 
 
 async def _trace_put(file_id: str, data: bytes) -> bool:
@@ -3458,7 +3497,14 @@ async def delete_trace(sid: str, request: Request) -> dict:
     """Delete a session for good: its trace manifest + event chunks, its durable workspace
     tarball, and tombstone the session vertex. /v1/sessions/{sid} is the protocol's name for it;
     /v1/traces/{sid} is the older path the Traces app calls, the same handler."""
-    await _owned_session(request, sid)
+    org, v = await _owned_session(request, sid)
+    # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
+    # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
+    if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
+        try:
+            await _stop_session(org, sid, v)
+        except Exception:  # noqa: BLE001
+            pass
     base = await _trace_base(sid)
     # 1) trace manifest + event chunks (drives the Recents/Traces list)
     if base:
@@ -3480,9 +3526,14 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _blob_delete(f"{base}/all.compact.jsonl", kb=TRACE_KB)
         # remove the flat index AND the per-harness/per-member mirrors (harness/member from the
         # manifest we just read; falls back to a bare flat-key delete if the manifest was unreadable)
-        await _deindex_manifest(base, manifest)
+        await _deindex_manifest(base, manifest, _session_trace.get(sid) or {}, v or {})
     # 2) durable session workspace tarball, and anything the media server holds for it
     await _blob_delete(_ws_blob(sid), kb=BLOB_KB)
+    # The live working folder is the session's memory on this box (the tarball is its durable
+    # copy); §6 says deletion frees it, so it goes too. The runner shares this volume.
+    _wsroot = os.environ.get("HARNESS_WORKSPACE") or ""
+    if _wsroot and sid and os.path.isdir(os.path.join(_wsroot, sid)):
+        shutil.rmtree(os.path.join(_wsroot, sid), ignore_errors=True)
     await _media_session_purge(sid)
     # 3) tombstone the session vertex + drop in-process state
     try:
