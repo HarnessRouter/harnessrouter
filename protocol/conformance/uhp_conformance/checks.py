@@ -825,6 +825,32 @@ def f07(ctx):
     return f"{len(ids)} removed"
 
 
+@check("F-08", "A session can be deleted at the protocol path", "full", f"{SPEC}/sessions.md#6-deleting")
+def f08(ctx):
+    # Its own session, never the cached one: later checks still read the shared session, and a
+    # check that deletes what its neighbours depend on would fail them for the wrong reason.
+    h = _harness(ctx)
+    body = {"input": PROMPT, "metadata": {"harness_id": h["id"]}, "stream": False}
+    if ctx.model:
+        body["model"] = ctx.model
+    r = ctx.client.post("/v1/responses", body=body)
+    assert r.status == 200, f"the task to be deleted returned HTTP {r.status}: {r.body[:200]!r}"
+    sid = ((r.json or {}).get("metadata") or {}).get("session_id")
+    if not sid:
+        raise Skip("the task did not return a session_id, so there is no session to delete")
+    # §6 names the endpoint. The older /v1/traces/{id} MAY be kept, but the named path must work —
+    # that is what lets a client delete a session on any server without per-implementation lore.
+    gone = ctx.client.delete(f"/v1/sessions/{sid}")
+    assert 200 <= gone.status < 300, (
+        f"DELETE /v1/sessions/{{id}} returned HTTP {gone.status}. §6 names this path for session "
+        "deletion; a server may keep /v1/traces/{id} besides, but the named one must work.")
+    after = ctx.client.get(f"/v1/sessions/{sid}")
+    assert after.status == 404, (
+        f"a deleted session still resolves (GET returned HTTP {after.status}); §6 requires 404 "
+        "afterwards, otherwise the client cannot tell 'deleted' from 'failed to delete'.")
+    return f"deleted {sid}, now 404"
+
+
 @check("F-02", "Creating a harness with an unsupported base is refused", "full",
        f"{SPEC}/harnesses.md#41-create")
 def f02(ctx):

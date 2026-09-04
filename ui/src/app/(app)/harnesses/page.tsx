@@ -16,7 +16,7 @@ import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
 import { ConfigChat, ShareModal, type ConvTotals } from '@/components/TaskChat';
 import { HarnessSettings } from '@/components/HarnessSettings';
-import { OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, createCustom, listCustom,
+import { OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, createCustom, listCustom, deleteSession,
          type CustomHarness } from '@/lib/harness';
 import { fetchHarnessRows, groupByHarness, timeAgo, p95Of, avgCreditsOf, RUNNING, TERMINAL_OK, TERMINAL_BAD,
          type HarnessRow, type TraceCard, fetchHarnessTasks, sortByActivity } from '@/lib/revamp-data';
@@ -105,6 +105,9 @@ export default function HarnessesPage() {
   const [adding, setAdding] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [totals, setTotals] = useState<ConvTotals | null>(null);
+  // A task about to be deleted: its id, title, and harness, for the confirm and the refresh after.
+  const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; hid: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   useEffect(() => { setTotals(null); }, [sid]);
   // Narrow screens (CSS <=820px) alternate between the panel and the main area, as Tasks did.
   const [mobileDetail, setMobileDetail] = useState(false);
@@ -234,11 +237,17 @@ export default function HarnessesPage() {
                       {tasks.length === 0 ? (loaded ? <div className="hx-tasks-empty">No tasks yet</div> : null) : tasks.map((c) => {
                         const on = c.session_id === sid;
                         return (
-                          <button key={c.session_id} type="button" className={'hx-task' + (on ? ' is-on' : '')}
-                            aria-current={on ? 'true' : undefined} onClick={() => openTask(r.id, c.session_id)}>
-                            <i className={'hx-dot is-' + taskState(c.status)} aria-hidden="true" />
-                            <span>{c.title || 'Task'}</span>
-                          </button>
+                          <div key={c.session_id} className={'hx-task-row' + (on ? ' is-on' : '')}>
+                            <button type="button" className={'hx-task' + (on ? ' is-on' : '')}
+                              aria-current={on ? 'true' : undefined} onClick={() => openTask(r.id, c.session_id)}>
+                              <i className={'hx-dot is-' + taskState(c.status)} aria-hidden="true" />
+                              <span>{c.title || 'Task'}</span>
+                            </button>
+                            <button type="button" className="hx-task-x" title="Delete this task" aria-label={`Delete the task ${c.title || 'Task'}`}
+                              onClick={(e) => { e.stopPropagation(); setConfirmDel({ sid: c.session_id, title: c.title || 'Task', hid: r.id }); }}>
+                              <iconify-icon icon="tabler:trash"></iconify-icon>
+                            </button>
+                          </div>
                         );
                       })}
                       {more && (
@@ -302,6 +311,11 @@ export default function HarnessesPage() {
                   <iconify-icon icon="tabler:share-2"></iconify-icon>
                 </button>
               )}
+              {view === 'chat' && sid && h && (
+                <button className="hx-icbtn" type="button" title="Delete this task" aria-label="Delete this task" onClick={() => setConfirmDel({ sid, title, hid: h })}>
+                  <iconify-icon icon="tabler:trash"></iconify-icon>
+                </button>
+              )}
               {view === 'chat' && h && <button className="hx-secondary" type="button" onClick={() => openNew(h)}>New task</button>}
               {view === 'settings' && h && <button className="hx-secondary" type="button" onClick={() => go({ h })}>Back to tasks</button>}
               {view === 'index' && <button className="hx-primary" type="button" onClick={() => setAdding(true)}>New harness</button>}
@@ -342,6 +356,39 @@ export default function HarnessesPage() {
           )}
         </div>
       </div>
+      {confirmDel && (
+        <div className="modal-backdrop" onClick={() => { if (!deleting) setConfirmDel(null); }}>
+          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="hx-del-title" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header"><div><h2 id="hx-del-title">Delete this task?</h2>
+              <p>&ldquo;{confirmDel.title}&rdquo; and its files are removed for good, and the agent memory it holds is freed.</p></div></div>
+            <div className="modal-body">
+              <div className="modal-actions">
+                <button className="button" type="button" disabled={deleting} onClick={() => setConfirmDel(null)}>Cancel</button>
+                <button className="button danger" type="button" disabled={deleting}
+                  onClick={async () => {
+                    setDeleting(true);
+                    try {
+                      await deleteSession(confirmDel.sid);
+                      track('task_deleted', { harness: confirmDel.hid });
+                      const wasOpen = confirmDel.sid === sid;
+                      setConfirmDel(null);
+                      // The refresh below keeps rows the first page no longer returns, on purpose:
+                      // they may be deeper pages. A deleted task is not, so it leaves here.
+                      setPerHarness((p) => p[confirmDel.hid]
+                        ? { ...p, [confirmDel.hid]: { ...p[confirmDel.hid], list: p[confirmDel.hid].list.filter((c) => c.session_id !== confirmDel.sid) } }
+                        : p);
+                      setCards((cs) => cs.filter((c) => c.session_id !== confirmDel.sid));
+                      await loadTasks(confirmDel.hid);
+                      refresh();
+                      if (wasOpen) go({ h: confirmDel.hid });
+                    } catch { /* the row stays; the next attempt says so again */ }
+                    finally { setDeleting(false); }
+                  }}>{deleting ? 'Deleting' : 'Delete'}</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
 
       {sharing && sid && <ShareModal sid={sid} onClose={() => setSharing(false)} />}
       {adding && (

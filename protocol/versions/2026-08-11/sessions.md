@@ -156,10 +156,19 @@ the R-series measures; the suite now asserts them.
 ## 6. Deleting
 
 ```http
-DELETE /v1/traces/{session_id}
+DELETE /v1/sessions/{session_id}
 ```
 
-Deletes the session and its stored history. A server MUST cancel any in-flight task in the session
-first, and MUST make the session unreadable afterwards. Deletion is the one place where cancel and
+Deletes the session and its stored history: the transcript, the trace, and the working folder the
+session's tasks wrote. Afterwards the session MUST NOT count toward any storage or memory allowance
+the server enforces, because deletion is how a client makes room. A server MUST answer `2xx`, and a
+later `GET /v1/sessions/{session_id}` MUST return `404`.
+
+`DELETE /v1/traces/{session_id}` is the older path for the same operation. It predates the session
+vocabulary; a server MAY keep serving it (the reference implementation does, as the same handler),
+but the path above is the one the protocol names and the one clients SHOULD use.
+
+A server MUST cancel any in-flight task in the session first, and MUST make the session
+unreadable afterwards. Deletion is the one place where cancel and
 delete are legitimately coupled, because the alternative is a running task writing into storage that
 no longer has an owner.
