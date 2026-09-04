@@ -1447,6 +1447,15 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     list that still says "running" for a session that finished, or that lists one deleted. So a
     missing scope field inherits from the card being replaced; the mirror set never shrinks by
     accident."""
+    # A write that lands after the session's delete (a finalize or reconcile racing it) must not
+    # resurrect the card: the tombstone on the vertex is the durable, replica-safe answer.
+    _sid = str(manifest.get("session_id") or base.rsplit("_", 1)[-1])
+    try:
+        _v = await _vertex_get(_sid)
+    except Exception:  # noqa: BLE001
+        _v = None
+    if _v and str(_v.get("status") or "") == "deleted":
+        return
     missing = [k for k in _SCOPE_FIELDS if not manifest.get(k)]
     if missing:
         prior = await _prior_manifest(base)
@@ -3529,11 +3538,15 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _deindex_manifest(base, manifest, _session_trace.get(sid) or {}, v or {})
     # 2) durable session workspace tarball, and anything the media server holds for it
     await _blob_delete(_ws_blob(sid), kb=BLOB_KB)
-    # The live working folder is the session's memory on this box (the tarball is its durable
-    # copy); §6 says deletion frees it, so it goes too. The runner shares this volume.
-    _wsroot = os.environ.get("HARNESS_WORKSPACE") or ""
-    if _wsroot and sid and os.path.isdir(os.path.join(_wsroot, sid)):
-        shutil.rmtree(os.path.join(_wsroot, sid), ignore_errors=True)
+    # The live working folder is the session's memory on this box (the tarball above is its
+    # durable copy); §6 says deletion frees it. Only the runner can remove it: the folder belongs
+    # to the session's own uid, and this process is not root. Best effort, never the reason a
+    # delete fails — the session is already unreadable by the time this runs.
+    if POOL_ENDPOINT:
+        try:
+            await _sandbox("/workspace", sid, "DELETE")
+        except Exception:  # noqa: BLE001
+            pass
     await _media_session_purge(sid)
     # 3) tombstone the session vertex + drop in-process state
     try:
