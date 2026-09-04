@@ -952,3 +952,11 @@ body {
 .cloud-chip iconify-icon { flex: 0 0 auto; font-size: 14px; }
 .cloud-chip.changed { color: var(--v2-ink, #1c1917); }
 .cloud-select-hint { margin: 10px 2px 0; }
+
+/* a task row in the tree: the task, and a delete that appears on hover or focus */
+.hx-task-row { position: relative; display: flex; align-items: center; }
+.hx-task-row .hx-task { flex: 1; min-width: 0; }
+.hx-task-x { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin-right: 8px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--v2-cap); cursor: pointer; opacity: 0; transition: opacity 110ms; }
+.hx-task-row:hover .hx-task-x, .hx-task-x:focus-visible, .hx-task-row.is-on .hx-task-x { opacity: 1; }
+.hx-task-x:hover { background: var(--v2-row, #f3f2f0); color: var(--v2-orange, #b4460f); }
+.hx-task-x iconify-icon { font-size: 14px; }
