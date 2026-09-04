@@ -4145,6 +4145,38 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
             "host": socket.gethostname(), "max_seconds": cap}
 
 
+@app.delete("/workspace")
+async def delete_workspace(identifier: str = "") -> dict:
+    """Remove a session's working folder for good (session delete, Sessions §6).
+
+    This lives in the runner and not the gateway on purpose: the gateway runs as an unprivileged
+    user and each session's folder belongs to that session's own uid (mode 700), so only the
+    process that made the wall can take it down. The folder is the session's memory on this box;
+    the durable tarball is the gateway's to delete. A shared root (sandbox-per-session) is never
+    removed. The gateway stops any live turn before asking; turn records here carry no session
+    identity, so this end cannot second-guess that."""
+    ident = (identifier or "").strip()
+    if not ident:
+        raise HTTPException(status_code=400, detail="identifier required")
+    if _SANDBOX_PER_SESSION:
+        return {"identifier": ident, "removed": False, "reason": "shared workspace root"}
+    ws = _ws(ident)
+    if os.path.realpath(ws) in (os.path.realpath(WORKSPACE_ROOT), "/"):
+        raise HTTPException(status_code=400, detail="refusing to remove the workspace root")
+    if not os.path.isdir(ws):
+        return {"identifier": ident, "removed": False, "reason": "no folder"}
+    uid = _session_uid(ws)
+    shutil.rmtree(ws, ignore_errors=True)
+    if uid is not None:
+        # the session's passwd/group entries were only ever for this folder
+        try:
+            subprocess.run(["userdel", f"hs{uid}"], capture_output=True)
+            subprocess.run(["groupdel", f"hs{uid}"], capture_output=True)
+        except OSError:
+            pass
+    return {"identifier": ident, "removed": not os.path.isdir(ws)}
+
+
 @app.post("/turn/{turn_id}/cancel")
 def cancel_turn(turn_id: str) -> dict:
     """Kill a running turn's CLI process on demand (user-initiated stop). The reader loop

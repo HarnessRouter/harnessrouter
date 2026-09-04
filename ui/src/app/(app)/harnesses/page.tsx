@@ -372,6 +372,12 @@ export default function HarnessesPage() {
                       track('task_deleted', { harness: confirmDel.hid });
                       const wasOpen = confirmDel.sid === sid;
                       setConfirmDel(null);
+                      // The refresh below keeps rows the first page no longer returns, on purpose:
+                      // they may be deeper pages. A deleted task is not, so it leaves here.
+                      setPerHarness((p) => p[confirmDel.hid]
+                        ? { ...p, [confirmDel.hid]: { ...p[confirmDel.hid], list: p[confirmDel.hid].list.filter((c) => c.session_id !== confirmDel.sid) } }
+                        : p);
+                      setCards((cs) => cs.filter((c) => c.session_id !== confirmDel.sid));
                       await loadTasks(confirmDel.hid);
                       refresh();
                       if (wasOpen) go({ h: confirmDel.hid });
