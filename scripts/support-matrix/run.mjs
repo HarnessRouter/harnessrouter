@@ -20,17 +20,29 @@ const files = () => page.evaluate(() => [...document.querySelectorAll('.wbx-file
 // a modal that took over the page mid-turn (an in-app alert); the first-visit welcome is dismissed at login
 const door = () => page.evaluate(() => document.querySelector('[role=dialog]:not(.welcome-overlay)')?.innerText?.replace(/\s+/g, ' ').trim() || '');
 const dismissWelcome = async () => { for (let i = 0; i < 4 && (await page.locator('.welcome-overlay').count()); i++) { await page.locator('.welcome-overlay .welcome-wide-close').click().catch(() => {}); await sleep(600); } };
-// send one message on the open session and wait for it to settle; returns the outcome
+const TERMINAL = new Set(['done', 'completed', 'failed', 'error', 'cancelled', 'incomplete', 'max_turns', 'timeout']);
+const sidOf = () => new URL(page.url()).searchParams.get('sid') || '';
+// the server's own record of the session's turns, read through the console's proxy (same cookie)
+const turnsOf = (sid) => page.evaluate(async (s) => { const r = await fetch(`/api/harness/v1/sessions/${s}/turns`); return r.ok ? ((await r.json()).turns || []) : null; }, sid).catch(() => null);
+// send one message on the open session and wait for it to settle; returns the outcome. The turn
+// settles on the server's word (the turns feed), not on the task pill: the pill reads the task card,
+// which lands a while after the turn does, and a turn scored off it was scored off the previous turn.
 async function turn(text, { maxS = 420 } = {}) {
-  const before = await transcript(); const t0 = Date.now();
+  const before = await transcript(); const t0 = Date.now(); const secs = () => Math.round((Date.now() - t0) / 10) / 100;
+  const sid0 = sidOf(); const n0 = sid0 ? ((await turnsOf(sid0)) || []).length : 0;
   await page.fill('.wbx-composer textarea, textarea', text); await page.keyboard.press('Enter');
-  let p = '', started = false;
-  // the pill still shows the previous turn's state for a moment: wait for this turn to start
-  for (let i = 0; i < 50 && !started; i++) { await sleep(500); p = await pill(); started = /running|working|starting/.test(p); }
-  for (let i = 0; i < maxS / 3; i++) { await sleep(3000); p = await pill(); const d = await door(); if (d) return { ok: false, s: (Date.now() - t0) / 1000, why: 'door: ' + d.slice(0, 160) }; if (/done|incomplete|failed|cancelled/.test(p)) break; }
-  await sleep(3000);
+  let sid = sid0, turns = null;
+  for (let i = 0; i < 120; i++) { await sleep(1000); sid = sid || sidOf(); if (!sid) continue; turns = await turnsOf(sid); if (turns && turns.length > n0) break; }
+  if (!turns || turns.length <= n0) return { ok: false, s: secs(), tail: '', why: 'the message was not taken: no turn record after 120 s' };
+  let last = null;
+  for (let i = 0; i < maxS / 3; i++) { await sleep(3000); const d = await door(); if (d) return { ok: false, s: secs(), tail: '', why: 'door: ' + d.slice(0, 160) }; turns = await turnsOf(sid); last = turns ? turns[turns.length - 1] : null; if (last && TERMINAL.has(String(last.status))) break; }
+  // then let the console render what the server stored: the answer lags the status by a moment
+  const head = String(last?.assistant || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  for (let i = 0; i < 12; i++) { const t = await transcript(); if (!/Working…/.test(t.slice(before.length)) && (!head || t.includes(head))) break; await sleep(1500); }
+  await sleep(1500);
   const t = await transcript(); const tail = t.slice(before.length).trim().slice(-400);
-  return { ok: /done/.test(p), pill: p, s: Math.round((Date.now() - t0) / 10) / 100, tail, why: /done/.test(p) ? '' : tail.slice(-220) };
+  const ok = !!last && (last.status === 'done' || last.status === 'completed');
+  return { ok, status: last ? last.status : 'none', pill: await pill(), s: secs(), tail, turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${last?.status}`) };
 }
 const expectWord = (r, word) => r.ok && (r.tail || '').includes(word) ? r : { ...r, ok: false, why: r.why || `answered without ${word}: ${(r.tail || '').slice(-200)}` };
 try {
@@ -41,10 +53,14 @@ try {
   }
   await sleep(1500); await dismissWelcome();
   for (const h of process.env.HARNESSES.split(',')) {
-    await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await sleep(3500); await dismissWelcome();
+    // the menu starts from a placeholder list and takes the gateway's catalog when it lands: wait for that
+    const catalog = page.waitForResponse((r) => r.url().includes('/v1/models'), { timeout: 30000 }).catch(() => null);
+    await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await catalog; await sleep(3500); await dismissWelcome();
     for (let i = 0; i < 10 && !(await page.locator('.wbx-conv-main.is-hero').count()); i++) { await page.click('button:has-text("New task")').catch(() => {}); await sleep(800); }
+    const readMenu = () => page.evaluate(() => [...document.querySelectorAll('.wbx-model-opt')].map((o) => ({ id: o.querySelector('span')?.textContent.trim(), ok: !o.disabled })));
     await page.click('.ar2-chip'); await sleep(600);
-    const models = await page.evaluate(() => [...document.querySelectorAll('.wbx-model-opt')].map((o) => ({ id: o.querySelector('span')?.textContent.trim(), ok: !o.disabled })));
+    let models = await readMenu();
+    for (let i = 0; i < 10; i++) { await sleep(1500); const again = await readMenu(); if (again.length === models.length && models.length) break; models = again; }
     await page.keyboard.press('Escape'); await sleep(300);
     const enabled = models.filter((m) => m.ok && (!process.env.MODELS || process.env.MODELS.split(',').includes(m.id))).map((m) => m.id);
     log(`HARNESS ${h} models ${models.length} runnable ${enabled.length}: ${enabled.join(',')}`);
@@ -67,7 +83,9 @@ try {
           log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: m }).first().click(); await sleep(300); }
           const a = await turn(`Create a file named hello-${h}.txt containing exactly the word HELLO, then reply DONE.`);
-          const fl = await files(); rec.artifact = { ...a, files: fl, ok: a.ok && fl.some((f) => f.includes(`hello-${h}.txt`)), why: a.ok && !fl.some((f) => f.includes(`hello-${h}.txt`)) ? `no file card (files: ${fl.join(',') || 'none'}); ${a.tail.slice(-160)}` : a.why };
+          // the file cards render from the settled read, a moment after the answer
+          let fl = await files(); for (let i = 0; i < 10 && fl.length < (a.turn_files || []).length; i++) { await sleep(1500); fl = await files(); }
+          rec.artifact = { ...a, files: fl, ok: a.ok && fl.some((f) => f.includes(`hello-${h}.txt`)), why: a.ok && !fl.some((f) => f.includes(`hello-${h}.txt`)) ? `no file card (files: ${fl.join(',') || 'none'}); ${a.tail.slice(-160)}` : a.why };
           log(`ARTIFACT ${k} ${rec.artifact.ok ? 'ok' : 'FAIL'} ${rec.artifact.s}s ${rec.artifact.why}`);
         } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; }
       } catch (e) { rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`); if (/has been closed/.test(rec.error)) throw e; }   // a closed browser ends the worker; the next launch resumes
