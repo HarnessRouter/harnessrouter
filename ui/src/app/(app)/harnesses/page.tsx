@@ -28,13 +28,17 @@ import { getConvState, type UserMsg } from '@/lib/conversation';
 type View = 'index' | 'chat' | 'settings';
 type TaskState = 'done' | 'running' | 'failed' | 'cancelled' | 'incomplete';
 
+const INCOMPLETE = new Set(['incomplete', 'max_turns', 'timeout', 'interrupted']);
 function taskState(status?: string): TaskState {
   const s = status || '';
   if (TERMINAL_OK.has(s)) return 'done';
   if (RUNNING.has(s)) return 'running';
   if (TERMINAL_BAD.has(s)) return 'failed';
   if (s === 'cancelled') return 'cancelled';
-  return 'incomplete';
+  if (INCOMPLETE.has(s)) return 'incomplete';
+  // a card the server has written but not yet given a status is a live task, not a stopped one;
+  // the pill flashed "incomplete" in that gap
+  return 'running';
 }
 
 /** A harness's loaded tasks: the pages read so far, the cursor for the next, and whether one is in flight. */

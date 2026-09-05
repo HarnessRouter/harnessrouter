@@ -5,7 +5,7 @@
 // own thinner versions instead of these: a text pill with an × where an image thumbnail belongs,
 // and a bare row where the output card belongs. One definition, so a column in an arena is the
 // same card as a task, because it is the same card.
-import React from 'react';
+import React, { useState } from 'react';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { containerFileUrl, downloadFile, type RespFile } from '@/lib/chat';
 
@@ -39,6 +39,8 @@ export function AttachCard({ name, dataUri, onRemove }: { name: string; dataUri?
 export function OutputFiles({ files, onPreview }: {
   files: RespFile[]; onPreview: (p: { url: string; name: string }) => void;
 }) {
+  // the archive is refused, with the names, when a cited file is no longer there; the row says so
+  const [zipErr, setZipErr] = useState('');
   if (!files.length) return null;
   const zipUrl = `/api/harness/v1/sessions/${encodeURIComponent(files[0].container_id)}`
     + `/files/archive?files=${encodeURIComponent(files.map((f) => f.file_id).join(','))}`;
@@ -62,10 +64,11 @@ export function OutputFiles({ files, onPreview }: {
           Only worth a row when there's more than one file. */}
       {files.length > 1 && (
         <button className="wbx-zipall" type="button"
-          onClick={(e) => { e.stopPropagation(); downloadFile(zipUrl, 'outputs.zip').catch(() => undefined); }}>
+          onClick={(e) => { e.stopPropagation(); setZipErr(''); downloadFile(zipUrl, 'outputs.zip').catch((err: unknown) => setZipErr(err instanceof Error ? err.message : 'Could not build the archive.')); }}>
           <IcDl /> Download all ({files.length}) as .zip
         </button>
       )}
+      {zipErr && <div className="wbx-zipall-err" role="alert">{zipErr}</div>}
     </div>
   );
 }

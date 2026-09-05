@@ -1187,6 +1187,25 @@ async def _image_auth(sid: str, backend: str) -> dict | None:
     return None
 
 
+def _codex_family(model: str) -> str:
+    """Codex gives gpt-5.3-codex and the other GPT models different tool sets. Measured on
+    2026-09-05: the other models act in a thread gpt-5.3-codex started, but gpt-5.3-codex runs
+    without its tools in a thread where any other model has taken a turn, and narrates its work."""
+    return "codex" if (model or "").strip().lower().endswith("-codex") else "gpt"
+
+
+def _codex_switch_refusal(models_seen, model_req: str) -> str:
+    """The sentence a Codex turn fails with when gpt-5.3-codex would run in a thread another
+    model family has already used, else empty."""
+    if _codex_family(model_req) != "codex":
+        return ""
+    others = sorted({m for m in (models_seen or []) if m and _codex_family(m) != "codex"})
+    if not others:
+        return ""
+    return (f"Codex cannot run {model_req} in a task that has already used {', '.join(others)}: "
+            f"its tools are not available there. Start a new task for {model_req}.")
+
+
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     """The synthetic connection for a model→integration mapping, or None when unmapped /
     unusable by this backend. Shaped exactly like a vault connection so the turn loop treats
@@ -2896,6 +2915,32 @@ def _broker_token(request: Request) -> str:
     return (request.headers.get("api-key") or request.headers.get("x-api-key") or "").strip()
 
 
+# A direct provider's connection carries only its key: its endpoint is the provider's own and is
+# not a thing to ask the user for. Gateways (OpenRouter, Vercel, TokenRouter) and self-hosted
+# endpoints carry their base_url on the connection. Without this table an OpenAI key answered
+# "connection has no base_url" (2026-09-04).
+_PROVIDER_BASE = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1"}
+
+
+def _with_provider_base(conn: dict | None) -> dict | None:
+    if conn and not str(conn.get("base_url") or "").strip():
+        base = _PROVIDER_BASE.get(str(conn.get("provider") or "").lower())
+        if base:
+            conn = {**conn, "base_url": base}
+    return conn
+
+
+_PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
+                                  r"insufficient_quota|rate limit|quota|forbidden|refused", re.IGNORECASE)
+
+
+def _turn_failure_message(rec: dict) -> str:
+    """What a failed turn says: the org's own key's refusal in plain words when that is why, else
+    the list of connections tried."""
+    tried = rec.get("tried") or []
+    return str(rec.get("error_message") or "") or (json.dumps(tried)[:400] if tried else "turn failed")
+
+
 async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
     """Resolve a turn credential's connection name back to its credentials.
 
@@ -2912,9 +2957,9 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
         # provider here is the INTEGRATION's own type — it selects the upstream auth header, which
         # is all the broker needs (the runner-side wiring already happened at turn start).
         cfg["provider"] = (integ.get("provider") or "").lower()
-        return cfg
+        return _with_provider_base(cfg)
     conn, _ = await _get_connection(org, conn_name)
-    return conn
+    return _with_provider_base(conn)
 
 
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
@@ -3209,10 +3254,50 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
             mw = str(m.get("workspace") or "")
             if mw != workspace and not (ws_default and not mw):
                 return None
+        # A card that still says running while the session vertex is terminal is a turn whose
+        # tail never finished: the replica wrote the vertex, then died before the finalize that
+        # rewrites the card (a roll under a live turn, 2026-09-04). The vertex is the durable
+        # truth, so the read repairs the card from it, once, and the list stops lying.
+        if str(m.get("status") or "") in _CARD_LIVE and m.get("session_id"):
+            fixed = await _card_settle(str(m["session_id"]), m)
+            if fixed:
+                m = fixed
         return {k: m.get(k) for k in _TRACE_CARD_FIELDS}
 
     cards = [c for c in await asyncio.gather(*[_card(it) for it in lst.get("items", [])]) if c]
     return {"sessions": cards, "cursor": lst.get("cursor") or ""}
+
+
+_CARD_LIVE = {"running", "starting", "in_progress"}
+
+
+async def _card_settle(sid: str, m: dict) -> dict | None:
+    """Repair a live-looking card from its session vertex. Returns the settled manifest when the
+    vertex is terminal, or its heartbeat is older than the hard turn cap with the turn unadopted;
+    None when the turn is genuinely live. The settled manifest is re-indexed so every mirror agrees."""
+    v = await _vertex_get(sid) or {}
+    vs = str(v.get("turn_status") or v.get("status") or "")
+    status = ""
+    if vs in ("done", "failed", "cancelled", "incomplete", "max_turns", "timeout"):
+        status = vs
+    else:
+        try:
+            hb = float(v.get("heartbeat") or 0)
+        except Exception:  # noqa: BLE001
+            hb = 0
+        if hb and time.time() - hb > _GW_MAX_TURN_S:
+            status = "failed"
+    if not status or status == str(m.get("status") or ""):
+        return None
+    m = dict(m)
+    m["status"] = status
+    base = _prefix_from_vertex(sid, v)
+    if base:
+        try:
+            await _index_manifest(base, m)
+        except Exception:  # noqa: BLE001 — the list still answers from the vertex's truth
+            pass
+    return m
 
 
 def _prefix_from_vertex(sid: str, v: dict | None) -> str | None:
@@ -4660,6 +4745,16 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
                                  if c not in _TOKENROUTER_NO_CHANNEL}
 
+# OpenRouter dates a slug when a model gets a new snapshot while TokenRouter keeps serving the
+# plain name. The shared table holds the name TokenRouter serves (it is where the platform's
+# traffic goes); OpenRouter's own list gets the dated name here, after TokenRouter has taken its
+# copy. Putting the dated name in the shared table sent TokenRouter "qwen/qwen3.8-max-0902" and
+# it answered "No available channel" (Hermes, 2026-09-05).
+_OPENROUTER_RESLUG = {
+    "qwen3.8-max": "qwen/qwen3.8-max-0902",
+}
+_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _VENDOR_MODELS["openrouter"].items()}
+
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
 # the two aggregators disagree about who publishes the model, not about which model it is.
@@ -5396,6 +5491,25 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     mapped_conn = await _mapped_integration_conn(backend, model_req)
     candidates: list[tuple[str, dict | None]] = ([(mapped_conn["name"], mapped_conn)] if mapped_conn else [])
     candidates += [(n, None) for n in chain]
+    if backend == "codex" and model_req:
+        # The session remembers every model it has run. A gpt-5.3-codex turn after another model
+        # family is refused, in words, rather than run without its tools or restarted on a fresh
+        # session.
+        _v = await _vertex_get(sid) or {}
+        seen = [m for m in str(_v.get("models_seen") or "").split(",") if m]
+        if not seen and resume:
+            try:
+                _turns = (await _session_turns_data(sid)).get("turns") or []
+                seen = [str(t.get("_model") or "") for t in _turns if t.get("_model")]
+            except Exception:  # noqa: BLE001
+                seen = []
+        _why = _codex_switch_refusal(seen, model_req) if resume else ""
+        if _why:
+            rec["error_message"] = _why
+            rec["tried"].append({"connection": "", "status": "refused", "error": _why})
+            candidates = []
+        elif model_req not in seen:
+            await _vertex_upsert(sid, {"models_seen": ",".join(seen + [model_req])})
     # Independent of which chat connection wins below: images are usually a different provider.
     image_auth = await _image_auth(sid, backend)
     vision_auth = await _vision_auth(sid, backend) if backend == "hermes" else None
@@ -5575,6 +5689,20 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     rec["tried"].append({"connection": name, "status": st,
                                          "error": (s.get("result") or s.get("error") or "")[:200]})
                 break
+        _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
+        if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name
+                and rec["tried"][-1].get("status") and _PROVIDER_REFUSAL_RE.search(_last_err)):
+            # The provider refused this key. That is configuration, not an outage to route around:
+            # falling through to the next connection ran the task on another key while the user
+            # believed this one worked. On a self-hosted install every key is the operator's own,
+            # so the rule is the refusal itself, not which store the key came from. Other failures
+            # (a transient error, a timeout) still move on to the next connection.
+            provider = str(conn.get("provider") or "your provider")
+            rec["error_message"] = f"Your {provider} key was refused: {_last_err or 'the provider returned an error'}"
+            status = "failed"
+            rec["status"] = "failed"
+            await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "last_connection": name})
+            break
         if terminal:
             status = terminal
             rec["status"] = "done" if terminal == "completed" else terminal
@@ -5781,6 +5909,24 @@ async def storage_usage() -> dict:
         except (TypeError, ValueError):
             pass
     return {"by_org": by_org}
+
+
+@app.post("/internal/sessions/{sid}/recycle", dependencies=[Depends(_internal_only)])
+async def recycle_session_sandbox(sid: str) -> dict:
+    """Recycle a session's sandbox on purpose: persist the workspace, then hydrate it back into the
+    same sandbox, which wipes and restores exactly as a fresh sandbox would after the old one was
+    let go. The support matrix uses it to test "a follow-up after the sandbox is gone" for every
+    harness and model without waiting out a cooldown. Refused while a turn is live."""
+    v = await _vertex_get(sid)
+    if not v:
+        raise HTTPException(404, "no such session")
+    if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
+        raise HTTPException(409, "a turn is running; recycle after it settles")
+    rec: dict = {}
+    await _checkpoint(sid, rec)
+    await _hydrate(sid, rec)
+    return {"session_id": sid, "checkpoint": rec.get("checkpoint") or rec.get("checkpoint_bytes"),
+            "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
 
 @app.post("/internal/reindex-traces", dependencies=[Depends(_internal_only)])
@@ -6216,10 +6362,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-                    if status == "failed":
-                        tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                                    "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-                    for ev in tr.complete(status, produced):
+                    # A failed turn says why in the transcript, not only in the response record: fail()
+                    # carries the message as an error event, which the console prints under the answer.
+                    for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                         await bus_emit_bg(ev)
                     await persist(status)
             except asyncio.CancelledError:
@@ -6266,10 +6411,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-                        if status == "failed":
-                            tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                                        "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-                        for ev in tr.complete(status, produced):
+                        # A failed turn says why in the transcript, not only in the response record: fail()
+                        # carries the message as an error event, which the console prints under the answer.
+                        for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                             await emit(ev)
                         await persist(status)
                 except asyncio.CancelledError:
@@ -6325,10 +6469,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-            if status == "failed":
-                tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                            "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-            for ev in tr.complete(status, produced):
+            # A failed turn says why in the transcript, not only in the response record: fail()
+            # carries the message as an error event, which the console prints under the answer.
+            for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
@@ -6596,6 +6739,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.
+                      # A failed turn's reason, the sentence its error event carried live.
+                      "error": ((rec.get("error") or {}).get("message") or None) if isinstance(rec.get("error"), dict) else None,
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
@@ -7269,7 +7414,7 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
         if cached is not None and path in cached:
             data = cached[path]
             media = mimetypes.guess_type(path)[0] or "application/octet-stream"
-            return data, media, path.rsplit("/", 1)[-1]
+            return data, media, path
         tf = await _workspace_tar(container_id)
         if tf is None:
             return None
@@ -7286,7 +7431,7 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
                 if data is None:
                     return None
                 media = mimetypes.guess_type(path)[0] or "application/octet-stream"
-                return data, media, path.rsplit("/", 1)[-1]
+                return data, media, path
         return None
     data = await _blob_get(f"containers/{container_id}/{file_id}", kb=RESP_BLOB_KB)
     if data is None:
@@ -7361,6 +7506,124 @@ _ARCHIVE_MAX_BYTES = 512 * 1024 * 1024   # in-memory zip cap; beyond this, downl
 class WorkspaceWrite(BaseModel):
     content: str | None = None        # text
     content_b64: str | None = None    # bytes
+
+
+# Declared BEFORE the {path:path} routes below: FastAPI matches routes in declaration order, and
+# declared after them "/files/archive" was read as a file named "archive" (404 for every
+# download-all click since the route was added).
+@app.get("/v1/sessions/{sid}/files/archive")
+async def session_files_archive(sid: str, request: Request, changed: bool = False, files: str = ""):
+    """Every artifact of a session (or one turn) as a single zip, preserving the workspace's
+    folder hierarchy — each entry's path inside the zip is the file's relative path.
+
+    - default: every user-visible file in the working directory (same set as GET .../files)
+    - ?changed=true: only the files created/modified in the MOST RECENT turn
+    - ?files=fid1,fid2: exactly those file ids (e.g. one specific turn's cited outputs)
+    """
+    await _owned_session(request, sid)   # V1C02-004: session-scoped files, org-owned only
+    _reap_spool_dir()   # sweep ZIP temps/orphaned tars whose BackgroundTask cleanup was skipped
+    want_ids = [f.strip() for f in files.split(",") if f.strip()][:200] if files else None
+    # The ZIP is SPOOLED TO DISK, never built in RAM (HR-INF-015): whole-workspace mode streams
+    # each tar member from the disk-cached tarball straight into the zip entry (O(copy-buffer)
+    # memory); the id-scoped modes write their capped per-file payloads. FileResponse streams it
+    # out; the temp file is removed after the response is sent.
+    fd, zpath = tempfile.mkstemp(suffix=".zip", dir=_WS_TAR_DIR)
+    os.close(fd)
+    nput = 0
+    total = 0
+    try:
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+            seen: set[str] = set()
+
+            def _add_bytes(p: str, data: bytes) -> None:
+                nonlocal nput, total
+                p = p.lstrip("/")
+                if p in seen:        # duplicate ids in ?files= — keep the first
+                    return
+                seen.add(p)
+                total += len(data)
+                if total > _ARCHIVE_MAX_BYTES:
+                    raise HTTPException(413, "workspace too large for one archive — download files individually")
+                z.writestr(p, data)
+                nput += 1
+
+            if want_ids:
+                # "All" means all: an archive missing a file it was asked for is refused, with the
+                # names, rather than handed over as if complete.
+                missing: list[str] = []
+                for fid in want_ids:
+                    got = await _container_file_bytes(sid, fid)
+                    if got is None:
+                        missing.append(_wf_path(fid) or fid)
+                        continue
+                    data, _media, fname = got
+                    _add_bytes(fname, data)
+                if missing:
+                    raise HTTPException(404, f"{len(missing)} of {len(want_ids)} files are no longer available: "
+                                             + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
+            elif changed:
+                blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
+                try:
+                    items = ((json.loads(blob) or {}).get("files") or []) if blob else []
+                except Exception:  # noqa: BLE001
+                    items = []
+                for it in items[:200]:
+                    fid, path = it.get("file_id"), it.get("path")
+                    if not (fid and path):
+                        continue
+                    got = await _container_file_bytes(sid, fid)
+                    if got:
+                        _add_bytes(path, got[0])
+            else:
+                tf = await _workspace_tar(sid)
+                if tf is None:
+                    raise HTTPException(404, "no workspace for this session yet — run a task first")
+
+                def _zip_workspace() -> tuple[int, int]:
+                    # Pure sync file work (disk tar in, disk zip out) — runs in a worker thread so
+                    # GB-scale gzip-decompress + deflate never stalls the event loop (SSE streams,
+                    # turn relays, and health probes keep flowing).
+                    n, tot = 0, 0
+                    with tf:
+                        for m in tf.getmembers():
+                            if not m.isreg():
+                                continue
+                            path = m.name[2:] if m.name.startswith("./") else m.name
+                            if not _ws_visible(path) or path.lstrip("/") in seen:
+                                continue
+                            tot += m.size
+                            if tot > _ARCHIVE_MAX_BYTES:
+                                raise HTTPException(413, "workspace too large for one archive — download files individually")
+                            fh = tf.extractfile(m)
+                            if fh is None:
+                                continue
+                            seen.add(path.lstrip("/"))
+                            # Explicit ZipInfo: bare ZipInfo defaults to STORED (uncompressed),
+                            # epoch-1980 mtime, and zero permissions — set them all properly.
+                            zi = zipfile.ZipInfo(path.lstrip("/"), date_time=time.localtime(m.mtime)[:6])
+                            zi.compress_type = zipfile.ZIP_DEFLATED
+                            zi.external_attr = (m.mode & 0xFFFF) << 16
+                            with fh, z.open(zi, "w") as zw:
+                                shutil.copyfileobj(fh, zw, 1024 * 1024)
+                            n += 1
+                    return n, tot
+
+                _n, _tot = await asyncio.to_thread(_zip_workspace)
+                nput += _n
+                total += _tot
+        if not nput:
+            raise HTTPException(404, "no files to archive")
+    except BaseException:
+        try:
+            os.unlink(zpath)
+        except OSError:
+            pass
+        raise
+    scope = "turn" if (want_ids or changed) else "all"
+    bg = BackgroundTask(os.unlink, zpath)
+    return FileResponse(zpath, media_type="application/zip", background=bg,
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
 
 
 @app.get("/v1/sessions/{sid}/files/{path:path}")
@@ -7458,113 +7721,6 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
 
 
-@app.get("/v1/sessions/{sid}/files/archive")
-async def session_files_archive(sid: str, request: Request, changed: bool = False, files: str = ""):
-    """Every artifact of a session (or one turn) as a single zip, preserving the workspace's
-    folder hierarchy — each entry's path inside the zip is the file's relative path.
-
-    - default: every user-visible file in the working directory (same set as GET .../files)
-    - ?changed=true: only the files created/modified in the MOST RECENT turn
-    - ?files=fid1,fid2: exactly those file ids (e.g. one specific turn's cited outputs)
-    """
-    await _owned_session(request, sid)   # V1C02-004: session-scoped files, org-owned only
-    _reap_spool_dir()   # sweep ZIP temps/orphaned tars whose BackgroundTask cleanup was skipped
-    want_ids = [f.strip() for f in files.split(",") if f.strip()][:200] if files else None
-    # The ZIP is SPOOLED TO DISK, never built in RAM (HR-INF-015): whole-workspace mode streams
-    # each tar member from the disk-cached tarball straight into the zip entry (O(copy-buffer)
-    # memory); the id-scoped modes write their capped per-file payloads. FileResponse streams it
-    # out; the temp file is removed after the response is sent.
-    fd, zpath = tempfile.mkstemp(suffix=".zip", dir=_WS_TAR_DIR)
-    os.close(fd)
-    nput = 0
-    total = 0
-    try:
-        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-            seen: set[str] = set()
-
-            def _add_bytes(p: str, data: bytes) -> None:
-                nonlocal nput, total
-                p = p.lstrip("/")
-                if p in seen:        # duplicate ids in ?files= — keep the first
-                    return
-                seen.add(p)
-                total += len(data)
-                if total > _ARCHIVE_MAX_BYTES:
-                    raise HTTPException(413, "workspace too large for one archive — download files individually")
-                z.writestr(p, data)
-                nput += 1
-
-            if want_ids:
-                for fid in want_ids:
-                    got = await _container_file_bytes(sid, fid)
-                    if got:
-                        data, _media, fname = got
-                        _add_bytes(fname, data)
-            elif changed:
-                blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
-                try:
-                    items = ((json.loads(blob) or {}).get("files") or []) if blob else []
-                except Exception:  # noqa: BLE001
-                    items = []
-                for it in items[:200]:
-                    fid, path = it.get("file_id"), it.get("path")
-                    if not (fid and path):
-                        continue
-                    got = await _container_file_bytes(sid, fid)
-                    if got:
-                        _add_bytes(path, got[0])
-            else:
-                tf = await _workspace_tar(sid)
-                if tf is None:
-                    raise HTTPException(404, "no workspace for this session yet — run a task first")
-
-                def _zip_workspace() -> tuple[int, int]:
-                    # Pure sync file work (disk tar in, disk zip out) — runs in a worker thread so
-                    # GB-scale gzip-decompress + deflate never stalls the event loop (SSE streams,
-                    # turn relays, and health probes keep flowing).
-                    n, tot = 0, 0
-                    with tf:
-                        for m in tf.getmembers():
-                            if not m.isreg():
-                                continue
-                            path = m.name[2:] if m.name.startswith("./") else m.name
-                            if not _ws_visible(path) or path.lstrip("/") in seen:
-                                continue
-                            tot += m.size
-                            if tot > _ARCHIVE_MAX_BYTES:
-                                raise HTTPException(413, "workspace too large for one archive — download files individually")
-                            fh = tf.extractfile(m)
-                            if fh is None:
-                                continue
-                            seen.add(path.lstrip("/"))
-                            # Explicit ZipInfo: bare ZipInfo defaults to STORED (uncompressed),
-                            # epoch-1980 mtime, and zero permissions — set them all properly.
-                            zi = zipfile.ZipInfo(path.lstrip("/"), date_time=time.localtime(m.mtime)[:6])
-                            zi.compress_type = zipfile.ZIP_DEFLATED
-                            zi.external_attr = (m.mode & 0xFFFF) << 16
-                            with fh, z.open(zi, "w") as zw:
-                                shutil.copyfileobj(fh, zw, 1024 * 1024)
-                            n += 1
-                    return n, tot
-
-                _n, _tot = await asyncio.to_thread(_zip_workspace)
-                nput += _n
-                total += _tot
-        if not nput:
-            raise HTTPException(404, "no files to archive")
-    except BaseException:
-        try:
-            os.unlink(zpath)
-        except OSError:
-            pass
-        raise
-    scope = "turn" if (want_ids or changed) else "all"
-    bg = BackgroundTask(os.unlink, zpath)
-    return FileResponse(zpath, media_type="application/zip", background=bg,
-                        headers={"Content-Disposition":
-                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
-
-
 @app.get("/v1/containers/{container_id}/files/{file_id}/content")
 async def container_file_content(container_id: str, file_id: str, request: Request):
     await _owned_session(request, container_id)   # V1C02-004: container_id IS the session id
@@ -7573,7 +7729,7 @@ async def container_file_content(container_id: str, file_id: str, request: Reque
         raise HTTPException(404, "file not found")
     data, media, fname = got
     return Response(content=data, media_type=media,
-                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+                    headers={"Content-Disposition": f'attachment; filename="{fname.rsplit("/", 1)[-1]}"'})
 
 
 # Office types with no faithful browser renderer → convert to PDF server-side (LibreOffice) so the
