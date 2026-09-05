@@ -103,7 +103,7 @@ function makeWbMarkdown(getSid: () => string | null, getHarness?: () => string |
 
 // Each base harness gets a stable assigned accent so the badge reads at a glance.
 const BASE_TINT: Record<string, string> = {
-  codex: '#0E8C6A', 'claude-code': '#C2613D', pi: '#6E55FF', hermes: '#2563EB',
+  codex: '#0E8C6A', 'claude-code': '#C2613D', pi: '#6E55FF', hermes: '#2563EB', omp: '#FF6B00',
 };
 function baseTint(id: string): string {
   if (BASE_TINT[id]) return BASE_TINT[id];

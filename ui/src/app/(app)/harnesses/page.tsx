@@ -477,6 +477,7 @@ function AddHarness({ onClose, onCreated, existing }: { onClose: () => void; onC
   }
   const blurb = (id: string) => id === 'codex' ? 'Repository work, code changes, shell commands, generated files.'
     : id === 'hermes' ? 'Self-improving agent that builds memory and skills across tasks.'
+    : id === 'omp' ? 'Full tool harness with hash-anchored edits, LSP, Python, browser, and subagents.'
     : 'Long-context analysis, document workflows, structured review.';
   return (
     <div className="ak-scrim" onMouseDown={() => { if (!busy) onClose(); }}>

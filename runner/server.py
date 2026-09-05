@@ -341,6 +341,10 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # key for custom providers — neither may travel in a checkpoint tarball.
                       "./.harness/home/.pi/agent/auth.json",
                       "./.harness/home/.pi/agent/models.json",
+                      # omp models / auth
+                      "./.harness/home/.omp/agent/auth.json",
+                      "./.harness/home/.omp/agent/models.json",
+                      "./.harness/home/.omp/agent/models.yml",
                       # dsh: the MCP cordis overlay can carry auth headers (same standing as
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
@@ -362,6 +366,7 @@ OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
+OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
 # Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
@@ -637,6 +642,9 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
     elif backend == "pi":
         rootrels = [".harness/home/.pi/agent/skills"]
         entryroot = ".harness/home/.pi/agent/skills"
+    elif backend == "omp":
+        rootrels = [".harness/home/.omp/agent/skills"]
+        entryroot = ".harness/home/.omp/agent/skills"
     elif backend == "codex":
         # $CODEX_HOME/skills/<name>/SKILL.md, and CODEX_HOME is redirected into the workspace
         rootrels = [".harness/home/.codex/skills"]
@@ -782,7 +790,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     if backend == "qwen":
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     return pathlib.Path(cwd) / (
-        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline")
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp")
         else "CLAUDE.md")
 
 
@@ -1833,6 +1841,195 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
     if t == "agent_end":
         err = state.get("_pi_error")
         usage = dict(state.get("_pi_usage") or {})
+        usage = {k: v for k, v in usage.items() if v}
+        if err:
+            return [{"type": "result", "subtype": "error", "is_error": True,
+                     "result": err, "usage": usage}]
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": usage}]
+    return []
+
+
+# ── omp (Oh My Pi, can1357/oh-my-pi CLI) ─────────────────────────────────────────
+# OMP is built on the Pi lineage and shares its JSON event stream contract (--mode json).
+# Unlike raw Pi, OMP features native MCP support via <agent_dir>/mcp.json and a richer
+# built-in tool set (bash, read, write, edit, glob, grep, lsp, python, todo, task, etc.).
+OMP_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+ALL_OMP_TOOLS = {"bash", "read", "write", "edit", "glob", "grep", "lsp", "python", "todo", "task", "browser", "web_search"}
+
+
+def _omp_has_session(agent_dir: pathlib.Path, session_id: str) -> bool:
+    """Is this session actually in this agent directory?
+
+    OMP writes session logs under <agent_dir>/sessions/ as *.jsonl files named with
+    the session id. If the session is missing, passing --resume would exit with an error.
+    """
+    if not session_id or not agent_dir.exists():
+        return False
+    sess_dir = agent_dir / "sessions"
+    if not sess_dir.exists():
+        return False
+    try:
+        for path in sess_dir.rglob(f"*{session_id}*.jsonl"):
+            if path.is_file():
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
+    """Write <agent_dir>/mcp.json for OMP native MCP support.
+
+    OMP supports native project and user MCP configurations with the standard
+    mcpServers schema. Returns whether any server was written.
+    """
+    entries: dict = {}
+    for s in servers or []:
+        url = (s or {}).get("url")
+        if not url:
+            continue
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
+        entry: dict = {"url": url}
+        auth = (s or {}).get("auth")
+        if auth:
+            hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            entry["headers"] = {"Authorization": hdr}
+        if isinstance((s or {}).get("headers"), dict):
+            entry.setdefault("headers", {}).update({str(k): str(v) for k, v in s["headers"].items()
+                                                    if k and v is not None})
+        entries[name] = entry
+    if not entries:
+        return False
+    path = agent_dir / "mcp.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
+    return True
+
+
+def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+               resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+               tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
+    pr = provider or "anthropic"
+    if pr not in OMP_PROVIDERS:
+        raise HTTPException(400, f"unknown omp provider '{pr}' (one of {sorted(OMP_PROVIDERS)})")
+    home = pathlib.Path(env.get("HOME") or cwd)
+    omp_agent_dir = home / ".omp" / "agent"
+    omp_agent_dir.mkdir(parents=True, exist_ok=True)
+    env["PI_CODING_AGENT_DIR"] = str(omp_agent_dir)
+    env.pop("OMP_PROFILE", None)
+    env.pop("PI_PROFILE", None)
+
+    use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
+    if use_custom:
+        if not auth.base_url:
+            raise HTTPException(400, f"omp provider '{pr}' needs a base_url (none configured)")
+        if auth.api_format == "anthropic":
+            api = "anthropic-messages"
+        elif auth.api_format == "openai":
+            api = "openai-completions"
+        elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+            api = "anthropic-messages"
+        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+            api = "openai-responses"
+        else:
+            api = "openai-completions"
+        models_content = _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
+                                          custom_openai=bool(auth.api_format))
+        (omp_agent_dir / "models.json").write_text(models_content)
+        (omp_agent_dir / "models.yml").write_text(models_content)
+        pname = "hr"
+    else:
+        pname = pr
+        if pr == "anthropic" and auth.api_key:
+            env["ANTHROPIC_API_KEY"] = auth.api_key
+        elif pr == "openai" and auth.api_key:
+            env["OPENAI_API_KEY"] = auth.api_key
+
+    cmd = ["omp", "-p", "--mode", "json",
+           "--model", f"{pname}/{model}" if pname == "hr" else model,
+           "--auto-approve",
+           "--no-extensions"]
+    if resume_session_id and _omp_has_session(omp_agent_dir, resume_session_id):
+        cmd += ["--resume", resume_session_id]
+    if tools_disabled:
+        disabled = {x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
+        enabled = [t for t in sorted(ALL_OMP_TOOLS) if t not in disabled]
+        if not enabled:
+            cmd += ["--no-tools"]
+        else:
+            cmd += [f"--tools={','.join(enabled)}"]
+    _omp_write_mcp(omp_agent_dir, mcp_servers)
+    cmd.append(prompt)
+    return cmd
+
+
+def _omp_usage_add(state: dict, u: dict | None) -> None:
+    if not isinstance(u, dict):
+        return
+    tot = state.setdefault("_omp_usage", {"input_tokens": 0, "output_tokens": 0,
+                                          "cache_read_tokens": 0, "cache_write_tokens": 0})
+    for src, dst in (("input", "input_tokens"), ("output", "output_tokens"),
+                     ("cacheRead", "cache_read_tokens"), ("cacheWrite", "cache_write_tokens")):
+        v = u.get(src)
+        if isinstance(v, (int, float)):
+            tot[dst] += int(v)
+
+
+def _omp_to_claude(obj: dict, state: dict) -> list[dict]:
+    t = obj.get("type")
+    if t == "session":
+        return [{"type": "system", "subtype": "init",
+                 "session_id": obj.get("id"), "model": state.get("model")}]
+    if t == "message_update":
+        ev = obj.get("assistantMessageEvent") or {}
+        et = ev.get("type")
+        if et == "text_delta" and ev.get("delta"):
+            state["_omp_text"] = state.get("_omp_text", "") + ev["delta"]
+            state["final"] = state["_omp_text"]
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": ev["delta"]}]}}]
+        if et == "thinking_delta" and ev.get("delta"):
+            return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": ev["delta"]}]}}]
+        return []
+    if t == "message_end":
+        msg = obj.get("message") or {}
+        if msg.get("role") != "assistant":
+            return []
+        _omp_usage_add(state, msg.get("usage"))
+        if msg.get("stopReason") == "error":
+            state["_omp_error"] = str(msg.get("errorMessage") or "omp provider error")
+            return []
+        full = "".join(c.get("text") or "" for c in (msg.get("content") or [])
+                       if isinstance(c, dict) and c.get("type") == "text")
+        streamed = state.get("_omp_text", "")
+        state["_omp_text"] = ""
+        if full:
+            state["final"] = full
+        if full and full != streamed:
+            if not streamed:
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full}]}}]
+            if full.startswith(streamed):
+                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full[len(streamed):]}]}}]
+            return []
+        return []
+    if t == "tool_execution_start":
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": obj.get("toolCallId") or "tool",
+             "name": obj.get("toolName") or "tool", "input": obj.get("args") or {}}]}}]
+    if t == "tool_execution_end":
+        res = obj.get("result")
+        if isinstance(res, dict):
+            parts = [c.get("text") or "" for c in (res.get("content") or [])
+                     if isinstance(c, dict) and c.get("type") == "text"]
+            content = "\n".join(x for x in parts if x) or json.dumps(res, default=str)[:4000]
+        else:
+            content = str(res or "")
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": obj.get("toolCallId") or "tool",
+             "is_error": bool(obj.get("isError")), "content": content}]}}]
+    if t == "agent_end":
+        err = state.get("_omp_error")
+        usage = dict(state.get("_omp_usage") or {})
         usage = {k: v for k, v in usage.items() if v}
         if err:
             return [{"type": "result", "subtype": "error", "is_error": True,
@@ -3061,6 +3258,8 @@ BACKENDS = {
              "normalize": _claude_passthrough},
     "cline": {"providers": sorted(CLINE_PROVIDERS), "default_model": CLINE_DEFAULT_MODEL,
               "normalize": _cline_to_claude},
+    "omp": {"providers": sorted(OMP_PROVIDERS), "default_model": OMP_DEFAULT_MODEL,
+            "normalize": _omp_to_claude},
 }
 
 
@@ -4088,6 +4287,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
+    elif backend == "omp":
+        model = model or OMP_DEFAULT_MODEL
+        cmd = _build_omp(req.provider, auth, model, req.prompt, cwd, env,
+                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
     elif backend == "qwen":
         model = model or QWEN_DEFAULT_MODEL
         cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
