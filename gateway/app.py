@@ -1874,9 +1874,11 @@ async def _brain_mint_room(sid: str) -> str | None:
     return None
 
 
-async def _hydrate(sid: str, rec: dict) -> None:
+async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
-    pass the blackboard room so the runner (re)starts the realtime sidecar for this session."""
+    pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
+    `force` skips the warm-sandbox probe: the workspace is wiped and restored from the durable
+    checkpoint even when the sandbox still holds it (a recycle on purpose)."""
     params = {}
     v = await _vertex_get(sid) or {}          # single durable read: blackboard room + checkpoint sha
     room = (v.get("brain_room") or None) if COLLAB_URL else None
@@ -1887,7 +1889,7 @@ async def _hydrate(sid: str, rec: dict) -> None:
         # checkpoint (sha marker kept by the runner), skip the blob download and the full
         # wipe+untar — the dominant cost of every follow-up turn on a big workspace.
         want_sha = str(v.get("ws_sha") or "")
-        if want_sha:
+        if want_sha and not force:
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
                                     params={**(params or {}), "probe": want_sha})
@@ -5913,19 +5915,23 @@ async def storage_usage() -> dict:
 
 @app.post("/internal/sessions/{sid}/recycle", dependencies=[Depends(_internal_only)])
 async def recycle_session_sandbox(sid: str) -> dict:
-    """Recycle a session's sandbox on purpose: persist the workspace, then hydrate it back into the
-    same sandbox, which wipes and restores exactly as a fresh sandbox would after the old one was
-    let go. The support matrix uses it to test "a follow-up after the sandbox is gone" for every
-    harness and model without waiting out a cooldown. Refused while a turn is live."""
+    """Recycle a session's sandbox on purpose: wipe the workspace and restore it from the durable
+    checkpoint, exactly what a follow-up pays after the pool let the old sandbox go. The support
+    matrix uses it to test "a follow-up after the sandbox is gone" for every harness and model
+    without waiting out the pool's cooldown. Refused while a turn is live.
+
+    Hydrate only, never checkpoint first: every turn already ends with a checkpoint, so the blob IS
+    the post-turn workspace, and a checkpoint taken from a sandbox that no longer holds the session
+    would tar an empty directory over it (that is how the first recycle pass lost the history of
+    every session whose sandbox had gone cold)."""
     v = await _vertex_get(sid)
     if not v:
         raise HTTPException(404, "no such session")
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
         raise HTTPException(409, "a turn is running; recycle after it settles")
     rec: dict = {}
-    await _checkpoint(sid, rec)
-    await _hydrate(sid, rec)
-    return {"session_id": sid, "checkpoint": rec.get("checkpoint") or rec.get("checkpoint_bytes"),
+    await _hydrate(sid, rec, force=True)
+    return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
             "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
 
