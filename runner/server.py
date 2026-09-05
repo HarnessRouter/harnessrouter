@@ -1297,6 +1297,39 @@ def _codex_session_provider_ids(cfg_dir: "pathlib.Path") -> list[str]:
     return ids
 
 
+# What a follow-up reads when its Codex history is not in the workspace any more: the task goes
+# on in the same workspace with its files, without the earlier exchanges.
+_CODEX_NO_ROLLOUT_NOTE = "The earlier conversation of this task is no longer available to Codex. Continuing in the same workspace with its files."
+
+
+def _codex_resume_thread_id(cfg_dir: "pathlib.Path", wanted: str | None) -> str | None:
+    """The thread id the app-server can resume in this CODEX_HOME: the wanted one when its rollout
+    is here, else the newest rollout's own id (the home is per session, so the newest rollout IS
+    this conversation, the same rule `exec resume --last` relies on; matching the wanted id alone
+    missed about a third of the time and answered "no rollout found for thread id"). None when
+    there is no rollout at all."""
+    import glob as _glob
+    paths = _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True)
+    if not paths:
+        return None
+    ids: list[tuple[float, str]] = []
+    for path in paths:
+        try:
+            with open(path) as fh:
+                for line in fh:
+                    if '"session_meta"' not in line:
+                        continue
+                    m = re.search(r'"id"\s*:\s*"([^"]+)"', line)
+                    if m:
+                        ids.append((os.path.getmtime(path), m.group(1)))
+                    break
+        except OSError:
+            continue
+    if wanted and any(i == wanted for _, i in ids):
+        return wanted
+    return max(ids)[1] if ids else None
+
+
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
                        env: dict, mcp_toml: str = "", resume: bool = False) -> "pathlib.Path":
     """Shared codex setup for BOTH exec and app-server: write config.toml (model/provider/base_url +
@@ -1442,7 +1475,8 @@ def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
 
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
-                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> list[str]:
+                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> tuple[list[str], str]:
+    """The exec command, and the note the transcript must carry when a follow-up's rollout is gone."""
     cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id))
     # Drop --ephemeral so codex PERSISTS the rollout to $CODEX_HOME/sessions (inside the checkpointed
     # workspace) — that's what makes a follow-up history-aware. Mirror the claude resume guard: only
@@ -1464,9 +1498,10 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
             # the most-recent rollout here IS this conversation. Resume by --last instead of matching
             # the thread UUID to the rollout filename (that match is codex-version-fragile and missed
             # ~1/3 of the time). --last is exact here precisely because the home is session-isolated.
-            return ["codex", "exec", "resume", "--last", *common, prompt]
+            return ["codex", "exec", "resume", "--last", *common, prompt], ""
         print(f"[resume] codex: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
-    return ["codex", "exec", *common, "--cd", cwd, prompt]
+        return ["codex", "exec", *common, "--cd", cwd, prompt], _CODEX_NO_ROLLOUT_NOTE
+    return ["codex", "exec", *common, "--cd", cwd, prompt], ""
 
 
 # ── dsh (DeepSeek Harness) ──────────────────────────────────────────────────────
@@ -3265,6 +3300,20 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         with _turns_lock:
             rec["events"].append(ev)
 
+    # Resume what is actually in this home (see _codex_resume_thread_id), sanitised like the exec
+    # path; a follow-up whose rollout is gone starts fresh in the same workspace and says so.
+    resume_thread = None
+    if resume_session_id:
+        cfg_dir = pathlib.Path(env.get("CODEX_HOME") or (pathlib.Path(env.get("HOME") or cwd) / ".codex"))
+        resume_thread = _codex_resume_thread_id(cfg_dir, resume_session_id)
+        if resume_thread:
+            import glob as _glob
+            c = _sanitize_codex_rollout(_glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True))
+            print(f"[resume] codex app-server: thread {resume_thread}{' (newest rollout, wanted ' + resume_session_id + ')' if resume_thread != resume_session_id else ''}; "
+                  f"dropped {c['reasoning']} reasoning blob(s), de-referenced {c['deref']} id(s)", flush=True)
+        else:
+            print(f"[resume] codex app-server: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
+            append({"type": "assistant", "message": {"content": [{"type": "text", "text": _CODEX_NO_ROLLOUT_NOTE}]}})
     try:
         proc = subprocess.Popen(["codex", "app-server"], cwd=cwd, env=env, text=True, bufsize=1,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -3325,7 +3374,7 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 res = msg.get("result") or {}
                 if mid == id_init:
                     send("initialized", {}, notify=True)
-                    id_thread = send(*_codex_thread_request(resume_session_id, cwd, model))
+                    id_thread = send(*_codex_thread_request(resume_thread, cwd, model))
                 elif mid == id_thread:
                     thread_id = ((res.get("thread") or {}).get("id")) or resume_session_id or ""
                     if thread_id:
@@ -4134,6 +4183,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     model = req.model or spec["default_model"]
     use_appserver = backend == "codex" and bool(req.codex_appserver)
     cmd = None
+    codex_note = ""
     hermes_provider = ""
     hermes_mcp: list[str] = []
     if backend == "codex":
@@ -4142,8 +4192,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         if use_appserver:
             _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id))   # config.toml + CODEX_HOME + auth
         else:
-            cmd = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
-                               mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)
+            cmd, codex_note = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
+                                           mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)
     elif backend == "hermes":
         model = model or HERMES_DEFAULT_MODEL
         hermes_provider = (req.provider or "bedrock").lower()
@@ -4196,6 +4246,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                     "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
         _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
                            "backend": backend, "model": model, "started": time.time()}
+        if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
+            _turns[turn_id]["events"].append({"type": "assistant", "_ts": time.time(),
+                                              "message": {"content": [{"type": "text", "text": codex_note}]}})
         if key:
             _turn_by_key[key] = turn_id
     if use_appserver:

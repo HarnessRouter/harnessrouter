@@ -20,3 +20,8 @@ def test_an_exhausted_chain_lists_what_was_tried():
 
 def test_nothing_tried_still_says_something():
     assert gw._turn_failure_message({}) == "turn failed"
+
+
+def test_only_a_refusal_reads_as_a_refused_key():
+    assert gw._PROVIDER_REFUSAL_RE.search("OpenAI API error (401): invalid api key")
+    assert not gw._PROVIDER_REFUSAL_RE.search("no rollout found for thread id 01a06ea9")

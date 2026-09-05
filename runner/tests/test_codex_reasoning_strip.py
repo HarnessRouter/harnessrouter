@@ -186,3 +186,16 @@ def test_a_failure_names_the_providers_refusal_over_the_clis_retries():
     lines = ["Reading prompt from stdin...", "ERROR: 401 Unauthorized: Incorrect API key provided", "Reconnecting... 1/5", "Reconnecting... 2/5"]
     assert next((ln for ln in lines if _PROVIDER_REFUSAL.search(ln)), "") == "ERROR: 401 Unauthorized: Incorrect API key provided"
     assert not _PROVIDER_REFUSAL.search("Reconnecting... 1/5")
+
+
+def test_app_server_resumes_the_rollout_that_is_here(tmp_path):
+    """The wanted thread when its rollout is here; else the newest rollout's own id; None with no rollout."""
+    from server import _codex_resume_thread_id
+    home = tmp_path / ".codex"; sess = home / "sessions" / "2026" / "09"; sess.mkdir(parents=True)
+    assert _codex_resume_thread_id(home, "t-wanted") is None
+    (sess / "rollout-a.jsonl").write_text('{"type": "session_meta", "payload": {"id": "t-old"}}\n')
+    import os, time
+    os.utime(sess / "rollout-a.jsonl", (time.time() - 100, time.time() - 100))
+    (sess / "rollout-b.jsonl").write_text('{"type": "session_meta", "payload": {"id": "t-new"}}\n')
+    assert _codex_resume_thread_id(home, "t-old") == "t-old", "the wanted rollout is here"
+    assert _codex_resume_thread_id(home, "t-missing") == "t-new", "not here: the newest rollout is this conversation"

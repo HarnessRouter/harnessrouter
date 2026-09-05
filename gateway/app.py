@@ -1187,6 +1187,25 @@ async def _image_auth(sid: str, backend: str) -> dict | None:
     return None
 
 
+def _codex_family(model: str) -> str:
+    """Codex gives gpt-5.3-codex and the other GPT models different tool sets. Measured on
+    2026-09-05: the other models act in a thread gpt-5.3-codex started, but gpt-5.3-codex runs
+    without its tools in a thread where any other model has taken a turn, and narrates its work."""
+    return "codex" if (model or "").strip().lower().endswith("-codex") else "gpt"
+
+
+def _codex_switch_refusal(models_seen, model_req: str) -> str:
+    """The sentence a Codex turn fails with when gpt-5.3-codex would run in a thread another
+    model family has already used, else empty."""
+    if _codex_family(model_req) != "codex":
+        return ""
+    others = sorted({m for m in (models_seen or []) if m and _codex_family(m) != "codex"})
+    if not others:
+        return ""
+    return (f"Codex cannot run {model_req} in a task that has already used {', '.join(others)}: "
+            f"its tools are not available there. Start a new task for {model_req}.")
+
+
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     """The synthetic connection for a model→integration mapping, or None when unmapped /
     unusable by this backend. Shaped exactly like a vault connection so the turn loop treats
@@ -2909,6 +2928,10 @@ def _with_provider_base(conn: dict | None) -> dict | None:
         if base:
             conn = {**conn, "base_url": base}
     return conn
+
+
+_PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
+                                  r"insufficient_quota|rate limit|quota|forbidden|refused", re.IGNORECASE)
 
 
 def _turn_failure_message(rec: dict) -> str:
@@ -5468,6 +5491,25 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     mapped_conn = await _mapped_integration_conn(backend, model_req)
     candidates: list[tuple[str, dict | None]] = ([(mapped_conn["name"], mapped_conn)] if mapped_conn else [])
     candidates += [(n, None) for n in chain]
+    if backend == "codex" and model_req:
+        # The session remembers every model it has run. A gpt-5.3-codex turn after another model
+        # family is refused, in words, rather than run without its tools or restarted on a fresh
+        # session.
+        _v = await _vertex_get(sid) or {}
+        seen = [m for m in str(_v.get("models_seen") or "").split(",") if m]
+        if not seen and resume:
+            try:
+                _turns = (await _session_turns_data(sid)).get("turns") or []
+                seen = [str(t.get("_model") or "") for t in _turns if t.get("_model")]
+            except Exception:  # noqa: BLE001
+                seen = []
+        _why = _codex_switch_refusal(seen, model_req) if resume else ""
+        if _why:
+            rec["error_message"] = _why
+            rec["tried"].append({"connection": "", "status": "refused", "error": _why})
+            candidates = []
+        elif model_req not in seen:
+            await _vertex_upsert(sid, {"models_seen": ",".join(seen + [model_req])})
     # Independent of which chat connection wins below: images are usually a different provider.
     image_auth = await _image_auth(sid, backend)
     vision_auth = await _vision_auth(sid, backend) if backend == "hermes" else None
@@ -5647,13 +5689,16 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     rec["tried"].append({"connection": name, "status": st,
                                          "error": (s.get("result") or s.get("error") or "")[:200]})
                 break
-        if (not terminal and src and src not in (GLOBAL_TENANT, "integration") and rec["tried"]
-                and rec["tried"][-1].get("connection") == name and rec["tried"][-1].get("status")):
-            # The org's OWN key failed. That is the org's configuration, not an outage to route
-            # around: falling through to the shared pool ran the task on another key while the
-            # user believed theirs worked. The turn stops here and names the provider's refusal.
+        _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
+        if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name
+                and rec["tried"][-1].get("status") and _PROVIDER_REFUSAL_RE.search(_last_err)):
+            # The provider refused this key. That is configuration, not an outage to route around:
+            # falling through to the next connection ran the task on another key while the user
+            # believed this one worked. On a self-hosted install every key is the operator's own,
+            # so the rule is the refusal itself, not which store the key came from. Other failures
+            # (a transient error, a timeout) still move on to the next connection.
             provider = str(conn.get("provider") or "your provider")
-            rec["error_message"] = f"Your {provider} key was refused: {rec['tried'][-1].get('error') or 'the provider returned an error'}"
+            rec["error_message"] = f"Your {provider} key was refused: {_last_err or 'the provider returned an error'}"
             status = "failed"
             rec["status"] = "failed"
             await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "last_connection": name})
@@ -5864,6 +5909,24 @@ async def storage_usage() -> dict:
         except (TypeError, ValueError):
             pass
     return {"by_org": by_org}
+
+
+@app.post("/internal/sessions/{sid}/recycle", dependencies=[Depends(_internal_only)])
+async def recycle_session_sandbox(sid: str) -> dict:
+    """Recycle a session's sandbox on purpose: persist the workspace, then hydrate it back into the
+    same sandbox, which wipes and restores exactly as a fresh sandbox would after the old one was
+    let go. The support matrix uses it to test "a follow-up after the sandbox is gone" for every
+    harness and model without waiting out a cooldown. Refused while a turn is live."""
+    v = await _vertex_get(sid)
+    if not v:
+        raise HTTPException(404, "no such session")
+    if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
+        raise HTTPException(409, "a turn is running; recycle after it settles")
+    rec: dict = {}
+    await _checkpoint(sid, rec)
+    await _hydrate(sid, rec)
+    return {"session_id": sid, "checkpoint": rec.get("checkpoint") or rec.get("checkpoint_bytes"),
+            "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
 
 @app.post("/internal/reindex-traces", dependencies=[Depends(_internal_only)])

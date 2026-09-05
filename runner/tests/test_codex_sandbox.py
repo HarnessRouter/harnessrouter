@@ -49,7 +49,7 @@ def test_exec_path_passes_bypass_flag(tmp_path):
     # `codex exec` disables its own sandbox ONLY via this flag; losing it re-enables read-only.
     home = tmp_path / "home"
     home.mkdir()
-    argv = rn._build_codex(
+    argv, _ = rn._build_codex(
         "azure",
         rn.Auth(api_key="sk-test", base_url="https://example.invalid/v1", wire_api="responses"),
         "gpt-5.5", "hello", str(tmp_path), {"HOME": str(home)},
