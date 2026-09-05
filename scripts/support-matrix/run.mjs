@@ -19,7 +19,7 @@ const transcript = () => page.evaluate(() => (document.querySelector('.wbx-conv-
 const files = () => page.evaluate(() => [...document.querySelectorAll('.wbx-filecard-name')].map((x) => x.textContent.trim()));
 // a modal that took over the page mid-turn (an in-app alert); the first-visit welcome is dismissed at login
 const door = () => page.evaluate(() => document.querySelector('[role=dialog]:not(.welcome-overlay)')?.innerText?.replace(/\s+/g, ' ').trim() || '');
-const dismissWelcome = async () => { for (let i = 0; i < 4 && (await page.locator('.welcome-overlay').count()); i++) { await page.locator('.welcome-overlay button').last().click().catch(() => {}); await sleep(600); } };
+const dismissWelcome = async () => { for (let i = 0; i < 4 && (await page.locator('.welcome-overlay').count()); i++) { await page.locator('.welcome-overlay .welcome-wide-close').click().catch(() => {}); await sleep(600); } };
 // send one message on the open session and wait for it to settle; returns the outcome
 async function turn(text, { maxS = 420 } = {}) {
   const before = await transcript(); const t0 = Date.now();
