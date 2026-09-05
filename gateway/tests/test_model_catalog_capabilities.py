@@ -34,7 +34,14 @@ def _vendor_models() -> dict[str, dict[str, str]]:
     src = open(_SRC).read()
     m = re.search(r"_VENDOR_MODELS: dict\[str, dict\[str, str\]\] = (\{.*?\n\})\n", src, re.S)
     assert m, "_VENDOR_MODELS not found in app.py"
-    return eval(m.group(1), {"__builtins__": {}}, {})  # noqa: S307 — our own literal
+    tables = eval(m.group(1), {"__builtins__": {}}, {})  # noqa: S307 — our own literal
+    # OpenRouter's own renames are applied at import in app.py, after TokenRouter takes its copy
+    # of the shared table; mirror that so this reads what OpenRouter is actually asked for.
+    r = re.search(r"_OPENROUTER_RESLUG = (\{.*?\n\})\n", src, re.S)
+    if r:
+        reslug = eval(r.group(1), {"__builtins__": {}}, {})  # noqa: S307
+        tables["openrouter"] = {c: reslug.get(c, v) for c, v in tables["openrouter"].items()}
+    return tables
 
 
 def _catalog() -> dict[str, dict]:

@@ -65,6 +65,9 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
     const blocks: Block[] = [];
     if (steps.length) blocks.push({ kind: 'tools', reasoning: '', steps });
     if (t.assistant) blocks.push({ kind: 'text', text: t.assistant });
+    // a failed turn's reason, the line the live stream appended as its error event
+    const why = (t as { error?: string }).error;
+    if (why && (t.status === 'failed' || t.status === 'error')) blocks.push({ kind: 'text', text: (t.assistant ? '\n\n' : '') + 'Error: ' + why });
     const st: AsstMsg['status'] = t.status === 'failed' || t.status === 'error' ? 'failed'
       : t.status === 'cancelled' ? 'cancelled'
       : (t.status === 'incomplete' || t.status === 'max_turns' || t.status === 'timeout') ? 'incomplete'
