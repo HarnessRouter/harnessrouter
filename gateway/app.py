@@ -963,6 +963,11 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "pi"): "openai-api",
     ("tokenrouter", "pi"): "tokenrouter",      ("vercel", "pi"): "tokenrouter",
     ("llmtr", "pi"): "tokenrouter",
+    ("anthropic", "omp"): "anthropic",         ("openai", "omp"): "openai",
+    ("azure-foundry", "omp"): "azure",
+    ("openrouter", "omp"): "openai-api",
+    ("tokenrouter", "omp"): "tokenrouter",     ("vercel", "omp"): "tokenrouter",
+    ("llmtr", "omp"): "tokenrouter",
     # dsh (DeepSeek Harness) is multi-family via dsh-llm-pi-ai — pi's unified LLM library as
     # a Cordis plugin — so its wiring mirrors pi's: 'deepseek' on the runner is the launch
     # adapter for the deepseek family, 'tokenrouter' again means "OpenAI/Anthropic-compatible,
@@ -1000,6 +1005,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "claude"): "tokenrouter",
     ("custom", "hermes"): "openai-api",        ("custom", "opencode"): "tokenrouter",
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
+    ("custom", "omp"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
 }
@@ -3796,8 +3802,8 @@ def _provider_backends(provider: str) -> list[str]:
 _CUSTOM_FORMAT_BACKENDS = {
     # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline"},
-    "anthropic": {"claude", "opencode", "pi", "dsh"},
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp"},
+    "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
 }
 
 
@@ -4705,7 +4711,7 @@ def _map_model(conn: dict, friendly: str) -> str | None:
     table = _vendor_models(provider)
     if friendly and friendly in table:
         return table[friendly]
-    if backend == "claude" or (backend in ("hermes", "pi", "dsh") and provider in ("anthropic", "bedrock")):
+    if backend == "claude" or (backend in ("hermes", "pi", "dsh", "omp") and provider in ("anthropic", "bedrock")):
         # Older claude ids the catalog no longer lists still map, and a caller may pass a
         # provider-native id directly; _LEGACY_CLAUDE_IDS carries both, keyed bare (opus-4.5).
         legacy = _BEDROCK_CLAUDE if provider == "bedrock" else _ANTHROPIC_CLAUDE
@@ -4869,8 +4875,16 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+    "omp": {"default": "gpt-5.4",
+           "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                      "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                      "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                      "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                      "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
 }
-_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
+_BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
 #   qwen3.7-max  -> 400 InvalidParameter "Unexpected item type in content"  (rejects the TYPE)
@@ -5001,9 +5015,9 @@ def _model_authorized(requested: str, backend: str) -> bool:
         return False
     if r in {m.lower() for m in _MODEL_CATALOG.get(backend, {}).get("models", [])}:
         return True
-    if backend in ("claude", "hermes", "pi", "dsh") and r in _PROVIDER_CLAUDE_IDS:
+    if backend in ("claude", "hermes", "pi", "dsh", "omp") and r in _PROVIDER_CLAUDE_IDS:
         return True   # power users may pass a provider-native claude id (claude-opus-4-8 / us.anthropic...)
-    if backend in ("codex", "hermes", "pi", "dsh") and r.startswith("gpt-"):
+    if backend in ("codex", "hermes", "pi", "dsh", "omp") and r.startswith("gpt-"):
         return True   # gpt-* family; Azure deployment names vary
     if backend == "dsh" and r.startswith(("deepseek", "deepseek/")):
         return True   # deepseek family; aggregator slugs vary (deepseek/deepseek-v4-pro)
@@ -5990,7 +6004,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # explicitly selected — that's not a valid provider id. Treat it as "unset" and inherit, in order:
     #   previous round's model -> the harness default_model -> connection default (in _map_model).
     # This keeps a conversation on the user's chosen model and never ships the bare backend to Bedrock.
-    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", ""}
+    _BARE = {"claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp", ""}
     if model_req.lower() in _BARE:
         inherited = ""
         if body.previous_response_id:
@@ -11699,6 +11713,18 @@ _BASE_CATALOG: dict[str, dict] = {
         # tool is genuinely absent, not merely requested (see _build_pi in the runner).
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
                   ("edit", "Edit")],
+        "tool_enforcement": "hard",
+    },
+    "omp": {
+        "label": "Oh My Pi", "backend": "omp", "status": "ready",
+        "system_prompt": ("You are Oh My Pi (OMP), an autonomous coding agent. You operate on "
+                          "a real git workspace with shell, file access, LSP, Python, browser, "
+                          "and subagents to complete engineering tasks end to end."),
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"),
+                  ("lsp", "LSP"), ("python", "Python"), ("todo", "Todo"),
+                  ("task", "Task (subagents)"), ("browser", "Browser"),
+                  ("web_search", "Web Search")],
         "tool_enforcement": "hard",
     },
     "dsh": {

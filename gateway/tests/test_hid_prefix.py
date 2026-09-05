@@ -22,6 +22,8 @@ def test_the_stored_alias_and_chrn_ids_route_too():
     assert "claude" in _SUPPORTED_BASES
     assert _HID_PREFIX_RE.match("/claude/v1/responses")
     assert _HID_PREFIX_RE.match("/chrn_" + "a" * 32 + "/v1/responses")
+    assert "omp" in _SUPPORTED_BASES
+    assert _HID_PREFIX_RE.match("/omp/v1/responses")
 
 
 def test_a_non_base_prefix_does_not_match():
