@@ -1266,10 +1266,39 @@ wire_api = "{wire_api}"
 network_access = true
 exclude_slash_tmp = false
 """
+_CODEX_ALIAS_TMPL = """[model_providers.{alias}]
+name = "{name}"
+base_url = "{base_url}"
+env_key = "{env_key}"
+wire_api = "{wire_api}"
+"""
+
+
+_PROVIDER_REFUSAL = re.compile(r"\b(401|403|429|5\d\d)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
+                               r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
+
+
+def _codex_session_provider_ids(cfg_dir: "pathlib.Path") -> list[str]:
+    """Every model provider id the session's rollouts name. Codex looks the recorded id up in the
+    config on resume, so a session started under another provider (or under the bare ids of
+    before the namespacing) fails to load unless the config still declares it."""
+    import glob as _glob
+    ids: list[str] = []
+    for path in _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True):
+        try:
+            for line in pathlib.Path(path).read_text().splitlines():
+                if '"model_provider"' not in line:
+                    continue
+                for m in re.finditer(r'"model_provider"\s*:\s*"([^"]+)"', line):
+                    if m.group(1) not in ids:
+                        ids.append(m.group(1))
+        except OSError:
+            continue
+    return ids
 
 
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
-                       env: dict, mcp_toml: str = "") -> "pathlib.Path":
+                       env: dict, mcp_toml: str = "", resume: bool = False) -> "pathlib.Path":
     """Shared codex setup for BOTH exec and app-server: write config.toml (model/provider/base_url +
     MCP), point CODEX_HOME at the checkpointed workspace, set provider auth + TMPDIR. Returns the
     CODEX_HOME dir. Mutates env."""
@@ -1294,6 +1323,16 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
+    if resume:
+        # A resumed session keeps the provider id it started under; Codex looks that id up in the
+        # config and refuses to load without it ("Model provider `azure` not found", a July
+        # session continued on 2026-09-05; "hr-tokenrouter not found", a session continued on the
+        # org's own key). Every id the session ever ran under is declared, at THIS turn's endpoint.
+        for alias in _codex_session_provider_ids(cfg_dir):
+            if alias == f"hr-{p}" or alias == "openai":     # the current one; a reserved built-in
+                continue
+            cfg += _CODEX_ALIAS_TMPL.format(alias=alias, name=spec["name"], base_url=base_url,
+                                            env_key=spec["env_key"], wire_api=auth.wire_api or "responses")
     if mcp_toml:   # owner-attached MCP servers via Codex's experimental rmcp HTTP client
         cfg += mcp_toml
     (cfg_dir / "config.toml").write_text(cfg)
@@ -1404,7 +1443,7 @@ def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
                  env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> list[str]:
-    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml)
+    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id))
     # Drop --ephemeral so codex PERSISTS the rollout to $CODEX_HOME/sessions (inside the checkpointed
     # workspace) — that's what makes a follow-up history-aware. Mirror the claude resume guard: only
     # `resume <id>` if the rollout is actually present in the (re)hydrated workspace, else start fresh
@@ -3007,9 +3046,28 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
         st = part.get("state") if isinstance(part.get("state"), dict) else {}
         if st.get("status") == "error":
             state.setdefault("_oc_tool_errors", []).append(str(st.get("error") or ""))
-        return pre + [{"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": part.get("id") or "tool",
-             "name": part.get("tool") or "tool", "input": st.get("input") or {}}]}}]
+        # opencode reports a tool once it has finished, with its own clock (state.time, ms): the
+        # call is stamped at its start and its result at its end, so the trace shows the seconds
+        # the tool actually ran. Stamped at arrival, a 25 s command showed as the 15 s AFTER it.
+        tid = part.get("id") or "tool"
+        tm = st.get("time") if isinstance(st.get("time"), dict) else {}
+        try:
+            t_start = float(tm.get("start") or 0) / 1000.0
+            t_end = float(tm.get("end") or 0) / 1000.0
+        except (TypeError, ValueError):
+            t_start = t_end = 0.0
+        call = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": part.get("tool") or "tool", "input": st.get("input") or {}}]}}
+        if t_start > 0:
+            call["_ts"] = t_start
+        if st.get("status") not in ("completed", "error"):
+            return pre + [call]
+        res = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid, "is_error": st.get("status") == "error",
+             "content": str(st.get("output") or st.get("error") or "")}]}}
+        if t_end > 0:
+            res["_ts"] = max(t_end, t_start)
+        return pre + [call, res]
     if t == "step_finish":
         _opencode_usage_add(state, part.get("tokens"))
         return pre
@@ -3131,7 +3189,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             except Exception:  # noqa: BLE001
                 continue
             for ev in normalize(obj, state):
-                ev["_ts"] = time.time()
+                ev.setdefault("_ts", time.time())
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -3153,7 +3211,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     eof = getattr(normalize, "eof", None)
     if eof is not None and result_ev is None:
         for ev in eof(state, rc):
-            ev["_ts"] = time.time()
+            ev.setdefault("_ts", time.time())
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
@@ -3168,7 +3226,10 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     if rec["status"] in ("failed", "error", "timeout"):
         tail = "\n".join(errbuf[-30:]).strip()
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
-        rec["error"] = (str(ev_err).strip() or tail or f"exit_code={rc}, no diagnostic output")[:2000]
+        # The provider's refusal is the line that explains a failure; the CLI's last lines are
+        # usually its retries ("Reconnecting... 1/5"). Say the refusal when there is one.
+        refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        rec["error"] = (refusal or str(ev_err).strip() or tail or f"exit_code={rc}, no diagnostic output")[:2000]
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
     rec["done"] = True
@@ -3181,13 +3242,26 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
 _CODEX_SANDBOX = os.environ.get("CODEX_APPSERVER_SANDBOX", "danger-full-access")  # kebab enum; env-tunable
 
 
+def _codex_thread_request(resume_session_id: str | None, cwd: str, model: str) -> tuple[str, dict]:
+    """The app-server request that opens this turn's thread, with its params.
+
+    A resumed thread takes THIS turn's model and settings too, not only its id: a thread resumed
+    bare keeps the tool set of the model it started with, and a turn on another model family
+    (gpt-5.3-codex after gpt-5.5) then narrates its work instead of calling tools (reproduced
+    three times, 2026-09-05). One params dict serves both requests so they cannot drift."""
+    params = {"cwd": cwd, "model": model, "sandbox": _CODEX_SANDBOX, "approvalPolicy": "never"}
+    if resume_session_id:
+        return "thread/resume", {"threadId": resume_session_id, **params}
+    return "thread/start", params
+
+
 def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str,
                             resume_session_id: str | None, timeout_seconds: int | None) -> None:
     rec = _turns[turn_id]
     state = {"final": ""}
 
     def append(ev: dict) -> None:
-        ev["_ts"] = time.time()
+        ev.setdefault("_ts", time.time())
         with _turns_lock:
             rec["events"].append(ev)
 
@@ -3251,9 +3325,7 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 res = msg.get("result") or {}
                 if mid == id_init:
                     send("initialized", {}, notify=True)
-                    id_thread = (send("thread/resume", {"threadId": resume_session_id}) if resume_session_id
-                                 else send("thread/start", {"cwd": cwd, "model": model,
-                                           "sandbox": _CODEX_SANDBOX, "approvalPolicy": "never"}))
+                    id_thread = send(*_codex_thread_request(resume_session_id, cwd, model))
                 elif mid == id_thread:
                     thread_id = ((res.get("thread") or {}).get("id")) or resume_session_id or ""
                     if thread_id:
@@ -3445,7 +3517,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     t0 = time.time()
 
     def append(ev: dict) -> None:
-        ev["_ts"] = time.time()
+        ev.setdefault("_ts", time.time())
         with _turns_lock:
             rec["events"].append(ev)
 
@@ -4068,7 +4140,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or CODEX_DEFAULT_MODEL
         mcp_toml = _codex_mcp_toml(req.mcp_servers)
         if use_appserver:
-            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml)   # config.toml + CODEX_HOME + auth
+            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id))   # config.toml + CODEX_HOME + auth
         else:
             cmd = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
                                mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)

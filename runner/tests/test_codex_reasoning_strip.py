@@ -159,3 +159,30 @@ def test_tolerates_missing_and_malformed(tmp_path):
     assert "not json at all" in text
     assert "encrypted_content" not in text
     assert '"rs_1"' in text
+
+
+def test_a_resumed_session_keeps_every_provider_id_it_ran_under(tmp_path, monkeypatch):
+    """Codex looks the rollout's recorded provider id up in the config on resume. A session started
+    on the platform's TokenRouter (hr-tokenrouter), or before the ids were namespaced (azure), and
+    continued on the org's own OpenAI key must still load: the config declares those ids too, at
+    this turn's endpoint."""
+    from server import Auth, _codex_prepare_env
+    home = tmp_path / "home"; sess = home / ".codex" / "sessions" / "2026" / "07"; sess.mkdir(parents=True)
+    (sess / "rollout-1.jsonl").write_text('{"type": "session_meta", "payload": {"id": "s1", "model_provider": "hr-tokenrouter"}}\n'
+                                          '{"type": "turn_context", "payload": {"model": "gpt-5.5", "model_provider": "azure"}}\n')
+    env = {"HOME": str(home)}
+    _codex_prepare_env("openai", Auth(api_key="sk-x", base_url="https://broker.example/v1/llm"), "gpt-5.4-mini", str(tmp_path), env, resume=True)
+    cfg = (home / ".codex" / "config.toml").read_text()
+    assert 'model_provider = "hr-openai"' in cfg and "[model_providers.hr-openai]" in cfg
+    assert "[model_providers.hr-tokenrouter]" in cfg and "[model_providers.azure]" in cfg
+    assert cfg.count('base_url = "https://broker.example/v1/llm"') == 3, "every alias points at this turn's endpoint"
+    fresh = {"HOME": str(tmp_path / "fresh")}
+    _codex_prepare_env("openai", Auth(api_key="sk-x", base_url="https://broker.example/v1/llm"), "gpt-5.4-mini", str(tmp_path), fresh, resume=False)
+    assert "[model_providers.hr-tokenrouter]" not in (tmp_path / "fresh" / ".codex" / "config.toml").read_text(), "a fresh session declares only its own"
+
+
+def test_a_failure_names_the_providers_refusal_over_the_clis_retries():
+    from server import _PROVIDER_REFUSAL
+    lines = ["Reading prompt from stdin...", "ERROR: 401 Unauthorized: Incorrect API key provided", "Reconnecting... 1/5", "Reconnecting... 2/5"]
+    assert next((ln for ln in lines if _PROVIDER_REFUSAL.search(ln)), "") == "ERROR: 401 Unauthorized: Incorrect API key provided"
+    assert not _PROVIDER_REFUSAL.search("Reconnecting... 1/5")
