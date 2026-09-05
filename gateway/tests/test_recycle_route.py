@@ -12,9 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app  # noqa: E402
 
 
-def _run(coro):
-    return asyncio.run(coro)
-
 
 def test_recycle_hydrates_without_probe_and_without_checkpoint(monkeypatch):
     calls = []
@@ -38,7 +35,7 @@ def test_recycle_hydrates_without_probe_and_without_checkpoint(monkeypatch):
     monkeypatch.setattr(app, "_hydrate_relay", relay)
     monkeypatch.setattr(app, "_checkpoint", checkpoint)
     monkeypatch.setattr(app, "COLLAB_URL", "")
-    out = _run(app.recycle_session_sandbox("hsess1"))
+    out = asyncio.run(app.recycle_session_sandbox("hsess1"))
     assert calls == [("relay", "hsess1")]
     assert out["hydrated"] is True and out["hydrate"]["restored"] is True
     assert out["checkpoint_sha"] == "abc123"
@@ -49,7 +46,7 @@ def test_recycle_refused_while_a_turn_runs(monkeypatch):
         return {"ws_sha": "abc123", "turn_status": "running"}
     monkeypatch.setattr(app, "_vertex_get", vertex_get)
     with pytest.raises(HTTPException) as e:
-        _run(app.recycle_session_sandbox("hsess1"))
+        asyncio.run(app.recycle_session_sandbox("hsess1"))
     assert e.value.status_code == 409
 
 
@@ -74,5 +71,5 @@ def test_hydrate_probe_still_used_for_ordinary_turns(monkeypatch):
     monkeypatch.setattr(app, "_hydrate_relay", relay)
     monkeypatch.setattr(app, "COLLAB_URL", "")
     rec = {}
-    _run(app._hydrate("hsess1", rec))
+    asyncio.run(app._hydrate("hsess1", rec))
     assert calls == [("probe", "abc123")] and rec["hydrated"] is True and rec["hydrate"]["skipped"] is True
