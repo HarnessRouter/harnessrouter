@@ -13,7 +13,7 @@ import app  # noqa: E402
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def test_recycle_hydrates_without_probe_and_without_checkpoint(monkeypatch):
