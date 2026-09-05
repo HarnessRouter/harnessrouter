@@ -27,6 +27,7 @@ def test_the_stored_aliases_still_resolve():
     assert A._backend_of_harness({"base": "claude"}) == "claude"
     assert A._backend_of_harness({"base": "claude-code"}) == "claude"
     assert A._backend_of_harness({"base": "deepseek-harness"}) == "dsh"
+    assert A._backend_of_harness({"base": "omp"}) == "omp"
 
 
 def test_unknown_base_stays_empty_for_the_caller_to_infer():

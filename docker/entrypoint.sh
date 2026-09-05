@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,cline}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,cline,omp}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -188,6 +188,7 @@ backend_bin() {
     opencode) echo "$TOOLS/bin/opencode" ;;
     qwen)   echo "$TOOLS/bin/qwen" ;;
     cline)  echo "$TOOLS/bin/cline" ;;
+    omp)    echo "$TOOLS/bin/omp" ;;
   esac
 }
 
@@ -214,6 +215,23 @@ install_opencode() {
   mkdir -p "$TOOLS/bin" && mv "$oc_tmp/opencode" "$TOOLS/bin/opencode" && chmod 755 "$TOOLS/bin/opencode" \
     || { rm -rf "$oc_tmp"; return 1; }
   rm -rf "$oc_tmp"
+}
+
+# omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases.
+install_omp() {
+  case "$(uname -m)" in
+    x86_64)        omp_arch="x64" ;;
+    aarch64|arm64) omp_arch="arm64" ;;
+    *) echo "unsupported architecture $(uname -m) for omp"; return 1 ;;
+  esac
+  omp_ref="${HR_OMP_VERSION:-latest}"
+  if [ "$omp_ref" = "latest" ]; then
+    omp_url="https://github.com/can1357/oh-my-pi/releases/latest/download/omp-linux-$omp_arch"
+  else
+    omp_url="https://github.com/can1357/oh-my-pi/releases/download/v${omp_ref#v}/omp-linux-$omp_arch"
+  fi
+  mkdir -p "$TOOLS/bin"
+  curl -fsSL "$omp_url" -o "$TOOLS/bin/omp" && chmod 755 "$TOOLS/bin/omp" || return 1
 }
 
 # Run an install and, if it fails, SAY WHY.
@@ -275,6 +293,11 @@ install_backends() {
     # mounts this adapter via -e only on turns that actually configure MCP servers.
     try_install "Pi" npm install -g --prefix "$TOOLS" --no-audit --no-fund --ignore-scripts \
         @earendil-works/pi-coding-agent pi-mcp-adapter || true
+  fi
+
+  if wanted omp && [ ! -x "$(backend_bin omp)" ]; then
+    echo "[harnessrouter] installing Oh My Pi (MIT)…"
+    try_install "Oh My Pi" install_omp || true
   fi
 
   if wanted dsh && [ ! -x "$(backend_bin dsh)" ]; then
