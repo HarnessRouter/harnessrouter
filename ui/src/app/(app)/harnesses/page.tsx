@@ -204,15 +204,23 @@ export default function HarnessesPage() {
           {!rows ? <SkelListItems rows={4} /> : panel.length === 0 ? (
             <div className="hx-empty">{needle ? 'Nothing matches that.' : 'No harnesses yet.'}</div>
           ) : ([
-            { key: 'yours' as const, label: 'Your harnesses', items: panel.filter((x) => x.r.kind !== 'builtin'), empty: needle ? '' : 'None yet. Fork a system harness, or create one from the dashboard.' },
+            { key: 'yours' as const, label: 'Your harnesses', items: panel.filter((x) => x.r.kind !== 'builtin'), empty: needle ? '' : 'None yet. Fork a system harness, or create one.' },
             { key: 'system' as const, label: 'System harnesses', items: panel.filter((x) => x.r.kind === 'builtin'), empty: '' },
           ]).map((g) => (
             <div key={g.key} className={'hx-group' + (groupsOpen[g.key] || needle ? ' is-open' : '')}>
-              <button type="button" className="hx-group-btn" aria-expanded={groupsOpen[g.key] || !!needle} onClick={() => toggleGroup(g.key)}>
-                <iconify-icon icon={groupsOpen[g.key] || needle ? 'tabler:chevron-down' : 'tabler:chevron-right'} className="hx-caret"></iconify-icon>
-                <span className="hx-group-label">{g.label}</span>
-                <span className="hx-group-count">{g.items.length}</span>
-              </button>
+              <div className="hx-group-row">
+                <button type="button" className="hx-group-btn" aria-expanded={groupsOpen[g.key] || !!needle} onClick={() => toggleGroup(g.key)}>
+                  <iconify-icon icon={groupsOpen[g.key] || needle ? 'tabler:chevron-down' : 'tabler:chevron-right'} className="hx-caret"></iconify-icon>
+                  <span className="hx-group-label">{g.label}</span>
+                  <span className="hx-group-count">{g.items.length}</span>
+                </button>
+                {/* a custom harness starts here too, not only from the dashboard */}
+                {g.key === 'yours' && (
+                  <button type="button" className="hx-ic hx-group-add" title="New harness" aria-label="New harness" onClick={() => setAdding(true)}>
+                    <iconify-icon icon="tabler:plus"></iconify-icon>
+                  </button>
+                )}
+              </div>
               {(groupsOpen[g.key] || !!needle) && (g.items.length === 0 ? (g.empty ? <div className="hx-group-empty">{g.empty}</div> : null) : g.items.map(({ r, tasks, loaded, more, loading }) => {
             const isOpen = open === r.id || !!needle;
               const running = tasks.filter((c) => RUNNING.has(c.status || '')).length;
