@@ -816,7 +816,7 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 # transparent to the CLI. bedrock/vertex sign with the cloud SDK and are handled separately
 # (see _auth_from_conn) — they keep their own credential until their signing path is brokered.
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
-                         "openrouter", "openai-api", "custom"}
+                         "openrouter", "openai-api", "custom", "google"}
 
 
 def _mint_turn_cred(sid: str, conn_name: str) -> str:
@@ -1002,6 +1002,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
+    # Google AI Studio: one key, Gemini's OpenAI-compatible chat-completions surface. Every
+    # backend that talks OpenAI's chat shape through a base_url reaches it as 'openai-api'.
+    # Not claude (Anthropic's protocol) and not codex (the Responses API): unprobed is unlisted.
+    ("google", "hermes"): "openai-api",        ("google", "pi"): "openai-api",
+    ("google", "dsh"): "openai-api",           ("google", "opencode"): "openai-api",
+    ("google", "qwen"): "openai-api",          ("google", "cline"): "openai-api",
 }
 
 
@@ -2921,7 +2927,10 @@ def _broker_token(request: Request) -> str:
 # not a thing to ask the user for. Gateways (OpenRouter, Vercel, TokenRouter) and self-hosted
 # endpoints carry their base_url on the connection. Without this table an OpenAI key answered
 # "connection has no base_url" (2026-09-04).
-_PROVIDER_BASE = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1"}
+_PROVIDER_BASE = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1",
+                  # Google AI Studio keys answer on Gemini's OpenAI-compatible surface (chat
+                  # completions); a key alone names the endpoint, the same way an OpenAI key does.
+                  "google": "https://generativelanguage.googleapis.com/v1beta/openai"}
 
 
 def _with_provider_base(conn: dict | None) -> dict | None:
@@ -4776,6 +4785,8 @@ _VERCEL_RESLUG = {
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
+# Google AI Studio serves the catalog's Gemini models by their own ids.
+_VENDOR_MODELS["google"] = {"gemini-3.6-flash": "gemini-3.6-flash"}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
