@@ -456,6 +456,10 @@ body {
 .hx-group + .hx-group { margin-top: 6px; border-top: 1px solid var(--v2-line); padding-top: 8px; }
 .hx-group-btn { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 12px 6px 14px; border: 0; background: none; cursor: pointer; color: var(--v2-sec); font: inherit; text-align: left; }
 .hx-group-btn:hover { color: var(--v2-ink); }
+.hx-group-row { display: flex; align-items: center; padding-right: 8px; }
+.hx-group-row .hx-group-btn { flex: 1; min-width: 0; }
+.hx-group-row .hx-group-add { opacity: 0; }
+.hx-group-row:hover .hx-group-add, .hx-group-add:focus-visible { opacity: 1; }
 .hx-group-btn .hx-caret { font-size: 14px; color: var(--v2-cap); flex: none; }
 .hx-group-label { font-size: 13px; font-weight: 500; }
 .hx-group-count { font-family: var(--v2-mono); font-size: 10.5px; color: var(--v2-cap); }
