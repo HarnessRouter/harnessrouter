@@ -80,7 +80,7 @@ try {
           const other = enabled.find((x) => x !== m) || null;
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: other }).first().click(); await sleep(300); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };
-          log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
+          log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : rec.switch.ok === null ? 'n/a' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: m }).first().click(); await sleep(300); }
           const a = await turn(`Create a file named hello-${h}.txt containing exactly the word HELLO, then reply DONE.`);
           // the file cards render from the settled read, a moment after the answer
