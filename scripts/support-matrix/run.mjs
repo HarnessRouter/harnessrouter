@@ -27,22 +27,40 @@ const turnsOf = (sid) => page.evaluate(async (s) => { const r = await fetch(`/ap
 // send one message on the open session and wait for it to settle; returns the outcome. The turn
 // settles on the server's word (the turns feed), not on the task pill: the pill reads the task card,
 // which lands a while after the turn does, and a turn scored off it was scored off the previous turn.
-async function turn(text, { maxS = 420 } = {}) {
+async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   const before = await transcript(); const t0 = Date.now(); const secs = () => Math.round((Date.now() - t0) / 10) / 100;
+  // the composer refuses a message while the previous turn's stream is still open (its Send is
+  // disabled): wait for it to take input again, or the message is dropped on the floor
+  const ready = () => page.evaluate(() => { const b = document.querySelector('.wbx-composer .uic-send'); const ta = document.querySelector('.wbx-composer textarea'); return !!ta && !ta.disabled && !!b && !b.disabled; });
+  await page.fill('.wbx-composer textarea, textarea', text);
+  let canSend = await ready(); for (let i = 0; i < 90 && !canSend; i++) { await sleep(1000); canSend = await ready(); }
+  if (!canSend) return { ok: false, s: secs(), tail: '', why: 'the composer stayed busy for 90 s after the previous turn settled' };
   const sid0 = sidOf(); const n0 = sid0 ? ((await turnsOf(sid0)) || []).length : 0;
-  await page.fill('.wbx-composer textarea, textarea', text); await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
   let sid = sid0, turns = null;
   for (let i = 0; i < 120; i++) { await sleep(1000); sid = sid || sidOf(); if (!sid) continue; turns = await turnsOf(sid); if (turns && turns.length > n0) break; }
   if (!turns || turns.length <= n0) return { ok: false, s: secs(), tail: '', why: 'the message was not taken: no turn record after 120 s' };
-  let last = null;
-  for (let i = 0; i < maxS / 3; i++) { await sleep(3000); const d = await door(); if (d) return { ok: false, s: secs(), tail: '', why: 'door: ' + d.slice(0, 160) }; turns = await turnsOf(sid); last = turns ? turns[turns.length - 1] : null; if (last && TERMINAL.has(String(last.status))) break; }
-  // then let the console render what the server stored: the answer lags the status by a moment
+  // settle on the server's word for the turn: two reads that agree on a terminal status, with the
+  // answer (or the reason) stored, and the produced files when the task was asked for one. The
+  // status lands a moment before the output does, and once read failed on a turn that completed.
+  let last = null, prev = '', agreed = 0, history = [];
+  for (let i = 0; i < maxS / 3; i++) {
+    await sleep(3000); const d = await door(); if (d) return { ok: false, s: secs(), tail: '', why: 'door: ' + d.slice(0, 160) };
+    turns = await turnsOf(sid); last = turns ? turns[turns.length - 1] : null; const st = String(last?.status || '');
+    if (st !== prev) { history.push(st); prev = st; }
+    if (!TERMINAL.has(st)) { agreed = 0; continue; }
+    const stored = !!(last.assistant || last.error || last.incomplete_reason || (last.files || []).length);
+    const filesIn = !expectFiles || (last.files || []).length > 0;
+    agreed = stored ? agreed + 1 : 0;
+    if (agreed >= 2 && (filesIn || agreed >= 8)) break;
+  }
+  // then let the console render what the server stored
   const head = String(last?.assistant || '').replace(/\s+/g, ' ').trim().slice(0, 40);
   for (let i = 0; i < 12; i++) { const t = await transcript(); if (!/Working…/.test(t.slice(before.length)) && (!head || t.includes(head))) break; await sleep(1500); }
   await sleep(1500);
   const t = await transcript(); const tail = t.slice(before.length).trim().slice(-400);
   const ok = !!last && (last.status === 'done' || last.status === 'completed');
-  return { ok, status: last ? last.status : 'none', pill: await pill(), s: secs(), tail, turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${last?.status}`) };
+  return { ok, status: last ? last.status : 'none', status_history: history, pill: await pill(), s: secs(), tail, turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${last?.status}`) };
 }
 const expectWord = (r, word) => r.ok && (r.tail || '').includes(word) ? r : { ...r, ok: false, why: r.why || `answered without ${word}: ${(r.tail || '').slice(-200)}` };
 try {
@@ -82,7 +100,7 @@ try {
           else rec.switch = { to: null, ok: null, why: 'only one model' };
           log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : rec.switch.ok === null ? 'n/a' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: m }).first().click(); await sleep(300); }
-          const a = await turn(`Create a file named hello-${h}.txt containing exactly the word HELLO, then reply DONE.`);
+          const a = await turn(`Create a file named hello-${h}.txt containing exactly the word HELLO, then reply DONE.`, { expectFiles: true });
           // the file cards render from the settled read, a moment after the answer
           let fl = await files(); for (let i = 0; i < 10 && fl.length < (a.turn_files || []).length; i++) { await sleep(1500); fl = await files(); }
           rec.artifact = { ...a, files: fl, ok: a.ok && fl.some((f) => f.includes(`hello-${h}.txt`)), why: a.ok && !fl.some((f) => f.includes(`hello-${h}.txt`)) ? `no file card (files: ${fl.join(',') || 'none'}); ${a.tail.slice(-160)}` : a.why };
