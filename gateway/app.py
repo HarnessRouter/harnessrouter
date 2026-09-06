@@ -3916,7 +3916,11 @@ async def _require_integrations_admin(request: Request) -> dict:
 _PROVIDER_CATALOG: dict[str, dict] = {
     "anthropic": {
         "label": "Anthropic",
-        "base_url": "https://api.anthropic.com",
+        # With the "/v1", like every other direct provider here and like the broker's own default
+        # (_PROVIDER_BASE): the broker joins the resource ("messages") straight onto it, and a
+        # base stored without the suffix sent a brokered Messages call to
+        # https://api.anthropic.com/messages. The claude CLI's runner path strips it again.
+        "base_url": "https://api.anthropic.com/v1",
         "fields": [],
         "secret": "api_key",
         "secret_label": "API Key",
