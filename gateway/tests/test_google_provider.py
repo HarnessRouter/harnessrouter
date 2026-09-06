@@ -108,3 +108,37 @@ def test_llmtr_and_the_aggregators_carry_fable_5_1_and_llmtr_the_gemini_family()
     for h, c in gw._MODEL_CATALOG.items():
         if "claude-fable-5" in c["models"]:
             assert "claude-fable-5-1" in c["models"], h
+
+
+# ── Gemini function declarations through TokenRouter (2026-09-06) ─────────────────────────
+def test_a_harness_tool_schema_is_normalised_to_googles_subset():
+    cline_like = {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "additionalProperties": False,
+                  "properties": {"files": {"type": "array", "items": {"type": "object", "properties": {
+                      "path": {"type": "string"}, "end_line": {"description": "line"},
+                      "count": {"type": "integer", "exclusiveMinimum": 0},
+                      "mode": {"oneOf": [{"const": "a"}, {"const": "b"}]},
+                      "tag": {"type": ["string", "null"]}}, "required": ["path", "gone"]}},
+                                 "opts": {"type": "object", "properties": {}}, "list": {"type": "array"}},
+                  "required": ["files"]}
+    out = gw._gemini_schema(cline_like)
+    assert "$schema" not in out and "additionalProperties" not in out
+    item = out["properties"]["files"]["items"]
+    assert item["properties"]["end_line"] == {"description": "line", "type": "string"}
+    assert item["properties"]["count"] == {"type": "integer", "minimum": 0}
+    assert item["properties"]["mode"] == {"anyOf": [{"enum": ["a"], "type": "string"}, {"enum": ["b"], "type": "string"}]}
+    assert item["properties"]["tag"] == {"type": "string", "nullable": True}
+    assert item["required"] == ["path"]
+    assert out["properties"]["opts"] == {"type": "object"}
+    assert out["properties"]["list"] == {"type": "array", "items": {"type": "string"}}
+
+
+def test_only_tool_parameters_change_and_an_empty_declaration_is_dropped():
+    body = json.dumps({"model": "google/gemini-3.8-flash", "messages": [{"role": "user", "content": "hi"}],
+                       "tools": [{"type": "function", "function": {"name": "a", "parameters": {"$schema": "x", "type": "object", "properties": {"p": {"type": "string"}}}}},
+                                 {"type": "function", "function": {"name": "b", "parameters": {"type": "object", "properties": {}}}}]}).encode()
+    out = json.loads(gw._with_gemini_schemas(body))
+    assert out["tools"][0]["function"]["parameters"] == {"type": "object", "properties": {"p": {"type": "string"}}}
+    assert "parameters" not in out["tools"][1]["function"]
+    assert out["messages"] == [{"role": "user", "content": "hi"}]
+    plain = b'{"model": "google/gemini-3.8-flash", "messages": []}'
+    assert gw._with_gemini_schemas(plain) is plain
