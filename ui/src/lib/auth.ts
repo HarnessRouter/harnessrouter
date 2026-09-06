@@ -45,7 +45,9 @@ export function getSession(): Session | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(SESSION_KEY);
-    return raw ? (JSON.parse(raw) as Session) : null;
+    const session = raw ? (JSON.parse(raw) as Session) : null;
+    if (session?.token) ensureProbeCookie(session.token);
+    return session;
   } catch {
     return null;
   }
@@ -55,33 +57,45 @@ export function getSession(): Session | null {
  *  snapshot (e.g. the dock avatar) can re-read without a reload. */
 export const SESSION_EVENT = 'agentstudio:session';
 
-// Cross-subdomain login-state cookie. The JWT lives in localStorage (origin-scoped, so the
-// marketing apex can't read it). To let harnessrouter.ai's header reflect login without exposing
-// the app's storage, we ALSO mirror the token into a cookie scoped to the registrable domain
-// (Domain=.harnessrouter.ai) — sent to both app. and the apex. The apex never reads this cookie in
-// JS; it calls GET /api/session on the app origin, which reads the cookie server-side and returns
-// only {authed, name}. On localhost/preview (not *.harnessrouter.ai) the Domain attribute is
-// omitted so the cookie still works same-origin.
-const AUTH_COOKIE = 'hr_auth';
-function _cookieDomain(): string {
-  if (typeof window === 'undefined') return '';
-  return window.location.hostname.endsWith('harnessrouter.ai') ? '; Domain=.harnessrouter.ai' : '';
+// Login-state mirror for the marketing header (see app/api/session/route.ts). After every
+// session write the console asks its OWN server to set an HttpOnly, host-only `hr_session` cookie
+// from the verified token, and to clear it on sign-out. Script on no origin can read that cookie;
+// the marketing apex learns only {authed, initial} by calling GET /api/session with credentials.
+// Fire-and-forget: if this ever fails the header simply keeps showing "Sign up".
+const PROBE_SYNCED_KEY = 'agentstudio.session.probe-synced';
+function syncProbeCookie(token: string): void {
+  if (typeof window === 'undefined' || !token) return;
+  void fetch('/api/session', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    credentials: 'same-origin',
+    keepalive: true,
+  }).catch(() => {});
 }
-function setAuthCookie(token: string): void {
+function clearProbeCookie(): void {
   if (typeof window === 'undefined') return;
-  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  // 7-day lifetime matches the session; SameSite=Lax so top-level navigations from the apex carry it.
-  document.cookie = `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=604800${_cookieDomain()}; SameSite=Lax${secure}`;
+  try { window.sessionStorage.removeItem(PROBE_SYNCED_KEY); } catch {}
+  void fetch('/api/session', { method: 'DELETE', credentials: 'same-origin', keepalive: true }).catch(() => {});
 }
-function clearAuthCookie(): void {
-  if (typeof window === 'undefined') return;
-  document.cookie = `${AUTH_COOKIE}=; Path=/; Max-Age=0${_cookieDomain()}; SameSite=Lax`;
+/** Sessions stored before the cookie existed: mirror them once per tab on first read. */
+function ensureProbeCookie(token: string): void {
+  if (typeof window === 'undefined' || !token) return;
+  try {
+    if (window.sessionStorage.getItem(PROBE_SYNCED_KEY)) return;
+    window.sessionStorage.setItem(PROBE_SYNCED_KEY, '1');
+  } catch {
+    return;
+  }
+  syncProbeCookie(token);
 }
 
 function setSession(s: Session): void {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify(s));
-    if (s.token) setAuthCookie(s.token);
+    if (s.token) {
+      try { window.sessionStorage.setItem(PROBE_SYNCED_KEY, '1'); } catch {}
+      syncProbeCookie(s.token);
+    }
     window.dispatchEvent(new CustomEvent(SESSION_EVENT));
   }
 }
@@ -89,7 +103,7 @@ function setSession(s: Session): void {
 export function clearSession(): void {
   if (typeof window !== 'undefined') {
     window.localStorage.removeItem(SESSION_KEY);
-    clearAuthCookie();
+    clearProbeCookie();
   }
 }
 
