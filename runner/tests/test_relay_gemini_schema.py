@@ -22,7 +22,7 @@ def test_a_harness_tool_schema_is_normalised_to_googles_subset():
     item = out["properties"]["files"]["items"]
     assert item["properties"]["end_line"] == {"description": "line", "type": "string"}
     assert item["properties"]["count"] == {"type": "integer", "minimum": 0}
-    assert item["properties"]["mode"] == {"anyOf": [{"enum": ["a"], "type": "string"}, {"enum": ["b"], "type": "string"}]}
+    assert item["properties"]["mode"] == {"type": "string", "anyOf": [{"enum": ["a"], "type": "string"}, {"enum": ["b"], "type": "string"}]}
     assert item["properties"]["tag"] == {"type": "string", "nullable": True}
     assert item["required"] == ["path"]
     assert out["properties"]["opts"] == {"type": "object"}
@@ -39,3 +39,11 @@ def test_only_tool_parameters_change_and_an_empty_declaration_is_dropped():
     assert out["messages"] == [{"role": "user", "content": "hi"}]
     plain = b'{"model": "google/gemini-3.8-flash", "messages": []}'
     assert server._with_gemini_schemas(plain) is plain
+
+
+def test_a_nullable_choice_gets_a_type():
+    # zod's optional integer: anyOf [integer, null] with no type; the 3.5-flash channel refuses it without one
+    assert server._gemini_schema({"anyOf": [{"type": "integer"}, {"type": "null"}], "description": "line"}) == {"type": "integer", "nullable": True, "description": "line"}
+    two = server._gemini_schema({"anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]})
+    assert two["type"] == "string" and two["nullable"] is True and [m["type"] for m in two["anyOf"]] == ["string", "integer"]
+    assert server._gemini_schema({"anyOf": [{"type": "null"}]}) == {"type": "string", "nullable": True}

@@ -140,6 +140,21 @@ def _gemini_schema(node):
         out["type"] = non_null[0] if non_null else "string"
         if "null" in t:
             out["nullable"] = True
+    if "type" not in out and isinstance(out.get("anyOf"), list):
+        # a nullable choice (zod's optional): the null member becomes `nullable`, one remaining member
+        # becomes the node itself, several keep anyOf under the first member's type; without a type
+        # the channel for gemini-3.5-flash answers "schema didn't specify the schema type field"
+        members = [m for m in out["anyOf"] if isinstance(m, dict) and m.get("type") != "null"]
+        if len(members) < len(out["anyOf"]):
+            out["nullable"] = True
+        if len(members) == 1:
+            out = {**members[0], **{k: v for k, v in out.items() if k != "anyOf"}}
+            out.setdefault("type", members[0].get("type", "string"))
+        elif members:
+            out["anyOf"] = members
+            out["type"] = members[0].get("type") or "string"
+        else:
+            out.pop("anyOf")
     if "type" not in out and "anyOf" not in out:
         out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
     if out.get("type") == "array" and "items" not in out:
