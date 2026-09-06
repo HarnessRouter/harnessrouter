@@ -152,10 +152,14 @@ try {
         const ts = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}/turns`); return r.ok ? await r.json() : null; }, rec.sid).catch(() => null);
         const turnsList = Array.isArray(ts) ? ts : (ts && Array.isArray(ts.turns) ? ts.turns : []);
         rec.connections = [...new Set(turnsList.map((t) => t && t.connection).filter(Boolean).map(String))];
+        // the model each turn record says the CLI actually ran (gemini-cli reports it; it rewrites some
+        // requested ids): a served model other than the pair's id is a substitution, a finding of its own
+        rec.served = [...new Set(turnsList.map((t) => t && t.served_model).filter(Boolean).map(String))];
+        rec.substituted = rec.served.filter((sm) => sm.split(',').some((x) => x && x !== m));
         if (process.env.EXPECT_CONNECTION) rec.foreign = rec.connections.filter((c) => c !== process.env.EXPECT_CONNECTION);
         rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
       }
-      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''} deleted=${rec.deleted || '?'}`);
+      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''}${(rec.served || []).length ? ' served=' + rec.served.join('+') : ''}${(rec.substituted || []).length ? ' SUBSTITUTED=' + rec.substituted.join('+') : ''} deleted=${rec.deleted || '?'}`);
     }
   }
 } catch (e) { log(`FATAL ${String(e).slice(0, 300)}`); }
