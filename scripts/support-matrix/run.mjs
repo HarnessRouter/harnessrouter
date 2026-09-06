@@ -32,32 +32,40 @@ const turnsOf = (sid) => page.evaluate(async (s) => { const r = await fetch(`/ap
 // settles on the server's word, not on the task pill: the pill reads the task card, which lands a
 // while after the turn does, and a turn scored off it was scored off the previous turn.
 async function turn(text, { maxS = 420, expectFiles = false } = {}) {
-  const before = await transcript(); const t0 = Date.now(); const secs = () => Math.round((Date.now() - t0) / 10) / 100;
+  const t0 = Date.now(); const secs = () => Math.round((Date.now() - t0) / 10) / 100;
+  const mark = text.slice(0, 60);
   // the composer refuses a message while the previous turn's stream is still open (its Send is
   // disabled): wait for it to take input again, or the message is dropped on the floor
   const ready = () => page.evaluate(() => { const b = document.querySelector('.wbx-composer .wbx-send, .wbx-composer .uic-send'); const ta = document.querySelector('.wbx-composer textarea'); return !!ta && !ta.disabled && !!b && !b.disabled; });
-  await page.fill('.wbx-composer textarea, textarea', text);
-  let canSend = await ready(); for (let i = 0; i < 90 && !canSend; i++) { await sleep(1000); canSend = await ready(); }
-  if (!canSend) return { ok: false, s: secs(), tail: '', why: 'the composer stayed busy for 90 s after the previous turn settled' };
-  const sid0 = sidOf(); const d0 = sid0 ? await detailOf(sid0) : null; const resp0 = String(d0?.last_response_id || '');
-  await page.keyboard.press('Enter');
-  // taken: the console shows the message at once; the server then opens a turn (a new task gets
-  // its session id in the URL first) and the session says running, or already names a new response
-  let sid = sid0, d = null, seenLive = false, taken = false;
-  for (let i = 0; i < 60 && !taken; i++) { await sleep(2000); sid = sid || sidOf(); if (!sid) continue; d = await detailOf(sid); const st = String(d?.turn_status || d?.status || ''); if (LIVE.has(st)) seenLive = true; taken = seenLive || (!!d && String(d.last_response_id || '') !== resp0 && !!d.last_response_id); }
+  const sid0 = sidOf(); const n0 = sid0 ? ((await turnsOf(sid0)) || []).length : 0;
+  const before = await transcript(); const sentAt = () => transcript().then((t) => t.lastIndexOf(mark));
+  // send, and see the message land in the transcript (the console shows it at once); a message a
+  // re-render swallowed (a model pick rebuilds the composer) is typed and sent once more
+  let shown = false;
+  for (let attempt = 0; attempt < 2 && !shown; attempt++) {
+    await page.fill('.wbx-composer textarea, textarea', text);
+    let canSend = await ready(); for (let i = 0; i < 90 && !canSend; i++) { await sleep(1000); canSend = await ready(); }
+    if (!canSend) return { ok: false, s: secs(), tail: '', why: 'the composer stayed busy for 90 s after the previous turn settled' };
+    await page.keyboard.press('Enter');
+    for (let i = 0; i < 10 && !shown; i++) { await sleep(1000); shown = (await sentAt()) >= before.lastIndexOf(mark) + 1 || ((await sentAt()) >= 0 && before.lastIndexOf(mark) < 0); }
+  }
+  if (!shown) return { ok: false, s: secs(), tail: '', why: 'the message never appeared in the transcript after two sends' };
+  // taken: the server opened a turn for it (a new task gets its session id in the URL first)
+  let sid = sid0, d = null, taken = false, n1 = n0;
+  for (let i = 0; i < 60 && !taken; i++) { await sleep(2000); sid = sid || sidOf(); if (!sid) continue; d = await detailOf(sid); if (LIVE.has(String(d?.turn_status || d?.status || ''))) taken = true; else if (i % 5 === 4) { const ts = await turnsOf(sid); n1 = ts ? ts.length : n1; taken = n1 > n0; } }
   if (!taken) return { ok: false, s: secs(), tail: '', why: 'the message was not taken: the session never opened a turn in 120 s' };
-  // settle on the session's status; then the turns feed, until the answer (or the reason) and the
-  // produced files are stored: the status lands a moment before the output does
+  // settle on the session's status; then the turns feed, until the new turn's answer (or reason)
+  // and the produced files are stored: the status lands a moment before the output does
   let st = '';
-  for (let i = 0; i < maxS / 3; i++) { await sleep(3000); const dr = await door(); if (dr) return { ok: false, s: secs(), tail: '', why: 'door: ' + dr.slice(0, 160) }; d = await detailOf(sid); st = String(d?.turn_status || d?.status || ''); if (TERMINAL.has(st) && (seenLive || String(d?.last_response_id || '') !== resp0)) break; if (LIVE.has(st)) seenLive = true; }
+  for (let i = 0; i < maxS / 3; i++) { await sleep(3000); const dr = await door(); if (dr) return { ok: false, s: secs(), tail: '', why: 'door: ' + dr.slice(0, 160) }; d = await detailOf(sid); st = String(d?.turn_status || d?.status || ''); if (TERMINAL.has(st)) break; }
   let last = null, turns = null;
-  for (let i = 0; i < 10; i++) { turns = await turnsOf(sid); last = turns ? turns[turns.length - 1] : null; const stored = !!(last && TERMINAL.has(String(last.status)) && (last.assistant || last.error || last.incomplete_reason || (last.files || []).length)); if (stored && (!expectFiles || (last.files || []).length)) break; await sleep(3000); }
+  for (let i = 0; i < 10; i++) { turns = await turnsOf(sid); last = turns && turns.length > n0 ? turns[turns.length - 1] : null; const stored = !!(last && TERMINAL.has(String(last.status)) && (last.assistant || last.error || last.incomplete_reason || (last.files || []).length)); if (stored && (!expectFiles || (last.files || []).length)) break; await sleep(3000); }
   // then let the console render what the server stored
   const head = String(last?.assistant || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-  for (let i = 0; i < 12; i++) { const t = await transcript(); if (!/Working…/.test(t.slice(before.length)) && (!head || t.includes(head))) break; await sleep(1500); }
+  for (let i = 0; i < 12; i++) { const t = await transcript(); const from = t.lastIndexOf(mark); if (!/Working…/.test(t.slice(from)) && (!head || t.slice(from).includes(head))) break; await sleep(1500); }
   await sleep(1500);
-  const t = await transcript(); const tail = t.slice(before.length).trim().slice(-400);
-  const status = String(last?.status || st || 'none');
+  const t = await transcript(); const from = t.lastIndexOf(mark); const tail = t.slice(from >= 0 ? from : before.length).trim().slice(-400);
+  const status = String(last?.status || (turns && turns.length > n0 ? st : 'none'));
   const ok = status === 'done' || status === 'completed';
   return { ok, status, pill: await pill(), s: secs(), tail, turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${status}`) };
 }
