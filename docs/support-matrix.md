@@ -2,6 +2,62 @@
 
 Scenarios: first turn, follow-up in the same session, switch model mid-session, artifact (a file the task must produce), recycle (the sandbox is let go on purpose, then a follow-up must recall the first message). pass = ran and answered as asked, FAIL = failed (reason in the notes), n/a = not run.
 
+## Provider: anthropic
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
+|---|---|---|---|---|---|---|---|
+| claude-code | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| claude-code | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| claude-code | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| claude-code | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| claude-code | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass |  |
+| claude-code | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| claude-code | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| cline | claude-fable-5 | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found"}] ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-haiku-4.5 | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found"}] ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-opus-4.7 | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found"}] ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-opus-4.8 | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found"}] ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-opus-5 | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found"}] ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-sonnet-4.6 | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found"}] ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-sonnet-5 | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found"}] ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| dsh | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| dsh | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| dsh | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| dsh | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| dsh | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass |  |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| dsh | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| hermes | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| hermes | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| hermes | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| hermes | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| hermes | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass |  |
+| hermes | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| hermes | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| opencode | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| pi | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| pi | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| pi | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| pi | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| pi | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass |  |
+| pi | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| pi | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
+| qwen | claude-fable-5 | pass | pass | pass (qwen3.7-max) | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 404 ; recycle: answered without M1-claude-fable-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that  ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-fable-5: What exact word did I ask you to reply with  |
+| qwen | claude-haiku-4.5 | pass | pass | pass (qwen3.7-max) | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 404 ; recycle: answered without M1-claude-haiku-4.5: What exact word did I ask you to reply with in my very first message of this task? Reply with just tha ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-haiku-4.5: What exact word did I ask you to reply wit |
+| qwen | claude-opus-4.7 | pass | pass | pass (qwen3.7-max) | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 404 ; recycle: answered without M1-claude-opus-4.7: What exact word did I ask you to reply with in my very first message of this task? Reply with just that ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-opus-4.7: What exact word did I ask you to reply with |
+| qwen | claude-opus-4.8 | pass | pass | pass (qwen3.7-max) | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 404 ; recycle: answered without M1-claude-opus-4.8: What exact word did I ask you to reply with in my very first message of this task? Reply with just that ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-opus-4.8: What exact word did I ask you to reply with |
+| qwen | claude-opus-5 | pass | pass | pass (qwen3.7-max) | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 404 ; recycle: answered without M1-claude-opus-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that w ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-opus-5: What exact word did I ask you to reply with i |
+| qwen | claude-sonnet-4.6 | pass | pass | pass (qwen3.7-max) | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 404 ; recycle: answered without M1-claude-sonnet-4.6: What exact word did I ask you to reply with in my very first message of this task? Reply with just th ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-sonnet-4.6: What exact word did I ask you to reply wi |
+| qwen | claude-sonnet-5 | pass | pass | pass (qwen3.7-max) | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 404 ; recycle: answered without M1-claude-sonnet-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-sonnet-5: What exact word did I ask you to reply with |
+
+49 pairs, 196 of 217 scenario runs passed.
+
 ## Provider: azure-openai
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
