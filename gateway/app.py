@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import re
+import collections
 import time
 import uuid
 import zipfile
@@ -1416,6 +1417,8 @@ async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
 
 
 async def _blob_delete(file_id: str, kb: str = BLOB_KB) -> bool:
+    if kb == TRACE_KB:
+        _card_cache_forget(file_id)
     return await BACKING.blob.delete(kb, file_id)
 
 
@@ -1491,6 +1494,8 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
                                 str(manifest.get("member_id") or ""),
                                 str(manifest.get("workspace") or ""))
+    for k in keys:
+        _card_cache_forget(k)
     await asyncio.gather(*[_trace_put(k, data) for k in keys])
 
 
@@ -2460,6 +2465,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         pass
     rec["status"] = settled
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
         await _vg_upsert("HarnessResponse", rid, {"status": settled})
     except Exception:  # noqa: BLE001
@@ -3248,24 +3254,32 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
     lst = await _blob_list(prefix, limit=limit, cursor=cursor or None)
 
     async def _card(item: dict):
-        b = await _blob_get(item["file_id"], kb=TRACE_KB)
-        if not b:
-            return None
-        # A mirror card whose flat card is gone is an orphan: a delete on an older version
-        # removed the flat card and left the mirror (the delete now clears every mirror, but an
-        # install upgrading brings its orphans with it). It is dropped here, and removed so the
-        # next list does not pay for it either. Only mirrors are checked: the flat index IS the
-        # manifest, so the read above already answered for it.
         fid = str(item["file_id"])
-        if "/idx/" not in fid:
-            flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
-            if not await _blob_get(flat, kb=TRACE_KB):
-                await _blob_delete(fid, kb=TRACE_KB)
+        m = _CARD_CACHE.get(fid)
+        if m is not None:
+            _CARD_CACHE.move_to_end(fid)
+        else:
+            b = await _blob_get(fid, kb=TRACE_KB)
+            if not b:
                 return None
-        try:
-            m = json.loads(b)
-        except Exception:  # noqa: BLE001
-            return None
+            try:
+                m = json.loads(b)
+            except Exception:  # noqa: BLE001
+                return None
+            # A mirror card whose flat card is gone is an orphan: a delete on an older version
+            # removed the flat card and left the mirror (the delete now clears every mirror, but
+            # the orphans made before it are still listed). It is dropped here, and removed so the
+            # next list does not pay for it either. Only mirrors are checked: the flat index IS the
+            # manifest, so the read above already answered for it.
+            if "/idx/" not in fid:
+                flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
+                if not await _blob_get(flat, kb=TRACE_KB):
+                    await _blob_delete(fid, kb=TRACE_KB)
+                    return None
+            if str(m.get("status") or "") not in _CARD_LIVE:
+                _CARD_CACHE[fid] = m
+                while len(_CARD_CACHE) > _CARD_CACHE_MAX:
+                    _CARD_CACHE.popitem(last=False)
         if member and (m.get("member_id") or "") != member:
             return None
         if harness and (m.get("harness_id") or "") != harness:
@@ -3279,9 +3293,19 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
         # rewrites the card (a roll under a live turn, 2026-09-04). The vertex is the durable
         # truth, so the read repairs the card from it, once, and the list stops lying.
         if str(m.get("status") or "") in _CARD_LIVE and m.get("session_id"):
-            fixed = await _card_settle(str(m["session_id"]), m)
-            if fixed:
-                m = fixed
+            sid_ = str(m["session_id"])
+            # A card found genuinely live is not asked again for a few seconds: with N tabs each
+            # listing every 15 s, the settle read per live card per list was one graph read per
+            # running task per tab.
+            if time.time() - _SETTLE_LIVE_AT.get(sid_, 0.0) > _SETTLE_LIVE_S:
+                fixed = await _card_settle(sid_, m)
+                if fixed:
+                    m = fixed
+                    _SETTLE_LIVE_AT.pop(sid_, None)
+                else:
+                    _SETTLE_LIVE_AT[sid_] = time.time()
+                    if len(_SETTLE_LIVE_AT) > 5000:
+                        _SETTLE_LIVE_AT.clear()
         return {k: m.get(k) for k in _TRACE_CARD_FIELDS}
 
     cards = [c for c in await asyncio.gather(*[_card(it) for it in lst.get("items", [])]) if c]
@@ -3289,6 +3313,16 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
 
 
 _CARD_LIVE = {"running", "starting", "in_progress"}
+# A session card changes only while its turn is live (and on delete). Terminal cards are served
+# from memory: every open Harnesses page re-read up to 200 cards every 15 s, one blob each.
+_CARD_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_CARD_CACHE_MAX = 8000
+_SETTLE_LIVE_AT: dict[str, float] = {}
+_SETTLE_LIVE_S = 10.0
+
+
+def _card_cache_forget(file_id: str) -> None:
+    _CARD_CACHE.pop(file_id, None)
 
 
 async def _card_settle(sid: str, m: dict) -> dict | None:
@@ -3511,6 +3545,7 @@ async def _stop_session(org: str, sid: str, v: dict, rid_hint: str = "") -> tupl
             rec = await _resp_get(rid)
             if rec and str(rec.get("status") or "") in ("running", "in_progress", "queued", "starting"):
                 rec["status"] = "cancelled"
+                _resp_cache_forget(rid)
                 await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", rid, {"status": "cancelled"})
         except Exception:  # noqa: BLE001
@@ -5257,6 +5292,7 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
 async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None,
                     status: str, created_at: float, store: bool) -> None:
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -5265,7 +5301,25 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
                      "created_at": str(created_at), "store": "1" if store else "0"})
 
 
+# A response record is written while its turn runs and once more when it ends; after that it is
+# immutable until a delete tombstones it. Every open conversation re-reads every turn record of
+# its session on a 4 s poll, so a twenty-turn session cost twenty blob reads per tab per poll and
+# the graph gateway saturated at ~15 open tabs (2026-09-06). Terminal records are served from
+# memory; a running record is still read every time; every writer forgets the key it writes.
+_RESP_TERMINAL = {"completed", "failed", "cancelled", "incomplete", "done", "max_turns", "timeout"}
+_RESP_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_RESP_CACHE_MAX = 4000
+
+
+def _resp_cache_forget(rid: str) -> None:
+    _RESP_CACHE.pop(rid, None)
+
+
 async def _resp_get(rid: str) -> dict | None:
+    hit = _RESP_CACHE.get(rid)
+    if hit is not None:
+        _RESP_CACHE.move_to_end(rid)
+        return hit
     b = await _blob_get(f"responses/{rid}.json", kb=RESP_BLOB_KB)
     if not b:
         return None
@@ -5273,7 +5327,13 @@ async def _resp_get(rid: str) -> dict | None:
         rec = json.loads(b)
     except Exception:  # noqa: BLE001
         return None
-    return None if rec.get("_deleted") else rec
+    if rec.get("_deleted"):
+        return None
+    if str(rec.get("status") or "") in _RESP_TERMINAL:
+        _RESP_CACHE[rid] = rec
+        while len(_RESP_CACHE) > _RESP_CACHE_MAX:
+            _RESP_CACHE.popitem(last=False)
+    return rec
 
 
 def _strip_internal(d: dict) -> dict:
@@ -6819,6 +6879,7 @@ async def delete_response(response_id: str, request: Request):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     rec["_deleted"] = True
     try:
+        _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -7124,6 +7185,7 @@ async def cancel_response(response_id: str, request: Request):
             # them consistent) and let the turn's own resp_is_cancelled check settle it.
             rec["status"] = "cancelled"
             try:
+                _resp_cache_forget(response_id)
                 await _blob_put(f"responses/{response_id}.json",
                                 json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", response_id, {"status": "cancelled"})
