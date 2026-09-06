@@ -2861,35 +2861,31 @@ _BROKER_HOP = ("host", "content-length", "connection", "keep-alive", "transfer-e
                "authorization", "api-key", "x-api-key")
 
 
-# Extended thinking is off through the broker, and this is the one place that enforces it.
+# What the broker removes from a request, by request shape and by key, and nothing else:
 #
-# The decision itself is not new — harness_runner already set MAX_THINKING_TOKENS=0 to stop
-# Claude Code sending thinking params, because opus-4.7/4.8 rejected `thinking.enabled` with a
-# 400 that leaked into the reply. That mechanism lived in the CLI's environment, so it only
-# covered one harness and only the shape the CLI used at the time. The CLI has since moved to
-# `output_config.effort`, which MAX_THINKING_TOKENS does not suppress, and haiku-4.5 rejects it
-# with "This model does not support the effort parameter" — the same class of failure, on a
-# different harness, through a different field.
-#
-# Every harness's inference traffic passes through this proxy, so enforcing it here covers
-# Claude Code, Hermes, Codex and anything added later, across whichever thinking API a CLI
-# happens to speak. The per-harness env hack is deleted rather than kept alongside: two
-# mechanisms for one behaviour is how the first one went stale unnoticed.
-# These travel together and must be removed together. `context_management`'s only strategy
-# today (clear_thinking_20251015) is defined in terms of thinking, so removing `thinking` while
-# leaving it produced a NEW 400 — "clear_thinking_20251015 strategy requires thinking to be
-# enabled or adaptive" — turning one broken model into a broken harness. Against this provider
-# context_management is rejected outright ("Extra inputs are not permitted") whether thinking is
-# present or not, so the coherent unit is: strip the whole group, leave a self-consistent request.
-_STRIP_REQUEST_FIELDS = ("thinking", "reasoning", "reasoning_effort", "context_management")
+# * Anthropic-shape requests (the `messages` path): the extended-thinking controls. Measured 400s:
+#   opus-4.7/4.8 reject Claude Code's `thinking.enabled` ("use output_config.effort"), haiku-4.5
+#   rejects `output_config.effort` and `thinking.adaptive`; `context_management`'s only strategy
+#   is defined in terms of thinking, so it goes with it. These are model-version rejections, the
+#   same on the org's own key as on the platform's, so they are stripped for every provider that
+#   carries the Anthropic shape (Anthropic, Bedrock, TokenRouter, Vercel, LLMTR).
+# * OpenAI-shape requests (`responses`, `responses/*`, `chat/completions`): nothing of the
+#   thinking group. `reasoning` carries Codex's effort and, on `responses/compact`, the
+#   `reasoning.context = all_turns` the compaction needs; TokenRouter and OpenRouter both take
+#   `reasoning` and `reasoning_effort` as written (probed 2026-09-06). Stripping it here ran
+#   every brokered Codex turn at default effort and broke compaction on an org's own OpenAI key
+#   ("requires reasoning.context to be all_turns").
+# * On the platform's key, on either shape: the priced-tier selectors (OpenAI `service_tier`,
+#   Anthropic fast mode's `speed`, an aggregator's `provider` preferences), because the platform
+#   bills the standard tier. On the org's own key the tier is the org's own choice.
+_ANTHROPIC_THINKING_FIELDS = ("thinking", "context_management")
+_TIER_FIELDS = ("service_tier", "speed", "provider")
 
 
-def _strip_unsupported(body: bytes) -> bytes:
-    """Remove thinking/effort controls from an inference request body.
-
-    Returns the body unchanged if it is not JSON — the broker must stay a dumb pipe for
-    anything it does not positively understand.
-    """
+def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path: str = "") -> bytes:
+    """Remove what this request must not carry (see the rule above). Returns the body unchanged
+    if it is not JSON — the broker must stay a dumb pipe for anything it does not positively
+    understand."""
     if not body:
         return body
     try:
@@ -2899,18 +2895,23 @@ def _strip_unsupported(body: bytes) -> bytes:
     if not isinstance(doc, dict):
         return body
     changed = False
-    for f in _STRIP_REQUEST_FIELDS:
+    anthropic_shape = (path or "").strip("/").startswith("messages")
+    fields: tuple[str, ...] = _ANTHROPIC_THINKING_FIELDS if anthropic_shape else ()
+    if not byok:
+        fields += _TIER_FIELDS
+    for f in fields:
         if f in doc:
             doc.pop(f)
             changed = True
-    # `output_config` carries more than effort; drop only that key, and the object with it
-    # if nothing else remains, so a provider never sees an empty container it may reject.
-    oc = doc.get("output_config")
-    if isinstance(oc, dict) and "effort" in oc:
-        oc.pop("effort")
-        changed = True
-        if not oc:
-            doc.pop("output_config")
+    if anthropic_shape:
+        # `output_config` carries more than effort; drop only that key, and the object with it
+        # if nothing else remains, so a provider never sees an empty container it may reject.
+        oc = doc.get("output_config")
+        if isinstance(oc, dict) and "effort" in oc:
+            oc.pop("effort")
+            changed = True
+            if not oc:
+                doc.pop("output_config")
     return json.dumps(doc).encode() if changed else body
 
 
@@ -3018,7 +3019,7 @@ async def llm_broker(path: str, request: Request):
     else:
         headers["authorization"] = f"Bearer {key}"
 
-    body = _strip_unsupported(await request.body())
+    body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix)
     rc = _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
     up = await rc.send(req, stream=True)
