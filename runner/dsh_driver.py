@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import re
 import os
 import pathlib
 import sys
@@ -57,6 +58,32 @@ def _rewrite_sse_line(line: bytes) -> bytes:
 _strip_reasoning_effort = False
 
 
+_GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
+_drop_fields: list = []   # the top-level fields this upstream refused as unknown, dropped from then on
+
+
+def _google_unknown_field(refused: bytes) -> str:
+    """The top-level field Google's OpenAI-compatible endpoint refused ("Unknown name \"store\":
+    Cannot find field."), or "" (a field named inside an object is not one to drop)."""
+    text = refused.decode("utf-8", "replace") if isinstance(refused, (bytes, bytearray)) else str(refused)
+    if "Cannot find field" not in text:
+        return ""
+    m = _GOOGLE_UNKNOWN_RE.search(text)
+    return m.group(1) if m else ""
+
+
+def _drop_top_level_fields(body: bytes, fields) -> bytes:
+    try:
+        obj = json.loads(body)
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        return body
+    if not isinstance(obj, dict) or not any(f in obj for f in fields):
+        return body
+    for f in fields:
+        obj.pop(f, None)
+    return json.dumps(obj).encode()
+
+
 def _drop_reasoning_effort(body: bytes) -> bytes:
     try:
         obj = json.loads(body)
@@ -87,8 +114,10 @@ class _Relay(http.server.BaseHTTPRequestHandler):
         headers.setdefault("accept", "*/*")
         if _strip_reasoning_effort:
             body = _drop_reasoning_effort(body)
+        if _drop_fields:
+            body = _drop_top_level_fields(body, _drop_fields)
         resp = None
-        for attempt in (0, 1):
+        for attempt in (0, 1, 2):
             req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
                                          data=body, method="POST", headers=headers)
             try:
@@ -97,9 +126,17 @@ class _Relay(http.server.BaseHTTPRequestHandler):
             except urllib.error.HTTPError as e:
                 data = e.read()
                 stripped = _drop_reasoning_effort(body)
-                if attempt == 0 and b"reasoning_effort" in data and stripped != body:
+                if attempt < 2 and b"reasoning_effort" in data and stripped != body:
                     _strip_reasoning_effort = True
                     body = stripped
+                    continue
+                unknown = _google_unknown_field(data) if e.code == 400 else ""
+                if attempt < 2 and unknown and unknown not in _drop_fields:
+                    # Google's OpenAI-compatible endpoint refuses any field it does not know (dsh
+                    # sends OpenAI's optional store and seed; measured 2026-09-06). The refusal
+                    # names the field: drop it, remember it, send again.
+                    _drop_fields.append(unknown)
+                    body = _drop_top_level_fields(body, _drop_fields)
                     continue
                 # pass provider errors through verbatim
                 self.send_response(e.code)
