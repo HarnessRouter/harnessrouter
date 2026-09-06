@@ -109,7 +109,10 @@ try {
         if (rec.first.ok) {
           rec.followup = expectWord(await turn(`Reply with exactly: M2-${m}`), `M2-${m}`);
           log(`FOLLOWUP ${k} ${rec.followup.ok ? 'ok' : 'FAIL'} ${rec.followup.s}s ${rec.followup.why}`);
-          const other = runnableAll.find((x) => x !== m) || null;
+          // the partner must be one Codex can carry on with: gpt-5.3-codex and the gpt-5.6 line refuse each
+          // other's threads by design (#73), and that rule is not what the switch row measures
+          const conflicts = (a, c) => (a === 'gpt-5.3-codex' && c.startsWith('gpt-5.6')) || (c === 'gpt-5.3-codex' && a.startsWith('gpt-5.6'));
+          const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || runnableAll.find((x) => x !== m) || null;
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: other }).first().click(); await sleep(300); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };
           log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : rec.switch.ok === null ? 'n/a' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
@@ -121,7 +124,9 @@ try {
           log(`ARTIFACT ${k} ${rec.artifact.ok ? 'ok' : 'FAIL'} ${rec.artifact.s}s ${rec.artifact.why}`);
           // the sandbox is let go on purpose (what the pool does between visits) and the next turn must
           // carry on from the durable checkpoint: the history, the files, the resume id
-          const rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid);
+          // the route refuses with 409 while the previous turn is still settling: ask again a few times
+          let rc = { code: 0, body: '' };
+          for (let i = 0; i < 6; i++) { rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid); if (rc.code !== 409) break; await sleep(5000); }
           if (rc.code === 200) {
             await sleep(2000);
             const r5 = await turn('What exact word did I ask you to reply with in my very first message of this task? Reply with just that word.');
