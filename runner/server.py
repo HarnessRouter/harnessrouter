@@ -360,6 +360,7 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
+GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.6-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
@@ -651,6 +652,14 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # ~/.qwen/skills under the redirected HOME — the dir the shipped 0.22.1 creates itself.
         rootrels = [".harness/home/.qwen/skills"]
         entryroot = ".harness/home/.qwen/skills"
+    elif backend == "gemini":
+        # ~/.gemini/skills under the redirected HOME — live-verified (2026-09-06, 0.58.0): the
+        # slides/sheets/videos starter-kit skills all activated correctly from this path via the
+        # real activate_skill tool ("Resources loaded from .../.gemini/skills/<name>"), same
+        # directory-drop shape as qwen's despite gemini-cli's own settings.json also documenting a
+        # separate skills.enabled/disabled key — that key toggles skills, it doesn't relocate them.
+        rootrels = [".harness/home/.gemini/skills"]
+        entryroot = ".harness/home/.gemini/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -783,6 +792,8 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     the name we chose simply never sees the harness's instructions."""
     if backend == "qwen":
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
+    if backend == "gemini":
+        return pathlib.Path(cwd) / "GEMINI.md"   # gemini-cli's own context.fileName default
     return pathlib.Path(cwd) / (
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline")
         else "CLAUDE.md")
@@ -2937,6 +2948,95 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     return cmd
 
 
+# Path A only (Gemini API Key / Google AI Studio). Unlike qwen, upstream gemini-cli speaks NO
+# OpenAI-compatible mode at all (that is a qwen-fork-only addition — see QWEN_PROVIDERS above),
+# so there is no loopback-relay trick that lets any generic OpenAI/Anthropic-shaped integration
+# drive this backend. A Vertex AI provider (service account) belongs here too in principle — the
+# runner-side env is the same GOOGLE_APPLICATION_CREDENTIALS/GOOGLE_CLOUD_PROJECT/
+# GOOGLE_CLOUD_LOCATION triple _build_claude's vertex branch already writes — but it is left OUT
+# of this set until the gateway side decides how (or whether) to broker it; see the gateway's
+# _BROKERABLE_PROVIDERS comment for bedrock/vertex.
+GEMINI_PROVIDERS = {"google"}
+
+
+def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
+    """~/.gemini/settings.json under the redirected HOME.
+
+    mcpServers uses gemini-cli's own schema (command/args/env for stdio, url/httpUrl/headers for
+    remote) — the same shape _qwen_settings already writes, because qwen inherited it unchanged
+    from this fork point (confirmed against gemini-cli's published configuration reference).
+
+    security.auth.selectedType is written explicitly rather than left to gemini-cli's own
+    GEMINI_API_KEY auto-detection: every other backend in this file pins its auth type
+    explicitly instead of relying on env-var presence alone (see qwen's --auth-type openai,
+    passed even though OPENAI_API_KEY being set would likely auto-select it too), and gemini-cli
+    publishes no non-interactive CLI flag equivalent to qwen's --auth-type — settings.json is the
+    only documented way to pin it outside the interactive /auth prompt."""
+    gdir = home / ".gemini"
+    gdir.mkdir(parents=True, exist_ok=True)
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"httpUrl": url}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": argv[0], "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        servers[name] = entry
+    cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}}}
+    if servers:
+        cfg["mcpServers"] = servers
+    (gdir / "settings.json").write_text(json.dumps(cfg, indent=2))
+
+
+def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+    pr = provider or "google"
+    if pr not in GEMINI_PROVIDERS:
+        raise HTTPException(400, f"unknown gemini provider '{pr}' (one of {sorted(GEMINI_PROVIDERS)})")
+    if not auth.api_key:
+        raise HTTPException(400, "gemini needs an api_key (none configured)")
+    home = pathlib.Path(cwd) / ".harness" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
+    env["GEMINI_API_KEY"] = auth.api_key
+    _gemini_settings(home, mcp_servers)
+    cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
+           # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
+           # per-workspace "folder trust" prompt and an approval mode, neither of which can be
+           # answered interactively in headless mode. --approval-mode=yolo is the current
+           # (non-deprecated) form of the old --yolo/-y flag; --skip-trust bypasses the trust
+           # prompt for a workspace that (like every turn here) has never been seen before. Both
+           # confirmed live (2026-09-06, 0.58.0): without them a fresh workspace either hangs on
+           # the trust prompt or the model has no shell/write tool at all, exactly qwen's failure
+           # mode without --yolo; with them, real shell/write/skill-activation calls went through
+           # across three starter-kit turns (slides, sheets, videos).
+           "--approval-mode", "yolo", "--skip-trust"]
+    if resume_session_id:
+        # gemini-cli's --resume takes ONLY "latest" or a numeric index into this project's own
+        # session list, never an arbitrary id (unlike claude/qwen's -r <uuid>) — so the id this
+        # runner tracks per turn cannot be passed through directly. "latest" is still correct
+        # here specifically because HOME is redirected into THIS workspace's own checkpoint
+        # (same as qwen): there is exactly one project's session history under it, so "latest"
+        # and "the session this resume call means" are the same session. Live-verified 2026-09-06:
+        # a follow-up turn on an existing slides-kit session picked up its own prior context and
+        # produced a real .pptx via the officecli skill, not a fresh unrelated session.
+        cmd += ["--resume", "latest"]
+    return cmd
+
+
 CLINE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 
 
@@ -3458,6 +3558,95 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
 _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
 
 
+def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE gemini-cli `--output-format stream-json` event to zero+ canonical claude
+    stream-json events.
+
+    Field names verified 2026-09 against the shipped 0.58.0 binary's own source (the bundle
+    ships de-minified enough to grep: bundle/gemini-*.js, StreamJsonFormatter.emitEvent call
+    sites) — not the public docs, which name the event TYPES but publish no field-level JSON
+    example. The first version of this function guessed field names from the docs alone and
+    every guess for tool_use/tool_result was wrong (id/name/input do not exist on the wire);
+    it shipped, ran for real against a live key, and every tool call rendered as a content-free
+    "Tool" row — caught from an actual failed turn (slides kit, 2026-09-06), not from re-reading
+    the docs harder. Confirmed shapes, straight from the emitEvent() call sites:
+
+        init:        {type, timestamp, session_id, model}
+        message:     {type, timestamp, role: "user"|"assistant", content: str, delta?: bool}
+        tool_use:    {type, timestamp, tool_name, tool_id, parameters}
+        tool_result: {type, timestamp, tool_id, status: "success"|"error", output?,
+                      error?: {type, message}}
+        result:      {type, timestamp, status: "success"|"error", stats,
+                      error?: {type, message}}   — NO text field on success; the final answer
+                      only ever arrives via accumulated `message` deltas, same as the one-shot
+                      `--output-format json` mode's separate {response, stats, error} shape does
+                      NOT apply here.
+        error:       {type, timestamp, severity, message} — documented as "non-fatal", and
+                      every fatal path in the source emits its OWN terminal `result` event
+                      separately (verified: the max-turns-exceeded handler, tool fatal-error
+                      handler, and top-level catch all construct `type:"result", status:"error"`
+                      themselves) — so this type is informational, not a turn-ending signal, and
+                      must not be promoted into a synthetic result the way v1 of this function did.
+    """
+    t = obj.get("type")
+    if t == "init":
+        return [{"type": "system", "subtype": "init",
+                 "session_id": obj.get("session_id"),
+                 "model": obj.get("model") or state.get("model")}]
+    if t == "message":
+        role = obj.get("role") or "assistant"
+        text = obj.get("content") or ""
+        if not text:
+            return []
+        if role == "assistant":
+            state["final"] = state.get("final", "") + text
+        return [{"type": role, "message": {"content": [{"type": "text", "text": text}]}}]
+    if t == "tool_use":
+        tuid = obj.get("tool_id") or "tool"
+        name = obj.get("tool_name") or "tool"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": name, "input": obj.get("parameters") or {}}]}}]
+    if t == "tool_result":
+        tuid = obj.get("tool_id") or "tool"
+        err = obj.get("error") if isinstance(obj.get("error"), dict) else None
+        content = obj.get("output") or (err or {}).get("message") or ""
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid,
+             "is_error": obj.get("status") == "error", "content": content}]}}]
+    if t == "error":
+        return []   # non-fatal by contract; the fatal path always emits its own `result` too
+    if t == "result":
+        err = obj.get("error") if isinstance(obj.get("error"), dict) else None
+        msg = err.get("message") if err else None
+        stats = obj.get("stats") if isinstance(obj.get("stats"), dict) else {}
+        # The stats are keyed by the model the CLI actually called (convertToStreamStats, 0.58.0),
+        # and the CLI rewrites some requested ids on the way (every "-flash" id becomes
+        # gemini-3.5-flash on the API-key auth path, measured 2026-09-06): the served model rides
+        # the result so the gateway can record a substitution instead of believing the request.
+        models = stats.get("models") if isinstance(stats.get("models"), dict) else {}
+        served = ",".join(k for k in models if isinstance(k, str) and k)
+        ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
+              "result": msg or state.get("final", ""), "usage": _gemini_usage(stats)}
+        if served:
+            ev["model"] = served
+        return [ev]
+    return [obj]
+
+
+def _gemini_usage(stats: dict) -> dict:
+    """gemini-cli's result stats in the runner's usage contract. Its `input_tokens` is the whole
+    prompt INCLUDING the cached part and `cached` is that part (its own `input` is the fresh count
+    and agrees), so the fresh input is the difference, the same subtraction the codex path makes;
+    without it the cached prefix (8k tokens of system prompt on a one-word turn) would be billed
+    at the full input rate."""
+    u = _norm_token_usage(stats)
+    if isinstance(stats, dict) and isinstance(stats.get("cached"), (int, float)) and stats["cached"] > 0:
+        cached = int(stats["cached"])
+        u["cache_read_tokens"] = cached
+        u["input_tokens"] = max(int(u.get("input_tokens") or 0) - cached, 0)
+    return u
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -3479,6 +3668,10 @@ BACKENDS = {
     # names) — so its normalizer IS the claude passthrough.
     "qwen": {"providers": sorted(QWEN_PROVIDERS), "default_model": QWEN_DEFAULT_MODEL,
              "normalize": _claude_passthrough},
+    # gemini's native stream-json is its OWN schema, not claude's — see _gemini_to_claude's
+    # docstring for why this cannot reuse the qwen row's passthrough despite the fork lineage.
+    "gemini": {"providers": sorted(GEMINI_PROVIDERS), "default_model": GEMINI_DEFAULT_MODEL,
+               "normalize": _gemini_to_claude},
     "cline": {"providers": sorted(CLINE_PROVIDERS), "default_model": CLINE_DEFAULT_MODEL,
               "normalize": _cline_to_claude},
 }
@@ -4513,8 +4706,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     #     complied, codex used the tool anyway. That is why the console calls it a request rather
     #     than a block. Written here once rather than as two divergent branches — hermes previously
     #     had neither, and silently ignored every disabled tool.
+    #   gemini — same tier, no confirmed per-tool switch in headless mode (see _BASE_CATALOG's
+    #     "gemini" entry). UHP §4.3 requires this be conveyed as a standing instruction rather than
+    #     silently dropped wherever it can't be a hard block, so it goes in this set rather than
+    #     being left out of it — the same class of gap this comment already names for hermes.
     agent_doc = req.agent_doc or ""
-    if backend in ("codex", "hermes", "dsh") and req.tools_disabled:
+    if backend in ("codex", "hermes", "dsh", "gemini") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
@@ -4589,6 +4786,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or QWEN_DEFAULT_MODEL
         cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+    elif backend == "gemini":
+        model = model or GEMINI_DEFAULT_MODEL
+        cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
+                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
     elif backend == "cline":
         model = model or CLINE_DEFAULT_MODEL
         cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
