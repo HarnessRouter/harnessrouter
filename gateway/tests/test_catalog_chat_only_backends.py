@@ -13,10 +13,10 @@ CHAT_ONLY_BACKENDS = ("qwen", "cline")
 
 def test_responses_only_models_stay_off_chat_only_harnesses():
     for backend in CHAT_ONLY_BACKENDS:
-        listed = set(gw._BASE_CATALOG[backend]["models"])
+        listed = set(gw._MODEL_CATALOG:[backend]["models"])
         assert not (listed & RESPONSES_ONLY), f"{backend} lists {listed & RESPONSES_ONLY}"
 
 
 def test_the_harnesses_that_speak_responses_keep_it():
     for backend in ("codex", "hermes", "pi", "dsh", "opencode"):
-        assert "gpt-5.3-codex" in gw._BASE_CATALOG[backend]["models"]
+        assert "gpt-5.3-codex" in gw._MODEL_CATALOG:[backend]["models"]
