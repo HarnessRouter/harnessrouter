@@ -3858,6 +3858,18 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret_label": "API Key",
         "key_hint": "vck_…",
     },
+    # Google AI Studio: #71 wired the provider (broker base, harness wiring, vendor models) but not
+    # this table, and the integrations document is validated against this table on every write, so
+    # a Gemini key was refused with "integration needs a name and a known provider (got 'google')"
+    # on 0.13.7 (measured while wiring the support matrix, 2026-09-06).
+    "google": {
+        "label": "Google AI Studio",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "AIza…",
+    },
     "llmtr": {
         "label": "LLMTR",
         "base_url": "https://llmtr.com/v1",
