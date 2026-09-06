@@ -5396,17 +5396,19 @@ _MODEL_CATALOG: dict[str, dict] = {
     # gemini-3.1-pro (the real Pro flagship) is deliberately NOT listed: Pro was dropped from the
     # free tier in 2026-04, so it would show as a choice and fail every call on a free-tier key.
     # Google's own ids only: gemini-cli speaks the native API, so the cross-vendor rows above do not
-    # apply. The list is the eleven ids the google provider serves, offered so the support matrix
-    # can measure each one THROUGH this CLI; it is pruned to what the measurement keeps. Measured
-    # locally on the pinned 0.58.0 (2026-09-06): on the API-key auth path the CLI treats "3.5 Flash
-    # GA" as launched and its resolver rewrites every id ending in "-flash" to gemini-3.5-flash
-    # (resolveModel: useGemini3_5Flash && isFlashModel), so a 3.6/3.7/3.8/2.5-flash request is
-    # served by gemini-3.5-flash and the result's stats say so; the flash-lite, pro and
-    # 3-flash-preview ids are served as requested. The default is one the CLI serves as itself.
+    # apply. Measured 2026-09-06 on the OSS instance (all five scenarios per id, org holding only the
+    # Google integration, 55 of 55 runs passed) with the served model read off the CLI's own stats:
+    # on the API-key auth path gemini-cli 0.58.0 treats "3.5 Flash GA" as launched and its resolver
+    # rewrites every id ending in "-flash" to gemini-3.5-flash (resolveModel with useGemini3_5Flash,
+    # true for gemini-api-key; the same in 0.59.0-preview.0 and the 0.60 nightly; no setting turns
+    # it off), so gemini-3.8-flash, 3.7-flash, 3.6-flash and 2.5-flash were served by gemini-3.5-flash
+    # on every turn and are not listed: a completed turn on them is a turn on 3.5-flash. Those four
+    # stay reachable on the same key through the OpenAI-shape harnesses, where Google serves each id
+    # as requested. The seven below were served as themselves on every turn.
     "gemini": {"default": "gemini-3.5-flash",
-               "models": ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
-                          "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
+               "models": ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+                          "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro",
+                          "gemini-2.5-flash-lite"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
