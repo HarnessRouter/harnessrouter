@@ -13,6 +13,8 @@ for prov, rows in sorted(by.items()):
             x = r.get(sc) or {}
             if x.get('ok') is False and x.get('why'): notes.append(f"{sc}: {x['why'][:140]}")
         if r.get('error'): notes.append(f"runner: {r['error'][:100]}")
+        ft = r.get('first_try') or {}
+        if ft: notes.append('retested once; first try: ' + '; '.join(f"{sc} {(ft.get(sc) or {}).get('why', '')[:80]}" for sc in ('first', 'followup', 'switch', 'artifact', 'recycle') if (ft.get(sc) or {}).get('ok') is False))
         sw = r.get('switch') or {}
         out.append(f"| {r['harness']} | {r['model']} | {mark(r.get('first'))} | {mark(r.get('followup'))} | {mark(sw)}{(' ('+sw['to']+')') if sw.get('to') else ''} | {mark(r.get('artifact'))} | {mark(r.get('recycle'))} | {' ; '.join(notes).replace('|', '/')} |")
     ok = sum(1 for r in rows for sc in ('first','followup','switch','artifact','recycle') if (r.get(sc) or {}).get('ok') is True)
