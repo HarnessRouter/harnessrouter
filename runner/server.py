@@ -363,7 +363,9 @@ QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
-CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
+# The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
+# number here made it compact late and let a long thread overflow the real window first.
+CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "272000")
 # Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 AZURE_OPENAI_BASE_URL = os.environ.get("AZURE_OPENAI_BASE_URL", "")
@@ -1257,6 +1259,12 @@ model_reasoning_effort = "{effort}"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_context_window = {ctx}
+[features]
+# Compaction happens locally. Remote compaction is a call to OpenAI's own backend
+# (/responses/compact under the Responses-Lite header) that an API key at api.openai.com refused
+# ("requires reasoning.context to be all_turns") and that Azure, TokenRouter, OpenRouter and
+# Vercel do not serve at all; local compaction works on every provider we front.
+remote_compaction_v2 = false
 [model_providers.{provider}]
 name = "{name}"
 base_url = "{base_url}"

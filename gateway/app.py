@@ -2945,6 +2945,14 @@ _PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect 
                                   r"insufficient_quota|rate limit|quota|forbidden|refused", re.IGNORECASE)
 
 
+def _provider_refused(err: str) -> bool:
+    """Whether a failure on the org's own connection is the provider refusing the key. Judged on
+    the first line only: that is the line the runner chose as the provider's answer, and a
+    diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex
+    compaction failure or a bad request into "your key was refused"."""
+    return bool(_PROVIDER_REFUSAL_RE.search((err or "").split("\n", 1)[0]))
+
+
 def _turn_failure_message(rec: dict) -> str:
     """What a failed turn says: the org's own key's refusal in plain words when that is why, else
     the list of connections tried."""
@@ -5704,7 +5712,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 break
         _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
         if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name
-                and rec["tried"][-1].get("status") and _PROVIDER_REFUSAL_RE.search(_last_err)):
+                and rec["tried"][-1].get("status") and _provider_refused(_last_err)):
             # The provider refused this key. That is configuration, not an outage to route around:
             # falling through to the next connection ran the task on another key while the user
             # believed this one worked. On a self-hosted install every key is the operator's own,
