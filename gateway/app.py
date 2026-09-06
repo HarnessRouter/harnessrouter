@@ -3012,6 +3012,126 @@ def _google_unknown_field(refused: bytes) -> str:
     return m.group(1) if m else ""
 
 
+# ── Gemini 3 thought signatures ────────────────────────────────────────────────────────
+# Google's OpenAI-compatible endpoint streams a `thought_signature` on every function call it
+# makes (tool_calls[].extra_content.google.thought_signature) and, on Gemini 3, refuses the next
+# request unless the replayed assistant tool_calls carry it back: 400 "Function call is missing
+# a thought_signature in functionCall parts" (measured 2026-09-06 on the artifact turn of pi, dsh,
+# qwen and opencode, every Gemini 3.x id; hermes keeps the field, Gemini 2.5 does not require it,
+# and the aggregators carry it themselves). OpenAI-shaped clients drop extra_content when they
+# rebuild the assistant message, so the broker remembers each signature under its tool call id as
+# the answer streams past and puts it back on the replay. A call it never saw (a trace that began
+# elsewhere) gets Google's own sentinel, which skips the check instead of failing the turn. One
+# process serves this deployment, so the table is in-process; owner-trust traffic never comes
+# here, and the loopback relays in the runner keep their own.
+_GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
+_GOOGLE_SIGS: dict[str, str] = {}        # "<sid>:<tool call id>" -> signature
+_GOOGLE_SIGS_MAX = 20000
+
+
+def _google_signatures_in(doc: dict) -> list[tuple[str, str]]:
+    """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
+    found: list[tuple[str, str]] = []
+    for ch in doc.get("choices") or []:
+        if not isinstance(ch, dict):
+            continue
+        holder = ch.get("delta") if isinstance(ch.get("delta"), dict) else ch.get("message")
+        if not isinstance(holder, dict):
+            continue
+        for tc in holder.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            sig = ((ec or {}).get("google") or {}).get("thought_signature") if isinstance(ec, dict) else None
+            cid = tc.get("id")
+            if isinstance(sig, str) and sig and isinstance(cid, str) and cid:
+                found.append((cid, sig))
+    return found
+
+
+def _google_remember(sid: str, pairs: list[tuple[str, str]]) -> None:
+    """Keep the signatures for the replay, under the session so one never serves another."""
+    for cid, sig in pairs:
+        if len(_GOOGLE_SIGS) >= _GOOGLE_SIGS_MAX:
+            _GOOGLE_SIGS.clear()
+        _GOOGLE_SIGS[f"{sid}:{cid}"] = sig
+
+
+def _google_with_signatures(body: bytes, sid: str) -> bytes:
+    """The request with every replayed assistant tool call carrying a thought signature: the one
+    the broker saw on the answer, else Google's sentinel. A body without tool calls is untouched."""
+    if b"tool_calls" not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
+        return body
+    changed = False
+    for msg in doc["messages"]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            if isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature"):
+                continue
+            cid = str(tc.get("id") or "")
+            sig = _GOOGLE_SIGS.get(f"{sid}:{cid}", "") if cid else ""
+            tc["extra_content"] = {"google": {"thought_signature": sig or _GOOGLE_SIG_SKIP}}
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+class _GoogleSigTap:
+    """Reads the thought signatures off a Google answer as it streams past: an SSE answer line by
+    line, a whole JSON answer once it has ended. The bytes go through untouched."""
+    LINE_MAX = 1 << 20      # a signature-bearing line is small; a longer one is content, skipped
+    BODY_MAX = 8 << 20
+
+    def __init__(self, content_type: str):
+        self.sse = "text/event-stream" in (content_type or "")
+        self.buf = b""
+        self.body = bytearray()
+        self.sigs: list[tuple[str, str]] = []   # seen and not yet remembered (drained by the pump)
+
+    def feed(self, chunk: bytes) -> None:
+        if self.sse:
+            self.buf += chunk
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                self._line(line.strip())
+            if len(self.buf) > self.LINE_MAX:
+                self.buf = b""
+        elif len(self.body) < self.BODY_MAX:
+            self.body += chunk
+
+    def _line(self, line: bytes) -> None:
+        if not line.startswith(b"data:") or b"thought_signature" not in line:
+            return
+        try:
+            doc = json.loads(line[5:].strip())
+        except ValueError:
+            return
+        if isinstance(doc, dict):
+            self.sigs += _google_signatures_in(doc)
+
+    def finish(self) -> None:
+        if self.sse:
+            if self.buf:
+                self._line(self.buf.strip())
+                self.buf = b""
+        elif b"thought_signature" in self.body:
+            try:
+                doc = json.loads(bytes(self.body))
+            except ValueError:
+                doc = None
+            if isinstance(doc, dict):
+                self.sigs += _google_signatures_in(doc)
+
+
 def _without_field(body: bytes, field: str) -> bytes:
     """The JSON request without one top-level field; a body that is not a JSON object is returned as is."""
     try:
@@ -3140,6 +3260,8 @@ async def llm_broker(path: str, request: Request):
         headers["authorization"] = f"Bearer {key}"
 
     body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix)
+    if provider == "google":
+        body = _google_with_signatures(body, sid)
     rc = _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
     up = await rc.send(req, stream=True)
@@ -3162,15 +3284,34 @@ async def llm_broker(path: str, request: Request):
                 break
             refused = await up.aread()
         if up.status_code == 400:
+            # The refusal reaches the harness, which shows it as "400 (no body)"; the cause is here.
+            print(f"[broker] google refused sid={sid} path={suffix!r}: "
+                  f"{refused[:300].decode('utf-8', 'replace')!r}", flush=True)
+            # aread() hands back the DECODED body; passing Google's content-encoding header along with
+            # it made the harness fail on the error itself ("Response decompression failed", "Failed
+            # to process error response") instead of reading the refusal, 2026-09-06.
             return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
                             headers={k: val for k, val in up.headers.items()
-                                     if k.lower() not in ("content-length", "transfer-encoding", "connection")})
+                                     if k.lower() not in ("content-length", "transfer-encoding", "connection",
+                                                          "content-encoding")})
+    # A Google answer's tool calls carry the signatures the next request must replay.
+    tap = _GoogleSigTap(up.headers.get("content-type", "")) if (provider == "google" and up.status_code < 400) else None
 
     async def pump():
         try:
             async for chunk in up.aiter_raw():
+                if tap is not None:
+                    tap.feed(chunk)
+                    if tap.sigs:
+                        pairs, tap.sigs = tap.sigs, []
+                        _google_remember(sid, pairs)
                 yield chunk
         finally:
+            if tap is not None:
+                tap.finish()                  # a whole JSON answer is read at the end
+                if tap.sigs:
+                    _google_remember(sid, tap.sigs)
+                    tap.sigs = []
             await up.aclose()
 
     out = {k: val for k, val in up.headers.items()
@@ -4731,12 +4872,14 @@ _BEDROCK_CLAUDE = {
     "sonnet-4.6": "us.anthropic.claude-sonnet-4-6", "sonnet-4.5": "us.anthropic.claude-sonnet-4-5",
     "opus-5": "us.anthropic.claude-opus-5", "sonnet-5": "us.anthropic.claude-sonnet-5",
     "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "fable-5": "us.anthropic.claude-fable-5",
+    "fable-5.1": "us.anthropic.claude-fable-5-1",
 }
 _ANTHROPIC_CLAUDE = {
     "opus-4.8": "claude-opus-4-8", "opus-4.7": "claude-opus-4-7", "opus-4.6": "claude-opus-4-6",
     "opus-4.5": "claude-opus-4-5", "sonnet-4.6": "claude-sonnet-4-6", "sonnet-4.5": "claude-sonnet-4-5",
     "opus-5": "claude-opus-5", "sonnet-5": "claude-sonnet-5",
     "haiku-4.5": "claude-haiku-4-5-20251001", "fable-5": "claude-fable-5",
+    "fable-5.1": "claude-fable-5-1",
 }
 
 
@@ -4757,6 +4900,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     "anthropic": {
         "claude-opus-5":     "claude-opus-5",
         "claude-fable-5":    "claude-fable-5",
+        "claude-fable-5-1":   "claude-fable-5-1",
         "claude-opus-4.8":   "claude-opus-4-8",
         "claude-sonnet-5":   "claude-sonnet-5",
         "claude-opus-4.7":   "claude-opus-4-7",
@@ -4766,6 +4910,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     "bedrock": {
         "claude-opus-5":     "us.anthropic.claude-opus-5",
         "claude-fable-5":    "us.anthropic.claude-fable-5",
+        "claude-fable-5-1":   "us.anthropic.claude-fable-5-1",
         "claude-opus-4.8":   "us.anthropic.claude-opus-4-8",
         "claude-sonnet-5":   "us.anthropic.claude-sonnet-5",
         "claude-opus-4.7":   "us.anthropic.claude-opus-4-7",
@@ -4803,6 +4948,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex":      "openai/gpt-5.3-codex",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-fable-5-1":    "anthropic/claude-fable-5.1",
         "claude-opus-4.8":    "anthropic/claude-opus-4.8",
         "claude-sonnet-5":    "anthropic/claude-sonnet-5",
         "claude-opus-4.7":    "anthropic/claude-opus-4.7",
@@ -4907,12 +5053,23 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex":      "openai/gpt-5.3-codex",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-fable-5-1":    "anthropic/claude-fable-5.1",
         "claude-opus-4.8":    "anthropic/claude-opus-4.8",
         "claude-sonnet-5":    "anthropic/claude-sonnet-5",
         "claude-opus-4.7":    "anthropic/claude-opus-4.7",
         "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
         "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
         "gemini-3.6-flash":   "google/gemini-3.6-flash",
+        "gemini-3.8-flash": "google/gemini-3.8-flash",
+        "gemini-3.7-flash": "google/gemini-3.7-flash",
+        "gemini-3.5-flash": "google/gemini-3.5-flash",
+        "gemini-3.5-flash-lite": "google/gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
+        "gemini-3-flash-preview": "google/gemini-3-flash-preview",
+        "gemini-2.5-pro": "google/gemini-2.5-pro",
+        "gemini-2.5-flash": "google/gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "google/gemini-2.5-flash-lite",
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshot/kimi-k3",
@@ -5090,7 +5247,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # Anthropic's models overview and AWS's own model card), so it routes directly instead of
     # falling through to the unmapped default it used at launch.
     "claude": {"default": "claude-sonnet-4.6",
-               "models": ["claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+               "models": ["claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"]},
     # hermes (NousResearch hermes-agent) is multi-family — it runs any frontier model through
     # the matching provider connection (family-aware chain selection in _resp_execute). Friendly
@@ -5101,7 +5258,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
-                          "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                          "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
@@ -5133,7 +5290,7 @@ _MODEL_CATALOG: dict[str, dict] = {
             "models": ["deepseek-v4-pro", "deepseek-v4-flash",
                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                       "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                       "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
@@ -5148,7 +5305,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     "opencode": {"default": "gpt-5.4",
                  "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                            "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                            "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
@@ -5166,7 +5323,7 @@ _MODEL_CATALOG: dict[str, dict] = {
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
-                        "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                        "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
@@ -5187,7 +5344,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     "cline": {"default": "gpt-5.4",
               "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5",
-                         "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
+                         "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
@@ -5196,7 +5353,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                      "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                      "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
@@ -7012,6 +7169,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         asst, tools, files = _output_to_turn_fields(rec.get("output") or [])
         turns.append({"id": rid, "status": rec.get("status"), "user": user_text,
                       "user_files": user_files, "assistant": asst, "tools": tools, "files": files,
+                      # the connection that served the turn, as the record stamps it
+                      "connection": rec.get("connection"),
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.

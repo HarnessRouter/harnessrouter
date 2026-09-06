@@ -115,8 +115,10 @@ try {
           log(`FOLLOWUP ${k} ${rec.followup.ok ? 'ok' : 'FAIL'} ${rec.followup.s}s ${rec.followup.why}`);
           // the partner must be one Codex can carry on with: gpt-5.3-codex and the gpt-5.6 line refuse each
           // other's threads by design (#73), and that rule is not what the switch row measures
-          const conflicts = (a, c) => (a === 'gpt-5.3-codex' && c.startsWith('gpt-5.6')) || (c === 'gpt-5.3-codex' && a.startsWith('gpt-5.6'));
-          const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || runnableAll.find((x) => x !== m) || null;
+          // Codex refuses gpt-5.3-codex after any other model (measured after gpt-5.5 and after the gpt-5.6
+          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement
+          const conflicts = (a, c) => a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex';
+          const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || null;
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: other }).first().click(); await sleep(300); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };
           log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : rec.switch.ok === null ? 'n/a' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
@@ -145,9 +147,15 @@ try {
       if (rec.sid) {
         const d = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`); return r.ok ? await r.json() : null; }, rec.sid).catch(() => null);
         if (d && d.last_connection) rec.connection = String(d.last_connection);
+        // every turn record's own stamp, so a pair served by more than one connection is visible: when
+        // EXPECT_CONNECTION names the connection under test, any other one is a finding of its own
+        const ts = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}/turns`); return r.ok ? await r.json() : null; }, rec.sid).catch(() => null);
+        const turnsList = Array.isArray(ts) ? ts : (ts && Array.isArray(ts.turns) ? ts.turns : []);
+        rec.connections = [...new Set(turnsList.map((t) => t && t.connection).filter(Boolean).map(String))];
+        if (process.env.EXPECT_CONNECTION) rec.foreign = rec.connections.filter((c) => c !== process.env.EXPECT_CONNECTION);
         rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
       }
-      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} deleted=${rec.deleted || '?'}`);
+      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''} deleted=${rec.deleted || '?'}`);
     }
   }
 } catch (e) { log(`FATAL ${String(e).slice(0, 300)}`); }
