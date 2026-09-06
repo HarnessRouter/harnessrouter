@@ -468,7 +468,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   const taRef = useRef<HTMLTextAreaElement>(null);   // shared Composer auto-grows it (15-row cap)
   // A fresh draft is for typing: the caret is already in the box when the page settles on it.
   const hero = !loading && msgs.length === 0 && !busy;
-  useEffect(() => { if (hero) taRef.current?.focus(); }, [hero]);
+  useEffect(() => { if (hero) taRef.current?.focus(); }, [hero, harnessId]);   // a fresh draft in another harness is a fresh box too
   const [files, setFiles] = useState<{ name: string; dataUri: string }[]>([]);
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const [modelOpen, setModelOpen] = useState(false);
