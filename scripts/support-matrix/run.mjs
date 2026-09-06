@@ -126,7 +126,15 @@ try {
           log(`RECYCLE ${k} ${rec.recycle.ok ? 'ok' : 'FAIL'} ${rec.recycle.s}s ${rec.recycle.why}`);
         } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; rec.recycle = { ok: null, why: 'first turn failed' }; }
       } catch (e) { rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`); if (/has been closed/.test(rec.error)) throw e; }   // a closed browser ends the worker; the next launch resumes
-      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k}`);
+      // the record is complete: stamp the connection that served it, then let the session go. Its
+      // workspace, checkpoint and trace are of no further use, and 170 of them per provider filled
+      // a 62 GB disk (hr-oss-test, 2026-09-06).
+      if (rec.sid) {
+        const d = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`); return r.ok ? await r.json() : null; }, rec.sid).catch(() => null);
+        if (d && d.last_connection) rec.connection = String(d.last_connection);
+        rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
+      }
+      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} deleted=${rec.deleted || '?'}`);
     }
   }
 } catch (e) { log(`FATAL ${String(e).slice(0, 300)}`); }
