@@ -31,3 +31,19 @@ One session per harness on the instance's own map (TokenRouter, Azure, Vercel), 
 ## Totals
 
 695 pairs over eight columns; every failing row carries the provider's own text in the table.
+
+## TokenRouter's Gemini channels refuse JSON-schema keys (2026-09-06)
+
+TokenRouter's Gemini channels forward a harness's JSON-schema tool declarations to Google's native
+API as sent, and Google's function-declaration validator refuses what its own OpenAI-compatible
+endpoint, OpenRouter and Vercel normalise away: `Unknown name "$schema"` (opencode),
+`Unknown name "exclusiveMinimum"` and `schema didn't specify the schema type field` (cline). The
+first turn of a task fails on the ids those channels serve natively (gemini-3.8-flash for one; the
+same declaration passes on 3.7-flash, 3.5-flash and 3-flash-preview), so it is per channel, not
+per model. Until TokenRouter normalises them itself, the broker and both loopback relays normalise
+tool parameters to Google's Schema subset for that channel and Gemini models only (keys outside the
+subset dropped, oneOf to anyOf, const to a one-value enum, exclusive bounds to bounds, a type list
+to one type plus nullable, a type on every node, items on every array, required limited to existing
+properties, an empty declaration dropped). The report is with TokenRouter; when their channel
+normalises, this comes out of both trees.
+
