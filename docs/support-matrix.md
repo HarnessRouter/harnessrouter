@@ -2,6 +2,68 @@
 
 Scenarios: first turn, follow-up in the same session, switch model mid-session, artifact (a file the task must produce), recycle (the sandbox is let go on purpose, then a follow-up must recall the first message). pass = ran and answered as asked, FAIL = failed (reason in the notes), n/a = not run.
 
+## Provider: azure-openai
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
+|---|---|---|---|---|---|---|---|
+| cline | gpt-5.2 | pass | pass | pass (gpt-5.4) | pass | pass |  |
+| cline | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| cline | gpt-5.4-mini | pass | pass | pass (gpt-5.4) | pass | pass |  |
+| cline | gpt-5.5 | pass | pass | pass (gpt-5.4) | pass | pass |  |
+| cline | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | pass | pass |  |
+| cline | gpt-5.6-sol | pass | pass | pass (gpt-5.4) | pass | pass |  |
+| cline | gpt-5.6-terra | pass | pass | pass (gpt-5.4) | pass | pass |  |
+| codex | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| codex | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Reconnecting... 1/5 (unexpected status 404 Not Found: The API depl ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Reconn |
+| codex | gpt-5.4 | pass | pass | FAIL (gpt-5.6-luna) | FAIL | FAIL | switch: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_084a1980f84eb70100 ; artifact: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; recycle: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; retested once; first try: switch [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \; artifact [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error ; recycle [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error  |
+| codex | gpt-5.4-mini | pass | pass | FAIL (gpt-5.6-luna) | FAIL | FAIL | switch: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_08d1a328d2605ba000 ; artifact: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; recycle: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; retested once; first try: switch [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \; artifact [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error ; recycle [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error  |
+| codex | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| codex | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | FAIL | FAIL | artifact: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_0919fc8615a9fc2e00 ; recycle: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_0919fc8615a9fc2e00 ; retested once; first try: recycle answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in |
+| codex | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| codex | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| dsh | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| dsh | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI API error (404): {\"type\":\"invalid_request_error\",\"code ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "HTTP 404: The API deployment for this resource does not exist. If  ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "HTTP 4 |
+| hermes | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "The API deployment for this resource does not exist. If you create ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "The AP |
+| opencode | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| opencode | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI API error (404): {\"type\":\"invalid_request_error\",\"code ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI |
+| pi | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| pi | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| qwen | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| qwen | gpt-5.3-codex | pass | pass | n/a | FAIL | FAIL | artifact: no file card (files: none); PI Error: 404 The API deployment for this resource does not exist. If you created the deployment within the last ; recycle: answered without M1-gpt-5.3-codex:  Reply with just that word. QWEN CODE [API Error: 404 The API deployment for this resource does not exist ; retested once; first try: artifact no file card (files: none); PI Error: 404 The API deployment for this resource d; recycle answered without M1-gpt-5.3-codex:  Reply with just that word. QWEN CODE [API Er |
+| qwen | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| qwen | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| qwen | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| qwen | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| qwen | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| qwen | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+
+55 pairs, 239 of 254 scenario runs passed.
+
 ## Provider: tokenrouter
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
