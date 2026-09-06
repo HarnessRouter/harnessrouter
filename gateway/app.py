@@ -3181,21 +3181,22 @@ def _gemini_schema(node):
         out["type"] = non_null[0] if non_null else "string"
         if "null" in t:
             out["nullable"] = True
-    if "type" not in out and isinstance(out.get("anyOf"), list):
-        # a nullable choice (zod's optional): the null member becomes `nullable`, one remaining member
-        # becomes the node itself, several keep anyOf under the first member's type; without a type
-        # the channel for gemini-3.5-flash answers "schema didn't specify the schema type field"
-        members = [m for m in out["anyOf"] if isinstance(m, dict) and m.get("type") != "null"]
-        if len(members) < len(out["anyOf"]):
+    if isinstance(out.get("anyOf"), list):
+        # No anyOf leaves this relay: one channel refuses an anyOf node without a type ("schema
+        # didn't specify the schema type field", gemini-3.5-flash) and another refuses one with
+        # anything beside it ("schema specified other fields alongside any_of", gemini-3.6-flash,
+        # both measured 2026-09-06 on TokenRouter). The null member becomes `nullable`; a choice of
+        # constants becomes one enum; any other choice becomes its first member under the node's
+        # own description, which is what the model reads.
+        members = [m for m in out.pop("anyOf") if isinstance(m, dict) and m.get("type") != "null"]
+        if len(members) < len(node.get("anyOf") or []):
             out["nullable"] = True
-        if len(members) == 1:
-            out = {**members[0], **{k: v for k, v in out.items() if k != "anyOf"}}
-            out.setdefault("type", members[0].get("type", "string"))
+        if members and all("enum" in m and "properties" not in m and "items" not in m for m in members):
+            out = {**members[0], **out, "enum": [x for m in members for x in m["enum"]]}
+            out.setdefault("type", "string")
         elif members:
-            out["anyOf"] = members
-            out["type"] = members[0].get("type") or "string"
-        else:
-            out.pop("anyOf")
+            out = {**members[0], **out}
+            out.setdefault("type", members[0].get("type") or "string")
     if "type" not in out and "anyOf" not in out:
         out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
     if out.get("type") == "array" and "items" not in out:
