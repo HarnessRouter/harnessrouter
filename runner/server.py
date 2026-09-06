@@ -3187,6 +3187,49 @@ BACKENDS = {
 
 # ── async turn registry (background execution; turns can run seconds → the 6h cap) ──
 _turns: dict[str, dict] = {}
+
+
+def _release_proc(rec: dict, proc: "subprocess.Popen | None") -> None:
+    """The turn's process is over: close its pipes and drop the handle from the record.
+
+    The handle was kept on the record so POST /turn/{id}/cancel could kill a live CLI, and it was
+    never let go: every finished turn left its stdout (and stdin, for the app-server) pipe open in
+    this process for as long as the record lived, which is forever. On the self-hosted test
+    instance 506 turns later the runner sat at 1020 of 1024 descriptors and every new turn failed
+    with "spawn: [Errno 24] Too many open files" (2026-09-06). A closed pipe on a finished
+    process is free; nothing reads it after the turn."""
+    if proc is None:
+        return
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except OSError:
+            pass
+    if rec.get("proc") is proc:
+        rec.pop("proc", None)
+
+
+# Finished turn records are read by the gateway for a few seconds after the turn ends (its poll
+# harvests the last events and persists them), then never again; they used to stay in memory,
+# every event of every turn, for the life of the process. A record is dropped once it is done
+# and older than the hard turn cap plus this grace, which no live poll can outlast.
+_TURN_RETENTION_S = 30 * 60
+
+
+def _evict_turns(now: float | None = None) -> int:
+    now = now or time.time()
+    gone = 0
+    with _turns_lock:
+        for tid, rec in list(_turns.items()):
+            if rec.get("done") and now - float(rec.get("started") or now) > MAX_TURN_SECONDS + _TURN_RETENTION_S:
+                _turns.pop(tid, None)
+                gone += 1
+        if gone:
+            for key, tid in list(_turn_by_key.items()):
+                if tid not in _turns:
+                    _turn_by_key.pop(key, None)
+    return gone
 _turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retried /turn; see turn())
 _turns_lock = threading.Lock()
 
@@ -3265,6 +3308,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         rc = proc.wait()
     finally:
         killer.cancel()
+        _release_proc(rec, proc)
     rec["exit_code"] = rc
     # Backends whose stream carries NO terminal event finish here: for them the process exiting IS
     # the end of the turn. claude/codex/pi/dsh all emit something terminal of their own and set
@@ -3451,6 +3495,7 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         turn_status = turn_status or "failed"
     finally:
         killer.cancel()
+        _release_proc(rec, proc)
         try:
             if proc.poll() is None:
                 _kill_proc_tree(proc)                            # one turn per process — never reuse
@@ -3718,6 +3763,8 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
         _sweep()   # final drain after EOF so the last messages always land
     finally:
         killer.cancel()
+        proc.wait()
+        _release_proc(rec, proc)
     rc = proc.returncode
     if sid:
         rec["session_id"] = sid
@@ -4264,6 +4311,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                             plugin_dirs=plugin_dirs)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex
+    _evict_turns()
     with _turns_lock:
         # Double-check under the lock: a concurrent retry with the same key may have raced past the
         # top-of-handler check before this one recorded the key. If so, use the winner and let this
