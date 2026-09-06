@@ -3091,6 +3091,19 @@ def _opencode_mcp(servers: list[dict] | None) -> dict:
     return out
 
 
+def _opencode_npm(auth: Auth, model: str, pr: str) -> str:
+    """Which ai-sdk package serves this turn: the wire format the connection speaks."""
+    if auth.api_format == "anthropic":
+        return "@ai-sdk/anthropic"
+    if auth.api_format == "openai":
+        return "@ai-sdk/openai-compatible"
+    if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+        return "@ai-sdk/anthropic"
+    if pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        return "@ai-sdk/openai"          # /v1/responses
+    return "@ai-sdk/openai-compatible"   # /v1/chat/completions
+
+
 def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
                      skills_dir: str | None, tools_disabled: list[str] | None = None,
                      pr: str = "") -> str:
@@ -3107,16 +3120,7 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     # chat/completions, and sending it to the openai-compatible package fails at the first call.
     # When api_format is set (custom integration), the user's explicit choice wins over any
     # model-family heuristic — the endpoint is the one they told us to reach.
-    if auth.api_format == "anthropic":
-        npm = "@ai-sdk/anthropic"
-    elif auth.api_format == "openai":
-        npm = "@ai-sdk/openai-compatible"
-    elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
-        npm = "@ai-sdk/anthropic"
-    elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
-        npm = "@ai-sdk/openai"          # /v1/responses
-    else:
-        npm = "@ai-sdk/openai-compatible"   # /v1/chat/completions
+    npm = _opencode_npm(auth, model, pr)
     # Every ai-sdk package appends its own resource to baseURL (@ai-sdk/anthropic "/messages",
     # @ai-sdk/openai "/responses", openai-compatible "/chat/completions") and expects the "/v1"
     # to be there already, the way pi's openai clients do (see _pi_models_json). A connection
@@ -3192,11 +3196,15 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
-    if auth.api_format == "openai" and auth.base_url and auth.api_key:
-        # A custom OpenAI endpoint rides the loopback relay, for the same two reasons hermes
-        # does: request shapes ai-sdk emits but strict endpoints refuse are repaired in flight
-        # (Azure's gpt-5.x deployments 400 on max_tokens — captured live 2026-08-27), and the
-        # real key stays in this process; opencode's env gets a per-turn placeholder.
+    if auth.base_url and auth.api_key and _opencode_npm(auth, model, pr) != "@ai-sdk/anthropic":
+        # Every OpenAI-shape opencode turn rides the loopback relay, as pi's and qwen's do, not only
+        # a custom endpoint: request shapes ai-sdk emits but strict endpoints refuse are repaired in
+        # flight (Azure's gpt-5.x deployments 400 on max_tokens, captured live 2026-08-27), Gemini
+        # 3's thought signatures are replayed (2026-09-06: with a Google key opencode reached Google
+        # directly, and every artifact turn on a Gemini 3.x id failed while pi, dsh and qwen passed
+        # through the relay), and the real key stays in this process; opencode's env gets a
+        # per-turn placeholder. A Messages-shape turn keeps its direct base: the relay speaks
+        # bearer auth, and Anthropic takes the key in x-api-key.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
