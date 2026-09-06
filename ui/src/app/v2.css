@@ -477,6 +477,9 @@ body {
 /* The tree guide: a hairline under the caret, so the tasks read as the harness's children. */
 .hx-tasks::before { content: ''; position: absolute; left: 21px; top: 0; bottom: 6px; width: 1px; background: var(--v2-line); }
 .hx-tasks-empty { padding: 5px 14px 6px 34px; font-size: 12px; color: var(--v2-cap); }
+.hx-tasks-skel .hx-task-row { gap: 9px; padding: 8px 14px 8px 34px; }
+.hx-skel-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.hx-skel-bar { height: 11px; border-radius: 5px; }
 .hx-task { position: relative; display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 14px 6px 32px; border: 0; background: none; cursor: pointer;
   font: inherit; text-align: left; }
 .hx-task span { font-size: 13px; color: var(--v2-body); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
