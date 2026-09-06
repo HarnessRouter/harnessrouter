@@ -8,8 +8,13 @@ import app as gw  # noqa: E402
 
 
 def test_google_serves_the_catalog_gemini_by_its_own_id():
-    assert gw._vendor_models("google") == {"gemini-3.6-flash": "gemini-3.6-flash"}
-    assert gw._integration_models({"provider": "google"}) == {"gemini-3.6-flash": "gemini-3.6-flash"}
+    table = gw._vendor_models("google")
+    # the Gemini chat family, each served by Google under its plain id (read from /v1beta/models 2026-09-06)
+    assert set(table) == {"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                          "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
+    assert all(k == v for k, v in table.items())
+    assert gw._integration_models({"provider": "google"}) == gw._vendor_models("google")
 
 
 def test_google_reaches_the_openai_shaped_backends_only():
