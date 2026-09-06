@@ -1,8 +1,10 @@
 # Support matrix suite
 
-Drives the console as one user and, for every harness and every model its menu offers, runs four
+Drives the console as one user and, for every harness and every model its menu offers, runs five
 scenarios in one session: a first turn, a follow-up, a switch to another model of the harness (then
-back), and an artifact (a file the task must produce, checked on the transcript's file cards).
+back), an artifact (a file the task must produce, checked on the transcript's file cards), and a
+recycle (the session's sandbox is let go on purpose through the internal recycle route, then a
+follow-up must recall the first message: the history survived the checkpoint round trip).
 Results are one JSON record per harness x model with the outcome, seconds and reason of each
 scenario; `fill-connection.py` stamps each record with the connection its session actually ran on;
 `render.py` turns the records into `docs/support-matrix.md`.
@@ -18,8 +20,9 @@ python3 render.py <(jq -s add results-A.json results-B.json) > ../../docs/suppor
 Needs `playwright` (`npm i playwright` next to `run.mjs`, then `npx playwright install chromium`).
 Resumable: a pair already recorded is skipped, so a killed worker is relaunched and continues; a
 pair whose record carries `error` (the runner's own failure) is re-run. To re-run failed pairs,
-delete their records and relaunch. `PROVIDER` is a label for the column: run once per key you
-want a column for, with that key wired in Integrations first. `MODELS` (comma list) limits a run
+delete their records and relaunch. `PROVIDER` is a label for the table: run once per provider, with the model map pointing every
+model that provider serves at its integration (one provider at a time, since a model has one
+integration). `MODELS` (comma list) limits a run
 to some models, which is how a single failing pair is reproduced with tracing on. Set
 `IGNORE_TLS=1` for an instance on a self-signed certificate.
 
