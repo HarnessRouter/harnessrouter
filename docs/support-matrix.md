@@ -181,6 +181,21 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 
 55 pairs, 267 of 271 scenario runs passed.
 
+## Provider: google
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
+|---|---|---|---|---|---|---|---|
+| dsh | gemini-3.6-flash | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Google AI Studio", "status": "failed", "error": "400 status code (no body)"}] |
+| hermes | gemini-3.6-flash | FAIL | n/a | n/a | n/a | n/a | first: Your openai-api key was refused: API call failed after 3 retries: HTTP 429: [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded yo |
+| opencode | gemini-3.6-flash | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Too Many Requests: [{\n  \"error\": {\n    \"code\": 429,\n    ; retested once; first try: followup [{"connection": "integration:Google AI Studio", "status": "failed", "error": "To; artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "To; recycle [{"connection": "integration:Google AI Studio", "status": "failed", "error": "To |
+| pi | gemini-3.6-flash | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Google AI Studio", "status": "failed", "error": "400 status code (no body)"}] |
+| qwen | gemini-3.6-flash | FAIL | n/a | n/a | n/a | n/a | first: Reply with exactly: M1-gemini-3.6-flash QWEN CODE Working… ; retested once; first try: first Reply with exactly: M1-gemini-3.6-flash QWEN CODE M1-gemini-3.6-flash Working… |
+
+5 pairs, 0 of 5 scenario runs passed.
+
 ## Provider: openai
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
