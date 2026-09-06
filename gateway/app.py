@@ -1464,10 +1464,14 @@ def _manifest_index_keys(base: str, harness_id: str, member_id: str, workspace: 
 _SCOPE_FIELDS = ("harness_id", "member_id", "workspace")
 
 
-async def _index_manifest(base: str, manifest: dict) -> None:
+async def _index_manifest(base: str, manifest: dict, *, prior: dict | None = None,
+                          known_live: bool = False) -> None:
     """Persist a manifest to the flat index and its narrow per-harness/per-member/per-workspace
     mirrors, so all read surfaces (unfiltered Recents, per-harness Traces, per-member 'my
-    sessions', per-workspace console views) agree.
+    sessions', per-workspace console views) agree. A caller that has just read the prior manifest
+    passes it as `prior`; one that has just written the session vertex itself passes
+    `known_live=True`: the turn-start card paid two reads of the same manifest and a vertex read
+    of the vertex it wrote a moment earlier.
 
     The scoping fields decide WHICH mirrors are written. A card that arrives without one (a
     finalize or reconcile built from a turn record that lost it) used to rewrite only the flat
@@ -1478,15 +1482,16 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     # A write that lands after the session's delete (a finalize or reconcile racing it) must not
     # resurrect the card: the tombstone on the vertex is the durable, replica-safe answer.
     _sid = str(manifest.get("session_id") or base.rsplit("_", 1)[-1])
-    try:
-        _v = await _vertex_get(_sid)
-    except Exception:  # noqa: BLE001
-        _v = None
-    if _v and str(_v.get("status") or "") == "deleted":
-        return
+    if not known_live:
+        try:
+            _v = await _vertex_get(_sid)
+        except Exception:  # noqa: BLE001
+            _v = None
+        if _v and str(_v.get("status") or "") == "deleted":
+            return
     missing = [k for k in _SCOPE_FIELDS if not manifest.get(k)]
     if missing:
-        prior = await _prior_manifest(base)
+        prior = prior if prior is not None else await _prior_manifest(base)
         for k in missing:
             if prior.get(k):
                 manifest[k] = prior[k]
@@ -1511,7 +1516,7 @@ async def _prior_manifest(prefix: str) -> dict:
         return {}
 
 
-async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
+async def _prior_session_totals(prefix: str, manifest: dict | None = None) -> tuple[float, dict]:
     """The session's credits/usage totals as of the CURRENT manifest — the one durable source both
     the turn-accept placeholder write and _trace_finalize must agree on. Whichever one omits these
     fields (rather than reading + carrying them forward) resets the session total to zero for every
@@ -1520,7 +1525,10 @@ async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
     if not prefix:
         return 0.0, {}
     try:
-        pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
+        if manifest is not None:
+            pm = json.dumps(manifest).encode() if manifest else b""
+        else:
+            pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
         if not pm:
             return 0.0, {}
         prior = json.loads(pm)
@@ -1538,8 +1546,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     session's credits/usage totals SO FAR forward (via _prior_session_totals) rather than omit
     them: an omitted field here is exactly what _trace_finalize's own accumulate would read back as
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
-    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "")
-    _pm = await _prior_manifest(tr.get("prefix") or "")
+    _pm = await _prior_manifest(tr.get("prefix") or "")          # the one read of the prior card
+    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "", _pm)
     prior_title = str(_pm.get("title") or "") if str(_pm.get("title_custom") or "") == "1" else ""
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
@@ -1558,7 +1566,7 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
         "trace_blob": tr.get("prefix"), "chunks": [],
         "finished_at": time.time(), "schema_version": 1,
         "credits": prior_credits, "usage": prior_usage,
-    })
+    }, prior=_pm, known_live=True)   # the vertex was written by this accept a moment ago
 
 
 async def _deindex_manifest(base: str, manifest: dict, *scopes: dict) -> None:
@@ -3467,7 +3475,7 @@ async def patch_session(sid: str, body: SessionPatch, request: Request) -> dict:
     # blob is what every LIST renders. Writing only the vertex looks like it worked and reverts on
     # the next load. `title_custom` is what stops the next turn regenerating it from your message.
     await _vg_upsert("HarnessSession", sid, {"title": title})
-    base = await _trace_base(sid)
+    base = _prefix_from_vertex(sid, _v)   # the vertex _owned_session already read
     if base:
         m = await _prior_manifest(base)
         if m:
