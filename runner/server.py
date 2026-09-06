@@ -1259,12 +1259,6 @@ model_reasoning_effort = "{effort}"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_context_window = {ctx}
-[features]
-# Compaction happens locally. Remote compaction is a call to OpenAI's own backend
-# (/responses/compact under the Responses-Lite header) that an API key at api.openai.com refused
-# ("requires reasoning.context to be all_turns") and that Azure, TokenRouter, OpenRouter and
-# Vercel do not serve at all; local compaction works on every provider we front.
-remote_compaction_v2 = false
 [model_providers.{provider}]
 name = "{name}"
 base_url = "{base_url}"
@@ -1355,6 +1349,20 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     # why codex state used to vanish. (auth.json inside is still creds-excluded.)
     cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".codex"
     cfg_dir.mkdir(parents=True, exist_ok=True)
+    # Which account serves this turn, as a fingerprint that never names the key. A resume under the
+    # account that minted the history keeps it whole; under another it is replayed as content
+    # (see _sanitize_codex_rollout). The marker lives in the checkpointed home, beside the rollouts.
+    fp = hashlib.sha256(f"{p}|{base_url}|{auth.api_key or ''}".encode()).hexdigest()[:16]
+    marker = cfg_dir / "hr-account"
+    try:
+        prior = marker.read_text().strip()
+    except OSError:
+        prior = ""
+    env["HR_CODEX_ACCOUNT_CHANGED"] = "0" if prior == fp else "1"
+    try:
+        marker.write_text(fp)
+    except OSError:
+        pass
     # codex only speaks the OpenAI Responses API now — current releases removed
     # `wire_api = "chat"` entirely, so a custom chat-completions endpoint cannot be driven by
     # codex at all (the gateway greys codex out for those integrations). Always the supported
@@ -1385,7 +1393,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     return cfg_dir
 
 
-def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
+def _sanitize_codex_rollout(rollouts: list[str], *, content_only: bool = True) -> dict:
     """Make a codex rollout safe to replay, without destroying any of it.
 
     Two hazards live in the same file, and the fix for one used to create the other.
@@ -1429,6 +1437,14 @@ def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
     # function_call_output form; `ctc_` the custom_tool_call form.
     MINTED = ("msg_", "rs_", "fc_", "fcr_", "ctc_")
     counts = {"reasoning": 0, "deref": 0, "damaged": 0}
+    # The same account serving the resume can resolve its own ids and decrypt its own blobs, and
+    # keeping both is what lets a model switch inside one resource (two Azure deployments) and a
+    # follow-up on one key keep their reasoning continuity. Only a resume under another account
+    # (the July thread born on Azure, resumed on the org's own OpenAI key; a chain fallback; a
+    # rotated key) is turned into content. Richard's rule (2026-09-06): a session that changes
+    # provider is not supported; everything on one provider must work.
+    if not content_only:
+        return counts
 
     for path in rollouts:
         try:
@@ -1447,28 +1463,32 @@ def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
             except ValueError:
                 parsed.append((line, None))   # unparseable: preserve verbatim
 
-        # Pass 1 — drop the account-bound blob, keep the item and its id.
-        has_reasoning = False
+        # Pass 1 — drop the account-bound blob, keep the item; its id goes in pass 2.
         for i, (line, o) in enumerate(parsed):
             if not o or o.get("type") != "response_item":
                 continue
             pay = o.get("payload")
             if not isinstance(pay, dict) or pay.get("type") != "reasoning":
                 continue
-            has_reasoning = True
             if pay.pop("encrypted_content", None) is not None:
                 counts["reasoning"] += 1
                 parsed[i] = (json.dumps(o), o)
 
-        # Pass 2 — repair a rollout the old delete-based strip already damaged. Only when there is
-        # no reasoning item left to anchor the ids: with reasoning present the references resolve
-        # and stripping ids would needlessly discard continuity.
+        # Pass 2 — a replayed history is content, never a reference. Every provider-minted id is
+        # removed on every resume: an id is a lookup into the state of the deployment or account
+        # that minted it, and a resumed thread is routinely served by another one (a July thread
+        # born on Azure resumed on the org's own OpenAI key answered 404 on every turn; a switch
+        # between two deployments of one Azure resource answered "message provided without its
+        # required reasoning item"; both 2026-09-06). With the ids gone the provider reads the
+        # items as ordinary content; `call_id`, `phase`, `role`, `content`, `name` and `arguments`
+        # stay, so tool pairing and the transcript survive. This trades server-side reasoning
+        # continuity for a replay that works wherever the next turn runs.
         minted = [
             (i, o) for i, (line, o) in enumerate(parsed)
             if o and o.get("type") == "response_item" and isinstance(o.get("payload"), dict)
             and str((o["payload"] or {}).get("id") or "").startswith(MINTED)
         ]
-        if minted and not has_reasoning:
+        if minted:
             counts["damaged"] += 1
             for i, o in minted:
                 o["payload"].pop("id", None)
@@ -1499,7 +1519,7 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
             # Make the rollout safe to replay: drop account-bound reasoning blobs, and repair a
             # rollout an older build already damaged (see the helper). Logged unconditionally —
             # staying silent at zero is what hid this step during the investigation.
-            c = _sanitize_codex_rollout(rollouts)
+            c = _sanitize_codex_rollout(rollouts, content_only=env.get("HR_CODEX_ACCOUNT_CHANGED") != "0")
             print(f"[resume] codex: sanitised rollout — dropped {c['reasoning']} reasoning blob(s), "
                   f"de-referenced {c['deref']} id(s) across {c['damaged']} damaged file(s)", flush=True)
             # CODEX_HOME is PER-SESSION (hydrate wipes + restores only THIS session's workspace), so
@@ -3316,7 +3336,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         resume_thread = _codex_resume_thread_id(cfg_dir, resume_session_id)
         if resume_thread:
             import glob as _glob
-            c = _sanitize_codex_rollout(_glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True))
+            c = _sanitize_codex_rollout(_glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True),
+                                        content_only=env.get("HR_CODEX_ACCOUNT_CHANGED") != "0")
             print(f"[resume] codex app-server: thread {resume_thread}{' (newest rollout, wanted ' + resume_session_id + ')' if resume_thread != resume_session_id else ''}; "
                   f"dropped {c['reasoning']} reasoning blob(s), de-referenced {c['deref']} id(s)", flush=True)
         else:
