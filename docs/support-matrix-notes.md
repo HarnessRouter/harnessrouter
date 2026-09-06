@@ -47,3 +47,37 @@ to one type plus nullable, a type on every node, items on every array, required 
 properties, an empty declaration dropped). The report is with TokenRouter; when their channel
 normalises, this comes out of both trees.
 
+## The Gemini family, one provider at a time (2026-09-06)
+
+The eleven Gemini ids main serves on google (gemini-3.8-flash, 3.7-flash, 3.6-flash, 3.5-flash,
+3.5-flash-lite, 3.1-flash-lite, 3.1-pro-preview, 3-flash-preview, 2.5-pro, 2.5-flash,
+2.5-flash-lite) were measured on every chat harness with the org holding ONE integration at a time
+(plus two that serve no Gemini id), the snapshot restored after each column. Columns: google
+(the sponsored Google AI Studio key), OpenRouter, Vercel, TokenRouter (its seven Gemini ids), and
+the gemini backend on its own column. A pair served by a connection other than the one under test,
+or as a model other than the id asked for, is a finding, never a pass; the columns run before
+0.13.21 carry the session's last connection per pair (the per-turn stamp landed with #103), the
+later ones the connection of every turn record.
+
+- google, 0.13.16 then the opencode rows on 0.13.20: 65 pairs, 324 of 325 after the re-run. The
+  thought-signature fix (#96) made every Gemini 3.x artifact turn pass on pi, dsh, qwen, cline and
+  hermes; opencode reached Google directly until #97 routed its OpenAI-shape turns through the
+  loopback relay, after which its eight 3.x ids pass every scenario. The one open miss is opencode
+  on gemini-2.5-flash, which passed its retest in the family run and failed artifact and recycle on
+  the single-try re-run: flaky on the smallest 2.5 flash through opencode, not a fix regression.
+- OpenRouter, 0.13.16: 65 pairs, 324 of 325. hermes on gemini-2.5-flash-lite answered "DONE" (its
+  last word) instead of the first message's word after a recycle, twice. Every Gemini 3.x artifact
+  turn passed: the aggregator carries the thought signatures itself.
+- Vercel, 0.13.16: 65 pairs, 323 of 325. dsh on gemini-2.5-flash-lite declined its own write tool
+  on the artifact turn ("the available tools lack the functionality to create files"), twice;
+  hermes on gemini-3.6-flash made the same recycle recall miss as on OpenRouter.
+- TokenRouter, 0.13.20 then the qwen and cline rows on 0.13.22: 41 pairs, 205 of 205. Its Gemini
+  channels forward tool declarations to Google's validator as sent; the three schema rules (#101,
+  #102, #104) took the column from 195 to 205: `$schema` and `exclusiveMinimum` and a property
+  without a type (opencode, cline), a nullable choice without a type (cline's read_files), and an
+  anyOf with siblings (qwen's fork_turns), each refused by a different channel.
+- gemini backend (Gemini CLI, PR #72), on 0.13.18-rc.1 built from that branch: 11 pairs, 55 of 55,
+  with four served-as findings (gemini-3.8-flash, 3.7-flash, 3.6-flash, 2.5-flash served by
+  gemini-3.5-flash on every turn, the CLI's own rewrite); the backend lists the seven ids served as
+  themselves.
+
