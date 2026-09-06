@@ -852,6 +852,15 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
                          "openrouter", "openai-api", "custom", "google"}
 
+# Backends that speak a provider's NATIVE API rather than the OpenAI or Anthropic shape the broker
+# and the loopback relays carry: nothing sits between the CLI and the provider, so the sandbox
+# must hold the raw key. That is owner trust by definition. In broker mode such a connection is
+# refused with the reason, instead of a broker credential going to Google as an API key and the
+# turn dying on a 400 nobody can read. gemini-cli 0.58.0 honours GOOGLE_GEMINI_BASE_URL on the
+# API-key path (measured 2026-09-06: pointed at a dead port it retried "fetch failed" against it),
+# so the native paths can be brokered later; until the broker carries them, this set is the guard.
+_NATIVE_ONLY_BACKENDS = {"gemini"}
+
 
 def _mint_turn_cred(sid: str, conn_name: str) -> str:
     """Per-turn credential: sid.conn.exp.hmac — resolvable back to exactly one connection."""
@@ -925,6 +934,11 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
                 out[field] = conn[field]
         return out
 
+    backend = str(conn.get("backend") or "")
+    if backend in _NATIVE_ONLY_BACKENDS:
+        print(f"[broker] refusing to build sandbox auth for backend={backend!r}: it speaks the "
+              f"provider's native API, which is not brokered (HR_SANDBOX_TRUST=owner runs it)", flush=True)
+        return None
     # Normalised: a connection saved as "TokenRouter" must not skip brokering on a casing mismatch.
     provider = str(conn.get("provider") or "").strip().lower()
     if provider not in _BROKERABLE_PROVIDERS or not sid or not PUBLIC_BASE_URL:
@@ -1853,6 +1867,7 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
         "title": (prompt.strip().splitlines()[0][:120] if prompt.strip() else sid[:16]),
         "user_prompt": prompt[:1500], "status": rec.get("status"),
         "connection": rec.get("connection"), "cli_session_id": rec.get("cli_session_id"),
+        "served_model": rec.get("served_model") or None,
         "result": (rec.get("result") or "")[:4000],
         "elapsed": rec.get("elapsed") or (round(time.time() - rec["started"], 1) if rec.get("started") else None),
         "event_count": real_count, "trace_blob": tr.get("prefix"),
@@ -4585,7 +4600,10 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
                                             "is_error": bool(c.get("is_error"))}))
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
-                               "is_error": bool(ev.get("is_error"))}))
+                               "is_error": bool(ev.get("is_error")),
+                               # the model the CLI reports it actually used, when it says (gemini-cli
+                               # keys its stats by served model, and rewrites some ids on the way)
+                               "model": str(ev.get("model") or "")}))
     elif t == "system" and ev.get("subtype") == "resume_lost":
         # The runner asked to continue a prior session, but it wasn't found in this sandbox — it
         # silently started fresh instead (see harness_runner _run_hermes_bg). A caller who believed
@@ -4621,6 +4639,7 @@ class _RespTranslator:
         self.requested_model = ""
         self.model_fallback = False
         self.fallback_reason = ""
+        self.served_model = ""      # what the CLI reports it ran, when it reports; "" = unknown
         self.seq = 0
         self.out_index = -1
         self.output: list[dict] = []
@@ -4654,6 +4673,7 @@ class _RespTranslator:
                                        if status == "incomplete" and self.incomplete_reason else None),
                 "previous_response_id": self.prev, "model": self.model,
                 "output": self.output, "store": self.store, "usage": self.usage,
+                "served_model": self.served_model,
                 "metadata": meta}
 
     def start(self) -> list[dict]:
@@ -4750,6 +4770,8 @@ class _RespTranslator:
             evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=item))
             self.output.append(item)
         elif kind == "result":
+            if payload.get("model"):
+                self.served_model = str(payload["model"])
             u = payload.get("usage")
             if u:
                 self.usage = {"input_tokens": u.get("input_tokens", 0),
@@ -5373,8 +5395,18 @@ _MODEL_CATALOG: dict[str, dict] = {
     # despite launching alongside 3.6 Flash — versions don't move in lockstep across the family).
     # gemini-3.1-pro (the real Pro flagship) is deliberately NOT listed: Pro was dropped from the
     # free tier in 2026-04, so it would show as a choice and fail every call on a free-tier key.
-    "gemini": {"default": "gemini-3.6-flash",
-               "models": ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"]},
+    # Google's own ids only: gemini-cli speaks the native API, so the cross-vendor rows above do not
+    # apply. The list is the eleven ids the google provider serves, offered so the support matrix
+    # can measure each one THROUGH this CLI; it is pruned to what the measurement keeps. Measured
+    # locally on the pinned 0.58.0 (2026-09-06): on the API-key auth path the CLI treats "3.5 Flash
+    # GA" as launched and its resolver rewrites every id ending in "-flash" to gemini-3.5-flash
+    # (resolveModel: useGemini3_5Flash && isFlashModel), so a 3.6/3.7/3.8/2.5-flash request is
+    # served by gemini-3.5-flash and the result's stats say so; the flash-lite, pro and
+    # 3-flash-preview ids are served as requested. The default is one the CLI serves as itself.
+    "gemini": {"default": "gemini-3.5-flash",
+               "models": ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                          "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -5977,7 +6009,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             # Refusing beats running: the only alternative is handing the sandbox a real provider
             # key. The chain moves on, and a fully unbrokerable chain fails the turn loudly.
             rec["tried"].append({"connection": name,
-                                 "error": "credential cannot be brokered; refused"})
+                                 "error": (f"the {backend} harness speaks the provider's native API, which is not "
+                                           f"brokered: run it with HR_SANDBOX_TRUST=owner"
+                                           if backend in _NATIVE_ONLY_BACKENDS else
+                                           "credential cannot be brokered; refused")})
             continue
         body = {"backend": conn.get("backend", backend), "provider": conn.get("provider"),
                 "model": (conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req)),
@@ -7188,6 +7223,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "user_files": user_files, "assistant": asst, "tools": tools, "files": files,
                       # the connection that served the turn, as the record stamps it
                       "connection": rec.get("connection"),
+                      # the model the CLI reported it ran, when it reported one
+                      "served_model": rec.get("served_model") or None,
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.
