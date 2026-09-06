@@ -1,7 +1,8 @@
 // Support matrix runner: harness x model x provider x {first, followup, switch, artifact, recycle}.
 // Drives the console as one user; one task at a time per worker; resumable (pairs already complete
 // in the results file are skipped). Env: BASE, HR_USER, HR_PASS, HARNESSES (comma), PROVIDER
-// (a label for the column), RESULTS (json path), LOG (append log), MODELS (optional comma filter),
+// (a label for the column), RESULTS (json path), LOG (append log), MODELS (optional comma filter of the
+// pairs to run), PROVIDER_MODELS (the column's own model table, which bounds the switch partner),
 // IGNORE_TLS=1 for a self-signed instance.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -93,7 +94,10 @@ try {
     await page.keyboard.press('Escape'); await sleep(300);
     // MODELS pins which PAIRS run (a re-run of the missing ones); the switch scenario still needs another
     // model this harness can run, so the switch target comes from the whole runnable list, not the pinned one.
-    const runnableAll = models.filter((m) => m.ok).map((m) => m.id);
+    // PROVIDER_MODELS is the column's own table: a switch partner outside it would run on another
+    // provider through the map's fallback, and a session that changes provider is not what any row measures
+    const scope = process.env.PROVIDER_MODELS ? new Set(process.env.PROVIDER_MODELS.split(',')) : null;
+    const runnableAll = models.filter((m) => m.ok && (!scope || scope.has(m.id))).map((m) => m.id);
     const enabled = runnableAll.filter((id) => !process.env.MODELS || process.env.MODELS.split(',').includes(id));
     log(`HARNESS ${h} models ${models.length} runnable ${enabled.length}: ${enabled.join(',')}`);
     for (const m of enabled) {
