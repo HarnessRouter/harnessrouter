@@ -35,3 +35,12 @@ def test_refusal_is_judged_on_the_providers_first_line_only():
     assert not gw._provider_refused(compact)
     assert gw._provider_refused("OpenAI API error (401): Incorrect API key provided")
     assert gw._provider_refused("Error: 429 insufficient_quota\nReconnecting... 1/5")
+
+
+def test_a_models_content_refusal_is_not_a_key_refusal():
+    # pi, glm-5.3-flash switching to claude-opus-5 on the OSS matrix (2026-09-06): the provider's
+    # first line was "The model refused to complete the request", and the word alone read as a
+    # refused key. A key refusal is an auth or quota line, never the word.
+    assert not gw._provider_refused("The model refused to complete the request")
+    assert not gw._provider_refused("Your tokenrouter key was refused: The model refused to complete the request")
+    assert gw._provider_refused("403 Forbidden: key disabled")
