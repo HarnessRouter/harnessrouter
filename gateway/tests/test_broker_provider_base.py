@@ -44,3 +44,11 @@ def test_a_vault_connection_gets_the_default_too(monkeypatch):
     monkeypatch.setattr(gw, "_get_connection", get)
     conn = asyncio.run(gw._broker_resolve("openai", "org.a"))
     assert conn["base_url"] == "https://api.openai.com/v1"
+
+
+def test_azure_bare_endpoint_gets_its_openai_surface():
+    assert gw._provider_base_url("azure-foundry", "https://r.openai.azure.com/") == "https://r.openai.azure.com/openai/v1"
+    assert gw._provider_base_url("azure", "https://r.openai.azure.com") == "https://r.openai.azure.com/openai/v1"
+    assert gw._provider_base_url("azure-foundry", "https://r.openai.azure.com/openai/v1/") == "https://r.openai.azure.com/openai/v1"
+    assert gw._provider_base_url("openai", "https://api.openai.com/v1/") == "https://api.openai.com/v1"
+    assert gw._provider_base_url("openrouter", "") == ""
