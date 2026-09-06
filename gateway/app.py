@@ -629,6 +629,39 @@ async def _redis_pump() -> None:
             _bus_deliver(m["org"], m["harness"], m["member"], m["sid"], m["rid"], m["ev"])
 
 
+# The bus tasks are HELD here for the life of the process. asyncio keeps only a weak reference to
+# a task, so a task created and dropped is collected at some later GC pass, mid-await, and its
+# coroutine is closed: "Task was destroyed but it is pending!" and, from the pubsub listen loop,
+# "aclose(): asynchronous generator is already running". Measured 2026-09-06 08:07Z to 08:10Z: every
+# gateway replica lost its Redis subscriber that way within minutes of booting, cross-replica events
+# stopped, and _redis_ok["sub"] stayed True, so the polling fallback never engaged and a console saw
+# another replica's turn only through its own re-reads. A held task is never collected; one that
+# ends for any reason is logged and started again.
+_BG_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _spawn_forever(name: str, fn) -> asyncio.Task:
+    """Run `fn()` as a held background task; whenever it ends (return, error), say so and restart it."""
+    loop = asyncio.get_running_loop()
+
+    def _done(t: asyncio.Task) -> None:
+        if _BG_TASKS.get(name) is not t:
+            return                                   # superseded (tests, a restart already made)
+        _BG_TASKS.pop(name, None)
+        if t.cancelled():
+            return                                   # shutdown
+        print(f"[bus] task {name} ended: {t.exception()!r}; restarting", flush=True)
+        if name == "redis-listen":
+            _redis_ok["sub"] = False                 # until the new listener subscribes
+        if not loop.is_closed():
+            loop.call_later(1.0, _spawn_forever, name, fn)
+
+    t = loop.create_task(fn(), name=name)
+    _BG_TASKS[name] = t
+    t.add_done_callback(_done)
+    return t
+
+
 async def _redis_listen() -> None:
     """Every replica tails the shared channel and delivers into its own buffers + subscribers."""
     while True:
@@ -895,8 +928,20 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
               flush=True)
         return None
     out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""))
-    out["base_url"] = f"{PUBLIC_BASE_URL}/v1/llm"
+    out["base_url"] = f"{_sandbox_broker_origin()}/v1/llm"
     return out
+
+
+def _sandbox_broker_origin() -> str:
+    """Where a sandbox reaches the broker. Hosted, the public base URL. Self-hosted, the runner is
+    a process beside the gateway and loopback is the broker's own door: the public URL is the
+    console's, whose sign-in wall turns away any client that does not present a Bearer token
+    (an Anthropic-shape client sends x-api-key), so opencode on a direct Anthropic key answered
+    "Not Found" on every turn (2026-09-06 support matrix)."""
+    local = os.environ.get("HARNESS_GATEWAY_URL", "").rstrip("/")
+    if local and _pool_is_local():
+        return local
+    return PUBLIC_BASE_URL
 
 
 def _conn_public(conn: dict) -> dict:
@@ -2509,8 +2554,8 @@ async def _start_bus() -> None:
     global _redis_out
     if REDIS_URL:
         _redis_out = asyncio.Queue(maxsize=100_000)
-        asyncio.create_task(_redis_pump())
-        asyncio.create_task(_redis_listen())
+        _spawn_forever("redis-pump", _redis_pump)
+        _spawn_forever("redis-listen", _redis_listen)
 
 
 @app.on_event("startup")
@@ -2929,6 +2974,34 @@ def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path
     return json.dumps(doc).encode() if changed else body
 
 
+_GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
+
+
+def _google_unknown_field(refused: bytes) -> str:
+    """The top-level request field Google's OpenAI-compatible endpoint refused as unknown, or "".
+    A field named inside an object ("at 'tools[0].function'") is not one this relay drops."""
+    try:
+        text = refused.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
+    if "Cannot find field" not in text:
+        return ""
+    m = _GOOGLE_UNKNOWN_RE.search(text)
+    return m.group(1) if m else ""
+
+
+def _without_field(body: bytes, field: str) -> bytes:
+    """The JSON request without one top-level field; a body that is not a JSON object is returned as is."""
+    try:
+        doc = json.loads(body or b"")
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or field not in doc:
+        return body
+    doc.pop(field)
+    return json.dumps(doc).encode()
+
+
 def _broker_token(request: Request) -> str:
     """CLIs differ in how they present a key (Bearer / api-key / x-api-key) — accept all three
     rather than special-casing per backend, which would be three paths for one decision."""
@@ -3048,6 +3121,28 @@ async def llm_broker(path: str, request: Request):
     rc = _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
     up = await rc.send(req, stream=True)
+    if provider == "google" and up.status_code == 400:
+        # Google's OpenAI-compatible endpoint refuses a request that names any field it does not
+        # know ("Unknown name \"store\": Cannot find field."), and the harnesses send OpenAI's
+        # optional fields freely (pi and dsh: store, seed; measured 2026-09-06 on gemini-3.6-flash).
+        # The refusal names the field; the request goes again without it, a few fields at most.
+        refused = await up.aread()
+        for _ in range(4):
+            unknown = _google_unknown_field(refused)
+            if not unknown:
+                break
+            await up.aclose()
+            body = _without_field(body, unknown)
+            print(f"[broker] google refused field {unknown!r}; sent again without it sid={sid}", flush=True)
+            req = rc.build_request(request.method, url, headers=headers, content=body or None)
+            up = await rc.send(req, stream=True)
+            if up.status_code != 400:
+                break
+            refused = await up.aread()
+        if up.status_code == 400:
+            return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
+                            headers={k: val for k, val in up.headers.items()
+                                     if k.lower() not in ("content-length", "transfer-encoding", "connection")})
 
     async def pump():
         try:
