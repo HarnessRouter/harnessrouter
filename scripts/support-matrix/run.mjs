@@ -115,8 +115,10 @@ try {
           log(`FOLLOWUP ${k} ${rec.followup.ok ? 'ok' : 'FAIL'} ${rec.followup.s}s ${rec.followup.why}`);
           // the partner must be one Codex can carry on with: gpt-5.3-codex and the gpt-5.6 line refuse each
           // other's threads by design (#73), and that rule is not what the switch row measures
-          const conflicts = (a, c) => (a === 'gpt-5.3-codex' && c.startsWith('gpt-5.6')) || (c === 'gpt-5.3-codex' && a.startsWith('gpt-5.6'));
-          const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || runnableAll.find((x) => x !== m) || null;
+          // Codex refuses gpt-5.3-codex after any other model (measured after gpt-5.5 and after the gpt-5.6
+          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement
+          const conflicts = (a, c) => a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex';
+          const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || null;
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: other }).first().click(); await sleep(300); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };
           log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : rec.switch.ok === null ? 'n/a' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
