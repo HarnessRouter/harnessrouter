@@ -46,4 +46,18 @@ subset dropped, oneOf to anyOf, const to a one-value enum, exclusive bounds to b
 to one type plus nullable, a type on every node, items on every array, required limited to existing
 properties, an empty declaration dropped). The report is with TokenRouter; when their channel
 normalises, this comes out of both trees.
+## The gemini backend (Gemini CLI) lists the ids it serves as itself (2026-09-06)
+
+gemini-cli speaks Google's native API with the raw key, so the backend runs in owner trust only and
+on Google's own ids. Measured on the OSS instance with the org holding only the Google integration,
+all five scenarios on each of the eleven ids the google provider serves, 55 of 55 runs passed, artifact
+turns included on every Gemini 3.x id (the CLI carries the thought signatures itself). The result
+event's stats are keyed by the model the CLI actually called, and that is where the catalog's rule
+bites: on the API-key auth path gemini-cli 0.58.0 (and 0.59.0-preview.0 and the 2026-09-06 nightly)
+treats "3.5 Flash GA" as launched and its resolver rewrites every id ending in "-flash" to
+gemini-3.5-flash, with no setting to turn it off. gemini-3.8-flash, 3.7-flash, 3.6-flash and 2.5-flash
+were served by gemini-3.5-flash on every turn and are listed as served-as findings, not passes; the
+backend lists the seven ids served as themselves: gemini-3.5-flash, 3.5-flash-lite, 3.1-flash-lite,
+3.1-pro-preview, 3-flash-preview, 2.5-pro, 2.5-flash-lite. The four stay reachable on the same key
+through the OpenAI-shape harnesses, where Google serves each id as requested on both API surfaces.
 

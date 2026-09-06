@@ -852,6 +852,15 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
                          "openrouter", "openai-api", "custom", "google"}
 
+# Backends that speak a provider's NATIVE API rather than the OpenAI or Anthropic shape the broker
+# and the loopback relays carry: nothing sits between the CLI and the provider, so the sandbox
+# must hold the raw key. That is owner trust by definition. In broker mode such a connection is
+# refused with the reason, instead of a broker credential going to Google as an API key and the
+# turn dying on a 400 nobody can read. gemini-cli 0.58.0 honours GOOGLE_GEMINI_BASE_URL on the
+# API-key path (measured 2026-09-06: pointed at a dead port it retried "fetch failed" against it),
+# so the native paths can be brokered later; until the broker carries them, this set is the guard.
+_NATIVE_ONLY_BACKENDS = {"gemini"}
+
 
 def _mint_turn_cred(sid: str, conn_name: str) -> str:
     """Per-turn credential: sid.conn.exp.hmac — resolvable back to exactly one connection."""
@@ -925,6 +934,11 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
                 out[field] = conn[field]
         return out
 
+    backend = str(conn.get("backend") or "")
+    if backend in _NATIVE_ONLY_BACKENDS:
+        print(f"[broker] refusing to build sandbox auth for backend={backend!r}: it speaks the "
+              f"provider's native API, which is not brokered (HR_SANDBOX_TRUST=owner runs it)", flush=True)
+        return None
     # Normalised: a connection saved as "TokenRouter" must not skip brokering on a casing mismatch.
     provider = str(conn.get("provider") or "").strip().lower()
     if provider not in _BROKERABLE_PROVIDERS or not sid or not PUBLIC_BASE_URL:
@@ -1060,6 +1074,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("google", "hermes"): "openai-api",        ("google", "pi"): "openai-api",
     ("google", "dsh"): "openai-api",           ("google", "opencode"): "openai-api",
     ("google", "qwen"): "openai-api",          ("google", "cline"): "openai-api",
+    # gemini (Gemini CLI) speaks Google's native API, not the OpenAI shape the rows above reach
+    # through a base_url, so it is wired to the google provider as itself: the runner gets the
+    # raw key (owner trust only; see _NATIVE_ONLY_BACKENDS). No ("custom", "gemini") row, for the
+    # reason it is absent from _CUSTOM_FORMAT_BACKENDS: a custom integration is OpenAI- or
+    # Anthropic-shaped.
+    ("google", "gemini"): "google",
 }
 
 
@@ -1847,6 +1867,7 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
         "title": (prompt.strip().splitlines()[0][:120] if prompt.strip() else sid[:16]),
         "user_prompt": prompt[:1500], "status": rec.get("status"),
         "connection": rec.get("connection"), "cli_session_id": rec.get("cli_session_id"),
+        "served_model": rec.get("served_model") or None,
         "result": (rec.get("result") or "")[:4000],
         "elapsed": rec.get("elapsed") or (round(time.time() - rec["started"], 1) if rec.get("started") else None),
         "event_count": real_count, "trace_blob": tr.get("prefix"),
@@ -4696,7 +4717,10 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
                                             "is_error": bool(c.get("is_error"))}))
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
-                               "is_error": bool(ev.get("is_error"))}))
+                               "is_error": bool(ev.get("is_error")),
+                               # the model the CLI reports it actually used, when it says (gemini-cli
+                               # keys its stats by served model, and rewrites some ids on the way)
+                               "model": str(ev.get("model") or "")}))
     elif t == "system" and ev.get("subtype") == "resume_lost":
         # The runner asked to continue a prior session, but it wasn't found in this sandbox — it
         # silently started fresh instead (see harness_runner _run_hermes_bg). A caller who believed
@@ -4736,6 +4760,7 @@ class _RespTranslator:
         # last_connection carried it before, one value per session; the turns feed and the support
         # matrix read it per turn (a report that said "every turn record" was reading the session).
         self.connection = ""
+        self.served_model = ""      # what the CLI reports it ran, when it reports; "" = unknown
         self.seq = 0
         self.out_index = -1
         self.output: list[dict] = []
@@ -4770,6 +4795,7 @@ class _RespTranslator:
                 "previous_response_id": self.prev, "model": self.model,
                 "output": self.output, "store": self.store, "usage": self.usage,
                 "connection": self.connection,
+                "served_model": self.served_model,
                 "metadata": meta}
 
     def start(self) -> list[dict]:
@@ -4866,6 +4892,8 @@ class _RespTranslator:
             evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=item))
             self.output.append(item)
         elif kind == "result":
+            if payload.get("model"):
+                self.served_model = str(payload["model"])
             u = payload.get("usage")
             if u:
                 self.usage = {"input_tokens": u.get("input_tokens", 0),
@@ -5480,6 +5508,29 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+    # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
+    # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
+    # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
+    # no-tool-use turn end to end against a real free-tier key). gemini-3.5-flash-lite and
+    # gemini-3.7-flash are NOT yet live-turn verified — added on published Google model-card ids
+    # (not guessed: gemini-3.6-pro does not exist, and the lite sibling shipped as 3.5, not 3.6,
+    # despite launching alongside 3.6 Flash — versions don't move in lockstep across the family).
+    # gemini-3.1-pro (the real Pro flagship) is deliberately NOT listed: Pro was dropped from the
+    # free tier in 2026-04, so it would show as a choice and fail every call on a free-tier key.
+    # Google's own ids only: gemini-cli speaks the native API, so the cross-vendor rows above do not
+    # apply. Measured 2026-09-06 on the OSS instance (all five scenarios per id, org holding only the
+    # Google integration, 55 of 55 runs passed) with the served model read off the CLI's own stats:
+    # on the API-key auth path gemini-cli 0.58.0 treats "3.5 Flash GA" as launched and its resolver
+    # rewrites every id ending in "-flash" to gemini-3.5-flash (resolveModel with useGemini3_5Flash,
+    # true for gemini-api-key; the same in 0.59.0-preview.0 and the 0.60 nightly; no setting turns
+    # it off), so gemini-3.8-flash, 3.7-flash, 3.6-flash and 2.5-flash were served by gemini-3.5-flash
+    # on every turn and are not listed: a completed turn on them is a turn on 3.5-flash. Those four
+    # stay reachable on the same key through the OpenAI-shape harnesses, where Google serves each id
+    # as requested. The seven below were served as themselves on every turn.
+    "gemini": {"default": "gemini-3.5-flash",
+               "models": ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+                          "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro",
+                          "gemini-2.5-flash-lite"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -5805,7 +5856,7 @@ def _strip_internal(d: dict) -> dict:
 # Instruction files WE write into the workspace — one per backend family. A new backend that
 # introduces a new context-file name must add it here or the harness's own instructions get
 # collected as a "produced" deliverable on the first turn (QWEN.md did, 2026-08-25).
-_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md"}
+_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md", "GEMINI.md"}
 
 
 def _is_internal_output(name: str) -> bool:
@@ -6082,7 +6133,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             # Refusing beats running: the only alternative is handing the sandbox a real provider
             # key. The chain moves on, and a fully unbrokerable chain fails the turn loudly.
             rec["tried"].append({"connection": name,
-                                 "error": "credential cannot be brokered; refused"})
+                                 "error": (f"the {backend} harness speaks the provider's native API, which is not "
+                                           f"brokered: run it with HR_SANDBOX_TRUST=owner"
+                                           if backend in _NATIVE_ONLY_BACKENDS else
+                                           "credential cannot be brokered; refused")})
             continue
         body = {"backend": conn.get("backend", backend), "provider": conn.get("provider"),
                 "model": (conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req)),
@@ -7300,6 +7354,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       # the model the turn asked for (a served model other than it on the SAME turn is a
                       # substitution; a switch turn asks for another model on purpose)
                       "model": rec.get("model") or None,
+                      # the model the CLI reported it ran, when it reported one
+                      "served_model": rec.get("served_model") or None,
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.
@@ -12465,6 +12521,31 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
+    "gemini": {
+        "label": "Gemini CLI", "backend": "gemini", "status": "ready",
+        "system_prompt": ("You are Gemini CLI, an autonomous coding agent. You work on a real "
+                          "git workspace with shell and file access, reading and editing files "
+                          "and running commands to complete the task end to end."),
+        # run_shell_command/write_file/activate_skill/update_topic are live-turn verified
+        # (2026-09-06, three real captured turns across the slides/sheets/videos starter kits —
+        # the same fix that corrected _gemini_to_claude's tool_use field names surfaced these
+        # real names). The rest (read_file/replace/search_file_content/glob/web_fetch/
+        # google_web_search/write_todos/save_memory) are still doc-sourced, not yet seen live —
+        # confirm before relying on any of THOSE for enforcement, the same silent-no-op trap the
+        # opencode/qwen comments warn about. Note "replace", not "edit" — gemini-cli's own name
+        # for the edit tool. update_topic isn't in gemini-cli's own public tool docs at all (the
+        # kits' skills invoke it constantly for a running strategic-intent summary); it may be a
+        # newer addition than the docs snapshot this catalog was first built from.
+        "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("replace", "Edit"),
+                  ("search_file_content", "Search"), ("glob", "Glob"),
+                  ("web_fetch", "Web Fetch"), ("google_web_search", "Web Search"),
+                  ("write_todos", "Todo"), ("save_memory", "Memory"),
+                  ("activate_skill", "Skill"), ("update_topic", "Topic")],
+        # No confirmed hard per-tool kill switch in headless mode (only --allowed-mcp-server-names
+        # gates MCP servers) — instruction tier until proven otherwise, same as qwen/cline/codex.
         "tool_enforcement": "instruction",
     },
     "cline": {
