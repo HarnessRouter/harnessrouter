@@ -59,7 +59,8 @@ async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   let st = '';
   for (let i = 0; i < maxS / 3; i++) { await sleep(3000); const dr = await door(); if (dr) return { ok: false, s: secs(), tail: '', why: 'door: ' + dr.slice(0, 160) }; d = await detailOf(sid); st = String(d?.turn_status || d?.status || ''); if (TERMINAL.has(st)) break; }
   let last = null, turns = null;
-  for (let i = 0; i < 10; i++) { turns = await turnsOf(sid); last = turns && turns.length > n0 ? turns[turns.length - 1] : null; const stored = !!(last && TERMINAL.has(String(last.status)) && (last.assistant || last.error || last.incomplete_reason || (last.files || []).length)); if (stored && (!expectFiles || (last.files || []).length)) break; await sleep(3000); }
+  // the record must be THIS message's: a send refused at the door leaves the previous turn's record in place
+  for (let i = 0; i < 10; i++) { turns = await turnsOf(sid); last = turns && turns.length > n0 && String((turns[turns.length - 1] || {}).user || '').trim() === text.trim() ? turns[turns.length - 1] : null; const stored = !!(last && TERMINAL.has(String(last.status)) && (last.assistant || last.error || last.incomplete_reason || (last.files || []).length)); if (stored && (!expectFiles || (last.files || []).length)) break; await sleep(3000); }
   // then let the console render what the server stored
   const head = String(last?.assistant || '').replace(/\s+/g, ' ').trim().slice(0, 40);
   for (let i = 0; i < 12; i++) { const t = await transcript(); const from = t.lastIndexOf(mark); if (!/Working…/.test(t.slice(from)) && (!head || t.slice(from).includes(head))) break; await sleep(1500); }
