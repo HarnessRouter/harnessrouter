@@ -1,4 +1,4 @@
-// Support matrix runner: harness x model x provider x {first, followup, switch, artifact}.
+// Support matrix runner: harness x model x provider x {first, followup, switch, artifact, recycle}.
 // Drives the console as one user; one task at a time per worker; resumable (pairs already complete
 // in the results file are skipped). Env: BASE, HR_USER, HR_PASS, HARNESSES (comma), PROVIDER
 // (a label for the column), RESULTS (json path), LOG (append log), MODELS (optional comma filter),
@@ -31,7 +31,7 @@ async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   const before = await transcript(); const t0 = Date.now(); const secs = () => Math.round((Date.now() - t0) / 10) / 100;
   // the composer refuses a message while the previous turn's stream is still open (its Send is
   // disabled): wait for it to take input again, or the message is dropped on the floor
-  const ready = () => page.evaluate(() => { const b = document.querySelector('.wbx-composer .uic-send'); const ta = document.querySelector('.wbx-composer textarea'); return !!ta && !ta.disabled && !!b && !b.disabled; });
+  const ready = () => page.evaluate(() => { const b = document.querySelector('.wbx-composer .wbx-send, .wbx-composer .uic-send'); const ta = document.querySelector('.wbx-composer textarea'); return !!ta && !ta.disabled && !!b && !b.disabled; });
   await page.fill('.wbx-composer textarea, textarea', text);
   let canSend = await ready(); for (let i = 0; i < 90 && !canSend; i++) { await sleep(1000); canSend = await ready(); }
   if (!canSend) return { ok: false, s: secs(), tail: '', why: 'the composer stayed busy for 90 s after the previous turn settled' };
@@ -84,7 +84,7 @@ try {
     log(`HARNESS ${h} models ${models.length} runnable ${enabled.length}: ${enabled.join(',')}`);
     for (const m of enabled) {
       const res = load(); const k = key(h, m);
-      if (res[k] && res[k].artifact && !res[k].error) { log(`SKIP ${k} (done)`); continue; }   // a runner error is not a result
+      if (res[k] && res[k].recycle && !res[k].error) { log(`SKIP ${k} (done)`); continue; }   // a runner error is not a result
       const rec = res[k] || { provider: PROVIDER, harness: h, model: m, at: new Date().toISOString() };
       try {
         await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await sleep(3000);
@@ -105,7 +105,16 @@ try {
           let fl = await files(); for (let i = 0; i < 10 && fl.length < (a.turn_files || []).length; i++) { await sleep(1500); fl = await files(); }
           rec.artifact = { ...a, files: fl, ok: a.ok && fl.some((f) => f.includes(`hello-${h}.txt`)), why: a.ok && !fl.some((f) => f.includes(`hello-${h}.txt`)) ? `no file card (files: ${fl.join(',') || 'none'}); ${a.tail.slice(-160)}` : a.why };
           log(`ARTIFACT ${k} ${rec.artifact.ok ? 'ok' : 'FAIL'} ${rec.artifact.s}s ${rec.artifact.why}`);
-        } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; }
+          // the sandbox is let go on purpose (what the pool does between visits) and the next turn must
+          // carry on from the durable checkpoint: the history, the files, the resume id
+          const rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid);
+          if (rc.code === 200) {
+            await sleep(2000);
+            const r5 = await turn('What exact word did I ask you to reply with in my very first message of this task? Reply with just that word.');
+            rec.recycle = expectWord(r5, `M1-${m}`); rec.recycle.recycled = rc;
+          } else rec.recycle = { ok: false, s: 0, why: `recycle refused: HTTP ${rc.code} ${rc.body}`, recycled: rc };
+          log(`RECYCLE ${k} ${rec.recycle.ok ? 'ok' : 'FAIL'} ${rec.recycle.s}s ${rec.recycle.why}`);
+        } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; rec.recycle = { ok: null, why: 'first turn failed' }; }
       } catch (e) { rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`); if (/has been closed/.test(rec.error)) throw e; }   // a closed browser ends the worker; the next launch resumes
       const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k}`);
     }
