@@ -91,6 +91,112 @@ def _drop_top_level_fields(body: bytes, fields) -> bytes:
     return json.dumps(obj).encode()
 
 
+_STRICT_GEMINI_HOST = "api.tokenrouter.com"   # TokenRouter's channels, by the upstream host
+# ── Gemini function declarations through a strict channel ────────────────────────────────
+# Google's native API validates function declarations against its own Schema (type, format,
+# description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
+# refuses anything else: "Unknown name \"$schema\" at 'tools[0].function_declarations[0].parameters'",
+# "Unknown name \"exclusiveMinimum\"", "schema didn't specify the schema type field". Google's own
+# OpenAI-compatible endpoint, OpenRouter and Vercel normalise a harness's JSON-schema declarations
+# before they reach it; TokenRouter's Gemini channels forward them as sent, so the first turn of a
+# task on opencode ($schema) and cline (exclusiveMinimum, a property without type) failed on the
+# ids those channels serve natively, gemini-3.8-flash for one (measured 2026-09-06, the platform
+# column). Until TokenRouter normalises them itself, this relay does, for that channel only.
+_GEMINI_SCHEMA_KEYS = {"type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
+                       "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength",
+                       "pattern", "example", "anyOf", "propertyOrdering", "default", "items", "minimum", "maximum"}
+
+
+def _gemini_schema(node):
+    """One JSON schema node as Google's function-declaration validator accepts it: only the keys it
+    names, `oneOf` as `anyOf`, `const` as a one-value enum, an exclusive bound as the bound, a type
+    list as one type plus nullable, a type on every node (inferred from its shape when left out),
+    items on every array, and `required` limited to properties that exist."""
+    if not isinstance(node, dict):
+        return node
+    out = {}
+    for k, v in node.items():
+        if k == "oneOf" and isinstance(v, list):
+            out.setdefault("anyOf", [_gemini_schema(x) for x in v])
+        elif k == "const":
+            out["enum"] = [v]
+        elif k == "exclusiveMinimum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("minimum", v)
+        elif k == "exclusiveMaximum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("maximum", v)
+        elif k not in _GEMINI_SCHEMA_KEYS:
+            continue
+        elif k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _gemini_schema(pv) for pk, pv in v.items()}
+        elif k == "items":
+            out[k] = _gemini_schema(v) if isinstance(v, dict) else (_gemini_schema(v[0]) if isinstance(v, list) and v else {"type": "string"})
+        elif k == "anyOf" and isinstance(v, list):
+            out[k] = [_gemini_schema(x) for x in v]
+        else:
+            out[k] = v
+    t = out.get("type")
+    if isinstance(t, list):
+        non_null = [x for x in t if x != "null"]
+        out["type"] = non_null[0] if non_null else "string"
+        if "null" in t:
+            out["nullable"] = True
+    if isinstance(out.get("anyOf"), list):
+        # No anyOf leaves this relay: one channel refuses an anyOf node without a type ("schema
+        # didn't specify the schema type field", gemini-3.5-flash) and another refuses one with
+        # anything beside it ("schema specified other fields alongside any_of", gemini-3.6-flash,
+        # both measured 2026-09-06 on TokenRouter). The null member becomes `nullable`; a choice of
+        # constants becomes one enum; any other choice becomes its first member under the node's
+        # own description, which is what the model reads.
+        members = [m for m in out.pop("anyOf") if isinstance(m, dict) and m.get("type") != "null"]
+        if len(members) < len(node.get("anyOf") or []):
+            out["nullable"] = True
+        if members and all("enum" in m and "properties" not in m and "items" not in m for m in members):
+            out = {**members[0], **out, "enum": [x for m in members for x in m["enum"]]}
+            out.setdefault("type", "string")
+        elif members:
+            out = {**members[0], **out}
+            out.setdefault("type", members[0].get("type") or "string")
+    if "type" not in out and "anyOf" not in out:
+        out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
+    if out.get("type") == "array" and "items" not in out:
+        out["items"] = {"type": "string"}
+    if out.get("type") == "object" and not out.get("properties"):
+        out.pop("properties", None)                 # an empty properties object is refused too
+        out.pop("required", None)
+    elif isinstance(out.get("required"), list) and isinstance(out.get("properties"), dict):
+        req = [r for r in out["required"] if r in out["properties"]]
+        if req:
+            out["required"] = req
+        else:
+            out.pop("required")
+    return out
+
+
+def _with_gemini_schemas(body: bytes) -> bytes:
+    """The chat request with every tool's parameters normalised for Google's validator; a tool
+    that declares no parameter loses the empty declaration. A body without tools is untouched."""
+    if b'"tools"' not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(fn, dict) or not isinstance(fn.get("parameters"), dict):
+            continue
+        params = _gemini_schema(fn["parameters"])
+        if params.get("type") == "object" and not params.get("properties"):
+            fn.pop("parameters")
+        else:
+            fn["parameters"] = params
+        changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
 def _google_signatures_in(doc: dict) -> list:
     """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
     found = []
@@ -184,6 +290,13 @@ class _Relay(http.server.BaseHTTPRequestHandler):
         google = _GOOGLE_HOST in UPSTREAM_BASE or _google_required
         if google and tail.endswith("/chat/completions"):
             body = _google_with_signatures(body, _google_sigs)
+        if _STRICT_GEMINI_HOST in UPSTREAM_BASE and tail.endswith("/chat/completions") and b"gemini" in body:
+            try:
+                _model = str((json.loads(body) or {}).get("model") or "")
+            except (ValueError, AttributeError):
+                _model = ""
+            if "gemini" in _model.lower():
+                body = _with_gemini_schemas(body)   # TokenRouter's Gemini channels forward tool schemas to Google's validator as sent
         resp = None
         for attempt in (0, 1, 2):
             req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,

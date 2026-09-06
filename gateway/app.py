@@ -3153,6 +3153,121 @@ class _GoogleSigTap:
                 self.sigs += _google_signatures_in(doc)
 
 
+_STRICT_GEMINI_CHANNELS = {"tokenrouter"}
+# ── Gemini function declarations through a strict channel ────────────────────────────────
+# Google's native API validates function declarations against its own Schema (type, format,
+# description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
+# refuses anything else: "Unknown name \"$schema\" at 'tools[0].function_declarations[0].parameters'",
+# "Unknown name \"exclusiveMinimum\"", "schema didn't specify the schema type field". Google's own
+# OpenAI-compatible endpoint, OpenRouter and Vercel normalise a harness's JSON-schema declarations
+# before they reach it; TokenRouter's Gemini channels forward them as sent, so the first turn of a
+# task on opencode ($schema) and cline (exclusiveMinimum, a property without type) failed on the
+# ids those channels serve natively, gemini-3.8-flash for one (measured 2026-09-06, the platform
+# column). Until TokenRouter normalises them itself, this relay does, for that channel only.
+_GEMINI_SCHEMA_KEYS = {"type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
+                       "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength",
+                       "pattern", "example", "anyOf", "propertyOrdering", "default", "items", "minimum", "maximum"}
+
+
+def _gemini_schema(node):
+    """One JSON schema node as Google's function-declaration validator accepts it: only the keys it
+    names, `oneOf` as `anyOf`, `const` as a one-value enum, an exclusive bound as the bound, a type
+    list as one type plus nullable, a type on every node (inferred from its shape when left out),
+    items on every array, and `required` limited to properties that exist."""
+    if not isinstance(node, dict):
+        return node
+    out: dict = {}
+    for k, v in node.items():
+        if k == "oneOf" and isinstance(v, list):
+            out.setdefault("anyOf", [_gemini_schema(x) for x in v])
+        elif k == "const":
+            out["enum"] = [v]
+        elif k == "exclusiveMinimum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("minimum", v)
+        elif k == "exclusiveMaximum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("maximum", v)
+        elif k not in _GEMINI_SCHEMA_KEYS:
+            continue
+        elif k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _gemini_schema(pv) for pk, pv in v.items()}
+        elif k == "items":
+            out[k] = _gemini_schema(v) if isinstance(v, dict) else (_gemini_schema(v[0]) if isinstance(v, list) and v else {"type": "string"})
+        elif k == "anyOf" and isinstance(v, list):
+            out[k] = [_gemini_schema(x) for x in v]
+        else:
+            out[k] = v
+    t = out.get("type")
+    if isinstance(t, list):
+        non_null = [x for x in t if x != "null"]
+        out["type"] = non_null[0] if non_null else "string"
+        if "null" in t:
+            out["nullable"] = True
+    if isinstance(out.get("anyOf"), list):
+        # No anyOf leaves this relay: one channel refuses an anyOf node without a type ("schema
+        # didn't specify the schema type field", gemini-3.5-flash) and another refuses one with
+        # anything beside it ("schema specified other fields alongside any_of", gemini-3.6-flash,
+        # both measured 2026-09-06 on TokenRouter). The null member becomes `nullable`; a choice of
+        # constants becomes one enum; any other choice becomes its first member under the node's
+        # own description, which is what the model reads.
+        members = [m for m in out.pop("anyOf") if isinstance(m, dict) and m.get("type") != "null"]
+        if len(members) < len(node.get("anyOf") or []):
+            out["nullable"] = True
+        if members and all("enum" in m and "properties" not in m and "items" not in m for m in members):
+            out = {**members[0], **out, "enum": [x for m in members for x in m["enum"]]}
+            out.setdefault("type", "string")
+        elif members:
+            out = {**members[0], **out}
+            out.setdefault("type", members[0].get("type") or "string")
+    if "type" not in out and "anyOf" not in out:
+        out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
+    if out.get("type") == "array" and "items" not in out:
+        out["items"] = {"type": "string"}
+    if out.get("type") == "object" and not out.get("properties"):
+        out.pop("properties", None)                 # an empty properties object is refused too
+        out.pop("required", None)
+    elif isinstance(out.get("required"), list) and isinstance(out.get("properties"), dict):
+        req = [r for r in out["required"] if r in out["properties"]]
+        if req:
+            out["required"] = req
+        else:
+            out.pop("required")
+    return out
+
+
+def _with_gemini_schemas(body: bytes) -> bytes:
+    """The chat request with every tool's parameters normalised for Google's validator; a tool
+    that declares no parameter loses the empty declaration. A body without tools is untouched."""
+    if b'"tools"' not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(fn, dict) or not isinstance(fn.get("parameters"), dict):
+            continue
+        params = _gemini_schema(fn["parameters"])
+        if params.get("type") == "object" and not params.get("properties"):
+            fn.pop("parameters")
+        else:
+            fn["parameters"] = params
+        changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _body_model_name(body: bytes) -> str:
+    """The model a chat request names, or "" (the body is not a JSON object)."""
+    try:
+        doc = json.loads(body) if body else {}
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    return str(doc.get("model") or "") if isinstance(doc, dict) else ""
+
+
 def _without_field(body: bytes, field: str) -> bytes:
     """The JSON request without one top-level field; a body that is not a JSON object is returned as is."""
     try:
@@ -3283,6 +3398,8 @@ async def llm_broker(path: str, request: Request):
     body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix)
     if provider == "google":
         body = _google_with_signatures(body, sid)
+    if provider in _STRICT_GEMINI_CHANNELS and "gemini" in _body_model_name(body).lower():
+        body = _with_gemini_schemas(body)
     rc = _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
     up = await rc.send(req, stream=True)
@@ -4639,6 +4756,10 @@ class _RespTranslator:
         self.requested_model = ""
         self.model_fallback = False
         self.fallback_reason = ""
+        # The connection that served this turn, stamped when the sandbox is dispatched. The session's
+        # last_connection carried it before, one value per session; the turns feed and the support
+        # matrix read it per turn (a report that said "every turn record" was reading the session).
+        self.connection = ""
         self.served_model = ""      # what the CLI reports it ran, when it reports; "" = unknown
         self.seq = 0
         self.out_index = -1
@@ -4673,6 +4794,7 @@ class _RespTranslator:
                                        if status == "incomplete" and self.incomplete_reason else None),
                 "previous_response_id": self.prev, "model": self.model,
                 "output": self.output, "store": self.store, "usage": self.usage,
+                "connection": self.connection,
                 "served_model": self.served_model,
                 "metadata": meta}
 
@@ -6065,6 +6187,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 await control_store.resp_put_running(org, translator.resp_id, sid, rt or "", int(_GW_MAX_TURN_S))
             except Exception:  # noqa: BLE001
                 pass
+        # The turn names its connection, not only the session: on the executor's record (the trace
+        # manifest reads it) and on the translator (the stored response and the turns feed read it).
+        rec["connection"] = name
+        translator.connection = name
         if sid in _cancel_req:
             try:
                 await _sandbox_json(f"/turn/{rt}/cancel", sid, "POST", attempts=2)
@@ -7225,6 +7351,9 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "user_files": user_files, "assistant": asst, "tools": tools, "files": files,
                       # the connection that served the turn, as the record stamps it
                       "connection": rec.get("connection"),
+                      # the model the turn asked for (a served model other than it on the SAME turn is a
+                      # substitution; a switch turn asks for another model on purpose)
+                      "model": rec.get("model") or None,
                       # the model the CLI reported it ran, when it reported one
                       "served_model": rec.get("served_model") or None,
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |

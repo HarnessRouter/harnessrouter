@@ -23,11 +23,15 @@ for prov, rows in sorted(by.items()):
             # a turn served by a connection other than the one under test is a finding, never a pass
             findings.append(f"{r['harness']} x {r['model']}: served by {', '.join(r['foreign'])} (turn records: {', '.join(r.get('connections') or [])})")
             notes.insert(0, "served by another connection (finding below)")
+        if r.get('substituted'):
+            # the CLI ran a model other than the id asked for: the id is not served as itself, a finding
+            findings.append(f"{r['harness']} x {r['model']}: served as {', '.join(r['substituted'])} (the CLI reports the model it ran)")
+            notes.insert(0, f"served as {', '.join(r['substituted'])} (finding below)")
         out.append(f"| {r['harness']} | {r['model']} | {mark(r.get('first'))} | {mark(r.get('followup'))} | {mark(sw)}{(' ('+sw['to']+')') if sw.get('to') else ''} | {mark(r.get('artifact'))} | {mark(r.get('recycle'))} | {served} | {' ; '.join(notes).replace('|', '/')} |")
-    clean = [r for r in rows if not r.get('foreign')]
+    clean = [r for r in rows if not r.get('foreign') and not r.get('substituted')]
     ok = sum(1 for r in clean for sc in ('first','followup','switch','artifact','recycle') if (r.get(sc) or {}).get('ok') is True)
     tot = sum(1 for r in clean for sc in ('first','followup','switch','artifact','recycle') if (r.get(sc) or {}).get('ok') is not None)
-    out += ["", f"{len(rows)} pairs, {ok} of {tot} scenario runs passed" + (f"; {len(rows) - len(clean)} pairs served by another connection are findings, not counted." if len(clean) < len(rows) else "."), ""]
+    out += ["", f"{len(rows)} pairs, {ok} of {tot} scenario runs passed" + (f"; {len(rows) - len(clean)} pairs served by another connection or as another model are findings, not counted." if len(clean) < len(rows) else "."), ""]
     if findings:
-        out += ["Findings, pairs served by a connection other than the one under test:", ""] + [f"- {f}" for f in findings] + [""]
+        out += ["Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:", ""] + [f"- {f}" for f in findings] + [""]
 print("\n".join(out))
