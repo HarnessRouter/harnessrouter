@@ -39,10 +39,13 @@ permissions:
 jobs:
   open:
     runs-on: ubuntu-latest
+    env:
+      # the secrets context is not allowed in a step's `if`; an env var carries the presence test
+      OPEN_PR_APP_ID: ${{ secrets.OPEN_PR_APP_ID }}
     steps:
       - uses: actions/checkout@v4
       - id: app
-        if: ${{ secrets.OPEN_PR_APP_ID != '' }}
+        if: ${{ env.OPEN_PR_APP_ID != '' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.OPEN_PR_APP_ID }}
