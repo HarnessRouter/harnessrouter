@@ -28,13 +28,17 @@ import { getConvState, type UserMsg } from '@/lib/conversation';
 type View = 'index' | 'chat' | 'settings';
 type TaskState = 'done' | 'running' | 'failed' | 'cancelled' | 'incomplete';
 
+const INCOMPLETE = new Set(['incomplete', 'max_turns', 'timeout', 'interrupted']);
 function taskState(status?: string): TaskState {
   const s = status || '';
   if (TERMINAL_OK.has(s)) return 'done';
   if (RUNNING.has(s)) return 'running';
   if (TERMINAL_BAD.has(s)) return 'failed';
   if (s === 'cancelled') return 'cancelled';
-  return 'incomplete';
+  if (INCOMPLETE.has(s)) return 'incomplete';
+  // a card the server has written but not yet given a status is a live task, not a stopped one;
+  // the pill flashed "incomplete" in that gap
+  return 'running';
 }
 
 /** A harness's loaded tasks: the pages read so far, the cursor for the next, and whether one is in flight. */
@@ -178,7 +182,13 @@ export default function HarnessesPage() {
     go({ h: hid });
   };
   const openSettings = (hid: string) => { setMobileDetail(true); go({ h: hid, view: 'settings' }); };
-  const toggle = (hid: string) => setOpen((s) => (s === hid ? null : hid));
+  // Opening a harness also opens a fresh task in it with the caret in the box: the click that
+  // reveals the folder is the same click that starts work there. Closing only folds the list.
+  const toggle = (hid: string) => {
+    if (open === hid) { setOpen(null); return; }
+    setOpen(hid);
+    openNew(hid);
+  };
 
   return (
     <section className={'hx-root' + (mobileDetail ? ' m-detail' : '')} id="view-harnesses">
@@ -242,7 +252,12 @@ export default function HarnessesPage() {
                   </div>
                   {isOpen && (
                     <div className="hx-tasks">
-                      {tasks.length === 0 ? (loaded ? <div className="hx-tasks-empty">No tasks yet</div> : null) : tasks.map((c) => {
+                      {tasks.length === 0 ? (loaded ? <div className="hx-tasks-empty">No tasks yet</div> : (
+                        <div className="hx-tasks-skel" aria-hidden="true">
+                          <div className="hx-task-row"><span className="sk hx-skel-dot" /><span className="sk hx-skel-bar" style={{ width: '58%' }} /></div>
+                          <div className="hx-task-row"><span className="sk hx-skel-dot" /><span className="sk hx-skel-bar" style={{ width: '42%' }} /></div>
+                        </div>
+                      )) : tasks.map((c) => {
                         const on = c.session_id === sid;
                         return (
                           <div key={c.session_id} className={'hx-task-row' + (on ? ' is-on' : '')}>

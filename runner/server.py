@@ -364,11 +364,14 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
+GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.6-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
-CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "400000")
+# The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
+# number here made it compact late and let a long thread overflow the real window first.
+CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "272000")
 # Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 AZURE_OPENAI_BASE_URL = os.environ.get("AZURE_OPENAI_BASE_URL", "")
@@ -657,6 +660,14 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # ~/.qwen/skills under the redirected HOME — the dir the shipped 0.22.1 creates itself.
         rootrels = [".harness/home/.qwen/skills"]
         entryroot = ".harness/home/.qwen/skills"
+    elif backend == "gemini":
+        # ~/.gemini/skills under the redirected HOME — live-verified (2026-09-06, 0.58.0): the
+        # slides/sheets/videos starter-kit skills all activated correctly from this path via the
+        # real activate_skill tool ("Resources loaded from .../.gemini/skills/<name>"), same
+        # directory-drop shape as qwen's despite gemini-cli's own settings.json also documenting a
+        # separate skills.enabled/disabled key — that key toggles skills, it doesn't relocate them.
+        rootrels = [".harness/home/.gemini/skills"]
+        entryroot = ".harness/home/.gemini/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -789,6 +800,8 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     the name we chose simply never sees the harness's instructions."""
     if backend == "qwen":
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
+    if backend == "gemini":
+        return pathlib.Path(cwd) / "GEMINI.md"   # gemini-cli's own context.fileName default
     return pathlib.Path(cwd) / (
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp")
         else "CLAUDE.md")
@@ -1162,7 +1175,11 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
         if auth.api_key:
             env["ANTHROPIC_API_KEY"] = auth.api_key
         if auth.base_url:
-            env["ANTHROPIC_BASE_URL"] = auth.base_url
+            # The CLI appends /v1/messages itself, so a base that carries the "/v1" the broker and
+            # the catalog use (https://api.anthropic.com/v1) doubled it and the CLI answered "you
+            # may not have access to it" (2026-09-06, measured on the self-hosted instance). The
+            # router branch below has always stripped it; a direct key gets the same rule.
+            env["ANTHROPIC_BASE_URL"] = auth.base_url.rstrip("/").removesuffix("/v1")
     elif p == "bedrock":
         env["CLAUDE_CODE_USE_BEDROCK"] = "1"
         if auth.aws_region:
@@ -1274,10 +1291,72 @@ wire_api = "{wire_api}"
 network_access = true
 exclude_slash_tmp = false
 """
+_CODEX_ALIAS_TMPL = """[model_providers.{alias}]
+name = "{name}"
+base_url = "{base_url}"
+env_key = "{env_key}"
+wire_api = "{wire_api}"
+"""
+
+
+_PROVIDER_REFUSAL = re.compile(r"\b(401|403|429|5\d\d)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
+                               r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
+
+
+def _codex_session_provider_ids(cfg_dir: "pathlib.Path") -> list[str]:
+    """Every model provider id the session's rollouts name. Codex looks the recorded id up in the
+    config on resume, so a session started under another provider (or under the bare ids of
+    before the namespacing) fails to load unless the config still declares it."""
+    import glob as _glob
+    ids: list[str] = []
+    for path in _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True):
+        try:
+            for line in pathlib.Path(path).read_text().splitlines():
+                if '"model_provider"' not in line:
+                    continue
+                for m in re.finditer(r'"model_provider"\s*:\s*"([^"]+)"', line):
+                    if m.group(1) not in ids:
+                        ids.append(m.group(1))
+        except OSError:
+            continue
+    return ids
+
+
+# What a follow-up reads when its Codex history is not in the workspace any more: the task goes
+# on in the same workspace with its files, without the earlier exchanges.
+_CODEX_NO_ROLLOUT_NOTE = "The earlier conversation of this task is no longer available to Codex. Continuing in the same workspace with its files."
+
+
+def _codex_resume_thread_id(cfg_dir: "pathlib.Path", wanted: str | None) -> str | None:
+    """The thread id the app-server can resume in this CODEX_HOME: the wanted one when its rollout
+    is here, else the newest rollout's own id (the home is per session, so the newest rollout IS
+    this conversation, the same rule `exec resume --last` relies on; matching the wanted id alone
+    missed about a third of the time and answered "no rollout found for thread id"). None when
+    there is no rollout at all."""
+    import glob as _glob
+    paths = _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True)
+    if not paths:
+        return None
+    ids: list[tuple[float, str]] = []
+    for path in paths:
+        try:
+            with open(path) as fh:
+                for line in fh:
+                    if '"session_meta"' not in line:
+                        continue
+                    m = re.search(r'"id"\s*:\s*"([^"]+)"', line)
+                    if m:
+                        ids.append((os.path.getmtime(path), m.group(1)))
+                    break
+        except OSError:
+            continue
+    if wanted and any(i == wanted for _, i in ids):
+        return wanted
+    return max(ids)[1] if ids else None
 
 
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
-                       env: dict, mcp_toml: str = "") -> "pathlib.Path":
+                       env: dict, mcp_toml: str = "", resume: bool = False) -> "pathlib.Path":
     """Shared codex setup for BOTH exec and app-server: write config.toml (model/provider/base_url +
     MCP), point CODEX_HOME at the checkpointed workspace, set provider auth + TMPDIR. Returns the
     CODEX_HOME dir. Mutates env."""
@@ -1293,6 +1372,20 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     # why codex state used to vanish. (auth.json inside is still creds-excluded.)
     cfg_dir = pathlib.Path(env.get("HOME") or cwd) / ".codex"
     cfg_dir.mkdir(parents=True, exist_ok=True)
+    # Which account serves this turn, as a fingerprint that never names the key. A resume under the
+    # account that minted the history keeps it whole; under another it is replayed as content
+    # (see _sanitize_codex_rollout). The marker lives in the checkpointed home, beside the rollouts.
+    fp = hashlib.sha256(f"{p}|{base_url}|{auth.api_key or ''}".encode()).hexdigest()[:16]
+    marker = cfg_dir / "hr-account"
+    try:
+        prior = marker.read_text().strip()
+    except OSError:
+        prior = ""
+    env["HR_CODEX_ACCOUNT_CHANGED"] = "0" if prior == fp else "1"
+    try:
+        marker.write_text(fp)
+    except OSError:
+        pass
     # codex only speaks the OpenAI Responses API now — current releases removed
     # `wire_api = "chat"` entirely, so a custom chat-completions endpoint cannot be driven by
     # codex at all (the gateway greys codex out for those integrations). Always the supported
@@ -1302,6 +1395,16 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
+    if resume:
+        # A resumed session keeps the provider id it started under; Codex looks that id up in the
+        # config and refuses to load without it ("Model provider `azure` not found", a July
+        # session continued on 2026-09-05; "hr-tokenrouter not found", a session continued on the
+        # org's own key). Every id the session ever ran under is declared, at THIS turn's endpoint.
+        for alias in _codex_session_provider_ids(cfg_dir):
+            if alias == f"hr-{p}" or alias == "openai":     # the current one; a reserved built-in
+                continue
+            cfg += _CODEX_ALIAS_TMPL.format(alias=alias, name=spec["name"], base_url=base_url,
+                                            env_key=spec["env_key"], wire_api=auth.wire_api or "responses")
     if mcp_toml:   # owner-attached MCP servers via Codex's experimental rmcp HTTP client
         cfg += mcp_toml
     (cfg_dir / "config.toml").write_text(cfg)
@@ -1313,7 +1416,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     return cfg_dir
 
 
-def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
+def _sanitize_codex_rollout(rollouts: list[str], *, content_only: bool = True) -> dict:
     """Make a codex rollout safe to replay, without destroying any of it.
 
     Two hazards live in the same file, and the fix for one used to create the other.
@@ -1357,6 +1460,14 @@ def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
     # function_call_output form; `ctc_` the custom_tool_call form.
     MINTED = ("msg_", "rs_", "fc_", "fcr_", "ctc_")
     counts = {"reasoning": 0, "deref": 0, "damaged": 0}
+    # The same account serving the resume can resolve its own ids and decrypt its own blobs, and
+    # keeping both is what lets a model switch inside one resource (two Azure deployments) and a
+    # follow-up on one key keep their reasoning continuity. Only a resume under another account
+    # (the July thread born on Azure, resumed on the org's own OpenAI key; a chain fallback; a
+    # rotated key) is turned into content. Richard's rule (2026-09-06): a session that changes
+    # provider is not supported; everything on one provider must work.
+    if not content_only:
+        return counts
 
     for path in rollouts:
         try:
@@ -1375,28 +1486,32 @@ def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
             except ValueError:
                 parsed.append((line, None))   # unparseable: preserve verbatim
 
-        # Pass 1 — drop the account-bound blob, keep the item and its id.
-        has_reasoning = False
+        # Pass 1 — drop the account-bound blob, keep the item; its id goes in pass 2.
         for i, (line, o) in enumerate(parsed):
             if not o or o.get("type") != "response_item":
                 continue
             pay = o.get("payload")
             if not isinstance(pay, dict) or pay.get("type") != "reasoning":
                 continue
-            has_reasoning = True
             if pay.pop("encrypted_content", None) is not None:
                 counts["reasoning"] += 1
                 parsed[i] = (json.dumps(o), o)
 
-        # Pass 2 — repair a rollout the old delete-based strip already damaged. Only when there is
-        # no reasoning item left to anchor the ids: with reasoning present the references resolve
-        # and stripping ids would needlessly discard continuity.
+        # Pass 2 — a replayed history is content, never a reference. Every provider-minted id is
+        # removed on every resume: an id is a lookup into the state of the deployment or account
+        # that minted it, and a resumed thread is routinely served by another one (a July thread
+        # born on Azure resumed on the org's own OpenAI key answered 404 on every turn; a switch
+        # between two deployments of one Azure resource answered "message provided without its
+        # required reasoning item"; both 2026-09-06). With the ids gone the provider reads the
+        # items as ordinary content; `call_id`, `phase`, `role`, `content`, `name` and `arguments`
+        # stay, so tool pairing and the transcript survive. This trades server-side reasoning
+        # continuity for a replay that works wherever the next turn runs.
         minted = [
             (i, o) for i, (line, o) in enumerate(parsed)
             if o and o.get("type") == "response_item" and isinstance(o.get("payload"), dict)
             and str((o["payload"] or {}).get("id") or "").startswith(MINTED)
         ]
-        if minted and not has_reasoning:
+        if minted:
             counts["damaged"] += 1
             for i, o in minted:
                 o["payload"].pop("id", None)
@@ -1411,8 +1526,9 @@ def _sanitize_codex_rollout(rollouts: list[str]) -> dict:
 
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
-                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> list[str]:
-    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml)
+                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> tuple[list[str], str]:
+    """The exec command, and the note the transcript must carry when a follow-up's rollout is gone."""
+    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id))
     # Drop --ephemeral so codex PERSISTS the rollout to $CODEX_HOME/sessions (inside the checkpointed
     # workspace) — that's what makes a follow-up history-aware. Mirror the claude resume guard: only
     # `resume <id>` if the rollout is actually present in the (re)hydrated workspace, else start fresh
@@ -1426,16 +1542,17 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
             # Make the rollout safe to replay: drop account-bound reasoning blobs, and repair a
             # rollout an older build already damaged (see the helper). Logged unconditionally —
             # staying silent at zero is what hid this step during the investigation.
-            c = _sanitize_codex_rollout(rollouts)
+            c = _sanitize_codex_rollout(rollouts, content_only=env.get("HR_CODEX_ACCOUNT_CHANGED") != "0")
             print(f"[resume] codex: sanitised rollout — dropped {c['reasoning']} reasoning blob(s), "
                   f"de-referenced {c['deref']} id(s) across {c['damaged']} damaged file(s)", flush=True)
             # CODEX_HOME is PER-SESSION (hydrate wipes + restores only THIS session's workspace), so
             # the most-recent rollout here IS this conversation. Resume by --last instead of matching
             # the thread UUID to the rollout filename (that match is codex-version-fragile and missed
             # ~1/3 of the time). --last is exact here precisely because the home is session-isolated.
-            return ["codex", "exec", "resume", "--last", *common, prompt]
+            return ["codex", "exec", "resume", "--last", *common, prompt], ""
         print(f"[resume] codex: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
-    return ["codex", "exec", *common, "--cd", cwd, prompt]
+        return ["codex", "exec", *common, "--cd", cwd, prompt], _CODEX_NO_ROLLOUT_NOTE
+    return ["codex", "exec", *common, "--cd", cwd, prompt], ""
 
 
 # ── dsh (DeepSeek Harness) ──────────────────────────────────────────────────────
@@ -1714,6 +1831,13 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             api = "openai-responses"
         else:
             api = "openai-completions"
+        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
+            # An OpenAI-shape turn rides the loopback relay, as every qwen and cline turn does: the
+            # relay repairs the request shape in flight (Google's OpenAI-compatible endpoint refuses
+            # OpenAI's optional fields, measured 2026-09-06) and the key never lands in the
+            # workspace's models.json, which is checkpointed. A custom endpoint keeps its own URL.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
         (home / ".pi" / "agent" / "models.json").write_text(
             _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
                             custom_openai=bool(auth.api_format)))
@@ -2318,6 +2442,210 @@ def _aws_eventstream_frames(resp):
             return
 
 
+_GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
+
+
+def _google_unknown_field(refused: bytes) -> str:
+    """The top-level request field Google's OpenAI-compatible endpoint refused as unknown, or "".
+    Google names one field per 400 ("Unknown name \"store\": Cannot find field."); a field named
+    inside an object ("at 'tools[0].function'") is not one the relay drops."""
+    text = refused.decode("utf-8", "replace") if isinstance(refused, (bytes, bytearray)) else str(refused)
+    if "Cannot find field" not in text:
+        return ""
+    m = _GOOGLE_UNKNOWN_RE.search(text)
+    return m.group(1) if m else ""
+
+
+# Gemini 3 requires each replayed tool call's thought signature: Google's OpenAI-compatible endpoint
+# streams it on every function call (tool_calls[].extra_content.google.thought_signature) and refuses
+# the next request without it, 400 "Function call is missing a thought_signature in functionCall
+# parts" (measured 2026-09-06 on the artifact turn of pi, dsh, qwen and opencode). OpenAI-shaped
+# clients drop extra_content when they rebuild the assistant message; in owner trust this relay is
+# the only thing between the harness and the provider, so it remembers each signature under its
+# tool call id as the answer streams past and puts it back on the replay. A call it never saw gets
+# Google's sentinel, which skips the check instead of failing the turn. The broker does the same
+# for brokered traffic.
+_GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
+_GOOGLE_HOST = "generativelanguage.googleapis.com"
+
+
+# The relay's route carries no provider, only the upstream: TokenRouter's channels are the host.
+_STRICT_GEMINI_HOST = "api.tokenrouter.com"
+# ── Gemini function declarations through a strict channel ────────────────────────────────
+# Google's native API validates function declarations against its own Schema (type, format,
+# description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
+# refuses anything else: "Unknown name \"$schema\" at 'tools[0].function_declarations[0].parameters'",
+# "Unknown name \"exclusiveMinimum\"", "schema didn't specify the schema type field". Google's own
+# OpenAI-compatible endpoint, OpenRouter and Vercel normalise a harness's JSON-schema declarations
+# before they reach it; TokenRouter's Gemini channels forward them as sent, so the first turn of a
+# task on opencode ($schema) and cline (exclusiveMinimum, a property without type) failed on the
+# ids those channels serve natively, gemini-3.8-flash for one (measured 2026-09-06, the platform
+# column). Until TokenRouter normalises them itself, this relay does, for that channel only.
+_GEMINI_SCHEMA_KEYS = {"type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
+                       "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength",
+                       "pattern", "example", "anyOf", "propertyOrdering", "default", "items", "minimum", "maximum"}
+
+
+def _gemini_schema(node):
+    """One JSON schema node as Google's function-declaration validator accepts it: only the keys it
+    names, `oneOf` as `anyOf`, `const` as a one-value enum, an exclusive bound as the bound, a type
+    list as one type plus nullable, a type on every node (inferred from its shape when left out),
+    items on every array, and `required` limited to properties that exist."""
+    if not isinstance(node, dict):
+        return node
+    out: dict = {}
+    for k, v in node.items():
+        if k == "oneOf" and isinstance(v, list):
+            out.setdefault("anyOf", [_gemini_schema(x) for x in v])
+        elif k == "const":
+            out["enum"] = [v]
+        elif k == "exclusiveMinimum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("minimum", v)
+        elif k == "exclusiveMaximum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("maximum", v)
+        elif k not in _GEMINI_SCHEMA_KEYS:
+            continue
+        elif k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _gemini_schema(pv) for pk, pv in v.items()}
+        elif k == "items":
+            out[k] = _gemini_schema(v) if isinstance(v, dict) else (_gemini_schema(v[0]) if isinstance(v, list) and v else {"type": "string"})
+        elif k == "anyOf" and isinstance(v, list):
+            out[k] = [_gemini_schema(x) for x in v]
+        else:
+            out[k] = v
+    t = out.get("type")
+    if isinstance(t, list):
+        non_null = [x for x in t if x != "null"]
+        out["type"] = non_null[0] if non_null else "string"
+        if "null" in t:
+            out["nullable"] = True
+    if isinstance(out.get("anyOf"), list):
+        # No anyOf leaves this relay: one channel refuses an anyOf node without a type ("schema
+        # didn't specify the schema type field", gemini-3.5-flash) and another refuses one with
+        # anything beside it ("schema specified other fields alongside any_of", gemini-3.6-flash,
+        # both measured 2026-09-06 on TokenRouter). The null member becomes `nullable`; a choice of
+        # constants becomes one enum; any other choice becomes its first member under the node's
+        # own description, which is what the model reads.
+        members = [m for m in out.pop("anyOf") if isinstance(m, dict) and m.get("type") != "null"]
+        if len(members) < len(node.get("anyOf") or []):
+            out["nullable"] = True
+        if members and all("enum" in m and "properties" not in m and "items" not in m for m in members):
+            out = {**members[0], **out, "enum": [x for m in members for x in m["enum"]]}
+            out.setdefault("type", "string")
+        elif members:
+            out = {**members[0], **out}
+            out.setdefault("type", members[0].get("type") or "string")
+    if "type" not in out and "anyOf" not in out:
+        out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
+    if out.get("type") == "array" and "items" not in out:
+        out["items"] = {"type": "string"}
+    if out.get("type") == "object" and not out.get("properties"):
+        out.pop("properties", None)                 # an empty properties object is refused too
+        out.pop("required", None)
+    elif isinstance(out.get("required"), list) and isinstance(out.get("properties"), dict):
+        req = [r for r in out["required"] if r in out["properties"]]
+        if req:
+            out["required"] = req
+        else:
+            out.pop("required")
+    return out
+
+
+def _with_gemini_schemas(body: bytes) -> bytes:
+    """The chat request with every tool's parameters normalised for Google's validator; a tool
+    that declares no parameter loses the empty declaration. A body without tools is untouched."""
+    if b'"tools"' not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(fn, dict) or not isinstance(fn.get("parameters"), dict):
+            continue
+        params = _gemini_schema(fn["parameters"])
+        if params.get("type") == "object" and not params.get("properties"):
+            fn.pop("parameters")
+        else:
+            fn["parameters"] = params
+        changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _google_signatures_in(doc: dict) -> list[tuple[str, str]]:
+    """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
+    found: list[tuple[str, str]] = []
+    for ch in doc.get("choices") or []:
+        if not isinstance(ch, dict):
+            continue
+        holder = ch.get("delta") if isinstance(ch.get("delta"), dict) else ch.get("message")
+        if not isinstance(holder, dict):
+            continue
+        for tc in holder.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            sig = ((ec or {}).get("google") or {}).get("thought_signature") if isinstance(ec, dict) else None
+            cid = tc.get("id")
+            if isinstance(sig, str) and sig and isinstance(cid, str) and cid:
+                found.append((cid, sig))
+    return found
+
+
+def _google_signatures_in_line(line: bytes) -> list[tuple[str, str]]:
+    """The signatures one SSE line carries; a line without one costs a substring check."""
+    if not line.startswith(b"data:") or b"thought_signature" not in line:
+        return []
+    try:
+        doc = json.loads(line[5:].strip())
+    except ValueError:
+        return []
+    return _google_signatures_in(doc) if isinstance(doc, dict) else []
+
+
+def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
+    """The request with every replayed assistant tool call carrying a thought signature: the one
+    this relay saw on the answer, else Google's sentinel. A body without tool calls is untouched."""
+    if b"tool_calls" not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
+        return body
+    changed = False
+    for msg in doc["messages"]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            if isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature"):
+                continue
+            cid = str(tc.get("id") or "")
+            tc["extra_content"] = {"google": {"thought_signature": sigs.get(cid) or _GOOGLE_SIG_SKIP}}
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _drop_top_level_field(body: bytes, field: str) -> bytes:
+    """The JSON request without one top-level field; anything else is returned as it came."""
+    try:
+        doc = json.loads(body or b"")
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or field not in doc:
+        return body
+    doc.pop(field)
+    return json.dumps(doc).encode()
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -2363,6 +2691,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _drop_stream_options(body)
             if flags.get(f"reasoning_effort_none:{_body_model}"):
                 body = _set_reasoning_effort_none(body)
+            for field in flags.get("drop_fields", ()):
+                body = _drop_top_level_field(body, field)
+            headers["content-length"] = str(len(body))
+        google = _GOOGLE_HOST in base or bool(flags.get("thought_signature"))
+        if google and body is not None and self.path.endswith("/chat/completions"):
+            body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
+            headers["content-length"] = str(len(body))
+        if (_STRICT_GEMINI_HOST in base and "gemini" in str(_body_model).lower()
+                and body is not None and self.path.endswith("/chat/completions")):
+            # TokenRouter's Gemini channels hand a harness's JSON-schema tool declarations to Google's
+            # validator as sent; the broker does the same normalisation for brokered traffic
+            body = _with_gemini_schemas(body)
             headers["content-length"] = str(len(body))
         resp = None
         tried_slim = False
@@ -2400,6 +2740,29 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     body = effort
                     headers["content-length"] = str(len(body))
                     continue
+                if google and e.code == 400:
+                    # the harness shows this as "400 (no body)"; the refusal is here
+                    print(f"[relay] google refused {tail} model={_body_model}: {data[:300]!r}", flush=True)
+                if (attempt < 2 and e.code == 400 and b"thought_signature" in data
+                        and not flags.get("thought_signature") and body is not None):
+                    # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
+                    flags["thought_signature"] = True
+                    google = True
+                    body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
+                    headers["content-length"] = str(len(body))
+                    continue
+                unknown = _google_unknown_field(data) if e.code == 400 else ""
+                dropped = _drop_top_level_field(body, unknown) if (unknown and body is not None) else None
+                if attempt < 2 and dropped is not None and dropped != body:
+                    # Google's OpenAI-compatible endpoint refuses any field it does not know (pi and
+                    # dsh send OpenAI's optional store and seed; measured 2026-09-06 on
+                    # gemini-3.6-flash). The refusal names the field: drop it, remember it for the
+                    # route, send again. The broker does the same for brokered traffic; in owner
+                    # trust the relay is the only thing between the harness and the provider.
+                    flags["drop_fields"] = tuple(flags.get("drop_fields", ())) + (unknown,)
+                    body = dropped
+                    headers["content-length"] = str(len(body))
+                    continue
                 slim = _drop_stream_options(body) if body is not None else None
                 if attempt < 2 and e.code == 400 and slim is not None and slim != body:
                     tried_slim = True
@@ -2418,18 +2781,34 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         ctype = resp.headers.get("content-type") or ""
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
-        if "text/event-stream" in ctype:   # responses stream through untouched — the fix is request-side
+        # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass
+        sigs = flags.setdefault("google_sigs", {}) if google else None
+        if "text/event-stream" in ctype:
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
+            pending = b""
             while True:
                 chunk = resp.read(4096)
                 if not chunk:
                     break
+                if sigs is not None:
+                    pending += chunk
+                    while b"\n" in pending:
+                        line, pending = pending.split(b"\n", 1)
+                        for cid, sig in _google_signatures_in_line(line.strip()):
+                            sigs[cid] = sig
                 self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
         else:
             data = resp.read()
+            if sigs is not None and b"thought_signature" in data:
+                try:
+                    doc = json.loads(data)
+                except ValueError:
+                    doc = None
+                if isinstance(doc, dict):
+                    sigs.update(_google_signatures_in(doc))
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -2560,6 +2939,14 @@ def _adapt_custom_auth(auth):
     return auth.model_copy(update={"base_url": base, "api_key": tok})
 
 
+def _relay_base_with_version(base_url: str) -> str:
+    """A relay base ends with /v1 unless it is an AWS host or already names an API version."""
+    base = (base_url or "").rstrip("/")
+    if not base or ".amazonaws.com" in base or re.search(r"/v\d+[a-z]*(/|$)", base):   # /v1, /v1beta/openai
+        return base
+    return base + "/v1"
+
+
 def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI)."""
     with _HERMES_RELAY["lock"]:
@@ -2568,7 +2955,13 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (base_url, api_key, {"rename_max_tokens": False})
+        # The relay joins the client's resource ("/chat/completions", "/messages") onto this base,
+        # so the base must carry its "/v1" the way every aggregator's does. A direct Anthropic key
+        # stored with the catalog's former default https://api.anthropic.com sent cline and qwen to
+        # https://api.anthropic.com/chat/completions, a 404 with no body (2026-09-06 support
+        # matrix; Anthropic's OpenAI-compatible surface lives under /v1). Bedrock keeps its host
+        # (its own path is built in _bedrock_anthropic).
+        _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key, {"rename_max_tokens": False})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -2749,6 +3142,95 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
            "--yolo"]
     if resume_session_id:
         cmd += ["-r", resume_session_id]
+    return cmd
+
+
+# Path A only (Gemini API Key / Google AI Studio). Unlike qwen, upstream gemini-cli speaks NO
+# OpenAI-compatible mode at all (that is a qwen-fork-only addition — see QWEN_PROVIDERS above),
+# so there is no loopback-relay trick that lets any generic OpenAI/Anthropic-shaped integration
+# drive this backend. A Vertex AI provider (service account) belongs here too in principle — the
+# runner-side env is the same GOOGLE_APPLICATION_CREDENTIALS/GOOGLE_CLOUD_PROJECT/
+# GOOGLE_CLOUD_LOCATION triple _build_claude's vertex branch already writes — but it is left OUT
+# of this set until the gateway side decides how (or whether) to broker it; see the gateway's
+# _BROKERABLE_PROVIDERS comment for bedrock/vertex.
+GEMINI_PROVIDERS = {"google"}
+
+
+def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
+    """~/.gemini/settings.json under the redirected HOME.
+
+    mcpServers uses gemini-cli's own schema (command/args/env for stdio, url/httpUrl/headers for
+    remote) — the same shape _qwen_settings already writes, because qwen inherited it unchanged
+    from this fork point (confirmed against gemini-cli's published configuration reference).
+
+    security.auth.selectedType is written explicitly rather than left to gemini-cli's own
+    GEMINI_API_KEY auto-detection: every other backend in this file pins its auth type
+    explicitly instead of relying on env-var presence alone (see qwen's --auth-type openai,
+    passed even though OPENAI_API_KEY being set would likely auto-select it too), and gemini-cli
+    publishes no non-interactive CLI flag equivalent to qwen's --auth-type — settings.json is the
+    only documented way to pin it outside the interactive /auth prompt."""
+    gdir = home / ".gemini"
+    gdir.mkdir(parents=True, exist_ok=True)
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"httpUrl": url}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": argv[0], "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        servers[name] = entry
+    cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}}}
+    if servers:
+        cfg["mcpServers"] = servers
+    (gdir / "settings.json").write_text(json.dumps(cfg, indent=2))
+
+
+def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+    pr = provider or "google"
+    if pr not in GEMINI_PROVIDERS:
+        raise HTTPException(400, f"unknown gemini provider '{pr}' (one of {sorted(GEMINI_PROVIDERS)})")
+    if not auth.api_key:
+        raise HTTPException(400, "gemini needs an api_key (none configured)")
+    home = pathlib.Path(cwd) / ".harness" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
+    env["GEMINI_API_KEY"] = auth.api_key
+    _gemini_settings(home, mcp_servers)
+    cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
+           # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
+           # per-workspace "folder trust" prompt and an approval mode, neither of which can be
+           # answered interactively in headless mode. --approval-mode=yolo is the current
+           # (non-deprecated) form of the old --yolo/-y flag; --skip-trust bypasses the trust
+           # prompt for a workspace that (like every turn here) has never been seen before. Both
+           # confirmed live (2026-09-06, 0.58.0): without them a fresh workspace either hangs on
+           # the trust prompt or the model has no shell/write tool at all, exactly qwen's failure
+           # mode without --yolo; with them, real shell/write/skill-activation calls went through
+           # across three starter-kit turns (slides, sheets, videos).
+           "--approval-mode", "yolo", "--skip-trust"]
+    if resume_session_id:
+        # gemini-cli's --resume takes ONLY "latest" or a numeric index into this project's own
+        # session list, never an arbitrary id (unlike claude/qwen's -r <uuid>) — so the id this
+        # runner tracks per turn cannot be passed through directly. "latest" is still correct
+        # here specifically because HOME is redirected into THIS workspace's own checkpoint
+        # (same as qwen): there is exactly one project's session history under it, so "latest"
+        # and "the session this resume call means" are the same session. Live-verified 2026-09-06:
+        # a follow-up turn on an existing slides-kit session picked up its own prior context and
+        # produced a real .pptx via the officecli skill, not a fresh unrelated session.
+        cmd += ["--resume", "latest"]
     return cmd
 
 
@@ -3019,6 +3501,19 @@ def _opencode_mcp(servers: list[dict] | None) -> dict:
     return out
 
 
+def _opencode_npm(auth: Auth, model: str, pr: str) -> str:
+    """Which ai-sdk package serves this turn: the wire format the connection speaks."""
+    if auth.api_format == "anthropic":
+        return "@ai-sdk/anthropic"
+    if auth.api_format == "openai":
+        return "@ai-sdk/openai-compatible"
+    if pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+        return "@ai-sdk/anthropic"
+    if pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        return "@ai-sdk/openai"          # /v1/responses
+    return "@ai-sdk/openai-compatible"   # /v1/chat/completions
+
+
 def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
                      skills_dir: str | None, tools_disabled: list[str] | None = None,
                      pr: str = "") -> str:
@@ -3035,22 +3530,24 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     # chat/completions, and sending it to the openai-compatible package fails at the first call.
     # When api_format is set (custom integration), the user's explicit choice wins over any
     # model-family heuristic — the endpoint is the one they told us to reach.
-    if auth.api_format == "anthropic":
-        npm = "@ai-sdk/anthropic"
-    elif auth.api_format == "openai":
-        npm = "@ai-sdk/openai-compatible"
-    elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
-        npm = "@ai-sdk/anthropic"
-    elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
-        npm = "@ai-sdk/openai"          # /v1/responses
-    else:
-        npm = "@ai-sdk/openai-compatible"   # /v1/chat/completions
+    npm = _opencode_npm(auth, model, pr)
+    # Every ai-sdk package appends its own resource to baseURL (@ai-sdk/anthropic "/messages",
+    # @ai-sdk/openai "/responses", openai-compatible "/chat/completions") and expects the "/v1"
+    # to be there already, the way pi's openai clients do (see _pi_models_json). A connection
+    # stored without it (the catalog's own default for a direct Anthropic key is
+    # https://api.anthropic.com) sent every opencode turn to https://api.anthropic.com/messages,
+    # which Anthropic answers "Not Found" (2026-09-06 support matrix, every claude model; the same
+    # key served pi and hermes, which normalise the suffix themselves). A custom endpoint is the
+    # user's exact URL and is left alone.
+    base = (auth.base_url or "").rstrip("/")
+    if not auth.api_format and not base.endswith("/v1"):
+        base += "/v1"
     cfg: dict = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
             "hr": {
                 "npm": npm,
-                "options": {"baseURL": auth.base_url, "apiKey": "{env:%s}" % _OPENCODE_KEY_ENV},
+                "options": {"baseURL": base, "apiKey": "{env:%s}" % _OPENCODE_KEY_ENV},
                 "models": {model: {}},
             }
         },
@@ -3109,11 +3606,15 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
-    if auth.api_format == "openai" and auth.base_url and auth.api_key:
-        # A custom OpenAI endpoint rides the loopback relay, for the same two reasons hermes
-        # does: request shapes ai-sdk emits but strict endpoints refuse are repaired in flight
-        # (Azure's gpt-5.x deployments 400 on max_tokens — captured live 2026-08-27), and the
-        # real key stays in this process; opencode's env gets a per-turn placeholder.
+    if auth.base_url and auth.api_key and _opencode_npm(auth, model, pr) != "@ai-sdk/anthropic":
+        # Every OpenAI-shape opencode turn rides the loopback relay, as pi's and qwen's do, not only
+        # a custom endpoint: request shapes ai-sdk emits but strict endpoints refuse are repaired in
+        # flight (Azure's gpt-5.x deployments 400 on max_tokens, captured live 2026-08-27), Gemini
+        # 3's thought signatures are replayed (2026-09-06: with a Google key opencode reached Google
+        # directly, and every artifact turn on a Gemini 3.x id failed while pi, dsh and qwen passed
+        # through the relay), and the real key stays in this process; opencode's env gets a
+        # per-turn placeholder. A Messages-shape turn keeps its direct base: the relay speaks
+        # bearer auth, and Anthropic takes the key in x-api-key.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
@@ -3204,9 +3705,28 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
         st = part.get("state") if isinstance(part.get("state"), dict) else {}
         if st.get("status") == "error":
             state.setdefault("_oc_tool_errors", []).append(str(st.get("error") or ""))
-        return pre + [{"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": part.get("id") or "tool",
-             "name": part.get("tool") or "tool", "input": st.get("input") or {}}]}}]
+        # opencode reports a tool once it has finished, with its own clock (state.time, ms): the
+        # call is stamped at its start and its result at its end, so the trace shows the seconds
+        # the tool actually ran. Stamped at arrival, a 25 s command showed as the 15 s AFTER it.
+        tid = part.get("id") or "tool"
+        tm = st.get("time") if isinstance(st.get("time"), dict) else {}
+        try:
+            t_start = float(tm.get("start") or 0) / 1000.0
+            t_end = float(tm.get("end") or 0) / 1000.0
+        except (TypeError, ValueError):
+            t_start = t_end = 0.0
+        call = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": part.get("tool") or "tool", "input": st.get("input") or {}}]}}
+        if t_start > 0:
+            call["_ts"] = t_start
+        if st.get("status") not in ("completed", "error"):
+            return pre + [call]
+        res = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid, "is_error": st.get("status") == "error",
+             "content": str(st.get("output") or st.get("error") or "")}]}}
+        if t_end > 0:
+            res["_ts"] = max(t_end, t_start)
+        return pre + [call, res]
     if t == "step_finish":
         _opencode_usage_add(state, part.get("tokens"))
         return pre
@@ -3235,6 +3755,95 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
 _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
 
 
+def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE gemini-cli `--output-format stream-json` event to zero+ canonical claude
+    stream-json events.
+
+    Field names verified 2026-09 against the shipped 0.58.0 binary's own source (the bundle
+    ships de-minified enough to grep: bundle/gemini-*.js, StreamJsonFormatter.emitEvent call
+    sites) — not the public docs, which name the event TYPES but publish no field-level JSON
+    example. The first version of this function guessed field names from the docs alone and
+    every guess for tool_use/tool_result was wrong (id/name/input do not exist on the wire);
+    it shipped, ran for real against a live key, and every tool call rendered as a content-free
+    "Tool" row — caught from an actual failed turn (slides kit, 2026-09-06), not from re-reading
+    the docs harder. Confirmed shapes, straight from the emitEvent() call sites:
+
+        init:        {type, timestamp, session_id, model}
+        message:     {type, timestamp, role: "user"|"assistant", content: str, delta?: bool}
+        tool_use:    {type, timestamp, tool_name, tool_id, parameters}
+        tool_result: {type, timestamp, tool_id, status: "success"|"error", output?,
+                      error?: {type, message}}
+        result:      {type, timestamp, status: "success"|"error", stats,
+                      error?: {type, message}}   — NO text field on success; the final answer
+                      only ever arrives via accumulated `message` deltas, same as the one-shot
+                      `--output-format json` mode's separate {response, stats, error} shape does
+                      NOT apply here.
+        error:       {type, timestamp, severity, message} — documented as "non-fatal", and
+                      every fatal path in the source emits its OWN terminal `result` event
+                      separately (verified: the max-turns-exceeded handler, tool fatal-error
+                      handler, and top-level catch all construct `type:"result", status:"error"`
+                      themselves) — so this type is informational, not a turn-ending signal, and
+                      must not be promoted into a synthetic result the way v1 of this function did.
+    """
+    t = obj.get("type")
+    if t == "init":
+        return [{"type": "system", "subtype": "init",
+                 "session_id": obj.get("session_id"),
+                 "model": obj.get("model") or state.get("model")}]
+    if t == "message":
+        role = obj.get("role") or "assistant"
+        text = obj.get("content") or ""
+        if not text:
+            return []
+        if role == "assistant":
+            state["final"] = state.get("final", "") + text
+        return [{"type": role, "message": {"content": [{"type": "text", "text": text}]}}]
+    if t == "tool_use":
+        tuid = obj.get("tool_id") or "tool"
+        name = obj.get("tool_name") or "tool"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": name, "input": obj.get("parameters") or {}}]}}]
+    if t == "tool_result":
+        tuid = obj.get("tool_id") or "tool"
+        err = obj.get("error") if isinstance(obj.get("error"), dict) else None
+        content = obj.get("output") or (err or {}).get("message") or ""
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid,
+             "is_error": obj.get("status") == "error", "content": content}]}}]
+    if t == "error":
+        return []   # non-fatal by contract; the fatal path always emits its own `result` too
+    if t == "result":
+        err = obj.get("error") if isinstance(obj.get("error"), dict) else None
+        msg = err.get("message") if err else None
+        stats = obj.get("stats") if isinstance(obj.get("stats"), dict) else {}
+        # The stats are keyed by the model the CLI actually called (convertToStreamStats, 0.58.0),
+        # and the CLI rewrites some requested ids on the way (every "-flash" id becomes
+        # gemini-3.5-flash on the API-key auth path, measured 2026-09-06): the served model rides
+        # the result so the gateway can record a substitution instead of believing the request.
+        models = stats.get("models") if isinstance(stats.get("models"), dict) else {}
+        served = ",".join(k for k in models if isinstance(k, str) and k)
+        ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
+              "result": msg or state.get("final", ""), "usage": _gemini_usage(stats)}
+        if served:
+            ev["model"] = served
+        return [ev]
+    return [obj]
+
+
+def _gemini_usage(stats: dict) -> dict:
+    """gemini-cli's result stats in the runner's usage contract. Its `input_tokens` is the whole
+    prompt INCLUDING the cached part and `cached` is that part (its own `input` is the fresh count
+    and agrees), so the fresh input is the difference, the same subtraction the codex path makes;
+    without it the cached prefix (8k tokens of system prompt on a one-word turn) would be billed
+    at the full input rate."""
+    u = _norm_token_usage(stats)
+    if isinstance(stats, dict) and isinstance(stats.get("cached"), (int, float)) and stats["cached"] > 0:
+        cached = int(stats["cached"])
+        u["cache_read_tokens"] = cached
+        u["input_tokens"] = max(int(u.get("input_tokens") or 0) - cached, 0)
+    return u
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -3256,6 +3865,10 @@ BACKENDS = {
     # names) — so its normalizer IS the claude passthrough.
     "qwen": {"providers": sorted(QWEN_PROVIDERS), "default_model": QWEN_DEFAULT_MODEL,
              "normalize": _claude_passthrough},
+    # gemini's native stream-json is its OWN schema, not claude's — see _gemini_to_claude's
+    # docstring for why this cannot reuse the qwen row's passthrough despite the fork lineage.
+    "gemini": {"providers": sorted(GEMINI_PROVIDERS), "default_model": GEMINI_DEFAULT_MODEL,
+               "normalize": _gemini_to_claude},
     "cline": {"providers": sorted(CLINE_PROVIDERS), "default_model": CLINE_DEFAULT_MODEL,
               "normalize": _cline_to_claude},
     "omp": {"providers": sorted(OMP_PROVIDERS), "default_model": OMP_DEFAULT_MODEL,
@@ -3265,6 +3878,49 @@ BACKENDS = {
 
 # ── async turn registry (background execution; turns can run seconds → the 6h cap) ──
 _turns: dict[str, dict] = {}
+
+
+def _release_proc(rec: dict, proc: "subprocess.Popen | None") -> None:
+    """The turn's process is over: close its pipes and drop the handle from the record.
+
+    The handle was kept on the record so POST /turn/{id}/cancel could kill a live CLI, and it was
+    never let go: every finished turn left its stdout (and stdin, for the app-server) pipe open in
+    this process for as long as the record lived, which is forever. On the self-hosted test
+    instance 506 turns later the runner sat at 1020 of 1024 descriptors and every new turn failed
+    with "spawn: [Errno 24] Too many open files" (2026-09-06). A closed pipe on a finished
+    process is free; nothing reads it after the turn."""
+    if proc is None:
+        return
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except OSError:
+            pass
+    if rec.get("proc") is proc:
+        rec.pop("proc", None)
+
+
+# Finished turn records are read by the gateway for a few seconds after the turn ends (its poll
+# harvests the last events and persists them), then never again; they used to stay in memory,
+# every event of every turn, for the life of the process. A record is dropped once it is done
+# and older than the hard turn cap plus this grace, which no live poll can outlast.
+_TURN_RETENTION_S = 30 * 60
+
+
+def _evict_turns(now: float | None = None) -> int:
+    now = now or time.time()
+    gone = 0
+    with _turns_lock:
+        for tid, rec in list(_turns.items()):
+            if rec.get("done") and now - float(rec.get("started") or now) > MAX_TURN_SECONDS + _TURN_RETENTION_S:
+                _turns.pop(tid, None)
+                gone += 1
+        if gone:
+            for key, tid in list(_turn_by_key.items()):
+                if tid not in _turns:
+                    _turn_by_key.pop(key, None)
+    return gone
 _turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retried /turn; see turn())
 _turns_lock = threading.Lock()
 
@@ -3330,7 +3986,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             except Exception:  # noqa: BLE001
                 continue
             for ev in normalize(obj, state):
-                ev["_ts"] = time.time()
+                ev.setdefault("_ts", time.time())
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -3343,6 +3999,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         rc = proc.wait()
     finally:
         killer.cancel()
+        _release_proc(rec, proc)
     rec["exit_code"] = rc
     # Backends whose stream carries NO terminal event finish here: for them the process exiting IS
     # the end of the turn. claude/codex/pi/dsh all emit something terminal of their own and set
@@ -3352,7 +4009,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     eof = getattr(normalize, "eof", None)
     if eof is not None and result_ev is None:
         for ev in eof(state, rc):
-            ev["_ts"] = time.time()
+            ev.setdefault("_ts", time.time())
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
@@ -3367,7 +4024,10 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     if rec["status"] in ("failed", "error", "timeout"):
         tail = "\n".join(errbuf[-30:]).strip()
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
-        rec["error"] = (str(ev_err).strip() or tail or f"exit_code={rc}, no diagnostic output")[:2000]
+        # The provider's refusal is the line that explains a failure; the CLI's last lines are
+        # usually its retries ("Reconnecting... 1/5"). Say the refusal when there is one.
+        refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        rec["error"] = (refusal or str(ev_err).strip() or tail or f"exit_code={rc}, no diagnostic output")[:2000]
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
     rec["done"] = True
@@ -3380,16 +4040,44 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
 _CODEX_SANDBOX = os.environ.get("CODEX_APPSERVER_SANDBOX", "danger-full-access")  # kebab enum; env-tunable
 
 
+def _codex_thread_request(resume_session_id: str | None, cwd: str, model: str) -> tuple[str, dict]:
+    """The app-server request that opens this turn's thread, with its params.
+
+    A resumed thread takes THIS turn's model and settings too, not only its id: a thread resumed
+    bare keeps the tool set of the model it started with, and a turn on another model family
+    (gpt-5.3-codex after gpt-5.5) then narrates its work instead of calling tools (reproduced
+    three times, 2026-09-05). One params dict serves both requests so they cannot drift."""
+    params = {"cwd": cwd, "model": model, "sandbox": _CODEX_SANDBOX, "approvalPolicy": "never"}
+    if resume_session_id:
+        return "thread/resume", {"threadId": resume_session_id, **params}
+    return "thread/start", params
+
+
 def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str,
                             resume_session_id: str | None, timeout_seconds: int | None) -> None:
     rec = _turns[turn_id]
     state = {"final": ""}
 
     def append(ev: dict) -> None:
-        ev["_ts"] = time.time()
+        ev.setdefault("_ts", time.time())
         with _turns_lock:
             rec["events"].append(ev)
 
+    # Resume what is actually in this home (see _codex_resume_thread_id), sanitised like the exec
+    # path; a follow-up whose rollout is gone starts fresh in the same workspace and says so.
+    resume_thread = None
+    if resume_session_id:
+        cfg_dir = pathlib.Path(env.get("CODEX_HOME") or (pathlib.Path(env.get("HOME") or cwd) / ".codex"))
+        resume_thread = _codex_resume_thread_id(cfg_dir, resume_session_id)
+        if resume_thread:
+            import glob as _glob
+            c = _sanitize_codex_rollout(_glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True),
+                                        content_only=env.get("HR_CODEX_ACCOUNT_CHANGED") != "0")
+            print(f"[resume] codex app-server: thread {resume_thread}{' (newest rollout, wanted ' + resume_session_id + ')' if resume_thread != resume_session_id else ''}; "
+                  f"dropped {c['reasoning']} reasoning blob(s), de-referenced {c['deref']} id(s)", flush=True)
+        else:
+            print(f"[resume] codex app-server: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
+            append({"type": "assistant", "message": {"content": [{"type": "text", "text": _CODEX_NO_ROLLOUT_NOTE}]}})
     try:
         proc = subprocess.Popen(["codex", "app-server"], cwd=cwd, env=env, text=True, bufsize=1,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -3450,9 +4138,7 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 res = msg.get("result") or {}
                 if mid == id_init:
                     send("initialized", {}, notify=True)
-                    id_thread = (send("thread/resume", {"threadId": resume_session_id}) if resume_session_id
-                                 else send("thread/start", {"cwd": cwd, "model": model,
-                                           "sandbox": _CODEX_SANDBOX, "approvalPolicy": "never"}))
+                    id_thread = send(*_codex_thread_request(resume_thread, cwd, model))
                 elif mid == id_thread:
                     thread_id = ((res.get("thread") or {}).get("id")) or resume_session_id or ""
                     if thread_id:
@@ -3500,6 +4186,7 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         turn_status = turn_status or "failed"
     finally:
         killer.cancel()
+        _release_proc(rec, proc)
         try:
             if proc.poll() is None:
                 _kill_proc_tree(proc)                            # one turn per process — never reuse
@@ -3644,7 +4331,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     t0 = time.time()
 
     def append(ev: dict) -> None:
-        ev["_ts"] = time.time()
+        ev.setdefault("_ts", time.time())
         with _turns_lock:
             rec["events"].append(ev)
 
@@ -3767,6 +4454,8 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
         _sweep()   # final drain after EOF so the last messages always land
     finally:
         killer.cancel()
+        proc.wait()
+        _release_proc(rec, proc)
     rc = proc.returncode
     if sid:
         rec["session_id"] = sid
@@ -4216,8 +4905,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     #     complied, codex used the tool anyway. That is why the console calls it a request rather
     #     than a block. Written here once rather than as two divergent branches — hermes previously
     #     had neither, and silently ignored every disabled tool.
+    #   gemini — same tier, no confirmed per-tool switch in headless mode (see _BASE_CATALOG's
+    #     "gemini" entry). UHP §4.3 requires this be conveyed as a standing instruction rather than
+    #     silently dropped wherever it can't be a hard block, so it goes in this set rather than
+    #     being left out of it — the same class of gap this comment already names for hermes.
     agent_doc = req.agent_doc or ""
-    if backend in ("codex", "hermes", "dsh") and req.tools_disabled:
+    if backend in ("codex", "hermes", "dsh", "gemini") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
@@ -4261,16 +4954,17 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     model = req.model or spec["default_model"]
     use_appserver = backend == "codex" and bool(req.codex_appserver)
     cmd = None
+    codex_note = ""
     hermes_provider = ""
     hermes_mcp: list[str] = []
     if backend == "codex":
         model = model or CODEX_DEFAULT_MODEL
         mcp_toml = _codex_mcp_toml(req.mcp_servers)
         if use_appserver:
-            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml)   # config.toml + CODEX_HOME + auth
+            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id))   # config.toml + CODEX_HOME + auth
         else:
-            cmd = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
-                               mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)
+            cmd, codex_note = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
+                                           mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)
     elif backend == "hermes":
         model = model or HERMES_DEFAULT_MODEL
         hermes_provider = (req.provider or "bedrock").lower()
@@ -4296,6 +4990,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or QWEN_DEFAULT_MODEL
         cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+    elif backend == "gemini":
+        model = model or GEMINI_DEFAULT_MODEL
+        cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
+                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
     elif backend == "cline":
         model = model or CLINE_DEFAULT_MODEL
         cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
@@ -4317,6 +5015,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                             plugin_dirs=plugin_dirs)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex
+    _evict_turns()
     with _turns_lock:
         # Double-check under the lock: a concurrent retry with the same key may have raced past the
         # top-of-handler check before this one recorded the key. If so, use the winner and let this
@@ -4328,6 +5027,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                     "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
         _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
                            "backend": backend, "model": model, "started": time.time()}
+        if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
+            _turns[turn_id]["events"].append({"type": "assistant", "_ts": time.time(),
+                                              "message": {"content": [{"type": "text", "text": codex_note}]}})
         if key:
             _turn_by_key[key] = turn_id
     if use_appserver:

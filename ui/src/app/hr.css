@@ -359,6 +359,8 @@ a { color: inherit; text-decoration: none; }
   font-size: 12.5px; font-weight: 600; font-family: inherit; color: var(--brand); padding: 6px 12px;
   border-radius: 9px; border: 1px solid var(--brand-soft); background: var(--brand-50); cursor: pointer; }
 .wbx-zipall:hover { border-color: var(--brand); background: var(--brand-100, #EEEAFE); }
+/* the archive was refused: the server's sentence, under the row that asked for it */
+.wbx-zipall-err { font-size: 12px; line-height: 1.4; color: #b42318; }
 .wbx-filecard { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; min-width: 0; border: 1px solid var(--line);
   border-radius: 12px; padding: 10px 12px; background: var(--surface); box-shadow: var(--shadow-1); }
 .wbx-filecard:hover { border-color: var(--brand-soft); }

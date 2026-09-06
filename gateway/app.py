@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import re
+import collections
 import time
 import uuid
 import zipfile
@@ -628,6 +629,39 @@ async def _redis_pump() -> None:
             _bus_deliver(m["org"], m["harness"], m["member"], m["sid"], m["rid"], m["ev"])
 
 
+# The bus tasks are HELD here for the life of the process. asyncio keeps only a weak reference to
+# a task, so a task created and dropped is collected at some later GC pass, mid-await, and its
+# coroutine is closed: "Task was destroyed but it is pending!" and, from the pubsub listen loop,
+# "aclose(): asynchronous generator is already running". Measured 2026-09-06 08:07Z to 08:10Z: every
+# gateway replica lost its Redis subscriber that way within minutes of booting, cross-replica events
+# stopped, and _redis_ok["sub"] stayed True, so the polling fallback never engaged and a console saw
+# another replica's turn only through its own re-reads. A held task is never collected; one that
+# ends for any reason is logged and started again.
+_BG_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _spawn_forever(name: str, fn) -> asyncio.Task:
+    """Run `fn()` as a held background task; whenever it ends (return, error), say so and restart it."""
+    loop = asyncio.get_running_loop()
+
+    def _done(t: asyncio.Task) -> None:
+        if _BG_TASKS.get(name) is not t:
+            return                                   # superseded (tests, a restart already made)
+        _BG_TASKS.pop(name, None)
+        if t.cancelled():
+            return                                   # shutdown
+        print(f"[bus] task {name} ended: {t.exception()!r}; restarting", flush=True)
+        if name == "redis-listen":
+            _redis_ok["sub"] = False                 # until the new listener subscribes
+        if not loop.is_closed():
+            loop.call_later(1.0, _spawn_forever, name, fn)
+
+    t = loop.create_task(fn(), name=name)
+    _BG_TASKS[name] = t
+    t.add_done_callback(_done)
+    return t
+
+
 async def _redis_listen() -> None:
     """Every replica tails the shared channel and delivers into its own buffers + subscribers."""
     while True:
@@ -816,7 +850,16 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 # transparent to the CLI. bedrock/vertex sign with the cloud SDK and are handled separately
 # (see _auth_from_conn) — they keep their own credential until their signing path is brokered.
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
-                         "openrouter", "openai-api", "custom"}
+                         "openrouter", "openai-api", "custom", "google"}
+
+# Backends that speak a provider's NATIVE API rather than the OpenAI or Anthropic shape the broker
+# and the loopback relays carry: nothing sits between the CLI and the provider, so the sandbox
+# must hold the raw key. That is owner trust by definition. In broker mode such a connection is
+# refused with the reason, instead of a broker credential going to Google as an API key and the
+# turn dying on a 400 nobody can read. gemini-cli 0.58.0 honours GOOGLE_GEMINI_BASE_URL on the
+# API-key path (measured 2026-09-06: pointed at a dead port it retried "fetch failed" against it),
+# so the native paths can be brokered later; until the broker carries them, this set is the guard.
+_NATIVE_ONLY_BACKENDS = {"gemini"}
 
 
 def _mint_turn_cred(sid: str, conn_name: str) -> str:
@@ -868,6 +911,12 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
     out = {k: conn[k] for k in _AUTH_FIELDS if conn.get(k) is not None}
     for secret in _SECRET_AUTH_FIELDS:
         out.pop(secret, None)
+    # The same base the broker would forward to: an Azure endpoint pasted bare from the portal
+    # gains its /openai/v1 here as well, because in owner trust the sandbox talks to the provider
+    # with this base directly and a bare one 404s on every tool call ("Resource not found", the
+    # matrix's second Azure column, 2026-09-06: text turns answered, tool turns did not).
+    if out.get("base_url"):
+        out["base_url"] = _provider_base_url(str(conn.get("provider") or ""), str(out["base_url"]))
 
     # Self-hosted bring-your-own-key. Brokering exists because a MULTI-TENANT sandbox runs
     # someone else's agent against OUR key, so the key must never enter it. Self-hosted inverts
@@ -885,6 +934,11 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
                 out[field] = conn[field]
         return out
 
+    backend = str(conn.get("backend") or "")
+    if backend in _NATIVE_ONLY_BACKENDS:
+        print(f"[broker] refusing to build sandbox auth for backend={backend!r}: it speaks the "
+              f"provider's native API, which is not brokered (HR_SANDBOX_TRUST=owner runs it)", flush=True)
+        return None
     # Normalised: a connection saved as "TokenRouter" must not skip brokering on a casing mismatch.
     provider = str(conn.get("provider") or "").strip().lower()
     if provider not in _BROKERABLE_PROVIDERS or not sid or not PUBLIC_BASE_URL:
@@ -894,8 +948,20 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
               flush=True)
         return None
     out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""))
-    out["base_url"] = f"{PUBLIC_BASE_URL}/v1/llm"
+    out["base_url"] = f"{_sandbox_broker_origin()}/v1/llm"
     return out
+
+
+def _sandbox_broker_origin() -> str:
+    """Where a sandbox reaches the broker. Hosted, the public base URL. Self-hosted, the runner is
+    a process beside the gateway and loopback is the broker's own door: the public URL is the
+    console's, whose sign-in wall turns away any client that does not present a Bearer token
+    (an Anthropic-shape client sends x-api-key), so opencode on a direct Anthropic key answered
+    "Not Found" on every turn (2026-09-06 support matrix)."""
+    local = os.environ.get("HARNESS_GATEWAY_URL", "").rstrip("/")
+    if local and _pool_is_local():
+        return local
+    return PUBLIC_BASE_URL
 
 
 def _conn_public(conn: dict) -> dict:
@@ -1008,6 +1074,18 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "omp"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
+    # Google AI Studio: one key, Gemini's OpenAI-compatible chat-completions surface. Every
+    # backend that talks OpenAI's chat shape through a base_url reaches it as 'openai-api'.
+    # Not claude (Anthropic's protocol) and not codex (the Responses API): unprobed is unlisted.
+    ("google", "hermes"): "openai-api",        ("google", "pi"): "openai-api",
+    ("google", "dsh"): "openai-api",           ("google", "opencode"): "openai-api",
+    ("google", "qwen"): "openai-api",          ("google", "cline"): "openai-api",
+    # gemini (Gemini CLI) speaks Google's native API, not the OpenAI shape the rows above reach
+    # through a base_url, so it is wired to the google provider as itself: the runner gets the
+    # raw key (owner trust only; see _NATIVE_ONLY_BACKENDS). No ("custom", "gemini") row, for the
+    # reason it is absent from _CUSTOM_FORMAT_BACKENDS: a custom integration is OpenAI- or
+    # Anthropic-shaped.
+    ("google", "gemini"): "google",
 }
 
 
@@ -1193,6 +1271,47 @@ async def _image_auth(sid: str, backend: str) -> dict | None:
     return None
 
 
+def _codex_family(model: str) -> str:
+    """Codex gives gpt-5.3-codex and the other GPT models different tool sets. Measured on
+    2026-09-05: the other models act in a thread gpt-5.3-codex started, but gpt-5.3-codex runs
+    without its tools in a thread where any other model has taken a turn, and narrates its work."""
+    return "codex" if (model or "").strip().lower().endswith("-codex") else "gpt"
+
+
+def _codex_switch_refusal(models_seen, model_req: str) -> str:
+    """The sentence a Codex turn fails with when gpt-5.3-codex would run in a thread another
+    model family has already used, else empty."""
+    if _codex_family(model_req) != "codex":
+        return ""
+    others = sorted({m for m in (models_seen or []) if m and _codex_family(m) != "codex"})
+    if not others:
+        return ""
+    return (f"Codex cannot run {model_req} in a task that has already used {', '.join(others)}: "
+            f"its tools are not available there. Start a new task for {model_req}.")
+
+
+def _integration_driving(integrations: list[dict], backend: str, canonical: str, mapped: str | None) -> dict | None:
+    """The integration a turn on `backend` for `canonical` runs through: the org's mapping when
+    that integration can drive the backend, else the first integration on the org (by name) that
+    can and serves the id. The map is the org's choice per model, made once for every backend; a
+    backend wired to one provider (gemini: google) cannot honour a mapping to an aggregator, and
+    without this fall-through it was unusable whenever the map named one, which the map does by
+    default (measured 2026-09-06 on 0.13.24: every gemini backend id unavailable, the picker
+    greyed, while the same ids ran when the map pointed at the Google integration)."""
+    by_name = {str(i.get("name") or ""): i for i in integrations}
+    first = by_name.get(mapped or "")
+    if first is not None and _integration_serves_backend(first, backend):
+        return first
+    canon = (canonical or "").strip()
+    for integ in sorted(integrations, key=lambda i: str(i.get("name") or "")):
+        if integ is first or not _integration_serves_backend(integ, backend):
+            continue
+        models = _integration_models(integ)
+        if canon in models or canon.lower() in models:
+            return integ
+    return None
+
+
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     """The synthetic connection for a model→integration mapping, or None when unmapped /
     unusable by this backend. Shaped exactly like a vault connection so the turn loop treats
@@ -1204,11 +1323,10 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     iname = mm.get(canon) or mm.get(canon.lower())
     if not iname:
         return None
-    integ = next((i for i in await _integrations_doc() if (i.get("name") or "") == iname), None)
+    integ = _integration_driving(await _integrations_doc(), backend, canon, iname)
     if not integ:
         return None
-    if not _integration_serves_backend(integ, backend):
-        return None
+    iname = str(integ.get("name") or "")
     provider = _INTEGRATION_WIRING.get(((integ.get("provider") or "").lower(), backend))
     if not provider:
         return None
@@ -1397,6 +1515,8 @@ async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
 
 
 async def _blob_delete(file_id: str, kb: str = BLOB_KB) -> bool:
+    if kb == TRACE_KB:
+        _card_cache_forget(file_id)
     return await BACKING.blob.delete(kb, file_id)
 
 
@@ -1442,10 +1562,14 @@ def _manifest_index_keys(base: str, harness_id: str, member_id: str, workspace: 
 _SCOPE_FIELDS = ("harness_id", "member_id", "workspace")
 
 
-async def _index_manifest(base: str, manifest: dict) -> None:
+async def _index_manifest(base: str, manifest: dict, *, prior: dict | None = None,
+                          known_live: bool = False) -> None:
     """Persist a manifest to the flat index and its narrow per-harness/per-member/per-workspace
     mirrors, so all read surfaces (unfiltered Recents, per-harness Traces, per-member 'my
-    sessions', per-workspace console views) agree.
+    sessions', per-workspace console views) agree. A caller that has just read the prior manifest
+    passes it as `prior`; one that has just written the session vertex itself passes
+    `known_live=True`: the turn-start card paid two reads of the same manifest and a vertex read
+    of the vertex it wrote a moment earlier.
 
     The scoping fields decide WHICH mirrors are written. A card that arrives without one (a
     finalize or reconcile built from a turn record that lost it) used to rewrite only the flat
@@ -1456,15 +1580,16 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     # A write that lands after the session's delete (a finalize or reconcile racing it) must not
     # resurrect the card: the tombstone on the vertex is the durable, replica-safe answer.
     _sid = str(manifest.get("session_id") or base.rsplit("_", 1)[-1])
-    try:
-        _v = await _vertex_get(_sid)
-    except Exception:  # noqa: BLE001
-        _v = None
-    if _v and str(_v.get("status") or "") == "deleted":
-        return
+    if not known_live:
+        try:
+            _v = await _vertex_get(_sid)
+        except Exception:  # noqa: BLE001
+            _v = None
+        if _v and str(_v.get("status") or "") == "deleted":
+            return
     missing = [k for k in _SCOPE_FIELDS if not manifest.get(k)]
     if missing:
-        prior = await _prior_manifest(base)
+        prior = prior if prior is not None else await _prior_manifest(base)
         for k in missing:
             if prior.get(k):
                 manifest[k] = prior[k]
@@ -1472,6 +1597,8 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
                                 str(manifest.get("member_id") or ""),
                                 str(manifest.get("workspace") or ""))
+    for k in keys:
+        _card_cache_forget(k)
     await asyncio.gather(*[_trace_put(k, data) for k in keys])
 
 
@@ -1487,7 +1614,7 @@ async def _prior_manifest(prefix: str) -> dict:
         return {}
 
 
-async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
+async def _prior_session_totals(prefix: str, manifest: dict | None = None) -> tuple[float, dict]:
     """The session's credits/usage totals as of the CURRENT manifest — the one durable source both
     the turn-accept placeholder write and _trace_finalize must agree on. Whichever one omits these
     fields (rather than reading + carrying them forward) resets the session total to zero for every
@@ -1496,7 +1623,10 @@ async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
     if not prefix:
         return 0.0, {}
     try:
-        pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
+        if manifest is not None:
+            pm = json.dumps(manifest).encode() if manifest else b""
+        else:
+            pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
         if not pm:
             return 0.0, {}
         prior = json.loads(pm)
@@ -1514,8 +1644,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     session's credits/usage totals SO FAR forward (via _prior_session_totals) rather than omit
     them: an omitted field here is exactly what _trace_finalize's own accumulate would read back as
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
-    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "")
-    _pm = await _prior_manifest(tr.get("prefix") or "")
+    _pm = await _prior_manifest(tr.get("prefix") or "")          # the one read of the prior card
+    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "", _pm)
     prior_title = str(_pm.get("title") or "") if str(_pm.get("title_custom") or "") == "1" else ""
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
@@ -1534,7 +1664,7 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
         "trace_blob": tr.get("prefix"), "chunks": [],
         "finished_at": time.time(), "schema_version": 1,
         "credits": prior_credits, "usage": prior_usage,
-    })
+    }, prior=_pm, known_live=True)   # the vertex was written by this accept a moment ago
 
 
 async def _deindex_manifest(base: str, manifest: dict, *scopes: dict) -> None:
@@ -1764,6 +1894,7 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
         "title": (prompt.strip().splitlines()[0][:120] if prompt.strip() else sid[:16]),
         "user_prompt": prompt[:1500], "status": rec.get("status"),
         "connection": rec.get("connection"), "cli_session_id": rec.get("cli_session_id"),
+        "served_model": rec.get("served_model") or None,
         "result": (rec.get("result") or "")[:4000],
         "elapsed": rec.get("elapsed") or (round(time.time() - rec["started"], 1) if rec.get("started") else None),
         "event_count": real_count, "trace_blob": tr.get("prefix"),
@@ -1861,9 +1992,14 @@ async def _brain_mint_room(sid: str) -> str | None:
     return None
 
 
-async def _hydrate(sid: str, rec: dict) -> None:
+_HYDRATE_FAILED_MESSAGE = "This task's files and conversation could not be restored just now, so nothing ran. Try again in a moment."
+
+
+async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
-    pass the blackboard room so the runner (re)starts the realtime sidecar for this session."""
+    pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
+    `force` skips the warm-sandbox probe: the workspace is wiped and restored from the durable
+    checkpoint even when the sandbox still holds it (a recycle on purpose)."""
     params = {}
     v = await _vertex_get(sid) or {}          # single durable read: blackboard room + checkpoint sha
     room = (v.get("brain_room") or None) if COLLAB_URL else None
@@ -1874,7 +2010,7 @@ async def _hydrate(sid: str, rec: dict) -> None:
         # checkpoint (sha marker kept by the runner), skip the blob download and the full
         # wipe+untar — the dominant cost of every follow-up turn on a big workspace.
         want_sha = str(v.get("ws_sha") or "")
-        if want_sha:
+        if want_sha and not force:
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
                                     params={**(params or {}), "probe": want_sha})
@@ -1886,9 +2022,20 @@ async def _hydrate(sid: str, rec: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass                        # probe is best-effort; fall through to full hydrate
         # Stream the checkpoint tar VG blob -> runner /hydrate without buffering it (HR-INF-015).
-        r = await _hydrate_relay(sid, params)
-        rec["hydrated"] = r.status_code < 400
-        rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+        # A restore that fails while a checkpoint exists is tried once more: under a burst of cold
+        # sessions (seven at once, 2026-09-06 11:00Z) one in ten to twenty restores failed, and the
+        # turn then ran on the wiped workspace and started the conversation over ("no rollout",
+        # "No saved session found", "couldn't resume"); the checkpoint itself was intact every time.
+        for attempt in range(2):
+            r = await _hydrate_relay(sid, params)
+            rec["hydrated"] = r.status_code < 400
+            rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+            if rec["hydrated"] or not want_sha:
+                break
+            rec["hydrate_error"] = f"HTTP {r.status_code} {(r.text or '')[:200]}"
+            print(f"[hydrate] restore failed sid={sid} attempt={attempt + 1} {rec['hydrate_error']}", flush=True)
+            if attempt == 0:
+                await asyncio.sleep(1.0)
         if rec["hydrated"]:
             # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
             # turn. Anything an app wrote since then has just been wiped out of it, so put it back
@@ -1896,11 +2043,13 @@ async def _hydrate(sid: str, rec: dict) -> None:
             # reaches this: that workspace was never wiped, so it still holds those writes.
             rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
         if not rec["hydrated"] and want_sha:
-            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed. Do NOT let this
-            # turn checkpoint over the good blob from a workspace that isn't that checkpoint.
+            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, twice. The turn
+            # must not run on this workspace (the caller refuses it), and this turn must never
+            # checkpoint over the good blob from a workspace that isn't that checkpoint.
             rec["hydrate_failed_with_checkpoint"] = True
     except Exception as e:  # noqa: BLE001
         rec["hydrate_error"] = str(e)[:200]
+        print(f"[hydrate] restore raised sid={sid} {rec['hydrate_error']}", flush=True)
         if str(v.get("ws_sha") or ""):
             rec["hydrate_failed_with_checkpoint"] = True
 
@@ -2439,6 +2588,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         pass
     rec["status"] = settled
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
         await _vg_upsert("HarnessResponse", rid, {"status": settled})
     except Exception:  # noqa: BLE001
@@ -2474,8 +2624,8 @@ async def _start_bus() -> None:
     global _redis_out
     if REDIS_URL:
         _redis_out = asyncio.Queue(maxsize=100_000)
-        asyncio.create_task(_redis_pump())
-        asyncio.create_task(_redis_listen())
+        _spawn_forever("redis-pump", _redis_pump)
+        _spawn_forever("redis-listen", _redis_listen)
 
 
 @app.on_event("startup")
@@ -2840,35 +2990,31 @@ _BROKER_HOP = ("host", "content-length", "connection", "keep-alive", "transfer-e
                "authorization", "api-key", "x-api-key")
 
 
-# Extended thinking is off through the broker, and this is the one place that enforces it.
+# What the broker removes from a request, by request shape and by key, and nothing else:
 #
-# The decision itself is not new — harness_runner already set MAX_THINKING_TOKENS=0 to stop
-# Claude Code sending thinking params, because opus-4.7/4.8 rejected `thinking.enabled` with a
-# 400 that leaked into the reply. That mechanism lived in the CLI's environment, so it only
-# covered one harness and only the shape the CLI used at the time. The CLI has since moved to
-# `output_config.effort`, which MAX_THINKING_TOKENS does not suppress, and haiku-4.5 rejects it
-# with "This model does not support the effort parameter" — the same class of failure, on a
-# different harness, through a different field.
-#
-# Every harness's inference traffic passes through this proxy, so enforcing it here covers
-# Claude Code, Hermes, Codex and anything added later, across whichever thinking API a CLI
-# happens to speak. The per-harness env hack is deleted rather than kept alongside: two
-# mechanisms for one behaviour is how the first one went stale unnoticed.
-# These travel together and must be removed together. `context_management`'s only strategy
-# today (clear_thinking_20251015) is defined in terms of thinking, so removing `thinking` while
-# leaving it produced a NEW 400 — "clear_thinking_20251015 strategy requires thinking to be
-# enabled or adaptive" — turning one broken model into a broken harness. Against this provider
-# context_management is rejected outright ("Extra inputs are not permitted") whether thinking is
-# present or not, so the coherent unit is: strip the whole group, leave a self-consistent request.
-_STRIP_REQUEST_FIELDS = ("thinking", "reasoning", "reasoning_effort", "context_management")
+# * Anthropic-shape requests (the `messages` path): the extended-thinking controls. Measured 400s:
+#   opus-4.7/4.8 reject Claude Code's `thinking.enabled` ("use output_config.effort"), haiku-4.5
+#   rejects `output_config.effort` and `thinking.adaptive`; `context_management`'s only strategy
+#   is defined in terms of thinking, so it goes with it. These are model-version rejections, the
+#   same on the org's own key as on the platform's, so they are stripped for every provider that
+#   carries the Anthropic shape (Anthropic, Bedrock, TokenRouter, Vercel, LLMTR).
+# * OpenAI-shape requests (`responses`, `responses/*`, `chat/completions`): nothing of the
+#   thinking group. `reasoning` carries Codex's effort and, on `responses/compact`, the
+#   `reasoning.context = all_turns` the compaction needs; TokenRouter and OpenRouter both take
+#   `reasoning` and `reasoning_effort` as written (probed 2026-09-06). Stripping it here ran
+#   every brokered Codex turn at default effort and broke compaction on an org's own OpenAI key
+#   ("requires reasoning.context to be all_turns").
+# * On the platform's key, on either shape: the priced-tier selectors (OpenAI `service_tier`,
+#   Anthropic fast mode's `speed`, an aggregator's `provider` preferences), because the platform
+#   bills the standard tier. On the org's own key the tier is the org's own choice.
+_ANTHROPIC_THINKING_FIELDS = ("thinking", "context_management")
+_TIER_FIELDS = ("service_tier", "speed", "provider")
 
 
-def _strip_unsupported(body: bytes) -> bytes:
-    """Remove thinking/effort controls from an inference request body.
-
-    Returns the body unchanged if it is not JSON — the broker must stay a dumb pipe for
-    anything it does not positively understand.
-    """
+def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path: str = "") -> bytes:
+    """Remove what this request must not carry (see the rule above). Returns the body unchanged
+    if it is not JSON — the broker must stay a dumb pipe for anything it does not positively
+    understand."""
     if not body:
         return body
     try:
@@ -2878,19 +3024,287 @@ def _strip_unsupported(body: bytes) -> bytes:
     if not isinstance(doc, dict):
         return body
     changed = False
-    for f in _STRIP_REQUEST_FIELDS:
+    anthropic_shape = (path or "").strip("/").startswith("messages")
+    fields: tuple[str, ...] = _ANTHROPIC_THINKING_FIELDS if anthropic_shape else ()
+    if not byok:
+        fields += _TIER_FIELDS
+    for f in fields:
         if f in doc:
             doc.pop(f)
             changed = True
-    # `output_config` carries more than effort; drop only that key, and the object with it
-    # if nothing else remains, so a provider never sees an empty container it may reject.
-    oc = doc.get("output_config")
-    if isinstance(oc, dict) and "effort" in oc:
-        oc.pop("effort")
-        changed = True
-        if not oc:
-            doc.pop("output_config")
+    if anthropic_shape:
+        # `output_config` carries more than effort; drop only that key, and the object with it
+        # if nothing else remains, so a provider never sees an empty container it may reject.
+        oc = doc.get("output_config")
+        if isinstance(oc, dict) and "effort" in oc:
+            oc.pop("effort")
+            changed = True
+            if not oc:
+                doc.pop("output_config")
     return json.dumps(doc).encode() if changed else body
+
+
+_GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
+
+
+def _google_unknown_field(refused: bytes) -> str:
+    """The top-level request field Google's OpenAI-compatible endpoint refused as unknown, or "".
+    A field named inside an object ("at 'tools[0].function'") is not one this relay drops."""
+    try:
+        text = refused.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
+    if "Cannot find field" not in text:
+        return ""
+    m = _GOOGLE_UNKNOWN_RE.search(text)
+    return m.group(1) if m else ""
+
+
+# ── Gemini 3 thought signatures ────────────────────────────────────────────────────────
+# Google's OpenAI-compatible endpoint streams a `thought_signature` on every function call it
+# makes (tool_calls[].extra_content.google.thought_signature) and, on Gemini 3, refuses the next
+# request unless the replayed assistant tool_calls carry it back: 400 "Function call is missing
+# a thought_signature in functionCall parts" (measured 2026-09-06 on the artifact turn of pi, dsh,
+# qwen and opencode, every Gemini 3.x id; hermes keeps the field, Gemini 2.5 does not require it,
+# and the aggregators carry it themselves). OpenAI-shaped clients drop extra_content when they
+# rebuild the assistant message, so the broker remembers each signature under its tool call id as
+# the answer streams past and puts it back on the replay. A call it never saw (a trace that began
+# elsewhere) gets Google's own sentinel, which skips the check instead of failing the turn. One
+# process serves this deployment, so the table is in-process; owner-trust traffic never comes
+# here, and the loopback relays in the runner keep their own.
+_GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
+_GOOGLE_SIGS: dict[str, str] = {}        # "<sid>:<tool call id>" -> signature
+_GOOGLE_SIGS_MAX = 20000
+
+
+def _google_signatures_in(doc: dict) -> list[tuple[str, str]]:
+    """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
+    found: list[tuple[str, str]] = []
+    for ch in doc.get("choices") or []:
+        if not isinstance(ch, dict):
+            continue
+        holder = ch.get("delta") if isinstance(ch.get("delta"), dict) else ch.get("message")
+        if not isinstance(holder, dict):
+            continue
+        for tc in holder.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            sig = ((ec or {}).get("google") or {}).get("thought_signature") if isinstance(ec, dict) else None
+            cid = tc.get("id")
+            if isinstance(sig, str) and sig and isinstance(cid, str) and cid:
+                found.append((cid, sig))
+    return found
+
+
+def _google_remember(sid: str, pairs: list[tuple[str, str]]) -> None:
+    """Keep the signatures for the replay, under the session so one never serves another."""
+    for cid, sig in pairs:
+        if len(_GOOGLE_SIGS) >= _GOOGLE_SIGS_MAX:
+            _GOOGLE_SIGS.clear()
+        _GOOGLE_SIGS[f"{sid}:{cid}"] = sig
+
+
+def _google_with_signatures(body: bytes, sid: str) -> bytes:
+    """The request with every replayed assistant tool call carrying a thought signature: the one
+    the broker saw on the answer, else Google's sentinel. A body without tool calls is untouched."""
+    if b"tool_calls" not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
+        return body
+    changed = False
+    for msg in doc["messages"]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            if isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature"):
+                continue
+            cid = str(tc.get("id") or "")
+            sig = _GOOGLE_SIGS.get(f"{sid}:{cid}", "") if cid else ""
+            tc["extra_content"] = {"google": {"thought_signature": sig or _GOOGLE_SIG_SKIP}}
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+class _GoogleSigTap:
+    """Reads the thought signatures off a Google answer as it streams past: an SSE answer line by
+    line, a whole JSON answer once it has ended. The bytes go through untouched."""
+    LINE_MAX = 1 << 20      # a signature-bearing line is small; a longer one is content, skipped
+    BODY_MAX = 8 << 20
+
+    def __init__(self, content_type: str):
+        self.sse = "text/event-stream" in (content_type or "")
+        self.buf = b""
+        self.body = bytearray()
+        self.sigs: list[tuple[str, str]] = []   # seen and not yet remembered (drained by the pump)
+
+    def feed(self, chunk: bytes) -> None:
+        if self.sse:
+            self.buf += chunk
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                self._line(line.strip())
+            if len(self.buf) > self.LINE_MAX:
+                self.buf = b""
+        elif len(self.body) < self.BODY_MAX:
+            self.body += chunk
+
+    def _line(self, line: bytes) -> None:
+        if not line.startswith(b"data:") or b"thought_signature" not in line:
+            return
+        try:
+            doc = json.loads(line[5:].strip())
+        except ValueError:
+            return
+        if isinstance(doc, dict):
+            self.sigs += _google_signatures_in(doc)
+
+    def finish(self) -> None:
+        if self.sse:
+            if self.buf:
+                self._line(self.buf.strip())
+                self.buf = b""
+        elif b"thought_signature" in self.body:
+            try:
+                doc = json.loads(bytes(self.body))
+            except ValueError:
+                doc = None
+            if isinstance(doc, dict):
+                self.sigs += _google_signatures_in(doc)
+
+
+_STRICT_GEMINI_CHANNELS = {"tokenrouter"}
+# ── Gemini function declarations through a strict channel ────────────────────────────────
+# Google's native API validates function declarations against its own Schema (type, format,
+# description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
+# refuses anything else: "Unknown name \"$schema\" at 'tools[0].function_declarations[0].parameters'",
+# "Unknown name \"exclusiveMinimum\"", "schema didn't specify the schema type field". Google's own
+# OpenAI-compatible endpoint, OpenRouter and Vercel normalise a harness's JSON-schema declarations
+# before they reach it; TokenRouter's Gemini channels forward them as sent, so the first turn of a
+# task on opencode ($schema) and cline (exclusiveMinimum, a property without type) failed on the
+# ids those channels serve natively, gemini-3.8-flash for one (measured 2026-09-06, the platform
+# column). Until TokenRouter normalises them itself, this relay does, for that channel only.
+_GEMINI_SCHEMA_KEYS = {"type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
+                       "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength",
+                       "pattern", "example", "anyOf", "propertyOrdering", "default", "items", "minimum", "maximum"}
+
+
+def _gemini_schema(node):
+    """One JSON schema node as Google's function-declaration validator accepts it: only the keys it
+    names, `oneOf` as `anyOf`, `const` as a one-value enum, an exclusive bound as the bound, a type
+    list as one type plus nullable, a type on every node (inferred from its shape when left out),
+    items on every array, and `required` limited to properties that exist."""
+    if not isinstance(node, dict):
+        return node
+    out: dict = {}
+    for k, v in node.items():
+        if k == "oneOf" and isinstance(v, list):
+            out.setdefault("anyOf", [_gemini_schema(x) for x in v])
+        elif k == "const":
+            out["enum"] = [v]
+        elif k == "exclusiveMinimum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("minimum", v)
+        elif k == "exclusiveMaximum" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.setdefault("maximum", v)
+        elif k not in _GEMINI_SCHEMA_KEYS:
+            continue
+        elif k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _gemini_schema(pv) for pk, pv in v.items()}
+        elif k == "items":
+            out[k] = _gemini_schema(v) if isinstance(v, dict) else (_gemini_schema(v[0]) if isinstance(v, list) and v else {"type": "string"})
+        elif k == "anyOf" and isinstance(v, list):
+            out[k] = [_gemini_schema(x) for x in v]
+        else:
+            out[k] = v
+    t = out.get("type")
+    if isinstance(t, list):
+        non_null = [x for x in t if x != "null"]
+        out["type"] = non_null[0] if non_null else "string"
+        if "null" in t:
+            out["nullable"] = True
+    if isinstance(out.get("anyOf"), list):
+        # No anyOf leaves this relay: one channel refuses an anyOf node without a type ("schema
+        # didn't specify the schema type field", gemini-3.5-flash) and another refuses one with
+        # anything beside it ("schema specified other fields alongside any_of", gemini-3.6-flash,
+        # both measured 2026-09-06 on TokenRouter). The null member becomes `nullable`; a choice of
+        # constants becomes one enum; any other choice becomes its first member under the node's
+        # own description, which is what the model reads.
+        members = [m for m in out.pop("anyOf") if isinstance(m, dict) and m.get("type") != "null"]
+        if len(members) < len(node.get("anyOf") or []):
+            out["nullable"] = True
+        if members and all("enum" in m and "properties" not in m and "items" not in m for m in members):
+            out = {**members[0], **out, "enum": [x for m in members for x in m["enum"]]}
+            out.setdefault("type", "string")
+        elif members:
+            out = {**members[0], **out}
+            out.setdefault("type", members[0].get("type") or "string")
+    if "type" not in out and "anyOf" not in out:
+        out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
+    if out.get("type") == "array" and "items" not in out:
+        out["items"] = {"type": "string"}
+    if out.get("type") == "object" and not out.get("properties"):
+        out.pop("properties", None)                 # an empty properties object is refused too
+        out.pop("required", None)
+    elif isinstance(out.get("required"), list) and isinstance(out.get("properties"), dict):
+        req = [r for r in out["required"] if r in out["properties"]]
+        if req:
+            out["required"] = req
+        else:
+            out.pop("required")
+    return out
+
+
+def _with_gemini_schemas(body: bytes) -> bytes:
+    """The chat request with every tool's parameters normalised for Google's validator; a tool
+    that declares no parameter loses the empty declaration. A body without tools is untouched."""
+    if b'"tools"' not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(fn, dict) or not isinstance(fn.get("parameters"), dict):
+            continue
+        params = _gemini_schema(fn["parameters"])
+        if params.get("type") == "object" and not params.get("properties"):
+            fn.pop("parameters")
+        else:
+            fn["parameters"] = params
+        changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _body_model_name(body: bytes) -> str:
+    """The model a chat request names, or "" (the body is not a JSON object)."""
+    try:
+        doc = json.loads(body) if body else {}
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    return str(doc.get("model") or "") if isinstance(doc, dict) else ""
+
+
+def _without_field(body: bytes, field: str) -> bytes:
+    """The JSON request without one top-level field; a body that is not a JSON object is returned as is."""
+    try:
+        doc = json.loads(body or b"")
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or field not in doc:
+        return body
+    doc.pop(field)
+    return json.dumps(doc).encode()
 
 
 def _broker_token(request: Request) -> str:
@@ -2900,6 +3314,43 @@ def _broker_token(request: Request) -> str:
     if auth[:7].lower() == "bearer ":
         return auth[7:].strip()
     return (request.headers.get("api-key") or request.headers.get("x-api-key") or "").strip()
+
+
+# A direct provider's connection carries only its key: its endpoint is the provider's own and is
+# not a thing to ask the user for. Gateways (OpenRouter, Vercel, TokenRouter) and self-hosted
+# endpoints carry their base_url on the connection. Without this table an OpenAI key answered
+# "connection has no base_url" (2026-09-04).
+_PROVIDER_BASE = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1",
+                  # Google AI Studio keys answer on Gemini's OpenAI-compatible surface (chat
+                  # completions); a key alone names the endpoint, the same way an OpenAI key does.
+                  "google": "https://generativelanguage.googleapis.com/v1beta/openai"}
+
+
+def _with_provider_base(conn: dict | None) -> dict | None:
+    if conn and not str(conn.get("base_url") or "").strip():
+        base = _PROVIDER_BASE.get(str(conn.get("provider") or "").lower())
+        if base:
+            conn = {**conn, "base_url": base}
+    return conn
+
+
+_PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
+                                  r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
+
+
+def _provider_refused(err: str) -> bool:
+    """Whether a failure on the org's own connection is the provider refusing the key. Judged on
+    the first line only: that is the line the runner chose as the provider's answer, and a
+    diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex
+    compaction failure or a bad request into "your key was refused"."""
+    return bool(_PROVIDER_REFUSAL_RE.search((err or "").split("\n", 1)[0]))
+
+
+def _turn_failure_message(rec: dict) -> str:
+    """What a failed turn says: the org's own key's refusal in plain words when that is why, else
+    the list of connections tried."""
+    tried = rec.get("tried") or []
+    return str(rec.get("error_message") or "") or (json.dumps(tried)[:400] if tried else "turn failed")
 
 
 async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
@@ -2918,9 +3369,20 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
         # provider here is the INTEGRATION's own type — it selects the upstream auth header, which
         # is all the broker needs (the runner-side wiring already happened at turn start).
         cfg["provider"] = (integ.get("provider") or "").lower()
-        return cfg
+        return _with_provider_base(cfg)
     conn, _ = await _get_connection(org, conn_name)
-    return conn
+    return _with_provider_base(conn)
+
+
+def _provider_base_url(provider: str, base_url: str) -> str:
+    """The URL the broker forwards to. An Azure OpenAI endpoint is pasted from the portal as the
+    bare resource (https://<resource>.openai.azure.com/); its OpenAI-compatible surface lives
+    under /openai/v1, and a bare base forwarded as-is 404s on every call ("Resource not found",
+    the matrix's Azure column, 2026-09-06). Any other provider's base is used as given."""
+    base = (base_url or "").strip().rstrip("/")
+    if base and provider.lower() in ("azure", "azure-foundry") and "/openai/" not in base:
+        base += "/openai/v1"
+    return base
 
 
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
@@ -2934,7 +3396,7 @@ async def llm_broker(path: str, request: Request):
     if not conn:
         raise HTTPException(502, "connection unavailable")
 
-    base = str(conn.get("base_url") or "").rstrip("/")
+    base = _provider_base_url(str(conn.get("provider") or ""), str(conn.get("base_url") or ""))
     if not base:
         raise HTTPException(502, "connection has no base_url")
     # CLIs append their own version segment (…/v1/messages, …/v1/responses) while provider
@@ -2960,16 +3422,61 @@ async def llm_broker(path: str, request: Request):
     else:
         headers["authorization"] = f"Bearer {key}"
 
-    body = _strip_unsupported(await request.body())
+    body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix)
+    if provider == "google":
+        body = _google_with_signatures(body, sid)
+    if provider in _STRICT_GEMINI_CHANNELS and "gemini" in _body_model_name(body).lower():
+        body = _with_gemini_schemas(body)
     rc = _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
     up = await rc.send(req, stream=True)
+    if provider == "google" and up.status_code == 400:
+        # Google's OpenAI-compatible endpoint refuses a request that names any field it does not
+        # know ("Unknown name \"store\": Cannot find field."), and the harnesses send OpenAI's
+        # optional fields freely (pi and dsh: store, seed; measured 2026-09-06 on gemini-3.6-flash).
+        # The refusal names the field; the request goes again without it, a few fields at most.
+        refused = await up.aread()
+        for _ in range(4):
+            unknown = _google_unknown_field(refused)
+            if not unknown:
+                break
+            await up.aclose()
+            body = _without_field(body, unknown)
+            print(f"[broker] google refused field {unknown!r}; sent again without it sid={sid}", flush=True)
+            req = rc.build_request(request.method, url, headers=headers, content=body or None)
+            up = await rc.send(req, stream=True)
+            if up.status_code != 400:
+                break
+            refused = await up.aread()
+        if up.status_code == 400:
+            # The refusal reaches the harness, which shows it as "400 (no body)"; the cause is here.
+            print(f"[broker] google refused sid={sid} path={suffix!r}: "
+                  f"{refused[:300].decode('utf-8', 'replace')!r}", flush=True)
+            # aread() hands back the DECODED body; passing Google's content-encoding header along with
+            # it made the harness fail on the error itself ("Response decompression failed", "Failed
+            # to process error response") instead of reading the refusal, 2026-09-06.
+            return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
+                            headers={k: val for k, val in up.headers.items()
+                                     if k.lower() not in ("content-length", "transfer-encoding", "connection",
+                                                          "content-encoding")})
+    # A Google answer's tool calls carry the signatures the next request must replay.
+    tap = _GoogleSigTap(up.headers.get("content-type", "")) if (provider == "google" and up.status_code < 400) else None
 
     async def pump():
         try:
             async for chunk in up.aiter_raw():
+                if tap is not None:
+                    tap.feed(chunk)
+                    if tap.sigs:
+                        pairs, tap.sigs = tap.sigs, []
+                        _google_remember(sid, pairs)
                 yield chunk
         finally:
+            if tap is not None:
+                tap.finish()                  # a whole JSON answer is read at the end
+                if tap.sigs:
+                    _google_remember(sid, tap.sigs)
+                    tap.sigs = []
             await up.aclose()
 
     out = {k: val for k, val in up.headers.items()
@@ -3189,24 +3696,32 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
     lst = await _blob_list(prefix, limit=limit, cursor=cursor or None)
 
     async def _card(item: dict):
-        b = await _blob_get(item["file_id"], kb=TRACE_KB)
-        if not b:
-            return None
-        # A mirror card whose flat card is gone is an orphan: a delete on an older version
-        # removed the flat card and left the mirror (the delete now clears every mirror, but an
-        # install upgrading brings its orphans with it). It is dropped here, and removed so the
-        # next list does not pay for it either. Only mirrors are checked: the flat index IS the
-        # manifest, so the read above already answered for it.
         fid = str(item["file_id"])
-        if "/idx/" not in fid:
-            flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
-            if not await _blob_get(flat, kb=TRACE_KB):
-                await _blob_delete(fid, kb=TRACE_KB)
+        m = _CARD_CACHE.get(fid)
+        if m is not None:
+            _CARD_CACHE.move_to_end(fid)
+        else:
+            b = await _blob_get(fid, kb=TRACE_KB)
+            if not b:
                 return None
-        try:
-            m = json.loads(b)
-        except Exception:  # noqa: BLE001
-            return None
+            try:
+                m = json.loads(b)
+            except Exception:  # noqa: BLE001
+                return None
+            # A mirror card whose flat card is gone is an orphan: a delete on an older version
+            # removed the flat card and left the mirror (the delete now clears every mirror, but
+            # the orphans made before it are still listed). It is dropped here, and removed so the
+            # next list does not pay for it either. Only mirrors are checked: the flat index IS the
+            # manifest, so the read above already answered for it.
+            if "/idx/" not in fid:
+                flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
+                if not await _blob_get(flat, kb=TRACE_KB):
+                    await _blob_delete(fid, kb=TRACE_KB)
+                    return None
+            if str(m.get("status") or "") not in _CARD_LIVE:
+                _CARD_CACHE[fid] = m
+                while len(_CARD_CACHE) > _CARD_CACHE_MAX:
+                    _CARD_CACHE.popitem(last=False)
         if member and (m.get("member_id") or "") != member:
             return None
         if harness and (m.get("harness_id") or "") != harness:
@@ -3215,10 +3730,70 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
             mw = str(m.get("workspace") or "")
             if mw != workspace and not (ws_default and not mw):
                 return None
+        # A card that still says running while the session vertex is terminal is a turn whose
+        # tail never finished: the replica wrote the vertex, then died before the finalize that
+        # rewrites the card (a roll under a live turn, 2026-09-04). The vertex is the durable
+        # truth, so the read repairs the card from it, once, and the list stops lying.
+        if str(m.get("status") or "") in _CARD_LIVE and m.get("session_id"):
+            sid_ = str(m["session_id"])
+            # A card found genuinely live is not asked again for a few seconds: with N tabs each
+            # listing every 15 s, the settle read per live card per list was one graph read per
+            # running task per tab.
+            if time.time() - _SETTLE_LIVE_AT.get(sid_, 0.0) > _SETTLE_LIVE_S:
+                fixed = await _card_settle(sid_, m)
+                if fixed:
+                    m = fixed
+                    _SETTLE_LIVE_AT.pop(sid_, None)
+                else:
+                    _SETTLE_LIVE_AT[sid_] = time.time()
+                    if len(_SETTLE_LIVE_AT) > 5000:
+                        _SETTLE_LIVE_AT.clear()
         return {k: m.get(k) for k in _TRACE_CARD_FIELDS}
 
     cards = [c for c in await asyncio.gather(*[_card(it) for it in lst.get("items", [])]) if c]
     return {"sessions": cards, "cursor": lst.get("cursor") or ""}
+
+
+_CARD_LIVE = {"running", "starting", "in_progress"}
+# A session card changes only while its turn is live (and on delete). Terminal cards are served
+# from memory: every open Harnesses page re-read up to 200 cards every 15 s, one blob each.
+_CARD_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_CARD_CACHE_MAX = 8000
+_SETTLE_LIVE_AT: dict[str, float] = {}
+_SETTLE_LIVE_S = 10.0
+
+
+def _card_cache_forget(file_id: str) -> None:
+    _CARD_CACHE.pop(file_id, None)
+
+
+async def _card_settle(sid: str, m: dict) -> dict | None:
+    """Repair a live-looking card from its session vertex. Returns the settled manifest when the
+    vertex is terminal, or its heartbeat is older than the hard turn cap with the turn unadopted;
+    None when the turn is genuinely live. The settled manifest is re-indexed so every mirror agrees."""
+    v = await _vertex_get(sid) or {}
+    vs = str(v.get("turn_status") or v.get("status") or "")
+    status = ""
+    if vs in ("done", "failed", "cancelled", "incomplete", "max_turns", "timeout"):
+        status = vs
+    else:
+        try:
+            hb = float(v.get("heartbeat") or 0)
+        except Exception:  # noqa: BLE001
+            hb = 0
+        if hb and time.time() - hb > _GW_MAX_TURN_S:
+            status = "failed"
+    if not status or status == str(m.get("status") or ""):
+        return None
+    m = dict(m)
+    m["status"] = status
+    base = _prefix_from_vertex(sid, v)
+    if base:
+        try:
+            await _index_manifest(base, m)
+        except Exception:  # noqa: BLE001 — the list still answers from the vertex's truth
+            pass
+    return m
 
 
 def _prefix_from_vertex(sid: str, v: dict | None) -> str | None:
@@ -3334,7 +3909,7 @@ async def patch_session(sid: str, body: SessionPatch, request: Request) -> dict:
     # blob is what every LIST renders. Writing only the vertex looks like it worked and reverts on
     # the next load. `title_custom` is what stops the next turn regenerating it from your message.
     await _vg_upsert("HarnessSession", sid, {"title": title})
-    base = await _trace_base(sid)
+    base = _prefix_from_vertex(sid, _v)   # the vertex _owned_session already read
     if base:
         m = await _prior_manifest(base)
         if m:
@@ -3412,6 +3987,7 @@ async def _stop_session(org: str, sid: str, v: dict, rid_hint: str = "") -> tupl
             rec = await _resp_get(rid)
             if rec and str(rec.get("status") or "") in ("running", "in_progress", "queued", "starting"):
                 rec["status"] = "cancelled"
+                _resp_cache_forget(rid)
                 await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", rid, {"status": "cancelled"})
         except Exception:  # noqa: BLE001
@@ -3668,7 +4244,11 @@ async def _require_integrations_admin(request: Request) -> dict:
 _PROVIDER_CATALOG: dict[str, dict] = {
     "anthropic": {
         "label": "Anthropic",
-        "base_url": "https://api.anthropic.com",
+        # With the "/v1", like every other direct provider here and like the broker's own default
+        # (_PROVIDER_BASE): the broker joins the resource ("messages") straight onto it, and a
+        # base stored without the suffix sent a brokered Messages call to
+        # https://api.anthropic.com/messages. The claude CLI's runner path strips it again.
+        "base_url": "https://api.anthropic.com/v1",
         "fields": [],
         "secret": "api_key",
         "secret_label": "API Key",
@@ -3704,6 +4284,18 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
         "key_hint": "vck_…",
+    },
+    # Google AI Studio: #71 wired the provider (broker base, harness wiring, vendor models) but not
+    # this table, and the integrations document is validated against this table on every write, so
+    # a Gemini key was refused with "integration needs a name and a known provider (got 'google')"
+    # on 0.13.7 (measured while wiring the support matrix, 2026-09-06).
+    "google": {
+        "label": "Google AI Studio",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "AIza…",
     },
     "llmtr": {
         "label": "LLMTR",
@@ -4152,7 +4744,10 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
                                             "is_error": bool(c.get("is_error"))}))
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
-                               "is_error": bool(ev.get("is_error"))}))
+                               "is_error": bool(ev.get("is_error")),
+                               # the model the CLI reports it actually used, when it says (gemini-cli
+                               # keys its stats by served model, and rewrites some ids on the way)
+                               "model": str(ev.get("model") or "")}))
     elif t == "system" and ev.get("subtype") == "resume_lost":
         # The runner asked to continue a prior session, but it wasn't found in this sandbox — it
         # silently started fresh instead (see harness_runner _run_hermes_bg). A caller who believed
@@ -4188,6 +4783,11 @@ class _RespTranslator:
         self.requested_model = ""
         self.model_fallback = False
         self.fallback_reason = ""
+        # The connection that served this turn, stamped when the sandbox is dispatched. The session's
+        # last_connection carried it before, one value per session; the turns feed and the support
+        # matrix read it per turn (a report that said "every turn record" was reading the session).
+        self.connection = ""
+        self.served_model = ""      # what the CLI reports it ran, when it reports; "" = unknown
         self.seq = 0
         self.out_index = -1
         self.output: list[dict] = []
@@ -4221,6 +4821,8 @@ class _RespTranslator:
                                        if status == "incomplete" and self.incomplete_reason else None),
                 "previous_response_id": self.prev, "model": self.model,
                 "output": self.output, "store": self.store, "usage": self.usage,
+                "connection": self.connection,
+                "served_model": self.served_model,
                 "metadata": meta}
 
     def start(self) -> list[dict]:
@@ -4317,6 +4919,8 @@ class _RespTranslator:
             evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=item))
             self.output.append(item)
         elif kind == "result":
+            if payload.get("model"):
+                self.served_model = str(payload["model"])
             u = payload.get("usage")
             if u:
                 self.usage = {"input_tokens": u.get("input_tokens", 0),
@@ -4445,12 +5049,14 @@ _BEDROCK_CLAUDE = {
     "sonnet-4.6": "us.anthropic.claude-sonnet-4-6", "sonnet-4.5": "us.anthropic.claude-sonnet-4-5",
     "opus-5": "us.anthropic.claude-opus-5", "sonnet-5": "us.anthropic.claude-sonnet-5",
     "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "fable-5": "us.anthropic.claude-fable-5",
+    "fable-5.1": "us.anthropic.claude-fable-5-1",
 }
 _ANTHROPIC_CLAUDE = {
     "opus-4.8": "claude-opus-4-8", "opus-4.7": "claude-opus-4-7", "opus-4.6": "claude-opus-4-6",
     "opus-4.5": "claude-opus-4-5", "sonnet-4.6": "claude-sonnet-4-6", "sonnet-4.5": "claude-sonnet-4-5",
     "opus-5": "claude-opus-5", "sonnet-5": "claude-sonnet-5",
     "haiku-4.5": "claude-haiku-4-5-20251001", "fable-5": "claude-fable-5",
+    "fable-5.1": "claude-fable-5-1",
 }
 
 
@@ -4471,6 +5077,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     "anthropic": {
         "claude-opus-5":     "claude-opus-5",
         "claude-fable-5":    "claude-fable-5",
+        "claude-fable-5-1":   "claude-fable-5-1",
         "claude-opus-4.8":   "claude-opus-4-8",
         "claude-sonnet-5":   "claude-sonnet-5",
         "claude-opus-4.7":   "claude-opus-4-7",
@@ -4480,6 +5087,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     "bedrock": {
         "claude-opus-5":     "us.anthropic.claude-opus-5",
         "claude-fable-5":    "us.anthropic.claude-fable-5",
+        "claude-fable-5-1":   "us.anthropic.claude-fable-5-1",
         "claude-opus-4.8":   "us.anthropic.claude-opus-4-8",
         "claude-sonnet-5":   "us.anthropic.claude-sonnet-5",
         "claude-opus-4.7":   "us.anthropic.claude-opus-4-7",
@@ -4517,12 +5125,27 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex":      "openai/gpt-5.3-codex",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-fable-5-1":    "anthropic/claude-fable-5.1",
         "claude-opus-4.8":    "anthropic/claude-opus-4.8",
         "claude-sonnet-5":    "anthropic/claude-sonnet-5",
         "claude-opus-4.7":    "anthropic/claude-opus-4.7",
         "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
         "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
-        "gemini-3.6-flash":   "google/gemini-3.6-flash",
+        # The Gemini text family, each id read from the aggregator's own /v1/models on 2026-09-06
+        # (OpenRouter serves all eleven; TokenRouter lacks four, see _TOKENROUTER_NO_CHANNEL; Vercel
+        # names one differently, see _VERCEL_RESLUG). Image, TTS, transcribe, embedding, batch and
+        # "-latest" alias ids are not chat models and are not here.
+        "gemini-3.8-flash":      "google/gemini-3.8-flash",
+        "gemini-3.7-flash":      "google/gemini-3.7-flash",
+        "gemini-3.6-flash":      "google/gemini-3.6-flash",
+        "gemini-3.5-flash":      "google/gemini-3.5-flash",
+        "gemini-3.5-flash-lite": "google/gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
+        "gemini-3-flash-preview": "google/gemini-3-flash-preview",
+        "gemini-2.5-pro":        "google/gemini-2.5-pro",
+        "gemini-2.5-flash":      "google/gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "google/gemini-2.5-flash-lite",
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshotai/kimi-k3",
@@ -4607,12 +5230,23 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex":      "openai/gpt-5.3-codex",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-fable-5-1":    "anthropic/claude-fable-5.1",
         "claude-opus-4.8":    "anthropic/claude-opus-4.8",
         "claude-sonnet-5":    "anthropic/claude-sonnet-5",
         "claude-opus-4.7":    "anthropic/claude-opus-4.7",
         "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
         "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
         "gemini-3.6-flash":   "google/gemini-3.6-flash",
+        "gemini-3.8-flash": "google/gemini-3.8-flash",
+        "gemini-3.7-flash": "google/gemini-3.7-flash",
+        "gemini-3.5-flash": "google/gemini-3.5-flash",
+        "gemini-3.5-flash-lite": "google/gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
+        "gemini-3-flash-preview": "google/gemini-3-flash-preview",
+        "gemini-2.5-pro": "google/gemini-2.5-pro",
+        "gemini-2.5-flash": "google/gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "google/gemini-2.5-flash-lite",
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshot/kimi-k3",
@@ -4648,6 +5282,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 # Re-test with a newer hermes before adding it back.
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
+    # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not these four.
+    "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 }
 # Image models, kept OUT of _VENDOR_MODELS on purpose: those tables feed the chat model pickers
 # and the per-backend catalogs, and an image model offered as a chat model is a broken choice a
@@ -4666,6 +5302,16 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
                                  if c not in _TOKENROUTER_NO_CHANNEL}
 
+# OpenRouter dates a slug when a model gets a new snapshot while TokenRouter keeps serving the
+# plain name. The shared table holds the name TokenRouter serves (it is where the platform's
+# traffic goes); OpenRouter's own list gets the dated name here, after TokenRouter has taken its
+# copy. Putting the dated name in the shared table sent TokenRouter "qwen/qwen3.8-max-0902" and
+# it answered "No available channel" (Hermes, 2026-09-05).
+_OPENROUTER_RESLUG = {
+    "qwen3.8-max": "qwen/qwen3.8-max-0902",
+}
+_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _VENDOR_MODELS["openrouter"].items()}
+
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
 # the two aggregators disagree about who publishes the model, not about which model it is.
@@ -4682,9 +5328,15 @@ _VERCEL_RESLUG = {
     # Vercel publishes the z-ai models under `zai/`, not the `z-ai/` the other aggregators use.
     "glm-5.3":            "zai/glm-5.3",
     "glm-5.3-flash":      "zai/glm-5.3-flash",
+    # Vercel lists the Gemini 3 Flash preview without the suffix (its /v1/models, 2026-09-06).
+    "gemini-3-flash-preview": "google/gemini-3-flash",
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
+# Google AI Studio serves the catalog's Gemini models by their own ids.
+# Google AI Studio serves the whole family under the plain id (its /v1beta/models, 2026-09-06, on
+# the sponsored project; 40 generateContent-capable models, of which these eleven are chat models).
+_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
@@ -4772,7 +5424,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # Anthropic's models overview and AWS's own model card), so it routes directly instead of
     # falling through to the unmapped default it used at launch.
     "claude": {"default": "claude-sonnet-4.6",
-               "models": ["claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+               "models": ["claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"]},
     # hermes (NousResearch hermes-agent) is multi-family — it runs any frontier model through
     # the matching provider connection (family-aware chain selection in _resp_execute). Friendly
@@ -4783,12 +5435,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
-                          "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                          "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
-                          "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
+                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
@@ -4815,9 +5467,9 @@ _MODEL_CATALOG: dict[str, dict] = {
             "models": ["deepseek-v4-pro", "deepseek-v4-flash",
                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                       "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                       "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                       "gemini-3.6-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
+                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
@@ -4830,21 +5482,27 @@ _MODEL_CATALOG: dict[str, dict] = {
     "opencode": {"default": "gpt-5.4",
                  "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                            "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                            "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                            "mistral-medium-3.5", "step-3.7-flash"]},
+                            "mistral-medium-3.5", "step-3.7-flash",
+                          # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
-    # Unprobed per-model on this backend (one live turn each of qwen3.7-max and gpt-5.4 verified,
-    # 2026-08-25) — substitution-check before leaning on any single row.
+    # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
+    # every row below passed on TokenRouter, Vercel and Azure OpenAI. gpt-5.3-codex is NOT here:
+    # qwen speaks chat/completions only and gpt-5.3-codex is served on the Responses API alone, so
+    # its text turns answer but its first tool turn is refused on every channel (TokenRouter
+    # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
+    # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
-                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                        "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
+                        "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                        "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
@@ -4863,18 +5521,43 @@ _MODEL_CATALOG: dict[str, dict] = {
     "cline": {"default": "gpt-5.4",
               "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5",
-                         "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
+                         "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                         "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+                         "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
+                          # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                      "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
+                      "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                      "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                      "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+    # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
+    # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
+    # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
+    # no-tool-use turn end to end against a real free-tier key). gemini-3.5-flash-lite and
+    # gemini-3.7-flash are NOT yet live-turn verified — added on published Google model-card ids
+    # (not guessed: gemini-3.6-pro does not exist, and the lite sibling shipped as 3.5, not 3.6,
+    # despite launching alongside 3.6 Flash — versions don't move in lockstep across the family).
+    # gemini-3.1-pro (the real Pro flagship) is deliberately NOT listed: Pro was dropped from the
+    # free tier in 2026-04, so it would show as a choice and fail every call on a free-tier key.
+    # Google's own ids only: gemini-cli speaks the native API, so the cross-vendor rows above do not
+    # apply. Measured 2026-09-06 on the OSS instance (all five scenarios per id, org holding only the
+    # Google integration, 55 of 55 runs passed) with the served model read off the CLI's own stats:
+    # on the API-key auth path gemini-cli 0.58.0 treats "3.5 Flash GA" as launched and its resolver
+    # rewrites every id ending in "-flash" to gemini-3.5-flash (resolveModel with useGemini3_5Flash,
+    # true for gemini-api-key; the same in 0.59.0-preview.0 and the 0.60 nightly; no setting turns
+    # it off), so gemini-3.8-flash, 3.7-flash, 3.6-flash and 2.5-flash were served by gemini-3.5-flash
+    # on every turn and are not listed: a completed turn on them is a turn on 3.5-flash. Those four
+    # stay reachable on the same key through the OpenAI-shape harnesses, where Google serves each id
+    # as requested. The seven below were served as themselves on every turn.
+    "gemini": {"default": "gemini-3.5-flash",
+               "models": ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+                          "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro",
+                          "gemini-2.5-flash-lite"]},
     "omp": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -5093,9 +5776,9 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         if not table:
             return None
         servable |= set(table)
+    integ_list = list(integrations.values())
     for canonical, iname in (await _effective_model_map()).items():
-        integ = integrations.get(iname)
-        if integ and _integration_serves_backend(integ, backend):
+        if _integration_driving(integ_list, backend, canonical, iname):
             servable.add(canonical)
     return servable
 
@@ -5154,6 +5837,7 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
 async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None,
                     status: str, created_at: float, store: bool) -> None:
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -5162,7 +5846,25 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
                      "created_at": str(created_at), "store": "1" if store else "0"})
 
 
+# A response record is written while its turn runs and once more when it ends; after that it is
+# immutable until a delete tombstones it. Every open conversation re-reads every turn record of
+# its session on a 4 s poll, so a twenty-turn session cost twenty blob reads per tab per poll and
+# the graph gateway saturated at ~15 open tabs (2026-09-06). Terminal records are served from
+# memory; a running record is still read every time; every writer forgets the key it writes.
+_RESP_TERMINAL = {"completed", "failed", "cancelled", "incomplete", "done", "max_turns", "timeout"}
+_RESP_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_RESP_CACHE_MAX = 4000
+
+
+def _resp_cache_forget(rid: str) -> None:
+    _RESP_CACHE.pop(rid, None)
+
+
 async def _resp_get(rid: str) -> dict | None:
+    hit = _RESP_CACHE.get(rid)
+    if hit is not None:
+        _RESP_CACHE.move_to_end(rid)
+        return hit
     b = await _blob_get(f"responses/{rid}.json", kb=RESP_BLOB_KB)
     if not b:
         return None
@@ -5170,7 +5872,13 @@ async def _resp_get(rid: str) -> dict | None:
         rec = json.loads(b)
     except Exception:  # noqa: BLE001
         return None
-    return None if rec.get("_deleted") else rec
+    if rec.get("_deleted"):
+        return None
+    if str(rec.get("status") or "") in _RESP_TERMINAL:
+        _RESP_CACHE[rid] = rec
+        while len(_RESP_CACHE) > _RESP_CACHE_MAX:
+            _RESP_CACHE.popitem(last=False)
+    return rec
 
 
 def _strip_internal(d: dict) -> dict:
@@ -5183,7 +5891,7 @@ def _strip_internal(d: dict) -> dict:
 # Instruction files WE write into the workspace — one per backend family. A new backend that
 # introduces a new context-file name must add it here or the harness's own instructions get
 # collected as a "produced" deliverable on the first turn (QWEN.md did, 2026-08-25).
-_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md"}
+_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md", "GEMINI.md"}
 
 
 def _is_internal_output(name: str) -> bool:
@@ -5366,6 +6074,14 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
     await _hydrate(sid, rec)
+    if rec.get("hydrate_failed_with_checkpoint"):
+        # The task has a checkpoint and it could not be restored: the turn does not run. Running it
+        # on the wiped workspace started the conversation over without a word (2026-09-06); an
+        # error the person can retry is the honest answer.
+        rec["status"] = "failed"
+        rec["error_message"] = _HYDRATE_FAILED_MESSAGE
+        rec["tried"] = [{"connection": "", "status": "failed", "error": f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}"}]
+        return "failed", [], rec
     # Capture the USER's message as the first trace event of this turn — the runner's
     # stream only carries agent/tool/result, never the prompt, so without this the
     # Traces timeline has no user turn. flatten.js renders type:'user' as a User row.
@@ -5410,6 +6126,25 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     mapped_conn = await _mapped_integration_conn(backend, model_req)
     candidates: list[tuple[str, dict | None]] = ([(mapped_conn["name"], mapped_conn)] if mapped_conn else [])
     candidates += [(n, None) for n in chain]
+    if backend == "codex" and model_req:
+        # The session remembers every model it has run. A gpt-5.3-codex turn after another model
+        # family is refused, in words, rather than run without its tools or restarted on a fresh
+        # session.
+        _v = await _vertex_get(sid) or {}
+        seen = [m for m in str(_v.get("models_seen") or "").split(",") if m]
+        if not seen and resume:
+            try:
+                _turns = (await _session_turns_data(sid)).get("turns") or []
+                seen = [str(t.get("_model") or "") for t in _turns if t.get("_model")]
+            except Exception:  # noqa: BLE001
+                seen = []
+        _why = _codex_switch_refusal(seen, model_req) if resume else ""
+        if _why:
+            rec["error_message"] = _why
+            rec["tried"].append({"connection": "", "status": "refused", "error": _why})
+            candidates = []
+        elif model_req not in seen:
+            await _vertex_upsert(sid, {"models_seen": ",".join(seen + [model_req])})
     # Independent of which chat connection wins below: images are usually a different provider.
     image_auth = await _image_auth(sid, backend)
     vision_auth = await _vision_auth(sid, backend) if backend == "hermes" else None
@@ -5433,7 +6168,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             # Refusing beats running: the only alternative is handing the sandbox a real provider
             # key. The chain moves on, and a fully unbrokerable chain fails the turn loudly.
             rec["tried"].append({"connection": name,
-                                 "error": "credential cannot be brokered; refused"})
+                                 "error": (f"the {backend} harness speaks the provider's native API, which is not "
+                                           f"brokered: run it with HR_SANDBOX_TRUST=owner"
+                                           if backend in _NATIVE_ONLY_BACKENDS else
+                                           "credential cannot be brokered; refused")})
             continue
         body = {"backend": conn.get("backend", backend), "provider": conn.get("provider"),
                 "model": (conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req)),
@@ -5484,6 +6222,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 await control_store.resp_put_running(org, translator.resp_id, sid, rt or "", int(_GW_MAX_TURN_S))
             except Exception:  # noqa: BLE001
                 pass
+        # The turn names its connection, not only the session: on the executor's record (the trace
+        # manifest reads it) and on the translator (the stored response and the turns feed read it).
+        rec["connection"] = name
+        translator.connection = name
         if sid in _cancel_req:
             try:
                 await _sandbox_json(f"/turn/{rt}/cancel", sid, "POST", attempts=2)
@@ -5589,6 +6331,20 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     rec["tried"].append({"connection": name, "status": st,
                                          "error": (s.get("result") or s.get("error") or "")[:200]})
                 break
+        _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
+        if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name
+                and rec["tried"][-1].get("status") and _provider_refused(_last_err)):
+            # The provider refused this key. That is configuration, not an outage to route around:
+            # falling through to the next connection ran the task on another key while the user
+            # believed this one worked. On a self-hosted install every key is the operator's own,
+            # so the rule is the refusal itself, not which store the key came from. Other failures
+            # (a transient error, a timeout) still move on to the next connection.
+            provider = str(conn.get("provider") or "your provider")
+            rec["error_message"] = f"Your {provider} key was refused: {_last_err or 'the provider returned an error'}"
+            status = "failed"
+            rec["status"] = "failed"
+            await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "last_connection": name})
+            break
         if terminal:
             status = terminal
             rec["status"] = "done" if terminal == "completed" else terminal
@@ -5795,6 +6551,30 @@ async def storage_usage() -> dict:
         except (TypeError, ValueError):
             pass
     return {"by_org": by_org}
+
+
+@app.post("/internal/sessions/{sid}/recycle", dependencies=[Depends(_internal_only)])
+async def recycle_session_sandbox(sid: str) -> dict:
+    """Recycle a session's sandbox on purpose: wipe the workspace and restore it from the durable
+    checkpoint, exactly what a follow-up pays after the pool let the old sandbox go. The support
+    matrix uses it to test "a follow-up after the sandbox is gone" for every harness and model
+    without waiting out the pool's cooldown. Refused while a turn is live.
+
+    Hydrate only, never checkpoint first: every turn already ends with a checkpoint, so the blob IS
+    the post-turn workspace, and a checkpoint taken from a sandbox that no longer holds the session
+    would tar an empty directory over it (that is how the first recycle pass lost the history of
+    every session whose sandbox had gone cold)."""
+    v = await _vertex_get(sid)
+    if not v:
+        raise HTTPException(404, "no such session")
+    if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
+        raise HTTPException(409, "a turn is running; recycle after it settles")
+    rec: dict = {}
+    await _hydrate(sid, rec, force=True)
+    if not rec.get("hydrated"):
+        raise HTTPException(502, f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}")
+    return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
+            "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
 
 @app.post("/internal/reindex-traces", dependencies=[Depends(_internal_only)])
@@ -6230,10 +7010,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-                    if status == "failed":
-                        tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                                    "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-                    for ev in tr.complete(status, produced):
+                    # A failed turn says why in the transcript, not only in the response record: fail()
+                    # carries the message as an error event, which the console prints under the answer.
+                    for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                         await bus_emit_bg(ev)
                     await persist(status)
             except asyncio.CancelledError:
@@ -6280,10 +7059,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-                        if status == "failed":
-                            tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                                        "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-                        for ev in tr.complete(status, produced):
+                        # A failed turn says why in the transcript, not only in the response record: fail()
+                        # carries the message as an error event, which the console prints under the answer.
+                        for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                             await emit(ev)
                         await persist(status)
                 except asyncio.CancelledError:
@@ -6339,10 +7117,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-            if status == "failed":
-                tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                            "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-            for ev in tr.complete(status, produced):
+            # A failed turn says why in the transcript, not only in the response record: fail()
+            # carries the message as an error event, which the console prints under the answer.
+            for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
@@ -6607,9 +7384,18 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         asst, tools, files = _output_to_turn_fields(rec.get("output") or [])
         turns.append({"id": rid, "status": rec.get("status"), "user": user_text,
                       "user_files": user_files, "assistant": asst, "tools": tools, "files": files,
+                      # the connection that served the turn, as the record stamps it
+                      "connection": rec.get("connection"),
+                      # the model the turn asked for (a served model other than it on the SAME turn is a
+                      # substitution; a switch turn asks for another model on purpose)
+                      "model": rec.get("model") or None,
+                      # the model the CLI reported it ran, when it reported one
+                      "served_model": rec.get("served_model") or None,
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.
+                      # A failed turn's reason, the sentence its error event carried live.
+                      "error": ((rec.get("error") or {}).get("message") or None) if isinstance(rec.get("error"), dict) else None,
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
@@ -6662,6 +7448,7 @@ async def delete_response(response_id: str, request: Request):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     rec["_deleted"] = True
     try:
+        _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -6967,6 +7754,7 @@ async def cancel_response(response_id: str, request: Request):
             # them consistent) and let the turn's own resp_is_cancelled check settle it.
             rec["status"] = "cancelled"
             try:
+                _resp_cache_forget(response_id)
                 await _blob_put(f"responses/{response_id}.json",
                                 json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", response_id, {"status": "cancelled"})
@@ -7283,7 +8071,7 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
         if cached is not None and path in cached:
             data = cached[path]
             media = mimetypes.guess_type(path)[0] or "application/octet-stream"
-            return data, media, path.rsplit("/", 1)[-1]
+            return data, media, path
         tf = await _workspace_tar(container_id)
         if tf is None:
             return None
@@ -7300,7 +8088,7 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
                 if data is None:
                     return None
                 media = mimetypes.guess_type(path)[0] or "application/octet-stream"
-                return data, media, path.rsplit("/", 1)[-1]
+                return data, media, path
         return None
     data = await _blob_get(f"containers/{container_id}/{file_id}", kb=RESP_BLOB_KB)
     if data is None:
@@ -7375,6 +8163,124 @@ _ARCHIVE_MAX_BYTES = 512 * 1024 * 1024   # in-memory zip cap; beyond this, downl
 class WorkspaceWrite(BaseModel):
     content: str | None = None        # text
     content_b64: str | None = None    # bytes
+
+
+# Declared BEFORE the {path:path} routes below: FastAPI matches routes in declaration order, and
+# declared after them "/files/archive" was read as a file named "archive" (404 for every
+# download-all click since the route was added).
+@app.get("/v1/sessions/{sid}/files/archive")
+async def session_files_archive(sid: str, request: Request, changed: bool = False, files: str = ""):
+    """Every artifact of a session (or one turn) as a single zip, preserving the workspace's
+    folder hierarchy — each entry's path inside the zip is the file's relative path.
+
+    - default: every user-visible file in the working directory (same set as GET .../files)
+    - ?changed=true: only the files created/modified in the MOST RECENT turn
+    - ?files=fid1,fid2: exactly those file ids (e.g. one specific turn's cited outputs)
+    """
+    await _owned_session(request, sid)   # V1C02-004: session-scoped files, org-owned only
+    _reap_spool_dir()   # sweep ZIP temps/orphaned tars whose BackgroundTask cleanup was skipped
+    want_ids = [f.strip() for f in files.split(",") if f.strip()][:200] if files else None
+    # The ZIP is SPOOLED TO DISK, never built in RAM (HR-INF-015): whole-workspace mode streams
+    # each tar member from the disk-cached tarball straight into the zip entry (O(copy-buffer)
+    # memory); the id-scoped modes write their capped per-file payloads. FileResponse streams it
+    # out; the temp file is removed after the response is sent.
+    fd, zpath = tempfile.mkstemp(suffix=".zip", dir=_WS_TAR_DIR)
+    os.close(fd)
+    nput = 0
+    total = 0
+    try:
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+            seen: set[str] = set()
+
+            def _add_bytes(p: str, data: bytes) -> None:
+                nonlocal nput, total
+                p = p.lstrip("/")
+                if p in seen:        # duplicate ids in ?files= — keep the first
+                    return
+                seen.add(p)
+                total += len(data)
+                if total > _ARCHIVE_MAX_BYTES:
+                    raise HTTPException(413, "workspace too large for one archive — download files individually")
+                z.writestr(p, data)
+                nput += 1
+
+            if want_ids:
+                # "All" means all: an archive missing a file it was asked for is refused, with the
+                # names, rather than handed over as if complete.
+                missing: list[str] = []
+                for fid in want_ids:
+                    got = await _container_file_bytes(sid, fid)
+                    if got is None:
+                        missing.append(_wf_path(fid) or fid)
+                        continue
+                    data, _media, fname = got
+                    _add_bytes(fname, data)
+                if missing:
+                    raise HTTPException(404, f"{len(missing)} of {len(want_ids)} files are no longer available: "
+                                             + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
+            elif changed:
+                blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
+                try:
+                    items = ((json.loads(blob) or {}).get("files") or []) if blob else []
+                except Exception:  # noqa: BLE001
+                    items = []
+                for it in items[:200]:
+                    fid, path = it.get("file_id"), it.get("path")
+                    if not (fid and path):
+                        continue
+                    got = await _container_file_bytes(sid, fid)
+                    if got:
+                        _add_bytes(path, got[0])
+            else:
+                tf = await _workspace_tar(sid)
+                if tf is None:
+                    raise HTTPException(404, "no workspace for this session yet — run a task first")
+
+                def _zip_workspace() -> tuple[int, int]:
+                    # Pure sync file work (disk tar in, disk zip out) — runs in a worker thread so
+                    # GB-scale gzip-decompress + deflate never stalls the event loop (SSE streams,
+                    # turn relays, and health probes keep flowing).
+                    n, tot = 0, 0
+                    with tf:
+                        for m in tf.getmembers():
+                            if not m.isreg():
+                                continue
+                            path = m.name[2:] if m.name.startswith("./") else m.name
+                            if not _ws_visible(path) or path.lstrip("/") in seen:
+                                continue
+                            tot += m.size
+                            if tot > _ARCHIVE_MAX_BYTES:
+                                raise HTTPException(413, "workspace too large for one archive — download files individually")
+                            fh = tf.extractfile(m)
+                            if fh is None:
+                                continue
+                            seen.add(path.lstrip("/"))
+                            # Explicit ZipInfo: bare ZipInfo defaults to STORED (uncompressed),
+                            # epoch-1980 mtime, and zero permissions — set them all properly.
+                            zi = zipfile.ZipInfo(path.lstrip("/"), date_time=time.localtime(m.mtime)[:6])
+                            zi.compress_type = zipfile.ZIP_DEFLATED
+                            zi.external_attr = (m.mode & 0xFFFF) << 16
+                            with fh, z.open(zi, "w") as zw:
+                                shutil.copyfileobj(fh, zw, 1024 * 1024)
+                            n += 1
+                    return n, tot
+
+                _n, _tot = await asyncio.to_thread(_zip_workspace)
+                nput += _n
+                total += _tot
+        if not nput:
+            raise HTTPException(404, "no files to archive")
+    except BaseException:
+        try:
+            os.unlink(zpath)
+        except OSError:
+            pass
+        raise
+    scope = "turn" if (want_ids or changed) else "all"
+    bg = BackgroundTask(os.unlink, zpath)
+    return FileResponse(zpath, media_type="application/zip", background=bg,
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
 
 
 @app.get("/v1/sessions/{sid}/files/{path:path}")
@@ -7472,113 +8378,6 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
 
 
-@app.get("/v1/sessions/{sid}/files/archive")
-async def session_files_archive(sid: str, request: Request, changed: bool = False, files: str = ""):
-    """Every artifact of a session (or one turn) as a single zip, preserving the workspace's
-    folder hierarchy — each entry's path inside the zip is the file's relative path.
-
-    - default: every user-visible file in the working directory (same set as GET .../files)
-    - ?changed=true: only the files created/modified in the MOST RECENT turn
-    - ?files=fid1,fid2: exactly those file ids (e.g. one specific turn's cited outputs)
-    """
-    await _owned_session(request, sid)   # V1C02-004: session-scoped files, org-owned only
-    _reap_spool_dir()   # sweep ZIP temps/orphaned tars whose BackgroundTask cleanup was skipped
-    want_ids = [f.strip() for f in files.split(",") if f.strip()][:200] if files else None
-    # The ZIP is SPOOLED TO DISK, never built in RAM (HR-INF-015): whole-workspace mode streams
-    # each tar member from the disk-cached tarball straight into the zip entry (O(copy-buffer)
-    # memory); the id-scoped modes write their capped per-file payloads. FileResponse streams it
-    # out; the temp file is removed after the response is sent.
-    fd, zpath = tempfile.mkstemp(suffix=".zip", dir=_WS_TAR_DIR)
-    os.close(fd)
-    nput = 0
-    total = 0
-    try:
-        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-            seen: set[str] = set()
-
-            def _add_bytes(p: str, data: bytes) -> None:
-                nonlocal nput, total
-                p = p.lstrip("/")
-                if p in seen:        # duplicate ids in ?files= — keep the first
-                    return
-                seen.add(p)
-                total += len(data)
-                if total > _ARCHIVE_MAX_BYTES:
-                    raise HTTPException(413, "workspace too large for one archive — download files individually")
-                z.writestr(p, data)
-                nput += 1
-
-            if want_ids:
-                for fid in want_ids:
-                    got = await _container_file_bytes(sid, fid)
-                    if got:
-                        data, _media, fname = got
-                        _add_bytes(fname, data)
-            elif changed:
-                blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
-                try:
-                    items = ((json.loads(blob) or {}).get("files") or []) if blob else []
-                except Exception:  # noqa: BLE001
-                    items = []
-                for it in items[:200]:
-                    fid, path = it.get("file_id"), it.get("path")
-                    if not (fid and path):
-                        continue
-                    got = await _container_file_bytes(sid, fid)
-                    if got:
-                        _add_bytes(path, got[0])
-            else:
-                tf = await _workspace_tar(sid)
-                if tf is None:
-                    raise HTTPException(404, "no workspace for this session yet — run a task first")
-
-                def _zip_workspace() -> tuple[int, int]:
-                    # Pure sync file work (disk tar in, disk zip out) — runs in a worker thread so
-                    # GB-scale gzip-decompress + deflate never stalls the event loop (SSE streams,
-                    # turn relays, and health probes keep flowing).
-                    n, tot = 0, 0
-                    with tf:
-                        for m in tf.getmembers():
-                            if not m.isreg():
-                                continue
-                            path = m.name[2:] if m.name.startswith("./") else m.name
-                            if not _ws_visible(path) or path.lstrip("/") in seen:
-                                continue
-                            tot += m.size
-                            if tot > _ARCHIVE_MAX_BYTES:
-                                raise HTTPException(413, "workspace too large for one archive — download files individually")
-                            fh = tf.extractfile(m)
-                            if fh is None:
-                                continue
-                            seen.add(path.lstrip("/"))
-                            # Explicit ZipInfo: bare ZipInfo defaults to STORED (uncompressed),
-                            # epoch-1980 mtime, and zero permissions — set them all properly.
-                            zi = zipfile.ZipInfo(path.lstrip("/"), date_time=time.localtime(m.mtime)[:6])
-                            zi.compress_type = zipfile.ZIP_DEFLATED
-                            zi.external_attr = (m.mode & 0xFFFF) << 16
-                            with fh, z.open(zi, "w") as zw:
-                                shutil.copyfileobj(fh, zw, 1024 * 1024)
-                            n += 1
-                    return n, tot
-
-                _n, _tot = await asyncio.to_thread(_zip_workspace)
-                nput += _n
-                total += _tot
-        if not nput:
-            raise HTTPException(404, "no files to archive")
-    except BaseException:
-        try:
-            os.unlink(zpath)
-        except OSError:
-            pass
-        raise
-    scope = "turn" if (want_ids or changed) else "all"
-    bg = BackgroundTask(os.unlink, zpath)
-    return FileResponse(zpath, media_type="application/zip", background=bg,
-                        headers={"Content-Disposition":
-                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
-
-
 @app.get("/v1/containers/{container_id}/files/{file_id}/content")
 async def container_file_content(container_id: str, file_id: str, request: Request):
     await _owned_session(request, container_id)   # V1C02-004: container_id IS the session id
@@ -7587,7 +8386,7 @@ async def container_file_content(container_id: str, file_id: str, request: Reque
         raise HTTPException(404, "file not found")
     data, media, fname = got
     return Response(content=data, media_type=media,
-                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+                    headers={"Content-Disposition": f'attachment; filename="{fname.rsplit("/", 1)[-1]}"'})
 
 
 # Office types with no faithful browser renderer → convert to PDF server-side (LibreOffice) so the
@@ -11769,6 +12568,31 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
+    "gemini": {
+        "label": "Gemini CLI", "backend": "gemini", "status": "ready",
+        "system_prompt": ("You are Gemini CLI, an autonomous coding agent. You work on a real "
+                          "git workspace with shell and file access, reading and editing files "
+                          "and running commands to complete the task end to end."),
+        # run_shell_command/write_file/activate_skill/update_topic are live-turn verified
+        # (2026-09-06, three real captured turns across the slides/sheets/videos starter kits —
+        # the same fix that corrected _gemini_to_claude's tool_use field names surfaced these
+        # real names). The rest (read_file/replace/search_file_content/glob/web_fetch/
+        # google_web_search/write_todos/save_memory) are still doc-sourced, not yet seen live —
+        # confirm before relying on any of THOSE for enforcement, the same silent-no-op trap the
+        # opencode/qwen comments warn about. Note "replace", not "edit" — gemini-cli's own name
+        # for the edit tool. update_topic isn't in gemini-cli's own public tool docs at all (the
+        # kits' skills invoke it constantly for a running strategic-intent summary); it may be a
+        # newer addition than the docs snapshot this catalog was first built from.
+        "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("replace", "Edit"),
+                  ("search_file_content", "Search"), ("glob", "Glob"),
+                  ("web_fetch", "Web Fetch"), ("google_web_search", "Web Search"),
+                  ("write_todos", "Todo"), ("save_memory", "Memory"),
+                  ("activate_skill", "Skill"), ("update_topic", "Topic")],
+        # No confirmed hard per-tool kill switch in headless mode (only --allowed-mcp-server-names
+        # gates MCP servers) — instruction tier until proven otherwise, same as qwen/cline/codex.
         "tool_enforcement": "instruction",
     },
     "cline": {

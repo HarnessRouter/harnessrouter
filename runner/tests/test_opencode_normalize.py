@@ -234,13 +234,16 @@ def test_resume_finds_a_session_still_sitting_in_the_write_ahead_log():
     assert "--session" in cmd and "ses_wal" in cmd
 
 
-def test_key_goes_to_the_environment_and_never_into_the_config_file():
+def test_the_real_key_stays_in_the_runner_and_never_enters_the_config_or_the_env():
+    # an OpenAI-shape turn rides the loopback relay: the env carries a per-turn placeholder the relay
+    # resolves to the real key, the config references the env, and the real key is in neither
     cmd, d, env = _argv()
-    assert env["HR_OPENCODE_KEY"] == "sk-test"
+    assert env["HR_OPENCODE_KEY"] != "sk-test" and env["HR_OPENCODE_KEY"]
     cfg = _json.loads(open(f"{d}/.harness/opencode.json").read())
     assert cfg["provider"]["hr"]["options"]["apiKey"] == "{env:HR_OPENCODE_KEY}"
     assert "sk-test" not in open(f"{d}/.harness/opencode.json").read()
-    assert cfg["provider"]["hr"]["options"]["baseURL"] == "https://relay.example/v1"
+    assert cfg["provider"]["hr"]["options"]["baseURL"].startswith("http://127.0.0.1:")
+    assert cfg["provider"]["hr"]["options"]["baseURL"].endswith("/v1")
 
 
 def test_a_prompt_starting_with_a_dash_is_not_read_as_a_flag():
@@ -352,3 +355,29 @@ def test_config_lives_under_harness_not_the_workspace_root():
     assert not os.path.exists(f"{d}/opencode.json")
     assert os.path.exists(f"{d}/.harness/opencode.json")
     assert env["OPENCODE_CONFIG"] == f"{d}/.harness/opencode.json"
+
+
+def test_a_finished_tool_keeps_its_own_clock_and_carries_its_result():
+    """opencode reports a tool once it is done. Its state.time (ms) stamps the call at the start
+    and the result at the end, so the seconds in between meter as agent work; the output rides
+    on the result so the trace shows it."""
+    out, _ = _run([_ev("tool_use", part={"type": "tool", "id": "prt_9", "tool": "bash",
+                                         "state": {"status": "completed", "input": {"command": "sleep 25"},
+                                                   "output": "done\n", "time": {"start": 1788600000000, "end": 1788600025300}}})])
+    call = [e for e in out if e.get("type") == "assistant"][0]
+    res = [e for e in out if e.get("type") == "user"][0]
+    assert call["_ts"] == 1788600000.0 and res["_ts"] == 1788600025.3
+    r = res["message"]["content"][0]
+    assert r["type"] == "tool_result" and r["tool_use_id"] == "prt_9" and r["content"] == "done\n" and r["is_error"] is False
+
+
+def test_a_failed_tool_carries_its_error_as_the_result():
+    out, _ = _run([_ev("tool_use", part={"type": "tool", "id": "p2", "tool": "bash",
+                                         "state": {"status": "error", "error": "boom", "time": {"start": 1000000, "end": 1002000}}})])
+    res = [e for e in out if e.get("type") == "user"][0]["message"]["content"][0]
+    assert res["is_error"] is True and res["content"] == "boom" and res["tool_use_id"] == "p2"
+
+
+def test_a_tool_without_a_clock_is_stamped_on_arrival():
+    out, _ = _run([_ev("tool_use", part={"type": "tool", "id": "p3", "tool": "bash", "state": {"status": "completed", "input": {}}})])
+    assert all("_ts" not in e for e in out), "no clock of its own: the runner stamps it when it lands"

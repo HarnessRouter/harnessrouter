@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,cline,omp}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -187,6 +187,7 @@ backend_bin() {
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
     opencode) echo "$TOOLS/bin/opencode" ;;
     qwen)   echo "$TOOLS/bin/qwen" ;;
+    gemini) echo "$TOOLS/bin/gemini" ;;
     cline)  echo "$TOOLS/bin/cline" ;;
     omp)    echo "$TOOLS/bin/omp" ;;
   esac
@@ -271,6 +272,16 @@ install_backends() {
   if wanted qwen && [ ! -x "$(backend_bin qwen)" ]; then
     echo "[harnessrouter] installing Qwen Code (Apache-2.0)…"
     try_install "Qwen Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund @qwen-code/qwen-code || true
+  fi
+
+  if wanted gemini && [ ! -x "$(backend_bin gemini)" ]; then
+    echo "[harnessrouter] installing Gemini CLI (Apache-2.0)…"
+    # Pinned, same rationale as cline's: 0.58.0 is the release runner/server.py's gemini code was
+    # verified against — the real stream-json field names (tool_name/tool_id/parameters, not the
+    # guessed id/name/input a first pass shipped with), --approval-mode/--skip-trust being
+    # load-bearing, and --resume latest's semantics all came from reading THIS version's own
+    # source. A silent bump to `latest` re-gambles all of it on a release nobody has checked.
+    try_install "Gemini CLI" npm install -g --prefix "$TOOLS" --no-audit --no-fund "@google/gemini-cli@${HR_GEMINI_VERSION:-0.58.0}" || true
   fi
 
   if wanted cline && [ ! -x "$(backend_bin cline)" ]; then

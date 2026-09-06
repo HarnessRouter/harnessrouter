@@ -14,6 +14,9 @@ const LOGO: Record<string, string> = {
   qwen: '/logos/qwen.png',
   cline: '/logos/cline.png',
   omp: '/logos/omp.png',
+  // gemini: deliberately absent. No brand asset has been added to /public/logos yet — Google's
+  // mark isn't ours to fetch and drop in without checking its usage terms, so this backend falls
+  // back to the generic glyph below until a properly sourced asset lands.
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {
