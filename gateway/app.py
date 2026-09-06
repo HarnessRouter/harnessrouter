@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import re
+import collections
 import time
 import uuid
 import zipfile
@@ -628,6 +629,39 @@ async def _redis_pump() -> None:
             _bus_deliver(m["org"], m["harness"], m["member"], m["sid"], m["rid"], m["ev"])
 
 
+# The bus tasks are HELD here for the life of the process. asyncio keeps only a weak reference to
+# a task, so a task created and dropped is collected at some later GC pass, mid-await, and its
+# coroutine is closed: "Task was destroyed but it is pending!" and, from the pubsub listen loop,
+# "aclose(): asynchronous generator is already running". Measured 2026-09-06 08:07Z to 08:10Z: every
+# gateway replica lost its Redis subscriber that way within minutes of booting, cross-replica events
+# stopped, and _redis_ok["sub"] stayed True, so the polling fallback never engaged and a console saw
+# another replica's turn only through its own re-reads. A held task is never collected; one that
+# ends for any reason is logged and started again.
+_BG_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _spawn_forever(name: str, fn) -> asyncio.Task:
+    """Run `fn()` as a held background task; whenever it ends (return, error), say so and restart it."""
+    loop = asyncio.get_running_loop()
+
+    def _done(t: asyncio.Task) -> None:
+        if _BG_TASKS.get(name) is not t:
+            return                                   # superseded (tests, a restart already made)
+        _BG_TASKS.pop(name, None)
+        if t.cancelled():
+            return                                   # shutdown
+        print(f"[bus] task {name} ended: {t.exception()!r}; restarting", flush=True)
+        if name == "redis-listen":
+            _redis_ok["sub"] = False                 # until the new listener subscribes
+        if not loop.is_closed():
+            loop.call_later(1.0, _spawn_forever, name, fn)
+
+    t = loop.create_task(fn(), name=name)
+    _BG_TASKS[name] = t
+    t.add_done_callback(_done)
+    return t
+
+
 async def _redis_listen() -> None:
     """Every replica tails the shared channel and delivers into its own buffers + subscribers."""
     while True:
@@ -868,6 +902,12 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
     out = {k: conn[k] for k in _AUTH_FIELDS if conn.get(k) is not None}
     for secret in _SECRET_AUTH_FIELDS:
         out.pop(secret, None)
+    # The same base the broker would forward to: an Azure endpoint pasted bare from the portal
+    # gains its /openai/v1 here as well, because in owner trust the sandbox talks to the provider
+    # with this base directly and a bare one 404s on every tool call ("Resource not found", the
+    # matrix's second Azure column, 2026-09-06: text turns answered, tool turns did not).
+    if out.get("base_url"):
+        out["base_url"] = _provider_base_url(str(conn.get("provider") or ""), str(out["base_url"]))
 
     # Self-hosted bring-your-own-key. Brokering exists because a MULTI-TENANT sandbox runs
     # someone else's agent against OUR key, so the key must never enter it. Self-hosted inverts
@@ -894,8 +934,20 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
               flush=True)
         return None
     out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""))
-    out["base_url"] = f"{PUBLIC_BASE_URL}/v1/llm"
+    out["base_url"] = f"{_sandbox_broker_origin()}/v1/llm"
     return out
+
+
+def _sandbox_broker_origin() -> str:
+    """Where a sandbox reaches the broker. Hosted, the public base URL. Self-hosted, the runner is
+    a process beside the gateway and loopback is the broker's own door: the public URL is the
+    console's, whose sign-in wall turns away any client that does not present a Bearer token
+    (an Anthropic-shape client sends x-api-key), so opencode on a direct Anthropic key answered
+    "Not Found" on every turn (2026-09-06 support matrix)."""
+    local = os.environ.get("HARNESS_GATEWAY_URL", "").rstrip("/")
+    if local and _pool_is_local():
+        return local
+    return PUBLIC_BASE_URL
 
 
 def _conn_public(conn: dict) -> dict:
@@ -1416,6 +1468,8 @@ async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
 
 
 async def _blob_delete(file_id: str, kb: str = BLOB_KB) -> bool:
+    if kb == TRACE_KB:
+        _card_cache_forget(file_id)
     return await BACKING.blob.delete(kb, file_id)
 
 
@@ -1461,10 +1515,14 @@ def _manifest_index_keys(base: str, harness_id: str, member_id: str, workspace: 
 _SCOPE_FIELDS = ("harness_id", "member_id", "workspace")
 
 
-async def _index_manifest(base: str, manifest: dict) -> None:
+async def _index_manifest(base: str, manifest: dict, *, prior: dict | None = None,
+                          known_live: bool = False) -> None:
     """Persist a manifest to the flat index and its narrow per-harness/per-member/per-workspace
     mirrors, so all read surfaces (unfiltered Recents, per-harness Traces, per-member 'my
-    sessions', per-workspace console views) agree.
+    sessions', per-workspace console views) agree. A caller that has just read the prior manifest
+    passes it as `prior`; one that has just written the session vertex itself passes
+    `known_live=True`: the turn-start card paid two reads of the same manifest and a vertex read
+    of the vertex it wrote a moment earlier.
 
     The scoping fields decide WHICH mirrors are written. A card that arrives without one (a
     finalize or reconcile built from a turn record that lost it) used to rewrite only the flat
@@ -1475,15 +1533,16 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     # A write that lands after the session's delete (a finalize or reconcile racing it) must not
     # resurrect the card: the tombstone on the vertex is the durable, replica-safe answer.
     _sid = str(manifest.get("session_id") or base.rsplit("_", 1)[-1])
-    try:
-        _v = await _vertex_get(_sid)
-    except Exception:  # noqa: BLE001
-        _v = None
-    if _v and str(_v.get("status") or "") == "deleted":
-        return
+    if not known_live:
+        try:
+            _v = await _vertex_get(_sid)
+        except Exception:  # noqa: BLE001
+            _v = None
+        if _v and str(_v.get("status") or "") == "deleted":
+            return
     missing = [k for k in _SCOPE_FIELDS if not manifest.get(k)]
     if missing:
-        prior = await _prior_manifest(base)
+        prior = prior if prior is not None else await _prior_manifest(base)
         for k in missing:
             if prior.get(k):
                 manifest[k] = prior[k]
@@ -1491,6 +1550,8 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
                                 str(manifest.get("member_id") or ""),
                                 str(manifest.get("workspace") or ""))
+    for k in keys:
+        _card_cache_forget(k)
     await asyncio.gather(*[_trace_put(k, data) for k in keys])
 
 
@@ -1506,7 +1567,7 @@ async def _prior_manifest(prefix: str) -> dict:
         return {}
 
 
-async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
+async def _prior_session_totals(prefix: str, manifest: dict | None = None) -> tuple[float, dict]:
     """The session's credits/usage totals as of the CURRENT manifest — the one durable source both
     the turn-accept placeholder write and _trace_finalize must agree on. Whichever one omits these
     fields (rather than reading + carrying them forward) resets the session total to zero for every
@@ -1515,7 +1576,10 @@ async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
     if not prefix:
         return 0.0, {}
     try:
-        pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
+        if manifest is not None:
+            pm = json.dumps(manifest).encode() if manifest else b""
+        else:
+            pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
         if not pm:
             return 0.0, {}
         prior = json.loads(pm)
@@ -1533,8 +1597,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     session's credits/usage totals SO FAR forward (via _prior_session_totals) rather than omit
     them: an omitted field here is exactly what _trace_finalize's own accumulate would read back as
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
-    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "")
-    _pm = await _prior_manifest(tr.get("prefix") or "")
+    _pm = await _prior_manifest(tr.get("prefix") or "")          # the one read of the prior card
+    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "", _pm)
     prior_title = str(_pm.get("title") or "") if str(_pm.get("title_custom") or "") == "1" else ""
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
@@ -1553,7 +1617,7 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
         "trace_blob": tr.get("prefix"), "chunks": [],
         "finished_at": time.time(), "schema_version": 1,
         "credits": prior_credits, "usage": prior_usage,
-    })
+    }, prior=_pm, known_live=True)   # the vertex was written by this accept a moment ago
 
 
 async def _deindex_manifest(base: str, manifest: dict, *scopes: dict) -> None:
@@ -1880,6 +1944,9 @@ async def _brain_mint_room(sid: str) -> str | None:
     return None
 
 
+_HYDRATE_FAILED_MESSAGE = "This task's files and conversation could not be restored just now, so nothing ran. Try again in a moment."
+
+
 async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
     pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
@@ -1907,9 +1974,20 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             except Exception:  # noqa: BLE001
                 pass                        # probe is best-effort; fall through to full hydrate
         # Stream the checkpoint tar VG blob -> runner /hydrate without buffering it (HR-INF-015).
-        r = await _hydrate_relay(sid, params)
-        rec["hydrated"] = r.status_code < 400
-        rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+        # A restore that fails while a checkpoint exists is tried once more: under a burst of cold
+        # sessions (seven at once, 2026-09-06 11:00Z) one in ten to twenty restores failed, and the
+        # turn then ran on the wiped workspace and started the conversation over ("no rollout",
+        # "No saved session found", "couldn't resume"); the checkpoint itself was intact every time.
+        for attempt in range(2):
+            r = await _hydrate_relay(sid, params)
+            rec["hydrated"] = r.status_code < 400
+            rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+            if rec["hydrated"] or not want_sha:
+                break
+            rec["hydrate_error"] = f"HTTP {r.status_code} {(r.text or '')[:200]}"
+            print(f"[hydrate] restore failed sid={sid} attempt={attempt + 1} {rec['hydrate_error']}", flush=True)
+            if attempt == 0:
+                await asyncio.sleep(1.0)
         if rec["hydrated"]:
             # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
             # turn. Anything an app wrote since then has just been wiped out of it, so put it back
@@ -1917,11 +1995,13 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             # reaches this: that workspace was never wiped, so it still holds those writes.
             rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
         if not rec["hydrated"] and want_sha:
-            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed. Do NOT let this
-            # turn checkpoint over the good blob from a workspace that isn't that checkpoint.
+            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, twice. The turn
+            # must not run on this workspace (the caller refuses it), and this turn must never
+            # checkpoint over the good blob from a workspace that isn't that checkpoint.
             rec["hydrate_failed_with_checkpoint"] = True
     except Exception as e:  # noqa: BLE001
         rec["hydrate_error"] = str(e)[:200]
+        print(f"[hydrate] restore raised sid={sid} {rec['hydrate_error']}", flush=True)
         if str(v.get("ws_sha") or ""):
             rec["hydrate_failed_with_checkpoint"] = True
 
@@ -2460,6 +2540,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         pass
     rec["status"] = settled
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
         await _vg_upsert("HarnessResponse", rid, {"status": settled})
     except Exception:  # noqa: BLE001
@@ -2495,8 +2576,8 @@ async def _start_bus() -> None:
     global _redis_out
     if REDIS_URL:
         _redis_out = asyncio.Queue(maxsize=100_000)
-        asyncio.create_task(_redis_pump())
-        asyncio.create_task(_redis_listen())
+        _spawn_forever("redis-pump", _redis_pump)
+        _spawn_forever("redis-listen", _redis_listen)
 
 
 @app.on_event("startup")
@@ -2915,6 +2996,34 @@ def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path
     return json.dumps(doc).encode() if changed else body
 
 
+_GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
+
+
+def _google_unknown_field(refused: bytes) -> str:
+    """The top-level request field Google's OpenAI-compatible endpoint refused as unknown, or "".
+    A field named inside an object ("at 'tools[0].function'") is not one this relay drops."""
+    try:
+        text = refused.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
+    if "Cannot find field" not in text:
+        return ""
+    m = _GOOGLE_UNKNOWN_RE.search(text)
+    return m.group(1) if m else ""
+
+
+def _without_field(body: bytes, field: str) -> bytes:
+    """The JSON request without one top-level field; a body that is not a JSON object is returned as is."""
+    try:
+        doc = json.loads(body or b"")
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or field not in doc:
+        return body
+    doc.pop(field)
+    return json.dumps(doc).encode()
+
+
 def _broker_token(request: Request) -> str:
     """CLIs differ in how they present a key (Bearer / api-key / x-api-key) — accept all three
     rather than special-casing per backend, which would be three paths for one decision."""
@@ -2943,7 +3052,7 @@ def _with_provider_base(conn: dict | None) -> dict | None:
 
 
 _PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
-                                  r"insufficient_quota|rate limit|quota|forbidden|refused", re.IGNORECASE)
+                                  r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
 
 
 def _provider_refused(err: str) -> bool:
@@ -2982,6 +3091,17 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
     return _with_provider_base(conn)
 
 
+def _provider_base_url(provider: str, base_url: str) -> str:
+    """The URL the broker forwards to. An Azure OpenAI endpoint is pasted from the portal as the
+    bare resource (https://<resource>.openai.azure.com/); its OpenAI-compatible surface lives
+    under /openai/v1, and a bare base forwarded as-is 404s on every call ("Resource not found",
+    the matrix's Azure column, 2026-09-06). Any other provider's base is used as given."""
+    base = (base_url or "").strip().rstrip("/")
+    if base and provider.lower() in ("azure", "azure-foundry") and "/openai/" not in base:
+        base += "/openai/v1"
+    return base
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
     claims = _verify_turn_cred(_broker_token(request))
@@ -2993,7 +3113,7 @@ async def llm_broker(path: str, request: Request):
     if not conn:
         raise HTTPException(502, "connection unavailable")
 
-    base = str(conn.get("base_url") or "").rstrip("/")
+    base = _provider_base_url(str(conn.get("provider") or ""), str(conn.get("base_url") or ""))
     if not base:
         raise HTTPException(502, "connection has no base_url")
     # CLIs append their own version segment (…/v1/messages, …/v1/responses) while provider
@@ -3023,6 +3143,28 @@ async def llm_broker(path: str, request: Request):
     rc = _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
     up = await rc.send(req, stream=True)
+    if provider == "google" and up.status_code == 400:
+        # Google's OpenAI-compatible endpoint refuses a request that names any field it does not
+        # know ("Unknown name \"store\": Cannot find field."), and the harnesses send OpenAI's
+        # optional fields freely (pi and dsh: store, seed; measured 2026-09-06 on gemini-3.6-flash).
+        # The refusal names the field; the request goes again without it, a few fields at most.
+        refused = await up.aread()
+        for _ in range(4):
+            unknown = _google_unknown_field(refused)
+            if not unknown:
+                break
+            await up.aclose()
+            body = _without_field(body, unknown)
+            print(f"[broker] google refused field {unknown!r}; sent again without it sid={sid}", flush=True)
+            req = rc.build_request(request.method, url, headers=headers, content=body or None)
+            up = await rc.send(req, stream=True)
+            if up.status_code != 400:
+                break
+            refused = await up.aread()
+        if up.status_code == 400:
+            return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
+                            headers={k: val for k, val in up.headers.items()
+                                     if k.lower() not in ("content-length", "transfer-encoding", "connection")})
 
     async def pump():
         try:
@@ -3248,24 +3390,32 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
     lst = await _blob_list(prefix, limit=limit, cursor=cursor or None)
 
     async def _card(item: dict):
-        b = await _blob_get(item["file_id"], kb=TRACE_KB)
-        if not b:
-            return None
-        # A mirror card whose flat card is gone is an orphan: a delete on an older version
-        # removed the flat card and left the mirror (the delete now clears every mirror, but an
-        # install upgrading brings its orphans with it). It is dropped here, and removed so the
-        # next list does not pay for it either. Only mirrors are checked: the flat index IS the
-        # manifest, so the read above already answered for it.
         fid = str(item["file_id"])
-        if "/idx/" not in fid:
-            flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
-            if not await _blob_get(flat, kb=TRACE_KB):
-                await _blob_delete(fid, kb=TRACE_KB)
+        m = _CARD_CACHE.get(fid)
+        if m is not None:
+            _CARD_CACHE.move_to_end(fid)
+        else:
+            b = await _blob_get(fid, kb=TRACE_KB)
+            if not b:
                 return None
-        try:
-            m = json.loads(b)
-        except Exception:  # noqa: BLE001
-            return None
+            try:
+                m = json.loads(b)
+            except Exception:  # noqa: BLE001
+                return None
+            # A mirror card whose flat card is gone is an orphan: a delete on an older version
+            # removed the flat card and left the mirror (the delete now clears every mirror, but
+            # the orphans made before it are still listed). It is dropped here, and removed so the
+            # next list does not pay for it either. Only mirrors are checked: the flat index IS the
+            # manifest, so the read above already answered for it.
+            if "/idx/" not in fid:
+                flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
+                if not await _blob_get(flat, kb=TRACE_KB):
+                    await _blob_delete(fid, kb=TRACE_KB)
+                    return None
+            if str(m.get("status") or "") not in _CARD_LIVE:
+                _CARD_CACHE[fid] = m
+                while len(_CARD_CACHE) > _CARD_CACHE_MAX:
+                    _CARD_CACHE.popitem(last=False)
         if member and (m.get("member_id") or "") != member:
             return None
         if harness and (m.get("harness_id") or "") != harness:
@@ -3279,9 +3429,19 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
         # rewrites the card (a roll under a live turn, 2026-09-04). The vertex is the durable
         # truth, so the read repairs the card from it, once, and the list stops lying.
         if str(m.get("status") or "") in _CARD_LIVE and m.get("session_id"):
-            fixed = await _card_settle(str(m["session_id"]), m)
-            if fixed:
-                m = fixed
+            sid_ = str(m["session_id"])
+            # A card found genuinely live is not asked again for a few seconds: with N tabs each
+            # listing every 15 s, the settle read per live card per list was one graph read per
+            # running task per tab.
+            if time.time() - _SETTLE_LIVE_AT.get(sid_, 0.0) > _SETTLE_LIVE_S:
+                fixed = await _card_settle(sid_, m)
+                if fixed:
+                    m = fixed
+                    _SETTLE_LIVE_AT.pop(sid_, None)
+                else:
+                    _SETTLE_LIVE_AT[sid_] = time.time()
+                    if len(_SETTLE_LIVE_AT) > 5000:
+                        _SETTLE_LIVE_AT.clear()
         return {k: m.get(k) for k in _TRACE_CARD_FIELDS}
 
     cards = [c for c in await asyncio.gather(*[_card(it) for it in lst.get("items", [])]) if c]
@@ -3289,6 +3449,16 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
 
 
 _CARD_LIVE = {"running", "starting", "in_progress"}
+# A session card changes only while its turn is live (and on delete). Terminal cards are served
+# from memory: every open Harnesses page re-read up to 200 cards every 15 s, one blob each.
+_CARD_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_CARD_CACHE_MAX = 8000
+_SETTLE_LIVE_AT: dict[str, float] = {}
+_SETTLE_LIVE_S = 10.0
+
+
+def _card_cache_forget(file_id: str) -> None:
+    _CARD_CACHE.pop(file_id, None)
 
 
 async def _card_settle(sid: str, m: dict) -> dict | None:
@@ -3433,7 +3603,7 @@ async def patch_session(sid: str, body: SessionPatch, request: Request) -> dict:
     # blob is what every LIST renders. Writing only the vertex looks like it worked and reverts on
     # the next load. `title_custom` is what stops the next turn regenerating it from your message.
     await _vg_upsert("HarnessSession", sid, {"title": title})
-    base = await _trace_base(sid)
+    base = _prefix_from_vertex(sid, _v)   # the vertex _owned_session already read
     if base:
         m = await _prior_manifest(base)
         if m:
@@ -3511,6 +3681,7 @@ async def _stop_session(org: str, sid: str, v: dict, rid_hint: str = "") -> tupl
             rec = await _resp_get(rid)
             if rec and str(rec.get("status") or "") in ("running", "in_progress", "queued", "starting"):
                 rec["status"] = "cancelled"
+                _resp_cache_forget(rid)
                 await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", rid, {"status": "cancelled"})
         except Exception:  # noqa: BLE001
@@ -3767,7 +3938,11 @@ async def _require_integrations_admin(request: Request) -> dict:
 _PROVIDER_CATALOG: dict[str, dict] = {
     "anthropic": {
         "label": "Anthropic",
-        "base_url": "https://api.anthropic.com",
+        # With the "/v1", like every other direct provider here and like the broker's own default
+        # (_PROVIDER_BASE): the broker joins the resource ("messages") straight onto it, and a
+        # base stored without the suffix sent a brokered Messages call to
+        # https://api.anthropic.com/messages. The claude CLI's runner path strips it again.
+        "base_url": "https://api.anthropic.com/v1",
         "fields": [],
         "secret": "api_key",
         "secret_label": "API Key",
@@ -3803,6 +3978,18 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
         "key_hint": "vck_…",
+    },
+    # Google AI Studio: #71 wired the provider (broker base, harness wiring, vendor models) but not
+    # this table, and the integrations document is validated against this table on every write, so
+    # a Gemini key was refused with "integration needs a name and a known provider (got 'google')"
+    # on 0.13.7 (measured while wiring the support matrix, 2026-09-06).
+    "google": {
+        "label": "Google AI Studio",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "AIza…",
     },
     "llmtr": {
         "label": "LLMTR",
@@ -5261,6 +5448,7 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
 async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None,
                     status: str, created_at: float, store: bool) -> None:
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -5269,7 +5457,25 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
                      "created_at": str(created_at), "store": "1" if store else "0"})
 
 
+# A response record is written while its turn runs and once more when it ends; after that it is
+# immutable until a delete tombstones it. Every open conversation re-reads every turn record of
+# its session on a 4 s poll, so a twenty-turn session cost twenty blob reads per tab per poll and
+# the graph gateway saturated at ~15 open tabs (2026-09-06). Terminal records are served from
+# memory; a running record is still read every time; every writer forgets the key it writes.
+_RESP_TERMINAL = {"completed", "failed", "cancelled", "incomplete", "done", "max_turns", "timeout"}
+_RESP_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_RESP_CACHE_MAX = 4000
+
+
+def _resp_cache_forget(rid: str) -> None:
+    _RESP_CACHE.pop(rid, None)
+
+
 async def _resp_get(rid: str) -> dict | None:
+    hit = _RESP_CACHE.get(rid)
+    if hit is not None:
+        _RESP_CACHE.move_to_end(rid)
+        return hit
     b = await _blob_get(f"responses/{rid}.json", kb=RESP_BLOB_KB)
     if not b:
         return None
@@ -5277,7 +5483,13 @@ async def _resp_get(rid: str) -> dict | None:
         rec = json.loads(b)
     except Exception:  # noqa: BLE001
         return None
-    return None if rec.get("_deleted") else rec
+    if rec.get("_deleted"):
+        return None
+    if str(rec.get("status") or "") in _RESP_TERMINAL:
+        _RESP_CACHE[rid] = rec
+        while len(_RESP_CACHE) > _RESP_CACHE_MAX:
+            _RESP_CACHE.popitem(last=False)
+    return rec
 
 
 def _strip_internal(d: dict) -> dict:
@@ -5473,6 +5685,14 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
     await _hydrate(sid, rec)
+    if rec.get("hydrate_failed_with_checkpoint"):
+        # The task has a checkpoint and it could not be restored: the turn does not run. Running it
+        # on the wiped workspace started the conversation over without a word (2026-09-06); an
+        # error the person can retry is the honest answer.
+        rec["status"] = "failed"
+        rec["error_message"] = _HYDRATE_FAILED_MESSAGE
+        rec["tried"] = [{"connection": "", "status": "failed", "error": f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}"}]
+        return "failed", [], rec
     # Capture the USER's message as the first trace event of this turn — the runner's
     # stream only carries agent/tool/result, never the prompt, so without this the
     # Traces timeline has no user turn. flatten.js renders type:'user' as a User row.
@@ -5955,6 +6175,8 @@ async def recycle_session_sandbox(sid: str) -> dict:
         raise HTTPException(409, "a turn is running; recycle after it settles")
     rec: dict = {}
     await _hydrate(sid, rec, force=True)
+    if not rec.get("hydrated"):
+        raise HTTPException(502, f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}")
     return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
             "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
@@ -6823,6 +7045,7 @@ async def delete_response(response_id: str, request: Request):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     rec["_deleted"] = True
     try:
+        _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -7128,6 +7351,7 @@ async def cancel_response(response_id: str, request: Request):
             # them consistent) and let the turn's own resp_is_cancelled check settle it.
             rec["status"] = "cancelled"
             try:
+                _resp_cache_forget(response_id)
                 await _blob_put(f"responses/{response_id}.json",
                                 json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", response_id, {"status": "cancelled"})

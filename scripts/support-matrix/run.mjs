@@ -1,7 +1,8 @@
 // Support matrix runner: harness x model x provider x {first, followup, switch, artifact, recycle}.
 // Drives the console as one user; one task at a time per worker; resumable (pairs already complete
 // in the results file are skipped). Env: BASE, HR_USER, HR_PASS, HARNESSES (comma), PROVIDER
-// (a label for the column), RESULTS (json path), LOG (append log), MODELS (optional comma filter),
+// (a label for the column), RESULTS (json path), LOG (append log), MODELS (optional comma filter of the
+// pairs to run), PROVIDER_MODELS (the column's own model table, which bounds the switch partner),
 // IGNORE_TLS=1 for a self-signed instance.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -91,7 +92,13 @@ try {
     for (let i = 0; i < 40 && models.length < served; i++) { await page.keyboard.press('Escape'); await sleep(1500); await page.click('.ar2-chip'); await sleep(400); models = await readMenu(); }
     if (models.length < served) log(`MENU ${h} shows ${models.length} of ${served} served models after 60 s`);
     await page.keyboard.press('Escape'); await sleep(300);
-    const enabled = models.filter((m) => m.ok && (!process.env.MODELS || process.env.MODELS.split(',').includes(m.id))).map((m) => m.id);
+    // MODELS pins which PAIRS run (a re-run of the missing ones); the switch scenario still needs another
+    // model this harness can run, so the switch target comes from the whole runnable list, not the pinned one.
+    // PROVIDER_MODELS is the column's own table: a switch partner outside it would run on another
+    // provider through the map's fallback, and a session that changes provider is not what any row measures
+    const scope = process.env.PROVIDER_MODELS ? new Set(process.env.PROVIDER_MODELS.split(',')) : null;
+    const runnableAll = models.filter((m) => m.ok && (!scope || scope.has(m.id))).map((m) => m.id);
+    const enabled = runnableAll.filter((id) => !process.env.MODELS || process.env.MODELS.split(',').includes(id));
     log(`HARNESS ${h} models ${models.length} runnable ${enabled.length}: ${enabled.join(',')}`);
     for (const m of enabled) {
       const res = load(); const k = key(h, m);
@@ -106,7 +113,10 @@ try {
         if (rec.first.ok) {
           rec.followup = expectWord(await turn(`Reply with exactly: M2-${m}`), `M2-${m}`);
           log(`FOLLOWUP ${k} ${rec.followup.ok ? 'ok' : 'FAIL'} ${rec.followup.s}s ${rec.followup.why}`);
-          const other = enabled.find((x) => x !== m) || null;
+          // the partner must be one Codex can carry on with: gpt-5.3-codex and the gpt-5.6 line refuse each
+          // other's threads by design (#73), and that rule is not what the switch row measures
+          const conflicts = (a, c) => (a === 'gpt-5.3-codex' && c.startsWith('gpt-5.6')) || (c === 'gpt-5.3-codex' && a.startsWith('gpt-5.6'));
+          const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || runnableAll.find((x) => x !== m) || null;
           if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: other }).first().click(); await sleep(300); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };
           log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : rec.switch.ok === null ? 'n/a' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
@@ -118,7 +128,9 @@ try {
           log(`ARTIFACT ${k} ${rec.artifact.ok ? 'ok' : 'FAIL'} ${rec.artifact.s}s ${rec.artifact.why}`);
           // the sandbox is let go on purpose (what the pool does between visits) and the next turn must
           // carry on from the durable checkpoint: the history, the files, the resume id
-          const rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid);
+          // the route refuses with 409 while the previous turn is still settling: ask again a few times
+          let rc = { code: 0, body: '' };
+          for (let i = 0; i < 6; i++) { rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid); if (rc.code !== 409) break; await sleep(5000); }
           if (rc.code === 200) {
             await sleep(2000);
             const r5 = await turn('What exact word did I ask you to reply with in my very first message of this task? Reply with just that word.');
