@@ -70,7 +70,12 @@ export function containerFileUrl(f: RespFile): string {
  *  artifact bytes is this helper; renderers turn the Blob into an object URL. */
 export async function fetchFileBlob(url: string): Promise<Blob> {
   const r = await harnessFetch(url, { headers: authHeaders() });
-  if (!r.ok) throw new Error(`${r.status}`);
+  if (!r.ok) {
+    // the server says why (an archive refused by name, a file no longer there); keep its sentence
+    let why = '';
+    try { why = String(((await r.json()) || {}).detail || ''); } catch { /* no body */ }
+    throw new Error(why || `${r.status}`);
+  }
   return r.blob();
 }
 

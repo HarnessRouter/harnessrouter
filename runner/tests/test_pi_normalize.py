@@ -172,7 +172,9 @@ def test_build_tokenrouter_gpt5_uses_openai_responses(tmp_path):
                       model="gpt-5.4-mini")
     mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
     assert mj["providers"]["hr"]["api"] == "openai-responses"
-    assert mj["providers"]["hr"]["baseUrl"] == "https://tr.example/v1"
+    # an OpenAI-shape turn rides the loopback relay: the relay's base, a placeholder key on disk
+    assert mj["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:") and mj["providers"]["hr"]["baseUrl"].endswith("/v1")
+    assert mj["providers"]["hr"]["apiKey"].startswith("hr-relay-")
     assert cmd[cmd.index("--provider") + 1] == "hr"
 
 

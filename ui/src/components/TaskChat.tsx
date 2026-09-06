@@ -236,6 +236,16 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
     if (models.includes(bare)) return bare;
     return fallbackModel || m;
   };
+  // A task's own model is taken as stored: it ran with it. Only the claude- prefix is tolerated;
+  // the fallback to the harness default is for a harness's saved default, never for a task, since
+  // the option list may not have loaded yet or may no longer list the model, and either way the
+  // task continues on its model or fails saying so, it does not silently move to another.
+  const exactModel = (m: string): string => {
+    if (models.includes(m)) return m;
+    if (models.includes('claude-' + m)) return 'claude-' + m;
+    const bare = m.replace(/^claude-/, '');
+    return models.includes(bare) ? bare : m;
+  };
   const [model, setModel] = useState(oob ? (oobDefaultModel(oob) || '') : normModel(ch?.defaultModel));
   // Re-sync the active model to the harness's saved default whenever the config loads or its default
   // changes (ch arrives async after mount; without ch in deps the saved default was never applied).
@@ -266,6 +276,9 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
   // Kept SEPARATE from selectedSid so a new chat reporting its own session id highlights the row
   // WITHOUT remounting the live conversation (the Conversation is keyed by selectedSid).
   const [activeSid, setActiveSid] = useState<string | null>(deepSid || null);
+  // The session this tab created itself (its id comes back from the first turn): the only task
+  // whose card need not be read, its conversation and its model are already here.
+  const bornHere = useRef<string | null>(null);
   useEffect(() => { onActiveSid?.(activeSid); }, [activeSid]); // eslint-disable-line react-hooks/exhaustive-deps
   // Deep-linked session validation: confirm the manifest exists; 404 -> visible error + New Task.
   // A 200 manifest also serves as the title/meta fallback when the session isn't in MY recents
@@ -274,8 +287,12 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
   const [deepCard, setDeepCard] = useState<TraceCard | null>(null);
   useEffect(() => {
     // A session born in this tab needs no lookup: its conversation is already here, and the
-    // index may not list it for a moment, which would read as a task that does not exist.
-    if (!deepSid || deepSid === activeSid) return;
+    // index may not list it for a moment, which would read as a task that does not exist. Every
+    // other task shown by URL (a reload, a new tab, a link) is read: its card says which model it
+    // ran with. The guard used to be deepSid === activeSid, which a reload satisfies from the
+    // first render (activeSid starts as deepSid), so a reopened task never had a card and its
+    // next turn went to the harness default model (measured 2026-09-06: gpt-5.6-sol became gpt-5.5).
+    if (!deepSid || deepSid === bornHere.current) return;
     let alive = true;
     harnessFetch(`/api/harness/v1/traces/${encodeURIComponent(deepSid)}`)
       .then(async (r) => {
@@ -309,8 +326,6 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
   // Narrow screens alternate between the task list and the detail pane (CSS ≤820px); desktop
   // ignores this. Narrow DEFAULTS to the detail view (list collapsed), the title-row toggle
   // expands the list; picking a task collapses it again.
-  // The task cards (lifted from RecentsPanel) drive the detail header's title + meta row.
-  const [cards, setCards] = useState<TraceCard[]>([]);
   const backend = oob?.backend ?? (oobById(draft?.base || '')?.backend ?? null);
 
   const startNew = () => {
@@ -331,17 +346,14 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
   }, [deepSid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shownSid = activeSid ?? selectedSid;
-  const selCard = shownSid
-    ? cards.find((c) => c.session_id === shownSid)
-      || (deepCard && deepCard.session_id === shownSid ? deepCard : null)
-    : null;
+  const selCard = shownSid && deepCard && deepCard.session_id === shownSid ? deepCard : null;
   const chip = selCard ? statusChip(selCard.status) : { cls: 'healthy', label: 'Ready' };
   // An existing task's selector shows the model IT actually ran with last turn (from the trace
   // card), not the harness default, resuming a conversation must not silently switch models.
   const taskModel = selCard?.model || '';
   useEffect(() => {
     if (!shownSid || !taskModel) return;
-    setModel(normModel(taskModel));
+    setModel(exactModel(taskModel));
   }, [shownSid, taskModel]); // eslint-disable-line react-hooks/exhaustive-deps
   const fmtDur = (s?: number) => {
     if (!s) return '';
@@ -378,7 +390,7 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
                       runtime: (oob ?? oobById(draft?.base || ''))?.name, defaultModel: oob ? (oobDefaultModel(oob) || '') : normModel(ch?.defaultModel) }}
             additionalHeaders={(draft?.additionalHeaders || []).filter(Boolean)}
             models={models} onModel={(m) => setModel(m)}
-            onSession={(sid) => { setActiveSid(sid); setRecentsKey((k) => k + 1); }}
+            onSession={(sid) => { bornHere.current = sid; setActiveSid(sid); setRecentsKey((k) => k + 1); }}
             onTotals={onTotals}
             onRan={() => { setRecentsKey((k) => k + 1); onActivity?.(); }} />
         </div>
@@ -456,7 +468,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   const taRef = useRef<HTMLTextAreaElement>(null);   // shared Composer auto-grows it (15-row cap)
   // A fresh draft is for typing: the caret is already in the box when the page settles on it.
   const hero = !loading && msgs.length === 0 && !busy;
-  useEffect(() => { if (hero) taRef.current?.focus(); }, [hero]);
+  useEffect(() => { if (hero) taRef.current?.focus(); }, [hero, harnessId]);   // a fresh draft in another harness is a fresh box too
   const [files, setFiles] = useState<{ name: string; dataUri: string }[]>([]);
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const [modelOpen, setModelOpen] = useState(false);
@@ -655,7 +667,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
       />
       <Popover open={modelOpen} anchorRef={modelBtnRef} onClose={() => setModelOpen(false)} width={280} minHeight={120} placement="above" className="wbx-model-pop" label="Model for this task">
         <div className="wbx-model-head">Model for this task</div>
-        <div role="listbox" aria-label="Model for this task">
+        <div role="listbox" aria-label="Model for this task" className="uic-pop-list">
           {models.map((m) => {
             const ok = modelAvailable(target.backend, m);
             return (

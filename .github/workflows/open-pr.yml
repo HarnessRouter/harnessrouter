@@ -10,8 +10,15 @@
 #   gh workflow run open-pr.yml -f branch=fix/x -f title="..." -f body="..."
 #
 # A PR opened with GITHUB_TOKEN does not start the checks workflow by itself (GitHub's guard
-# against recursive runs). The next push to the branch does, and the agent makes one; an empty
-# commit is enough.
+# against recursive runs), and main's ruleset expects the four checks, so such a PR stays blocked
+# until a push to its branch starts them (2026-09-06: a docs PR sat blocked for exactly that). With
+# a GitHub App installed on the repo (permissions: Pull requests write, Contents read, Metadata
+# read) and its id and private key stored as OPEN_PR_APP_ID and OPEN_PR_APP_PRIVATE_KEY, the PR is
+# opened with the App's installation token instead: the checks start on their own, and the App,
+# not the operator, is the author, so the operator can still approve. A personal access token
+# would not do: the operator would author the PR and could not approve it. Without the App
+# secrets the bot token is used and the next push to the branch starts the checks (an empty
+# commit is enough).
 name: open-pr
 on:
   workflow_dispatch:
@@ -32,10 +39,19 @@ permissions:
 jobs:
   open:
     runs-on: ubuntu-latest
+    env:
+      # the secrets context is not allowed in a step's `if`; an env var carries the presence test
+      OPEN_PR_APP_ID: ${{ secrets.OPEN_PR_APP_ID }}
     steps:
       - uses: actions/checkout@v4
+      - id: app
+        if: ${{ env.OPEN_PR_APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OPEN_PR_APP_ID }}
+          private-key: ${{ secrets.OPEN_PR_APP_PRIVATE_KEY }}
       - env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           BRANCH: ${{ inputs.branch }}
           TITLE: ${{ inputs.title }}
           BODY: ${{ inputs.body }}

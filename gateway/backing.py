@@ -238,15 +238,27 @@ class FileBlobStore:
         return await asyncio.to_thread(_do)
 
     async def list(self, kb: str, prefix: str, limit: int = 20, cursor: str | None = None) -> dict:
+        # Walk only the subtree the prefix names: everything before its last "/" is a directory
+        # under the store, the rest a name prefix inside it. Walking the whole store cost every
+        # blob on every call, and a paged listing repeated the walk per page: with 15k blobs on a
+        # self-hosted volume one turns read took 55 s and the gateway sat at 150% CPU (2026-09-06).
         def _do():
-            base = self._root / kb
-            if not base.is_dir():
+            base = (self._root / kb).resolve()
+            dir_part, _, _ = prefix.rpartition("/")
+            top = (base / dir_part).resolve() if dir_part else base
+            if not str(top).startswith(str(base)) or not top.is_dir():   # escape or nothing there
                 return {"items": [], "cursor": None}
-            keys = sorted(str(f.relative_to(base)) for f in base.rglob("*")
-                          if f.is_file() and not f.name.endswith(".tmp")
-                          and str(f.relative_to(base)).startswith(prefix))
-            if cursor:
-                keys = [k for k in keys if k > cursor]
+            root_len = len(str(base)) + 1
+            keys: list[str] = []
+            for root, _dirs, files in os.walk(top):
+                rel = root[root_len:].replace(os.sep, "/") if len(root) > root_len else ""
+                for name in files:
+                    if name.endswith(".tmp"):
+                        continue
+                    key = f"{rel}/{name}" if rel else name
+                    if key.startswith(prefix) and (not cursor or key > cursor):
+                        keys.append(key)
+            keys.sort()
             page = keys[:limit]
             nxt = page[-1] if len(keys) > limit else None
             return {"items": [{"file_id": k} for k in page], "cursor": nxt}
