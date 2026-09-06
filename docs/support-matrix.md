@@ -182,6 +182,147 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 
 55 pairs, 267 of 273 scenario runs passed.
 
+## Provider: openrouter
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
+|---|---|---|---|---|---|---|---|
+| dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | claude-opus-4.7 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | claude-opus-4.8 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | claude-opus-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | claude-sonnet-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass |  |
+| dsh | gemini-3.6-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | glm-5.3 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | glm-5.3-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.2 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.3-codex | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.4 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
+| hermes | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gemini-3.6-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | glm-5.3-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | hunyuan-3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | kimi-k2.7-code | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | kimi-k3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | ling-3.0-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | minimax-m3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | nemotron-3-ultra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | qwen3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gemini-3.6-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | glm-5.3-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| opencode | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | kimi-k2.7-code | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | kimi-k3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | gemini-3.6-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | glm-5.3-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| pi | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | kimi-k2.7-code | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | kimi-k3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| pi | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | retested once; first try:  |
+| qwen | claude-fable-5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | claude-haiku-4.5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | claude-opus-4.7 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | claude-opus-4.8 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | claude-opus-5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | claude-sonnet-4.6 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | claude-sonnet-5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | deepseek-v4-flash | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | deepseek-v4-pro | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | gemini-3.6-flash | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | glm-5.3 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | glm-5.3-flash | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | gpt-5.2 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | gpt-5.4 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | gpt-5.4-mini | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | gpt-5.5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | gpt-5.6-luna | pass | pass | pass (qwen3.7-max) | pass | FAIL | recycle: answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in my very first message of this task? Reply with just that wo ; retested once; first try: recycle answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in |
+| qwen | gpt-5.6-sol | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | gpt-5.6-terra | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | kimi-k2.7-code | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | kimi-k3 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | mistral-medium-3.5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | qwen3.7-max | pass | pass | pass (qwen3.8-max) | pass | pass |  |
+| qwen | qwen3.8-max | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+| qwen | step-3.7-flash | pass | pass | pass (qwen3.7-max) | pass | pass |  |
+
+134 pairs, 669 of 670 scenario runs passed.
+
 ## Provider: tokenrouter
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
