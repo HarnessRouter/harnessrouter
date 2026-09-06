@@ -6132,7 +6132,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 await control_store.resp_put_running(org, translator.resp_id, sid, rt or "", int(_GW_MAX_TURN_S))
             except Exception:  # noqa: BLE001
                 pass
-        translator.connection = name       # the turn record names its connection, not only the session
+        # The turn names its connection, not only the session: on the executor's record (the trace
+        # manifest reads it) and on the translator (the stored response and the turns feed read it).
+        rec["connection"] = name
+        translator.connection = name
         if sid in _cancel_req:
             try:
                 await _sandbox_json(f"/turn/{rt}/cancel", sid, "POST", attempts=2)

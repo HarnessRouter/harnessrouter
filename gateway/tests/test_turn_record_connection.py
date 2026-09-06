@@ -11,5 +11,5 @@ def test_the_record_carries_the_connection_stamped_at_dispatch():
     tr = gw._RespTranslator("resp_1", "gemini-3.5-flash", None, True, 0.0)
     assert tr.connection == ""
     tr.connection = "integration:Google AI Studio"
-    rec = tr._response_obj()
+    rec = tr._response_obj("completed")
     assert rec["connection"] == "integration:Google AI Studio"
