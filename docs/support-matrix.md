@@ -1,5 +1,7 @@
 # Harness support matrix
 
+The run's notes, per column, are in [support-matrix-notes.md](support-matrix-notes.md).
+
 Scenarios: first turn, follow-up in the same session, switch model mid-session, artifact (a file the task must produce), recycle (the sandbox is let go on purpose, then a follow-up must recall the first message). pass = ran and answered as asked, FAIL = failed (reason in the notes), n/a = not run.
 
 ## Provider: anthropic
@@ -13,13 +15,13 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | claude-code | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass |  |
 | claude-code | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | claude-code | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
-| cline | claude-fable-5 | pass | pass | pass (gpt-5.4) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| cline | claude-haiku-4.5 | pass | pass | pass (gpt-5.4) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| cline | claude-opus-4.7 | pass | pass | pass (gpt-5.4) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| cline | claude-opus-4.8 | pass | pass | pass (gpt-5.4) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| cline | claude-opus-5 | pass | pass | pass (gpt-5.4) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| cline | claude-sonnet-4.6 | pass | pass | pass (gpt-5.4) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| cline | claude-sonnet-5 | pass | pass | pass (gpt-5.4) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| cline | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
 | dsh | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | dsh | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | dsh | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass |  |
@@ -34,13 +36,13 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | hermes | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass |  |
 | hermes | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | hermes | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
-| opencode | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| opencode | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| opencode | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| opencode | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| opencode | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| opencode | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| opencode | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | re-run on 0.13.9 (opencode's baseURL carries /v1) ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-haiku-4.5 | FAIL | n/a | n/a | n/a | n/a | first: answered without M1-claude-haiku-4.5:  debugging, or refactoring code Exploring and understanding your codebase Solving technical problems A ; re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
 | pi | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | pi | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | pi | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass |  |
@@ -56,7 +58,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | qwen | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-sonnet-4.6: What exact word did I ask you to reply wi |
 | qwen | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-sonnet-5: What exact word did I ask you to reply with |
 
-49 pairs, 245 of 245 scenario runs passed.
+49 pairs, 240 of 241 scenario runs passed.
 
 ## Provider: azure-e2
 
