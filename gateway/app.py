@@ -4947,12 +4947,16 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
-    # Unprobed per-model on this backend (one live turn each of qwen3.7-max and gpt-5.4 verified,
-    # 2026-08-25) — substitution-check before leaning on any single row.
+    # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
+    # every row below passed on TokenRouter, Vercel and Azure OpenAI. gpt-5.3-codex is NOT here:
+    # qwen speaks chat/completions only and gpt-5.3-codex is served on the Responses API alone, so
+    # its text turns answer but its first tool turn is refused on every channel (TokenRouter
+    # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
+    # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
-                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
+                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
