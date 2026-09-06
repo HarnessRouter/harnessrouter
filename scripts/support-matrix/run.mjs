@@ -155,7 +155,13 @@ try {
         // the model each turn record says the CLI actually ran (gemini-cli reports it; it rewrites some
         // requested ids): a served model other than the pair's id is a substitution, a finding of its own
         rec.served = [...new Set(turnsList.map((t) => t && t.served_model).filter(Boolean).map(String))];
-        rec.substituted = rec.served.filter((sm) => sm.split(',').some((x) => x && x !== m));
+        // judged per turn against what THAT turn asked for: the switch scenario runs a partner model on
+        // purpose, and its served name is not a substitution of this pair's id. A feed without the
+        // per-turn model (older gateways) falls back to the pair's id never being served at all.
+        const withModel = turnsList.filter((t) => t && t.served_model && t.model);
+        rec.substituted = withModel.length
+          ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && x !== m)).map((t) => String(t.served_model)))]
+          : (rec.served.length && !rec.served.some((sm) => sm.split(',').includes(m)) ? rec.served : []);
         if (process.env.EXPECT_CONNECTION) rec.foreign = rec.connections.filter((c) => c !== process.env.EXPECT_CONNECTION);
         rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
       }
