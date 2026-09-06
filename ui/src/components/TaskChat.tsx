@@ -655,7 +655,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
       />
       <Popover open={modelOpen} anchorRef={modelBtnRef} onClose={() => setModelOpen(false)} width={280} minHeight={120} placement="above" className="wbx-model-pop" label="Model for this task">
         <div className="wbx-model-head">Model for this task</div>
-        <div role="listbox" aria-label="Model for this task">
+        <div role="listbox" aria-label="Model for this task" className="uic-pop-list">
           {models.map((m) => {
             const ok = modelAvailable(target.backend, m);
             return (

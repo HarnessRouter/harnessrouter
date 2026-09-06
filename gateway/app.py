@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import re
+import collections
 import time
 import uuid
 import zipfile
@@ -816,7 +817,7 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 # transparent to the CLI. bedrock/vertex sign with the cloud SDK and are handled separately
 # (see _auth_from_conn) — they keep their own credential until their signing path is brokered.
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
-                         "openrouter", "openai-api", "custom"}
+                         "openrouter", "openai-api", "custom", "google"}
 
 
 def _mint_turn_cred(sid: str, conn_name: str) -> str:
@@ -1002,6 +1003,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
+    # Google AI Studio: one key, Gemini's OpenAI-compatible chat-completions surface. Every
+    # backend that talks OpenAI's chat shape through a base_url reaches it as 'openai-api'.
+    # Not claude (Anthropic's protocol) and not codex (the Responses API): unprobed is unlisted.
+    ("google", "hermes"): "openai-api",        ("google", "pi"): "openai-api",
+    ("google", "dsh"): "openai-api",           ("google", "opencode"): "openai-api",
+    ("google", "qwen"): "openai-api",          ("google", "cline"): "openai-api",
 }
 
 
@@ -1185,6 +1192,25 @@ async def _image_auth(sid: str, backend: str) -> dict | None:
             return {"base_url": auth["base_url"], "api_key": auth["api_key"], "model": pid,
                     "models": sorted(m for m in mm if mm[m] == mm[canonical])}
     return None
+
+
+def _codex_family(model: str) -> str:
+    """Codex gives gpt-5.3-codex and the other GPT models different tool sets. Measured on
+    2026-09-05: the other models act in a thread gpt-5.3-codex started, but gpt-5.3-codex runs
+    without its tools in a thread where any other model has taken a turn, and narrates its work."""
+    return "codex" if (model or "").strip().lower().endswith("-codex") else "gpt"
+
+
+def _codex_switch_refusal(models_seen, model_req: str) -> str:
+    """The sentence a Codex turn fails with when gpt-5.3-codex would run in a thread another
+    model family has already used, else empty."""
+    if _codex_family(model_req) != "codex":
+        return ""
+    others = sorted({m for m in (models_seen or []) if m and _codex_family(m) != "codex"})
+    if not others:
+        return ""
+    return (f"Codex cannot run {model_req} in a task that has already used {', '.join(others)}: "
+            f"its tools are not available there. Start a new task for {model_req}.")
 
 
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
@@ -1391,6 +1417,8 @@ async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
 
 
 async def _blob_delete(file_id: str, kb: str = BLOB_KB) -> bool:
+    if kb == TRACE_KB:
+        _card_cache_forget(file_id)
     return await BACKING.blob.delete(kb, file_id)
 
 
@@ -1436,10 +1464,14 @@ def _manifest_index_keys(base: str, harness_id: str, member_id: str, workspace: 
 _SCOPE_FIELDS = ("harness_id", "member_id", "workspace")
 
 
-async def _index_manifest(base: str, manifest: dict) -> None:
+async def _index_manifest(base: str, manifest: dict, *, prior: dict | None = None,
+                          known_live: bool = False) -> None:
     """Persist a manifest to the flat index and its narrow per-harness/per-member/per-workspace
     mirrors, so all read surfaces (unfiltered Recents, per-harness Traces, per-member 'my
-    sessions', per-workspace console views) agree.
+    sessions', per-workspace console views) agree. A caller that has just read the prior manifest
+    passes it as `prior`; one that has just written the session vertex itself passes
+    `known_live=True`: the turn-start card paid two reads of the same manifest and a vertex read
+    of the vertex it wrote a moment earlier.
 
     The scoping fields decide WHICH mirrors are written. A card that arrives without one (a
     finalize or reconcile built from a turn record that lost it) used to rewrite only the flat
@@ -1450,15 +1482,16 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     # A write that lands after the session's delete (a finalize or reconcile racing it) must not
     # resurrect the card: the tombstone on the vertex is the durable, replica-safe answer.
     _sid = str(manifest.get("session_id") or base.rsplit("_", 1)[-1])
-    try:
-        _v = await _vertex_get(_sid)
-    except Exception:  # noqa: BLE001
-        _v = None
-    if _v and str(_v.get("status") or "") == "deleted":
-        return
+    if not known_live:
+        try:
+            _v = await _vertex_get(_sid)
+        except Exception:  # noqa: BLE001
+            _v = None
+        if _v and str(_v.get("status") or "") == "deleted":
+            return
     missing = [k for k in _SCOPE_FIELDS if not manifest.get(k)]
     if missing:
-        prior = await _prior_manifest(base)
+        prior = prior if prior is not None else await _prior_manifest(base)
         for k in missing:
             if prior.get(k):
                 manifest[k] = prior[k]
@@ -1466,6 +1499,8 @@ async def _index_manifest(base: str, manifest: dict) -> None:
     keys = _manifest_index_keys(base, str(manifest.get("harness_id") or ""),
                                 str(manifest.get("member_id") or ""),
                                 str(manifest.get("workspace") or ""))
+    for k in keys:
+        _card_cache_forget(k)
     await asyncio.gather(*[_trace_put(k, data) for k in keys])
 
 
@@ -1481,7 +1516,7 @@ async def _prior_manifest(prefix: str) -> dict:
         return {}
 
 
-async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
+async def _prior_session_totals(prefix: str, manifest: dict | None = None) -> tuple[float, dict]:
     """The session's credits/usage totals as of the CURRENT manifest — the one durable source both
     the turn-accept placeholder write and _trace_finalize must agree on. Whichever one omits these
     fields (rather than reading + carrying them forward) resets the session total to zero for every
@@ -1490,7 +1525,10 @@ async def _prior_session_totals(prefix: str) -> tuple[float, dict]:
     if not prefix:
         return 0.0, {}
     try:
-        pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
+        if manifest is not None:
+            pm = json.dumps(manifest).encode() if manifest else b""
+        else:
+            pm = await _blob_get(_manifest_key(prefix), kb=TRACE_KB)
         if not pm:
             return 0.0, {}
         prior = json.loads(pm)
@@ -1508,8 +1546,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     session's credits/usage totals SO FAR forward (via _prior_session_totals) rather than omit
     them: an omitted field here is exactly what _trace_finalize's own accumulate would read back as
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
-    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "")
-    _pm = await _prior_manifest(tr.get("prefix") or "")
+    _pm = await _prior_manifest(tr.get("prefix") or "")          # the one read of the prior card
+    prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "", _pm)
     prior_title = str(_pm.get("title") or "") if str(_pm.get("title_custom") or "") == "1" else ""
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
@@ -1528,7 +1566,7 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
         "trace_blob": tr.get("prefix"), "chunks": [],
         "finished_at": time.time(), "schema_version": 1,
         "credits": prior_credits, "usage": prior_usage,
-    })
+    }, prior=_pm, known_live=True)   # the vertex was written by this accept a moment ago
 
 
 async def _deindex_manifest(base: str, manifest: dict, *scopes: dict) -> None:
@@ -1855,9 +1893,11 @@ async def _brain_mint_room(sid: str) -> str | None:
     return None
 
 
-async def _hydrate(sid: str, rec: dict) -> None:
+async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
-    pass the blackboard room so the runner (re)starts the realtime sidecar for this session."""
+    pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
+    `force` skips the warm-sandbox probe: the workspace is wiped and restored from the durable
+    checkpoint even when the sandbox still holds it (a recycle on purpose)."""
     params = {}
     v = await _vertex_get(sid) or {}          # single durable read: blackboard room + checkpoint sha
     room = (v.get("brain_room") or None) if COLLAB_URL else None
@@ -1868,7 +1908,7 @@ async def _hydrate(sid: str, rec: dict) -> None:
         # checkpoint (sha marker kept by the runner), skip the blob download and the full
         # wipe+untar — the dominant cost of every follow-up turn on a big workspace.
         want_sha = str(v.get("ws_sha") or "")
-        if want_sha:
+        if want_sha and not force:
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
                                     params={**(params or {}), "probe": want_sha})
@@ -2433,6 +2473,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         pass
     rec["status"] = settled
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
         await _vg_upsert("HarnessResponse", rid, {"status": settled})
     except Exception:  # noqa: BLE001
@@ -2834,35 +2875,31 @@ _BROKER_HOP = ("host", "content-length", "connection", "keep-alive", "transfer-e
                "authorization", "api-key", "x-api-key")
 
 
-# Extended thinking is off through the broker, and this is the one place that enforces it.
+# What the broker removes from a request, by request shape and by key, and nothing else:
 #
-# The decision itself is not new — harness_runner already set MAX_THINKING_TOKENS=0 to stop
-# Claude Code sending thinking params, because opus-4.7/4.8 rejected `thinking.enabled` with a
-# 400 that leaked into the reply. That mechanism lived in the CLI's environment, so it only
-# covered one harness and only the shape the CLI used at the time. The CLI has since moved to
-# `output_config.effort`, which MAX_THINKING_TOKENS does not suppress, and haiku-4.5 rejects it
-# with "This model does not support the effort parameter" — the same class of failure, on a
-# different harness, through a different field.
-#
-# Every harness's inference traffic passes through this proxy, so enforcing it here covers
-# Claude Code, Hermes, Codex and anything added later, across whichever thinking API a CLI
-# happens to speak. The per-harness env hack is deleted rather than kept alongside: two
-# mechanisms for one behaviour is how the first one went stale unnoticed.
-# These travel together and must be removed together. `context_management`'s only strategy
-# today (clear_thinking_20251015) is defined in terms of thinking, so removing `thinking` while
-# leaving it produced a NEW 400 — "clear_thinking_20251015 strategy requires thinking to be
-# enabled or adaptive" — turning one broken model into a broken harness. Against this provider
-# context_management is rejected outright ("Extra inputs are not permitted") whether thinking is
-# present or not, so the coherent unit is: strip the whole group, leave a self-consistent request.
-_STRIP_REQUEST_FIELDS = ("thinking", "reasoning", "reasoning_effort", "context_management")
+# * Anthropic-shape requests (the `messages` path): the extended-thinking controls. Measured 400s:
+#   opus-4.7/4.8 reject Claude Code's `thinking.enabled` ("use output_config.effort"), haiku-4.5
+#   rejects `output_config.effort` and `thinking.adaptive`; `context_management`'s only strategy
+#   is defined in terms of thinking, so it goes with it. These are model-version rejections, the
+#   same on the org's own key as on the platform's, so they are stripped for every provider that
+#   carries the Anthropic shape (Anthropic, Bedrock, TokenRouter, Vercel, LLMTR).
+# * OpenAI-shape requests (`responses`, `responses/*`, `chat/completions`): nothing of the
+#   thinking group. `reasoning` carries Codex's effort and, on `responses/compact`, the
+#   `reasoning.context = all_turns` the compaction needs; TokenRouter and OpenRouter both take
+#   `reasoning` and `reasoning_effort` as written (probed 2026-09-06). Stripping it here ran
+#   every brokered Codex turn at default effort and broke compaction on an org's own OpenAI key
+#   ("requires reasoning.context to be all_turns").
+# * On the platform's key, on either shape: the priced-tier selectors (OpenAI `service_tier`,
+#   Anthropic fast mode's `speed`, an aggregator's `provider` preferences), because the platform
+#   bills the standard tier. On the org's own key the tier is the org's own choice.
+_ANTHROPIC_THINKING_FIELDS = ("thinking", "context_management")
+_TIER_FIELDS = ("service_tier", "speed", "provider")
 
 
-def _strip_unsupported(body: bytes) -> bytes:
-    """Remove thinking/effort controls from an inference request body.
-
-    Returns the body unchanged if it is not JSON — the broker must stay a dumb pipe for
-    anything it does not positively understand.
-    """
+def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path: str = "") -> bytes:
+    """Remove what this request must not carry (see the rule above). Returns the body unchanged
+    if it is not JSON — the broker must stay a dumb pipe for anything it does not positively
+    understand."""
     if not body:
         return body
     try:
@@ -2872,18 +2909,23 @@ def _strip_unsupported(body: bytes) -> bytes:
     if not isinstance(doc, dict):
         return body
     changed = False
-    for f in _STRIP_REQUEST_FIELDS:
+    anthropic_shape = (path or "").strip("/").startswith("messages")
+    fields: tuple[str, ...] = _ANTHROPIC_THINKING_FIELDS if anthropic_shape else ()
+    if not byok:
+        fields += _TIER_FIELDS
+    for f in fields:
         if f in doc:
             doc.pop(f)
             changed = True
-    # `output_config` carries more than effort; drop only that key, and the object with it
-    # if nothing else remains, so a provider never sees an empty container it may reject.
-    oc = doc.get("output_config")
-    if isinstance(oc, dict) and "effort" in oc:
-        oc.pop("effort")
-        changed = True
-        if not oc:
-            doc.pop("output_config")
+    if anthropic_shape:
+        # `output_config` carries more than effort; drop only that key, and the object with it
+        # if nothing else remains, so a provider never sees an empty container it may reject.
+        oc = doc.get("output_config")
+        if isinstance(oc, dict) and "effort" in oc:
+            oc.pop("effort")
+            changed = True
+            if not oc:
+                doc.pop("output_config")
     return json.dumps(doc).encode() if changed else body
 
 
@@ -2894,6 +2936,43 @@ def _broker_token(request: Request) -> str:
     if auth[:7].lower() == "bearer ":
         return auth[7:].strip()
     return (request.headers.get("api-key") or request.headers.get("x-api-key") or "").strip()
+
+
+# A direct provider's connection carries only its key: its endpoint is the provider's own and is
+# not a thing to ask the user for. Gateways (OpenRouter, Vercel, TokenRouter) and self-hosted
+# endpoints carry their base_url on the connection. Without this table an OpenAI key answered
+# "connection has no base_url" (2026-09-04).
+_PROVIDER_BASE = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1",
+                  # Google AI Studio keys answer on Gemini's OpenAI-compatible surface (chat
+                  # completions); a key alone names the endpoint, the same way an OpenAI key does.
+                  "google": "https://generativelanguage.googleapis.com/v1beta/openai"}
+
+
+def _with_provider_base(conn: dict | None) -> dict | None:
+    if conn and not str(conn.get("base_url") or "").strip():
+        base = _PROVIDER_BASE.get(str(conn.get("provider") or "").lower())
+        if base:
+            conn = {**conn, "base_url": base}
+    return conn
+
+
+_PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
+                                  r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
+
+
+def _provider_refused(err: str) -> bool:
+    """Whether a failure on the org's own connection is the provider refusing the key. Judged on
+    the first line only: that is the line the runner chose as the provider's answer, and a
+    diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex
+    compaction failure or a bad request into "your key was refused"."""
+    return bool(_PROVIDER_REFUSAL_RE.search((err or "").split("\n", 1)[0]))
+
+
+def _turn_failure_message(rec: dict) -> str:
+    """What a failed turn says: the org's own key's refusal in plain words when that is why, else
+    the list of connections tried."""
+    tried = rec.get("tried") or []
+    return str(rec.get("error_message") or "") or (json.dumps(tried)[:400] if tried else "turn failed")
 
 
 async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
@@ -2912,9 +2991,9 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
         # provider here is the INTEGRATION's own type — it selects the upstream auth header, which
         # is all the broker needs (the runner-side wiring already happened at turn start).
         cfg["provider"] = (integ.get("provider") or "").lower()
-        return cfg
+        return _with_provider_base(cfg)
     conn, _ = await _get_connection(org, conn_name)
-    return conn
+    return _with_provider_base(conn)
 
 
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
@@ -2954,7 +3033,7 @@ async def llm_broker(path: str, request: Request):
     else:
         headers["authorization"] = f"Bearer {key}"
 
-    body = _strip_unsupported(await request.body())
+    body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix)
     rc = _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
     up = await rc.send(req, stream=True)
@@ -3183,24 +3262,32 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
     lst = await _blob_list(prefix, limit=limit, cursor=cursor or None)
 
     async def _card(item: dict):
-        b = await _blob_get(item["file_id"], kb=TRACE_KB)
-        if not b:
-            return None
-        # A mirror card whose flat card is gone is an orphan: a delete on an older version
-        # removed the flat card and left the mirror (the delete now clears every mirror, but an
-        # install upgrading brings its orphans with it). It is dropped here, and removed so the
-        # next list does not pay for it either. Only mirrors are checked: the flat index IS the
-        # manifest, so the read above already answered for it.
         fid = str(item["file_id"])
-        if "/idx/" not in fid:
-            flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
-            if not await _blob_get(flat, kb=TRACE_KB):
-                await _blob_delete(fid, kb=TRACE_KB)
+        m = _CARD_CACHE.get(fid)
+        if m is not None:
+            _CARD_CACHE.move_to_end(fid)
+        else:
+            b = await _blob_get(fid, kb=TRACE_KB)
+            if not b:
                 return None
-        try:
-            m = json.loads(b)
-        except Exception:  # noqa: BLE001
-            return None
+            try:
+                m = json.loads(b)
+            except Exception:  # noqa: BLE001
+                return None
+            # A mirror card whose flat card is gone is an orphan: a delete on an older version
+            # removed the flat card and left the mirror (the delete now clears every mirror, but
+            # the orphans made before it are still listed). It is dropped here, and removed so the
+            # next list does not pay for it either. Only mirrors are checked: the flat index IS the
+            # manifest, so the read above already answered for it.
+            if "/idx/" not in fid:
+                flat = f"{fid.split('/', 1)[0]}/idx/{fid.rsplit('/', 1)[-1]}"
+                if not await _blob_get(flat, kb=TRACE_KB):
+                    await _blob_delete(fid, kb=TRACE_KB)
+                    return None
+            if str(m.get("status") or "") not in _CARD_LIVE:
+                _CARD_CACHE[fid] = m
+                while len(_CARD_CACHE) > _CARD_CACHE_MAX:
+                    _CARD_CACHE.popitem(last=False)
         if member and (m.get("member_id") or "") != member:
             return None
         if harness and (m.get("harness_id") or "") != harness:
@@ -3209,10 +3296,70 @@ async def _session_cards(org: str, limit: int, cursor: str, member: str, harness
             mw = str(m.get("workspace") or "")
             if mw != workspace and not (ws_default and not mw):
                 return None
+        # A card that still says running while the session vertex is terminal is a turn whose
+        # tail never finished: the replica wrote the vertex, then died before the finalize that
+        # rewrites the card (a roll under a live turn, 2026-09-04). The vertex is the durable
+        # truth, so the read repairs the card from it, once, and the list stops lying.
+        if str(m.get("status") or "") in _CARD_LIVE and m.get("session_id"):
+            sid_ = str(m["session_id"])
+            # A card found genuinely live is not asked again for a few seconds: with N tabs each
+            # listing every 15 s, the settle read per live card per list was one graph read per
+            # running task per tab.
+            if time.time() - _SETTLE_LIVE_AT.get(sid_, 0.0) > _SETTLE_LIVE_S:
+                fixed = await _card_settle(sid_, m)
+                if fixed:
+                    m = fixed
+                    _SETTLE_LIVE_AT.pop(sid_, None)
+                else:
+                    _SETTLE_LIVE_AT[sid_] = time.time()
+                    if len(_SETTLE_LIVE_AT) > 5000:
+                        _SETTLE_LIVE_AT.clear()
         return {k: m.get(k) for k in _TRACE_CARD_FIELDS}
 
     cards = [c for c in await asyncio.gather(*[_card(it) for it in lst.get("items", [])]) if c]
     return {"sessions": cards, "cursor": lst.get("cursor") or ""}
+
+
+_CARD_LIVE = {"running", "starting", "in_progress"}
+# A session card changes only while its turn is live (and on delete). Terminal cards are served
+# from memory: every open Harnesses page re-read up to 200 cards every 15 s, one blob each.
+_CARD_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_CARD_CACHE_MAX = 8000
+_SETTLE_LIVE_AT: dict[str, float] = {}
+_SETTLE_LIVE_S = 10.0
+
+
+def _card_cache_forget(file_id: str) -> None:
+    _CARD_CACHE.pop(file_id, None)
+
+
+async def _card_settle(sid: str, m: dict) -> dict | None:
+    """Repair a live-looking card from its session vertex. Returns the settled manifest when the
+    vertex is terminal, or its heartbeat is older than the hard turn cap with the turn unadopted;
+    None when the turn is genuinely live. The settled manifest is re-indexed so every mirror agrees."""
+    v = await _vertex_get(sid) or {}
+    vs = str(v.get("turn_status") or v.get("status") or "")
+    status = ""
+    if vs in ("done", "failed", "cancelled", "incomplete", "max_turns", "timeout"):
+        status = vs
+    else:
+        try:
+            hb = float(v.get("heartbeat") or 0)
+        except Exception:  # noqa: BLE001
+            hb = 0
+        if hb and time.time() - hb > _GW_MAX_TURN_S:
+            status = "failed"
+    if not status or status == str(m.get("status") or ""):
+        return None
+    m = dict(m)
+    m["status"] = status
+    base = _prefix_from_vertex(sid, v)
+    if base:
+        try:
+            await _index_manifest(base, m)
+        except Exception:  # noqa: BLE001 — the list still answers from the vertex's truth
+            pass
+    return m
 
 
 def _prefix_from_vertex(sid: str, v: dict | None) -> str | None:
@@ -3328,7 +3475,7 @@ async def patch_session(sid: str, body: SessionPatch, request: Request) -> dict:
     # blob is what every LIST renders. Writing only the vertex looks like it worked and reverts on
     # the next load. `title_custom` is what stops the next turn regenerating it from your message.
     await _vg_upsert("HarnessSession", sid, {"title": title})
-    base = await _trace_base(sid)
+    base = _prefix_from_vertex(sid, _v)   # the vertex _owned_session already read
     if base:
         m = await _prior_manifest(base)
         if m:
@@ -3406,6 +3553,7 @@ async def _stop_session(org: str, sid: str, v: dict, rid_hint: str = "") -> tupl
             rec = await _resp_get(rid)
             if rec and str(rec.get("status") or "") in ("running", "in_progress", "queued", "starting"):
                 rec["status"] = "cancelled"
+                _resp_cache_forget(rid)
                 await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", rid, {"status": "cancelled"})
         except Exception:  # noqa: BLE001
@@ -4660,6 +4808,16 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
                                  if c not in _TOKENROUTER_NO_CHANNEL}
 
+# OpenRouter dates a slug when a model gets a new snapshot while TokenRouter keeps serving the
+# plain name. The shared table holds the name TokenRouter serves (it is where the platform's
+# traffic goes); OpenRouter's own list gets the dated name here, after TokenRouter has taken its
+# copy. Putting the dated name in the shared table sent TokenRouter "qwen/qwen3.8-max-0902" and
+# it answered "No available channel" (Hermes, 2026-09-05).
+_OPENROUTER_RESLUG = {
+    "qwen3.8-max": "qwen/qwen3.8-max-0902",
+}
+_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _VENDOR_MODELS["openrouter"].items()}
+
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
 # the two aggregators disagree about who publishes the model, not about which model it is.
@@ -4679,6 +4837,8 @@ _VERCEL_RESLUG = {
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
+# Google AI Studio serves the catalog's Gemini models by their own ids.
+_VENDOR_MODELS["google"] = {"gemini-3.6-flash": "gemini-3.6-flash"}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
@@ -5140,6 +5300,7 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
 async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None,
                     status: str, created_at: float, store: bool) -> None:
     try:
+        _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -5148,7 +5309,25 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
                      "created_at": str(created_at), "store": "1" if store else "0"})
 
 
+# A response record is written while its turn runs and once more when it ends; after that it is
+# immutable until a delete tombstones it. Every open conversation re-reads every turn record of
+# its session on a 4 s poll, so a twenty-turn session cost twenty blob reads per tab per poll and
+# the graph gateway saturated at ~15 open tabs (2026-09-06). Terminal records are served from
+# memory; a running record is still read every time; every writer forgets the key it writes.
+_RESP_TERMINAL = {"completed", "failed", "cancelled", "incomplete", "done", "max_turns", "timeout"}
+_RESP_CACHE: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_RESP_CACHE_MAX = 4000
+
+
+def _resp_cache_forget(rid: str) -> None:
+    _RESP_CACHE.pop(rid, None)
+
+
 async def _resp_get(rid: str) -> dict | None:
+    hit = _RESP_CACHE.get(rid)
+    if hit is not None:
+        _RESP_CACHE.move_to_end(rid)
+        return hit
     b = await _blob_get(f"responses/{rid}.json", kb=RESP_BLOB_KB)
     if not b:
         return None
@@ -5156,7 +5335,13 @@ async def _resp_get(rid: str) -> dict | None:
         rec = json.loads(b)
     except Exception:  # noqa: BLE001
         return None
-    return None if rec.get("_deleted") else rec
+    if rec.get("_deleted"):
+        return None
+    if str(rec.get("status") or "") in _RESP_TERMINAL:
+        _RESP_CACHE[rid] = rec
+        while len(_RESP_CACHE) > _RESP_CACHE_MAX:
+            _RESP_CACHE.popitem(last=False)
+    return rec
 
 
 def _strip_internal(d: dict) -> dict:
@@ -5396,6 +5581,25 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     mapped_conn = await _mapped_integration_conn(backend, model_req)
     candidates: list[tuple[str, dict | None]] = ([(mapped_conn["name"], mapped_conn)] if mapped_conn else [])
     candidates += [(n, None) for n in chain]
+    if backend == "codex" and model_req:
+        # The session remembers every model it has run. A gpt-5.3-codex turn after another model
+        # family is refused, in words, rather than run without its tools or restarted on a fresh
+        # session.
+        _v = await _vertex_get(sid) or {}
+        seen = [m for m in str(_v.get("models_seen") or "").split(",") if m]
+        if not seen and resume:
+            try:
+                _turns = (await _session_turns_data(sid)).get("turns") or []
+                seen = [str(t.get("_model") or "") for t in _turns if t.get("_model")]
+            except Exception:  # noqa: BLE001
+                seen = []
+        _why = _codex_switch_refusal(seen, model_req) if resume else ""
+        if _why:
+            rec["error_message"] = _why
+            rec["tried"].append({"connection": "", "status": "refused", "error": _why})
+            candidates = []
+        elif model_req not in seen:
+            await _vertex_upsert(sid, {"models_seen": ",".join(seen + [model_req])})
     # Independent of which chat connection wins below: images are usually a different provider.
     image_auth = await _image_auth(sid, backend)
     vision_auth = await _vision_auth(sid, backend) if backend == "hermes" else None
@@ -5575,6 +5779,20 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     rec["tried"].append({"connection": name, "status": st,
                                          "error": (s.get("result") or s.get("error") or "")[:200]})
                 break
+        _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
+        if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name
+                and rec["tried"][-1].get("status") and _provider_refused(_last_err)):
+            # The provider refused this key. That is configuration, not an outage to route around:
+            # falling through to the next connection ran the task on another key while the user
+            # believed this one worked. On a self-hosted install every key is the operator's own,
+            # so the rule is the refusal itself, not which store the key came from. Other failures
+            # (a transient error, a timeout) still move on to the next connection.
+            provider = str(conn.get("provider") or "your provider")
+            rec["error_message"] = f"Your {provider} key was refused: {_last_err or 'the provider returned an error'}"
+            status = "failed"
+            rec["status"] = "failed"
+            await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "last_connection": name})
+            break
         if terminal:
             status = terminal
             rec["status"] = "done" if terminal == "completed" else terminal
@@ -5781,6 +5999,28 @@ async def storage_usage() -> dict:
         except (TypeError, ValueError):
             pass
     return {"by_org": by_org}
+
+
+@app.post("/internal/sessions/{sid}/recycle", dependencies=[Depends(_internal_only)])
+async def recycle_session_sandbox(sid: str) -> dict:
+    """Recycle a session's sandbox on purpose: wipe the workspace and restore it from the durable
+    checkpoint, exactly what a follow-up pays after the pool let the old sandbox go. The support
+    matrix uses it to test "a follow-up after the sandbox is gone" for every harness and model
+    without waiting out the pool's cooldown. Refused while a turn is live.
+
+    Hydrate only, never checkpoint first: every turn already ends with a checkpoint, so the blob IS
+    the post-turn workspace, and a checkpoint taken from a sandbox that no longer holds the session
+    would tar an empty directory over it (that is how the first recycle pass lost the history of
+    every session whose sandbox had gone cold)."""
+    v = await _vertex_get(sid)
+    if not v:
+        raise HTTPException(404, "no such session")
+    if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
+        raise HTTPException(409, "a turn is running; recycle after it settles")
+    rec: dict = {}
+    await _hydrate(sid, rec, force=True)
+    return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
+            "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
 
 @app.post("/internal/reindex-traces", dependencies=[Depends(_internal_only)])
@@ -6216,10 +6456,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-                    if status == "failed":
-                        tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                                    "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-                    for ev in tr.complete(status, produced):
+                    # A failed turn says why in the transcript, not only in the response record: fail()
+                    # carries the message as an error event, which the console prints under the answer.
+                    for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                         await bus_emit_bg(ev)
                     await persist(status)
             except asyncio.CancelledError:
@@ -6266,10 +6505,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-                        if status == "failed":
-                            tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                                        "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-                        for ev in tr.complete(status, produced):
+                        # A failed turn says why in the transcript, not only in the response record: fail()
+                        # carries the message as an error event, which the console prints under the answer.
+                        for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                             await emit(ev)
                         await persist(status)
                 except asyncio.CancelledError:
@@ -6325,10 +6563,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
-            if status == "failed":
-                tr.error = {"type": "harness_error", "code": "connections_exhausted",
-                            "message": (json.dumps(rec.get("tried") or [])[:400]) or "turn failed"}
-            for ev in tr.complete(status, produced):
+            # A failed turn says why in the transcript, not only in the response record: fail()
+            # carries the message as an error event, which the console prints under the answer.
+            for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
@@ -6596,6 +6833,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.
+                      # A failed turn's reason, the sentence its error event carried live.
+                      "error": ((rec.get("error") or {}).get("message") or None) if isinstance(rec.get("error"), dict) else None,
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
@@ -6648,6 +6887,7 @@ async def delete_response(response_id: str, request: Request):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     rec["_deleted"] = True
     try:
+        _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -6953,6 +7193,7 @@ async def cancel_response(response_id: str, request: Request):
             # them consistent) and let the turn's own resp_is_cancelled check settle it.
             rec["status"] = "cancelled"
             try:
+                _resp_cache_forget(response_id)
                 await _blob_put(f"responses/{response_id}.json",
                                 json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", response_id, {"status": "cancelled"})
@@ -7269,7 +7510,7 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
         if cached is not None and path in cached:
             data = cached[path]
             media = mimetypes.guess_type(path)[0] or "application/octet-stream"
-            return data, media, path.rsplit("/", 1)[-1]
+            return data, media, path
         tf = await _workspace_tar(container_id)
         if tf is None:
             return None
@@ -7286,7 +7527,7 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
                 if data is None:
                     return None
                 media = mimetypes.guess_type(path)[0] or "application/octet-stream"
-                return data, media, path.rsplit("/", 1)[-1]
+                return data, media, path
         return None
     data = await _blob_get(f"containers/{container_id}/{file_id}", kb=RESP_BLOB_KB)
     if data is None:
@@ -7361,6 +7602,124 @@ _ARCHIVE_MAX_BYTES = 512 * 1024 * 1024   # in-memory zip cap; beyond this, downl
 class WorkspaceWrite(BaseModel):
     content: str | None = None        # text
     content_b64: str | None = None    # bytes
+
+
+# Declared BEFORE the {path:path} routes below: FastAPI matches routes in declaration order, and
+# declared after them "/files/archive" was read as a file named "archive" (404 for every
+# download-all click since the route was added).
+@app.get("/v1/sessions/{sid}/files/archive")
+async def session_files_archive(sid: str, request: Request, changed: bool = False, files: str = ""):
+    """Every artifact of a session (or one turn) as a single zip, preserving the workspace's
+    folder hierarchy — each entry's path inside the zip is the file's relative path.
+
+    - default: every user-visible file in the working directory (same set as GET .../files)
+    - ?changed=true: only the files created/modified in the MOST RECENT turn
+    - ?files=fid1,fid2: exactly those file ids (e.g. one specific turn's cited outputs)
+    """
+    await _owned_session(request, sid)   # V1C02-004: session-scoped files, org-owned only
+    _reap_spool_dir()   # sweep ZIP temps/orphaned tars whose BackgroundTask cleanup was skipped
+    want_ids = [f.strip() for f in files.split(",") if f.strip()][:200] if files else None
+    # The ZIP is SPOOLED TO DISK, never built in RAM (HR-INF-015): whole-workspace mode streams
+    # each tar member from the disk-cached tarball straight into the zip entry (O(copy-buffer)
+    # memory); the id-scoped modes write their capped per-file payloads. FileResponse streams it
+    # out; the temp file is removed after the response is sent.
+    fd, zpath = tempfile.mkstemp(suffix=".zip", dir=_WS_TAR_DIR)
+    os.close(fd)
+    nput = 0
+    total = 0
+    try:
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+            seen: set[str] = set()
+
+            def _add_bytes(p: str, data: bytes) -> None:
+                nonlocal nput, total
+                p = p.lstrip("/")
+                if p in seen:        # duplicate ids in ?files= — keep the first
+                    return
+                seen.add(p)
+                total += len(data)
+                if total > _ARCHIVE_MAX_BYTES:
+                    raise HTTPException(413, "workspace too large for one archive — download files individually")
+                z.writestr(p, data)
+                nput += 1
+
+            if want_ids:
+                # "All" means all: an archive missing a file it was asked for is refused, with the
+                # names, rather than handed over as if complete.
+                missing: list[str] = []
+                for fid in want_ids:
+                    got = await _container_file_bytes(sid, fid)
+                    if got is None:
+                        missing.append(_wf_path(fid) or fid)
+                        continue
+                    data, _media, fname = got
+                    _add_bytes(fname, data)
+                if missing:
+                    raise HTTPException(404, f"{len(missing)} of {len(want_ids)} files are no longer available: "
+                                             + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
+            elif changed:
+                blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
+                try:
+                    items = ((json.loads(blob) or {}).get("files") or []) if blob else []
+                except Exception:  # noqa: BLE001
+                    items = []
+                for it in items[:200]:
+                    fid, path = it.get("file_id"), it.get("path")
+                    if not (fid and path):
+                        continue
+                    got = await _container_file_bytes(sid, fid)
+                    if got:
+                        _add_bytes(path, got[0])
+            else:
+                tf = await _workspace_tar(sid)
+                if tf is None:
+                    raise HTTPException(404, "no workspace for this session yet — run a task first")
+
+                def _zip_workspace() -> tuple[int, int]:
+                    # Pure sync file work (disk tar in, disk zip out) — runs in a worker thread so
+                    # GB-scale gzip-decompress + deflate never stalls the event loop (SSE streams,
+                    # turn relays, and health probes keep flowing).
+                    n, tot = 0, 0
+                    with tf:
+                        for m in tf.getmembers():
+                            if not m.isreg():
+                                continue
+                            path = m.name[2:] if m.name.startswith("./") else m.name
+                            if not _ws_visible(path) or path.lstrip("/") in seen:
+                                continue
+                            tot += m.size
+                            if tot > _ARCHIVE_MAX_BYTES:
+                                raise HTTPException(413, "workspace too large for one archive — download files individually")
+                            fh = tf.extractfile(m)
+                            if fh is None:
+                                continue
+                            seen.add(path.lstrip("/"))
+                            # Explicit ZipInfo: bare ZipInfo defaults to STORED (uncompressed),
+                            # epoch-1980 mtime, and zero permissions — set them all properly.
+                            zi = zipfile.ZipInfo(path.lstrip("/"), date_time=time.localtime(m.mtime)[:6])
+                            zi.compress_type = zipfile.ZIP_DEFLATED
+                            zi.external_attr = (m.mode & 0xFFFF) << 16
+                            with fh, z.open(zi, "w") as zw:
+                                shutil.copyfileobj(fh, zw, 1024 * 1024)
+                            n += 1
+                    return n, tot
+
+                _n, _tot = await asyncio.to_thread(_zip_workspace)
+                nput += _n
+                total += _tot
+        if not nput:
+            raise HTTPException(404, "no files to archive")
+    except BaseException:
+        try:
+            os.unlink(zpath)
+        except OSError:
+            pass
+        raise
+    scope = "turn" if (want_ids or changed) else "all"
+    bg = BackgroundTask(os.unlink, zpath)
+    return FileResponse(zpath, media_type="application/zip", background=bg,
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
 
 
 @app.get("/v1/sessions/{sid}/files/{path:path}")
@@ -7458,113 +7817,6 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
 
 
-@app.get("/v1/sessions/{sid}/files/archive")
-async def session_files_archive(sid: str, request: Request, changed: bool = False, files: str = ""):
-    """Every artifact of a session (or one turn) as a single zip, preserving the workspace's
-    folder hierarchy — each entry's path inside the zip is the file's relative path.
-
-    - default: every user-visible file in the working directory (same set as GET .../files)
-    - ?changed=true: only the files created/modified in the MOST RECENT turn
-    - ?files=fid1,fid2: exactly those file ids (e.g. one specific turn's cited outputs)
-    """
-    await _owned_session(request, sid)   # V1C02-004: session-scoped files, org-owned only
-    _reap_spool_dir()   # sweep ZIP temps/orphaned tars whose BackgroundTask cleanup was skipped
-    want_ids = [f.strip() for f in files.split(",") if f.strip()][:200] if files else None
-    # The ZIP is SPOOLED TO DISK, never built in RAM (HR-INF-015): whole-workspace mode streams
-    # each tar member from the disk-cached tarball straight into the zip entry (O(copy-buffer)
-    # memory); the id-scoped modes write their capped per-file payloads. FileResponse streams it
-    # out; the temp file is removed after the response is sent.
-    fd, zpath = tempfile.mkstemp(suffix=".zip", dir=_WS_TAR_DIR)
-    os.close(fd)
-    nput = 0
-    total = 0
-    try:
-        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-            seen: set[str] = set()
-
-            def _add_bytes(p: str, data: bytes) -> None:
-                nonlocal nput, total
-                p = p.lstrip("/")
-                if p in seen:        # duplicate ids in ?files= — keep the first
-                    return
-                seen.add(p)
-                total += len(data)
-                if total > _ARCHIVE_MAX_BYTES:
-                    raise HTTPException(413, "workspace too large for one archive — download files individually")
-                z.writestr(p, data)
-                nput += 1
-
-            if want_ids:
-                for fid in want_ids:
-                    got = await _container_file_bytes(sid, fid)
-                    if got:
-                        data, _media, fname = got
-                        _add_bytes(fname, data)
-            elif changed:
-                blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
-                try:
-                    items = ((json.loads(blob) or {}).get("files") or []) if blob else []
-                except Exception:  # noqa: BLE001
-                    items = []
-                for it in items[:200]:
-                    fid, path = it.get("file_id"), it.get("path")
-                    if not (fid and path):
-                        continue
-                    got = await _container_file_bytes(sid, fid)
-                    if got:
-                        _add_bytes(path, got[0])
-            else:
-                tf = await _workspace_tar(sid)
-                if tf is None:
-                    raise HTTPException(404, "no workspace for this session yet — run a task first")
-
-                def _zip_workspace() -> tuple[int, int]:
-                    # Pure sync file work (disk tar in, disk zip out) — runs in a worker thread so
-                    # GB-scale gzip-decompress + deflate never stalls the event loop (SSE streams,
-                    # turn relays, and health probes keep flowing).
-                    n, tot = 0, 0
-                    with tf:
-                        for m in tf.getmembers():
-                            if not m.isreg():
-                                continue
-                            path = m.name[2:] if m.name.startswith("./") else m.name
-                            if not _ws_visible(path) or path.lstrip("/") in seen:
-                                continue
-                            tot += m.size
-                            if tot > _ARCHIVE_MAX_BYTES:
-                                raise HTTPException(413, "workspace too large for one archive — download files individually")
-                            fh = tf.extractfile(m)
-                            if fh is None:
-                                continue
-                            seen.add(path.lstrip("/"))
-                            # Explicit ZipInfo: bare ZipInfo defaults to STORED (uncompressed),
-                            # epoch-1980 mtime, and zero permissions — set them all properly.
-                            zi = zipfile.ZipInfo(path.lstrip("/"), date_time=time.localtime(m.mtime)[:6])
-                            zi.compress_type = zipfile.ZIP_DEFLATED
-                            zi.external_attr = (m.mode & 0xFFFF) << 16
-                            with fh, z.open(zi, "w") as zw:
-                                shutil.copyfileobj(fh, zw, 1024 * 1024)
-                            n += 1
-                    return n, tot
-
-                _n, _tot = await asyncio.to_thread(_zip_workspace)
-                nput += _n
-                total += _tot
-        if not nput:
-            raise HTTPException(404, "no files to archive")
-    except BaseException:
-        try:
-            os.unlink(zpath)
-        except OSError:
-            pass
-        raise
-    scope = "turn" if (want_ids or changed) else "all"
-    bg = BackgroundTask(os.unlink, zpath)
-    return FileResponse(zpath, media_type="application/zip", background=bg,
-                        headers={"Content-Disposition":
-                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
-
-
 @app.get("/v1/containers/{container_id}/files/{file_id}/content")
 async def container_file_content(container_id: str, file_id: str, request: Request):
     await _owned_session(request, container_id)   # V1C02-004: container_id IS the session id
@@ -7573,7 +7825,7 @@ async def container_file_content(container_id: str, file_id: str, request: Reque
         raise HTTPException(404, "file not found")
     data, media, fname = got
     return Response(content=data, media_type=media,
-                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+                    headers={"Content-Disposition": f'attachment; filename="{fname.rsplit("/", 1)[-1]}"'})
 
 
 # Office types with no faithful browser renderer → convert to PDF server-side (LibreOffice) so the
