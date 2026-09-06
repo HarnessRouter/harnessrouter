@@ -2996,6 +2996,17 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
     return _with_provider_base(conn)
 
 
+def _provider_base_url(provider: str, base_url: str) -> str:
+    """The URL the broker forwards to. An Azure OpenAI endpoint is pasted from the portal as the
+    bare resource (https://<resource>.openai.azure.com/); its OpenAI-compatible surface lives
+    under /openai/v1, and a bare base forwarded as-is 404s on every call ("Resource not found",
+    the matrix's Azure column, 2026-09-06). Any other provider's base is used as given."""
+    base = (base_url or "").strip().rstrip("/")
+    if base and provider.lower() in ("azure", "azure-foundry") and "/openai/" not in base:
+        base += "/openai/v1"
+    return base
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
     claims = _verify_turn_cred(_broker_token(request))
@@ -3007,7 +3018,7 @@ async def llm_broker(path: str, request: Request):
     if not conn:
         raise HTTPException(502, "connection unavailable")
 
-    base = str(conn.get("base_url") or "").rstrip("/")
+    base = _provider_base_url(str(conn.get("provider") or ""), str(conn.get("base_url") or ""))
     if not base:
         raise HTTPException(502, "connection has no base_url")
     # CLIs append their own version segment (…/v1/messages, …/v1/responses) while provider
