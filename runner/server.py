@@ -1812,6 +1812,13 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             api = "openai-responses"
         else:
             api = "openai-completions"
+        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
+            # An OpenAI-shape turn rides the loopback relay, as every qwen and cline turn does: the
+            # relay repairs the request shape in flight (Google's OpenAI-compatible endpoint refuses
+            # OpenAI's optional fields, measured 2026-09-06) and the key never lands in the
+            # workspace's models.json, which is checkpointed. A custom endpoint keeps its own URL.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
         (home / ".pi" / "agent" / "models.json").write_text(
             _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
                             custom_openai=bool(auth.api_format)))
@@ -2227,6 +2234,32 @@ def _aws_eventstream_frames(resp):
             return
 
 
+_GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
+
+
+def _google_unknown_field(refused: bytes) -> str:
+    """The top-level request field Google's OpenAI-compatible endpoint refused as unknown, or "".
+    Google names one field per 400 ("Unknown name \"store\": Cannot find field."); a field named
+    inside an object ("at 'tools[0].function'") is not one the relay drops."""
+    text = refused.decode("utf-8", "replace") if isinstance(refused, (bytes, bytearray)) else str(refused)
+    if "Cannot find field" not in text:
+        return ""
+    m = _GOOGLE_UNKNOWN_RE.search(text)
+    return m.group(1) if m else ""
+
+
+def _drop_top_level_field(body: bytes, field: str) -> bytes:
+    """The JSON request without one top-level field; anything else is returned as it came."""
+    try:
+        doc = json.loads(body or b"")
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or field not in doc:
+        return body
+    doc.pop(field)
+    return json.dumps(doc).encode()
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -2272,6 +2305,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _drop_stream_options(body)
             if flags.get(f"reasoning_effort_none:{_body_model}"):
                 body = _set_reasoning_effort_none(body)
+            for field in flags.get("drop_fields", ()):
+                body = _drop_top_level_field(body, field)
             headers["content-length"] = str(len(body))
         resp = None
         tried_slim = False
@@ -2307,6 +2342,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     # the provider named the fix itself; remember it for this model only
                     flags[f"reasoning_effort_none:{_body_model}"] = True
                     body = effort
+                    headers["content-length"] = str(len(body))
+                    continue
+                unknown = _google_unknown_field(data) if e.code == 400 else ""
+                dropped = _drop_top_level_field(body, unknown) if (unknown and body is not None) else None
+                if attempt < 2 and dropped is not None and dropped != body:
+                    # Google's OpenAI-compatible endpoint refuses any field it does not know (pi and
+                    # dsh send OpenAI's optional store and seed; measured 2026-09-06 on
+                    # gemini-3.6-flash). The refusal names the field: drop it, remember it for the
+                    # route, send again. The broker does the same for brokered traffic; in owner
+                    # trust the relay is the only thing between the harness and the provider.
+                    flags["drop_fields"] = tuple(flags.get("drop_fields", ())) + (unknown,)
+                    body = dropped
                     headers["content-length"] = str(len(body))
                     continue
                 slim = _drop_stream_options(body) if body is not None else None
