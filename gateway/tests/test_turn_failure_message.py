@@ -25,3 +25,13 @@ def test_nothing_tried_still_says_something():
 def test_only_a_refusal_reads_as_a_refused_key():
     assert gw._PROVIDER_REFUSAL_RE.search("OpenAI API error (401): invalid api key")
     assert not gw._PROVIDER_REFUSAL_RE.search("no rollout found for thread id 01a06ea9")
+
+
+def test_refusal_is_judged_on_the_providers_first_line_only():
+    compact = ("ERROR codex_core::session::turn: Failed to run pre-sampling compact\n"
+               "Error running remote compact task: { \"error\": { \"message\": \"X-OpenAI-Internal-Codex-Responses-Lite "
+               "requires `reasoning.context` to be `all_turns`.\", \"type\": \"invalid_request_error\" } }\n"
+               "Reconnecting... 1/5 (rate limit? no: quota)")
+    assert not gw._provider_refused(compact)
+    assert gw._provider_refused("OpenAI API error (401): Incorrect API key provided")
+    assert gw._provider_refused("Error: 429 insufficient_quota\nReconnecting... 1/5")

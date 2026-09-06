@@ -199,3 +199,15 @@ def test_app_server_resumes_the_rollout_that_is_here(tmp_path):
     (sess / "rollout-b.jsonl").write_text('{"type": "session_meta", "payload": {"id": "t-new"}}\n')
     assert _codex_resume_thread_id(home, "t-old") == "t-old", "the wanted rollout is here"
     assert _codex_resume_thread_id(home, "t-missing") == "t-new", "not here: the newest rollout is this conversation"
+
+
+def test_codex_config_compacts_locally(tmp_path, monkeypatch):
+    """Remote compaction is off in every Codex config the runner writes: it is an OpenAI-backend
+    call that other providers do not serve and that an API key was refused on."""
+    import server as rs
+    env = {"HOME": str(tmp_path)}
+    cfg_dir = rs._codex_prepare_env("openai", rs.Auth(api_key="k"), "gpt-5.5", str(tmp_path), env)
+    cfg = (cfg_dir / "config.toml").read_text()
+    assert "[features]\n" in cfg and "remote_compaction_v2 = false" in cfg
+    import tomllib
+    assert tomllib.loads(cfg)["features"]["remote_compaction_v2"] is False
