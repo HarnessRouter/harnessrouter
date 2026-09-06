@@ -234,13 +234,16 @@ def test_resume_finds_a_session_still_sitting_in_the_write_ahead_log():
     assert "--session" in cmd and "ses_wal" in cmd
 
 
-def test_key_goes_to_the_environment_and_never_into_the_config_file():
+def test_the_real_key_stays_in_the_runner_and_never_enters_the_config_or_the_env():
+    # an OpenAI-shape turn rides the loopback relay: the env carries a per-turn placeholder the relay
+    # resolves to the real key, the config references the env, and the real key is in neither
     cmd, d, env = _argv()
-    assert env["HR_OPENCODE_KEY"] == "sk-test"
+    assert env["HR_OPENCODE_KEY"] != "sk-test" and env["HR_OPENCODE_KEY"]
     cfg = _json.loads(open(f"{d}/.harness/opencode.json").read())
     assert cfg["provider"]["hr"]["options"]["apiKey"] == "{env:HR_OPENCODE_KEY}"
     assert "sk-test" not in open(f"{d}/.harness/opencode.json").read()
-    assert cfg["provider"]["hr"]["options"]["baseURL"] == "https://relay.example/v1"
+    assert cfg["provider"]["hr"]["options"]["baseURL"].startswith("http://127.0.0.1:")
+    assert cfg["provider"]["hr"]["options"]["baseURL"].endswith("/v1")
 
 
 def test_a_prompt_starting_with_a_dash_is_not_read_as_a_flag():
