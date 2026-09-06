@@ -902,6 +902,12 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
     out = {k: conn[k] for k in _AUTH_FIELDS if conn.get(k) is not None}
     for secret in _SECRET_AUTH_FIELDS:
         out.pop(secret, None)
+    # The same base the broker would forward to: an Azure endpoint pasted bare from the portal
+    # gains its /openai/v1 here as well, because in owner trust the sandbox talks to the provider
+    # with this base directly and a bare one 404s on every tool call ("Resource not found", the
+    # matrix's second Azure column, 2026-09-06: text turns answered, tool turns did not).
+    if out.get("base_url"):
+        out["base_url"] = _provider_base_url(str(conn.get("provider") or ""), str(out["base_url"]))
 
     # Self-hosted bring-your-own-key. Brokering exists because a MULTI-TENANT sandbox runs
     # someone else's agent against OUR key, so the key must never enter it. Self-hosted inverts
