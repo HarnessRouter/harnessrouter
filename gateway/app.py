@@ -7297,6 +7297,9 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "user_files": user_files, "assistant": asst, "tools": tools, "files": files,
                       # the connection that served the turn, as the record stamps it
                       "connection": rec.get("connection"),
+                      # the model the turn asked for (a served model other than it on the SAME turn is a
+                      # substitution; a switch turn asks for another model on purpose)
+                      "model": rec.get("model") or None,
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.
