@@ -14,15 +14,15 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | cline | gpt-5.6-sol | pass | pass | pass (gpt-5.4) | pass | pass |  |
 | cline | gpt-5.6-terra | pass | pass | pass (gpt-5.4) | pass | pass |  |
 | codex | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| codex | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Reconnecting... 1/5 (unexpected status 404 Not Found: The API depl ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Reconn |
-| codex | gpt-5.4 | pass | pass | FAIL (gpt-5.6-luna) | FAIL | FAIL | switch: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_084a1980f84eb70100 ; artifact: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; recycle: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; retested once; first try: switch [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \; artifact [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error ; recycle [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error  |
-| codex | gpt-5.4-mini | pass | pass | FAIL (gpt-5.6-luna) | FAIL | FAIL | switch: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_08d1a328d2605ba000 ; artifact: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; recycle: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error running remote compact task: {\n  \"error\": {\n    \"messag ; retested once; first try: switch [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \; artifact [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error ; recycle [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "Error  |
+| codex | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | FAIL | FAIL | artifact: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-sol: its tools are not available there. Start a new task for gpt-5.3- ; recycle: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-sol: its tools are not available there. Start a new task for gpt-5.3- |
+| codex | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| codex | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | codex | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| codex | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | FAIL | FAIL | artifact: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_0919fc8615a9fc2e00 ; recycle: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "{\n  \"error\": {\n    \"message\": \"Item 'msg_0919fc8615a9fc2e00 ; retested once; first try: recycle answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in |
+| codex | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | codex | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | codex | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | dsh | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| dsh | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI API error (404): {\"type\":\"invalid_request_error\",\"code ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI |
+| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass |  |
 | dsh | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | dsh | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | dsh | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -30,7 +30,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | dsh | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | dsh | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | hermes | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| hermes | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "HTTP 404: The API deployment for this resource does not exist. If  ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "HTTP 4 |
+| hermes | gpt-5.3-codex | pass | pass | n/a | pass | pass |  |
 | hermes | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | hermes | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | hermes | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -38,7 +38,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| opencode | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "The API deployment for this resource does not exist. If you create ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "The AP |
+| opencode | gpt-5.3-codex | pass | pass | n/a | pass | pass |  |
 | opencode | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -46,7 +46,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | opencode | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | opencode | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| pi | gpt-5.3-codex | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI API error (404): {\"type\":\"invalid_request_error\",\"code ; retested once; first try: first [{"connection": "integration:Azure OpenAI", "status": "failed", "error": "OpenAI |
+| pi | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -54,7 +54,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | pi | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | pi | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | qwen | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| qwen | gpt-5.3-codex | pass | pass | n/a | FAIL | FAIL | artifact: no file card (files: none); PI Error: 404 The API deployment for this resource does not exist. If you created the deployment within the last ; recycle: answered without M1-gpt-5.3-codex:  Reply with just that word. QWEN CODE [API Error: 404 The API deployment for this resource does not exist ; retested once; first try: artifact no file card (files: none); PI Error: 404 The API deployment for this resource d; recycle answered without M1-gpt-5.3-codex:  Reply with just that word. QWEN CODE [API Er |
+| qwen | gpt-5.3-codex | pass | pass | n/a | FAIL | FAIL | artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE [API Error: 400 ; recycle: answered without M1-gpt-5.3-codex: What exact word did I ask you to reply with in my very first message of this task? Reply with just that w |
 | qwen | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | qwen | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | qwen | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -62,7 +62,26 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | qwen | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | qwen | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 
-55 pairs, 239 of 254 scenario runs passed.
+55 pairs, 267 of 271 scenario runs passed.
+
+## Provider: openai
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Notes |
+|---|---|---|---|---|---|---|---|
+| hermes | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | FAIL | pass | artifact: no file card (files: none); Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE Used a tool  |
+| opencode | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| opencode | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| opencode | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+| pi | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
+| pi | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
+
+12 pairs, 59 of 60 scenario runs passed.
 
 ## Provider: tokenrouter
 
@@ -100,11 +119,11 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | cline | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass |  |
 | cline | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass |  |
 | codex | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| codex | gpt-5.3-codex | pass | pass | pass (gpt-5.6-luna) | FAIL | FAIL | artifact: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-luna: its tools are not available there. Start a new task for gpt-5.3 ; recycle: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-luna: its tools are not available there. Start a new task for gpt-5.3 ; retested once; first try: artifact Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-sol: its ; recycle Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-sol: its  |
+| codex | gpt-5.3-codex | pass | pass | pass (gpt-5.6-luna) | FAIL | FAIL | artifact: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-luna: its tools are not available there. Start a new task for gpt-5.3 ; recycle: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-luna: its tools are not available there. Start a new task for gpt-5.3 |
 | codex | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | codex | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | codex | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| codex | gpt-5.6-luna | pass | pass | FAIL (gpt-5.3-codex) | pass | pass | switch: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-luna: its tools are not available there. Start a new task for gpt-5.3 ; retested once; first try: recycle answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in |
+| codex | gpt-5.6-luna | pass | pass | FAIL (gpt-5.3-codex) | pass | pass | switch: Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-luna: its tools are not available there. Start a new task for gpt-5.3 |
 | codex | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | codex | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
@@ -163,12 +182,12 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | opencode | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| opencode | claude-opus-5 | pass | pass | FAIL (gemini-3.6-flash) | pass | pass | switch: [{"connection": "integration:My TokenRouter", "status": "failed", "error": "Invalid JSON payload received. Unknown name \"$schema\" at 'tool ; retested once; first try: followup Reply with exactly: M2-claude-opus-5 OPENCODE Working… |
+| opencode | claude-opus-5 | pass | pass | FAIL (gemini-3.6-flash) | pass | pass | switch: [{"connection": "integration:My TokenRouter", "status": "failed", "error": "Invalid JSON payload received. Unknown name \"$schema\" at 'tool |
 | opencode | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| opencode | gemini-3.6-flash | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:My TokenRouter", "status": "failed", "error": "Invalid JSON payload received. Unknown name \"$schema\" at 'tool ; retested once; first try: first [{"connection": "integration:My TokenRouter", "status": "failed", "error": "Inva |
+| opencode | gemini-3.6-flash | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:My TokenRouter", "status": "failed", "error": "Invalid JSON payload received. Unknown name \"$schema\" at 'tool |
 | opencode | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | glm-5.3-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | opencode | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -189,14 +208,14 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | pi | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| pi | claude-opus-5 | pass | pass | pass (glm-5.3-flash) | pass | pass | retested once; first try: first [{"connection": "integration:My TokenRouter", "status": "failed", "error": "M1-c |
+| pi | claude-opus-5 | pass | pass | pass (glm-5.3-flash) | pass | pass |  |
 | pi | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | gemini-3.6-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| pi | glm-5.3-flash | pass | pass | FAIL (claude-opus-5) | pass | pass | switch: Your tokenrouter key was refused: The model refused to complete the request ; retested once; first try: artifact no file card (files: none); Create a file named hello-pi.txt containing exactly  |
+| pi | glm-5.3-flash | pass | pass | FAIL (claude-opus-5) | pass | pass | switch: Your tokenrouter key was refused: The model refused to complete the request |
 | pi | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | pi | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -224,7 +243,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | qwen | glm-5.3 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | glm-5.3-flash | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | gpt-5.2 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
-| qwen | gpt-5.3-codex | pass | pass | n/a | FAIL | FAIL | artifact: no file card (files: none);  word HELLO, then reply DONE. QWEN CODE [API Error: 404 This model is not supported in the v1/chat/completions e ; recycle: answered without M1-gpt-5.3-codex: ith in my very first message of this task? Reply with just that word. QWEN CODE [API Error: 404 This mode ; retested once; first try: artifact no file card (files: none);  word HELLO, then reply DONE. QWEN CODE [API Error: ; recycle answered without M1-gpt-5.3-codex: ith in my very first message of this task? Re |
+| qwen | gpt-5.3-codex | pass | pass | n/a | FAIL | FAIL | artifact: no file card (files: none);  word HELLO, then reply DONE. QWEN CODE [API Error: 404 This model is not supported in the v1/chat/completions e ; recycle: answered without M1-gpt-5.3-codex: ith in my very first message of this task? Reply with just that word. QWEN CODE [API Error: 404 This mode |
 | qwen | gpt-5.4 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | gpt-5.4-mini | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | gpt-5.5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
@@ -276,7 +295,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | cline | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass |  |
 | cline | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass |  |
 | codex | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| codex | gpt-5.3-codex | pass | pass | n/a | pass | pass | retested once; first try: artifact Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-sol: its ; recycle Codex cannot run gpt-5.3-codex in a task that has already used gpt-5.6-sol: its  |
+| codex | gpt-5.3-codex | pass | pass | n/a | pass | pass |  |
 | codex | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | codex | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | codex | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -301,7 +320,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
 | dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
 | dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
-| dsh | gpt-5.6-sol | pass | pass | n/a | pass | pass | retested once; first try: first the message was not taken: the session never opened a turn in 120 s |
+| dsh | gpt-5.6-sol | pass | pass | n/a | pass | pass |  |
 | dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
 | dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
 | dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass |  |
@@ -330,9 +349,9 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass |  |
 | hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | hermes | hunyuan-3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| hermes | kimi-k2.7-code | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Vercel AI Gateway", "status": "failed", "error": "hermes -z: agent failed: Model moonshotai/kimi-k2.7-code has  ; retested once; first try: first [{"connection": "integration:Vercel AI Gateway", "status": "failed", "error": "h |
+| hermes | kimi-k2.7-code | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Vercel AI Gateway", "status": "failed", "error": "hermes -z: agent failed: Model moonshotai/kimi-k2.7-code has  |
 | hermes | kimi-k3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
-| hermes | ling-3.0-flash | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Vercel AI Gateway", "status": "failed", "error": "hermes -z: agent failed: Model inclusionai/ling-3.0-flash has ; retested once; first try: first [{"connection": "integration:Vercel AI Gateway", "status": "failed", "error": "h |
+| hermes | ling-3.0-flash | FAIL | n/a | n/a | n/a | n/a | first: [{"connection": "integration:Vercel AI Gateway", "status": "failed", "error": "hermes -z: agent failed: Model inclusionai/ling-3.0-flash has |
 | hermes | minimax-m3 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | hermes | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
 | hermes | nemotron-3-ultra | pass | pass | pass (gpt-5.6-sol) | pass | pass |  |
@@ -396,7 +415,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | qwen | claude-haiku-4.5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | claude-opus-4.7 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | claude-opus-4.8 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
-| qwen | claude-opus-5 | pass | pass | n/a | pass | pass | retested once; first try: first the message was not taken: the session never opened a turn in 120 s |
+| qwen | claude-opus-5 | pass | pass | n/a | pass | pass |  |
 | qwen | claude-sonnet-4.6 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | claude-sonnet-5 | pass | pass | pass (qwen3.7-max) | pass | pass |  |
 | qwen | deepseek-v4-flash | pass | pass | pass (qwen3.7-max) | pass | pass |  |
