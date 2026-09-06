@@ -1060,6 +1060,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("google", "hermes"): "openai-api",        ("google", "pi"): "openai-api",
     ("google", "dsh"): "openai-api",           ("google", "opencode"): "openai-api",
     ("google", "qwen"): "openai-api",          ("google", "cline"): "openai-api",
+    # gemini (Gemini CLI) speaks Google's native API, not the OpenAI shape the rows above reach
+    # through a base_url, so it is wired to the google provider as itself: the runner gets the
+    # raw key (owner trust only; see _NATIVE_ONLY_BACKENDS). No ("custom", "gemini") row, for the
+    # reason it is absent from _CUSTOM_FORMAT_BACKENDS: a custom integration is OpenAI- or
+    # Anthropic-shaped.
+    ("google", "gemini"): "google",
 }
 
 
@@ -5358,6 +5364,17 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+    # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
+    # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
+    # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
+    # no-tool-use turn end to end against a real free-tier key). gemini-3.5-flash-lite and
+    # gemini-3.7-flash are NOT yet live-turn verified — added on published Google model-card ids
+    # (not guessed: gemini-3.6-pro does not exist, and the lite sibling shipped as 3.5, not 3.6,
+    # despite launching alongside 3.6 Flash — versions don't move in lockstep across the family).
+    # gemini-3.1-pro (the real Pro flagship) is deliberately NOT listed: Pro was dropped from the
+    # free tier in 2026-04, so it would show as a choice and fail every call on a free-tier key.
+    "gemini": {"default": "gemini-3.6-flash",
+               "models": ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -5683,7 +5700,7 @@ def _strip_internal(d: dict) -> dict:
 # Instruction files WE write into the workspace — one per backend family. A new backend that
 # introduces a new context-file name must add it here or the harness's own instructions get
 # collected as a "produced" deliverable on the first turn (QWEN.md did, 2026-08-25).
-_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md"}
+_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md", "GEMINI.md"}
 
 
 def _is_internal_output(name: str) -> bool:
@@ -12336,6 +12353,31 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
+    "gemini": {
+        "label": "Gemini CLI", "backend": "gemini", "status": "ready",
+        "system_prompt": ("You are Gemini CLI, an autonomous coding agent. You work on a real "
+                          "git workspace with shell and file access, reading and editing files "
+                          "and running commands to complete the task end to end."),
+        # run_shell_command/write_file/activate_skill/update_topic are live-turn verified
+        # (2026-09-06, three real captured turns across the slides/sheets/videos starter kits —
+        # the same fix that corrected _gemini_to_claude's tool_use field names surfaced these
+        # real names). The rest (read_file/replace/search_file_content/glob/web_fetch/
+        # google_web_search/write_todos/save_memory) are still doc-sourced, not yet seen live —
+        # confirm before relying on any of THOSE for enforcement, the same silent-no-op trap the
+        # opencode/qwen comments warn about. Note "replace", not "edit" — gemini-cli's own name
+        # for the edit tool. update_topic isn't in gemini-cli's own public tool docs at all (the
+        # kits' skills invoke it constantly for a running strategic-intent summary); it may be a
+        # newer addition than the docs snapshot this catalog was first built from.
+        "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("replace", "Edit"),
+                  ("search_file_content", "Search"), ("glob", "Glob"),
+                  ("web_fetch", "Web Fetch"), ("google_web_search", "Web Search"),
+                  ("write_todos", "Todo"), ("save_memory", "Memory"),
+                  ("activate_skill", "Skill"), ("update_topic", "Topic")],
+        # No confirmed hard per-tool kill switch in headless mode (only --allowed-mcp-server-names
+        # gates MCP servers) — instruction tier until proven otherwise, same as qwen/cline/codex.
         "tool_enforcement": "instruction",
     },
     "cline": {
