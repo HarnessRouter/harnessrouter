@@ -2465,6 +2465,14 @@ def _adapt_custom_auth(auth):
     return auth.model_copy(update={"base_url": base, "api_key": tok})
 
 
+def _relay_base_with_version(base_url: str) -> str:
+    """A relay base ends with /v1 unless it is an AWS host or already names an API version."""
+    base = (base_url or "").rstrip("/")
+    if not base or ".amazonaws.com" in base or re.search(r"/v\d+[a-z]*(/|$)", base):   # /v1, /v1beta/openai
+        return base
+    return base + "/v1"
+
+
 def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI)."""
     with _HERMES_RELAY["lock"]:
@@ -2473,7 +2481,13 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (base_url, api_key, {"rename_max_tokens": False})
+        # The relay joins the client's resource ("/chat/completions", "/messages") onto this base,
+        # so the base must carry its "/v1" the way every aggregator's does. A direct Anthropic key
+        # stored with the catalog's former default https://api.anthropic.com sent cline and qwen to
+        # https://api.anthropic.com/chat/completions, a 404 with no body (2026-09-06 support
+        # matrix; Anthropic's OpenAI-compatible surface lives under /v1). Bedrock keeps its host
+        # (its own path is built in _bedrock_anthropic).
+        _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key, {"rename_max_tokens": False})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
