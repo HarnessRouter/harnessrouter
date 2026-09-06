@@ -4808,7 +4808,21 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-opus-4.7":    "anthropic/claude-opus-4.7",
         "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
         "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
-        "gemini-3.6-flash":   "google/gemini-3.6-flash",
+        # The Gemini text family, each id read from the aggregator's own /v1/models on 2026-09-06
+        # (OpenRouter serves all eleven; TokenRouter lacks four, see _TOKENROUTER_NO_CHANNEL; Vercel
+        # names one differently, see _VERCEL_RESLUG). Image, TTS, transcribe, embedding, batch and
+        # "-latest" alias ids are not chat models and are not here.
+        "gemini-3.8-flash":      "google/gemini-3.8-flash",
+        "gemini-3.7-flash":      "google/gemini-3.7-flash",
+        "gemini-3.6-flash":      "google/gemini-3.6-flash",
+        "gemini-3.5-flash":      "google/gemini-3.5-flash",
+        "gemini-3.5-flash-lite": "google/gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
+        "gemini-3-flash-preview": "google/gemini-3-flash-preview",
+        "gemini-2.5-pro":        "google/gemini-2.5-pro",
+        "gemini-2.5-flash":      "google/gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "google/gemini-2.5-flash-lite",
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
         "deepseek-v4-flash":  "deepseek/deepseek-v4-flash",
         "kimi-k3":            "moonshotai/kimi-k3",
@@ -4934,6 +4948,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 # Re-test with a newer hermes before adding it back.
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
+    # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not these four.
+    "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 }
 # Image models, kept OUT of _VENDOR_MODELS on purpose: those tables feed the chat model pickers
 # and the per-backend catalogs, and an image model offered as a chat model is a broken choice a
@@ -4978,11 +4994,15 @@ _VERCEL_RESLUG = {
     # Vercel publishes the z-ai models under `zai/`, not the `z-ai/` the other aggregators use.
     "glm-5.3":            "zai/glm-5.3",
     "glm-5.3-flash":      "zai/glm-5.3-flash",
+    # Vercel lists the Gemini 3 Flash preview without the suffix (its /v1/models, 2026-09-06).
+    "gemini-3-flash-preview": "google/gemini-3-flash",
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
 # Google AI Studio serves the catalog's Gemini models by their own ids.
-_VENDOR_MODELS["google"] = {"gemini-3.6-flash": "gemini-3.6-flash"}
+# Google AI Studio serves the whole family under the plain id (its /v1beta/models, 2026-09-06, on
+# the sponsored project; 40 generateContent-capable models, of which these eleven are chat models).
+_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
@@ -5086,7 +5106,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
-                          "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
+                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
@@ -5115,7 +5135,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                       "gemini-3.6-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
+                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
@@ -5132,7 +5152,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                            "mistral-medium-3.5", "step-3.7-flash"]},
+                            "mistral-medium-3.5", "step-3.7-flash",
+                          # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
     # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
     # every row below passed on TokenRouter, Vercel and Azure OpenAI. gpt-5.3-codex is NOT here:
@@ -5146,7 +5168,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                        "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
@@ -5168,13 +5190,15 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                         "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+                         "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
+                          # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                      "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                      "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
 }
