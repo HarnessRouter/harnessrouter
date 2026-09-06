@@ -1284,6 +1284,28 @@ def _codex_switch_refusal(models_seen, model_req: str) -> str:
             f"its tools are not available there. Start a new task for {model_req}.")
 
 
+def _integration_driving(integrations: list[dict], backend: str, canonical: str, mapped: str | None) -> dict | None:
+    """The integration a turn on `backend` for `canonical` runs through: the org's mapping when
+    that integration can drive the backend, else the first integration on the org (by name) that
+    can and serves the id. The map is the org's choice per model, made once for every backend; a
+    backend wired to one provider (gemini: google) cannot honour a mapping to an aggregator, and
+    without this fall-through it was unusable whenever the map named one, which the map does by
+    default (measured 2026-09-06 on 0.13.24: every gemini backend id unavailable, the picker
+    greyed, while the same ids ran when the map pointed at the Google integration)."""
+    by_name = {str(i.get("name") or ""): i for i in integrations}
+    first = by_name.get(mapped or "")
+    if first is not None and _integration_serves_backend(first, backend):
+        return first
+    canon = (canonical or "").strip()
+    for integ in sorted(integrations, key=lambda i: str(i.get("name") or "")):
+        if integ is first or not _integration_serves_backend(integ, backend):
+            continue
+        models = _integration_models(integ)
+        if canon in models or canon.lower() in models:
+            return integ
+    return None
+
+
 async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     """The synthetic connection for a model→integration mapping, or None when unmapped /
     unusable by this backend. Shaped exactly like a vault connection so the turn loop treats
@@ -1295,11 +1317,10 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     iname = mm.get(canon) or mm.get(canon.lower())
     if not iname:
         return None
-    integ = next((i for i in await _integrations_doc() if (i.get("name") or "") == iname), None)
+    integ = _integration_driving(await _integrations_doc(), backend, canon, iname)
     if not integ:
         return None
-    if not _integration_serves_backend(integ, backend):
-        return None
+    iname = str(integ.get("name") or "")
     provider = _INTEGRATION_WIRING.get(((integ.get("provider") or "").lower(), backend))
     if not provider:
         return None
@@ -5741,9 +5762,9 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         if not table:
             return None
         servable |= set(table)
+    integ_list = list(integrations.values())
     for canonical, iname in (await _effective_model_map()).items():
-        integ = integrations.get(iname)
-        if integ and _integration_serves_backend(integ, backend):
+        if _integration_driving(integ_list, backend, canonical, iname):
             servable.add(canonical)
     return servable
 
