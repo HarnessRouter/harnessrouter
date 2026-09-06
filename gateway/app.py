@@ -2949,7 +2949,7 @@ def _with_provider_base(conn: dict | None) -> dict | None:
 
 
 _PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
-                                  r"insufficient_quota|rate limit|quota|forbidden|refused", re.IGNORECASE)
+                                  r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
 
 
 def _provider_refused(err: str) -> bool:
