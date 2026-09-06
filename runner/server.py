@@ -1156,7 +1156,11 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
         if auth.api_key:
             env["ANTHROPIC_API_KEY"] = auth.api_key
         if auth.base_url:
-            env["ANTHROPIC_BASE_URL"] = auth.base_url
+            # The CLI appends /v1/messages itself, so a base that carries the "/v1" the broker and
+            # the catalog use (https://api.anthropic.com/v1) doubled it and the CLI answered "you
+            # may not have access to it" (2026-09-06, measured on the self-hosted instance). The
+            # router branch below has always stripped it; a direct key gets the same rule.
+            env["ANTHROPIC_BASE_URL"] = auth.base_url.rstrip("/").removesuffix("/v1")
     elif p == "bedrock":
         env["CLAUDE_CODE_USE_BEDROCK"] = "1"
         if auth.aws_region:
