@@ -48,7 +48,7 @@ export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]
 // (they surface installed skills to the agent). They are never user-facing outputs, so they must
 // never render as output file cards, including on older sessions that captured them before the
 // gateway started excluding them.
-const _INTERNAL_OUT = new Set(['AGENTS.md', 'CLAUDE.md', 'QWEN.md']);
+const _INTERNAL_OUT = new Set(['AGENTS.md', 'CLAUDE.md', 'QWEN.md', 'GEMINI.md']);
 export const isInternalOutput = (name?: string) =>
   !!name && (_INTERNAL_OUT.has(name) || name.startsWith('.harness/') || name.includes('/.harness/'));
 export type Msg = UserMsg | AsstMsg;

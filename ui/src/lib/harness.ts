@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'qwen' | 'cline' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'qwen' | 'gemini' | 'cline' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -86,6 +86,14 @@ export const OOB: OobHarness[] = [
     // Same relay reach as pi/opencode; qwen family first since it is the backend's home family.
     models: ['qwen3.7-max', 'qwen3.8-max', 'gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.3-codex', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'mistral-medium-3.5', 'step-3.7-flash'], defaultModel: 'qwen3.7-max', moreModels: 0,
     systemPrompt: 'You are Qwen Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
+  { id: 'gemini', name: 'Gemini CLI', version: 'v0.58.0', backend: 'gemini', status: 'ready',
+    // Google's own native models only (Path A: Gemini API Key) — this backend has no relay
+    // reach into the gpt/claude/deepseek/etc catalogs the way qwen/pi/opencode do, because it
+    // speaks neither the OpenAI nor the Anthropic wire protocol. Placeholder until the gateway's
+    // /v1/models catalog for this backend is populated (see gateway's _MODEL_CATALOG["gemini"]).
+    models: ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.7-flash'], defaultModel: 'gemini-3.6-flash', moreModels: 0,
+    systemPrompt: 'You are Gemini CLI, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'cline', name: 'Cline', version: 'v3.0.60', backend: 'cline', status: 'ready',
     // Placeholder only, like every list above: the gateway's catalog wins once fetched. Every

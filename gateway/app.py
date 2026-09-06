@@ -815,6 +815,15 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 # Providers whose wire protocol is plain HTTP + a bearer/api-key header, so a base_url swap is
 # transparent to the CLI. bedrock/vertex sign with the cloud SDK and are handled separately
 # (see _auth_from_conn) — they keep their own credential until their signing path is brokered.
+#
+# "google" (Gemini API Key) is protocol-wise just like anthropic/openai — a bearer header against
+# one fixed host — so it COULD be added here. It is deliberately left OUT for now because that
+# swap requires gemini-cli to honor a redirected base_url for its gemini-api-key auth path, and
+# that has not been confirmed against a live binary (unlike anthropic/openai's ANTHROPIC_BASE_URL/
+# OPENAI_BASE_URL, which every backend here already redirects routinely). Until confirmed, a
+# "google" connection falls through _auth_from_conn's "not brokerable" branch below and is only
+# usable in HR_SANDBOX_TRUST=owner (self-hosted) mode — the same tier bedrock/vertex sit in today,
+# for the same reason: don't claim a credential is safely brokered before checking it actually is.
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
                          "openrouter", "openai-api", "custom"}
 
@@ -1002,6 +1011,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "pi"): "tokenrouter",            ("custom", "dsh"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
+    # gemini (Gemini CLI) speaks NEITHER the OpenAI nor the Anthropic wire protocol, so none of
+    # the generic rows above (anthropic/openai/azure-foundry/openrouter/tokenrouter/vercel/llmtr)
+    # apply — a Vercel or OpenRouter connection cannot drive it no matter how many providers it
+    # aggregates, because gemini-cli never asks it in a shape it understands. It gets its own
+    # provider instead. No ("custom", "gemini") row either, for the same reason it is absent from
+    # _CUSTOM_FORMAT_BACKENDS below: a custom integration is OpenAI- or Anthropic-shaped.
+    ("google", "gemini"): "google",
 }
 
 
@@ -3737,6 +3753,23 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "aws_bearer_token",
         "secret_label": "API Key (bearer token)",
     },
+    # Google AI Studio (Gemini API Key), Path A only — drives the "gemini" backend (Gemini CLI).
+    # Plain bearer/header auth against one fixed endpoint — the same SHAPE as anthropic/openai,
+    # which is why it's a _BROKERABLE_PROVIDERS candidate — but it is NOT in that set yet; see the
+    # comment there for why (gemini-cli honoring a redirected base_url is unconfirmed). Until it
+    # is, a "google" connection only works in HR_SANDBOX_TRUST=owner mode. Vertex AI (service
+    # account) is the OTHER Gemini auth path — deliberately NOT a row here yet either, for the
+    # same reason bedrock/vertex sign with the cloud SDK instead of a bearer header: it cannot
+    # ride this same transparent base_url-swap broker without extra work minting short-lived
+    # tokens server-side.
+    "google": {
+        "label": "Google AI (Gemini API Key)",
+        "base_url": "https://generativelanguage.googleapis.com",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "AIza…",
+    },
     "custom": {
         "label": "Custom",
         "base_url": None,          # user provides
@@ -4500,6 +4533,16 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.2":       "gpt-5.2",
         "gpt-5.3-codex": "gpt-5.3-codex",
     },
+    # Google AI Studio (Gemini API Key) direct — the vendor id IS the canonical id, unlike the
+    # aggregator tables below (openrouter/vercel/llmtr) that need a vendor-qualified slug. Missing
+    # this table entirely (only _MODEL_CATALOG["gemini"] was added, not this one) is what made the
+    # "google" integration ineligible for every model in the console's mapping picker — servedBy()
+    # there reads i.models, which is this table, not the per-backend catalog.
+    "google": {
+        "gemini-3.6-flash":     "gemini-3.6-flash",
+        "gemini-3.5-flash-lite": "gemini-3.5-flash-lite",
+        "gemini-3.7-flash":     "gemini-3.7-flash",
+    },
     "openrouter": {
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
         "gpt-5.6-terra":      "openai/gpt-5.6-terra",
@@ -4869,6 +4912,17 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+    # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
+    # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
+    # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
+    # no-tool-use turn end to end against a real free-tier key). gemini-3.5-flash-lite and
+    # gemini-3.7-flash are NOT yet live-turn verified — added on published Google model-card ids
+    # (not guessed: gemini-3.6-pro does not exist, and the lite sibling shipped as 3.5, not 3.6,
+    # despite launching alongside 3.6 Flash — versions don't move in lockstep across the family).
+    # gemini-3.1-pro (the real Pro flagship) is deliberately NOT listed: Pro was dropped from the
+    # free tier in 2026-04, so it would show as a choice and fail every call on a free-tier key.
+    "gemini": {"default": "gemini-3.6-flash",
+               "models": ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"]},
 }
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -5169,7 +5223,7 @@ def _strip_internal(d: dict) -> dict:
 # Instruction files WE write into the workspace — one per backend family. A new backend that
 # introduces a new context-file name must add it here or the harness's own instructions get
 # collected as a "produced" deliverable on the first turn (QWEN.md did, 2026-08-25).
-_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md"}
+_OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md", "GEMINI.md"}
 
 
 def _is_internal_output(name: str) -> bool:
@@ -11743,6 +11797,31 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
+        "tool_enforcement": "instruction",
+    },
+    "gemini": {
+        "label": "Gemini CLI", "backend": "gemini", "status": "ready",
+        "system_prompt": ("You are Gemini CLI, an autonomous coding agent. You work on a real "
+                          "git workspace with shell and file access, reading and editing files "
+                          "and running commands to complete the task end to end."),
+        # run_shell_command/write_file/activate_skill/update_topic are live-turn verified
+        # (2026-09-06, three real captured turns across the slides/sheets/videos starter kits —
+        # the same fix that corrected _gemini_to_claude's tool_use field names surfaced these
+        # real names). The rest (read_file/replace/search_file_content/glob/web_fetch/
+        # google_web_search/write_todos/save_memory) are still doc-sourced, not yet seen live —
+        # confirm before relying on any of THOSE for enforcement, the same silent-no-op trap the
+        # opencode/qwen comments warn about. Note "replace", not "edit" — gemini-cli's own name
+        # for the edit tool. update_topic isn't in gemini-cli's own public tool docs at all (the
+        # kits' skills invoke it constantly for a running strategic-intent summary); it may be a
+        # newer addition than the docs snapshot this catalog was first built from.
+        "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("replace", "Edit"),
+                  ("search_file_content", "Search"), ("glob", "Glob"),
+                  ("web_fetch", "Web Fetch"), ("google_web_search", "Web Search"),
+                  ("write_todos", "Todo"), ("save_memory", "Memory"),
+                  ("activate_skill", "Skill"), ("update_topic", "Topic")],
+        # No confirmed hard per-tool kill switch in headless mode (only --allowed-mcp-server-names
+        # gates MCP servers) — instruction tier until proven otherwise, same as qwen/cline/codex.
         "tool_enforcement": "instruction",
     },
     "cline": {
