@@ -6,12 +6,13 @@
 // Secure, SameSite=Lax, host-only (no Domain attribute). The marketing page fetches
 // GET /api/session with credentials:include; the browser attaches the cookie because
 // harnessrouter.ai and app.harnessrouter.ai are same-site, and the answer carries only
-// {authed, initial, dashboardUrl}. Nothing here returns, echoes, or logs the token, and no script
+// {authed, initial, avatarUrl, dashboardUrl}. Nothing here returns, echoes, or logs the token, and no script
 // on any origin can read the cookie.
 //
 //   POST   same-origin, Authorization: Bearer   verify with the engine, then set the cookie
 //   DELETE same-origin                          clear the cookie (sign-out)
 //   GET    marketing origins only               read + verify the cookie, answer the minimal state
+//          (avatarUrl is the member's OAuth photo when there is one; https only)
 //
 // Every unknown origin, missing cookie, engine error or invalid token is answered as signed out
 // or refused BEFORE any authenticated work, so the route cannot be used to make the engine verify
@@ -83,7 +84,7 @@ function withCookies(res: Response, lines: string[]): Response {
   return res;
 }
 
-type Verified = { ok: true; initial: string } | { ok: false };
+type Verified = { ok: true; initial: string; avatarUrl: string | null } | { ok: false };
 
 /** First letter or digit of the member's name (or email), uppercased; "A" when there is none. */
 function initialOf(member: Record<string, unknown> | null | undefined): string {
@@ -92,6 +93,18 @@ function initialOf(member: Record<string, unknown> | null | undefined): string {
   );
   const match = source?.match(/\p{L}|\p{N}/u);
   return match ? match[0].toUpperCase() : 'A';
+}
+
+/** The member's OAuth profile photo, only when it is an https URL; anything else is dropped. */
+function avatarOf(member: Record<string, unknown> | null | undefined): string | null {
+  const raw = member?.avatar_url;
+  if (typeof raw !== 'string' || raw.length > 2048) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Ask the engine whether this token is a live session. Never throws; failures read as invalid. */
@@ -104,7 +117,7 @@ async function verify(token: string): Promise<Verified> {
     });
     if (!r.ok) return { ok: false };
     const d = await r.json().catch(() => null);
-    return { ok: true, initial: initialOf(d?.member) };
+    return { ok: true, initial: initialOf(d?.member), avatarUrl: avatarOf(d?.member) };
   } catch {
     return { ok: false };
   }
@@ -139,7 +152,10 @@ export async function GET(req: NextRequest) {
     return withCookies(json({ authed: false }, headers), legacy);
   }
   return withCookies(
-    json({ authed: true, initial: verified.initial, dashboardUrl: DASHBOARD_URL }, headers),
+    json(
+      { authed: true, initial: verified.initial, avatarUrl: verified.avatarUrl, dashboardUrl: DASHBOARD_URL },
+      headers,
+    ),
     legacy,
   );
 }
