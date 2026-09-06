@@ -1938,6 +1938,9 @@ async def _brain_mint_room(sid: str) -> str | None:
     return None
 
 
+_HYDRATE_FAILED_MESSAGE = "This task's files and conversation could not be restored just now, so nothing ran. Try again in a moment."
+
+
 async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
     pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
@@ -1965,9 +1968,20 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             except Exception:  # noqa: BLE001
                 pass                        # probe is best-effort; fall through to full hydrate
         # Stream the checkpoint tar VG blob -> runner /hydrate without buffering it (HR-INF-015).
-        r = await _hydrate_relay(sid, params)
-        rec["hydrated"] = r.status_code < 400
-        rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+        # A restore that fails while a checkpoint exists is tried once more: under a burst of cold
+        # sessions (seven at once, 2026-09-06 11:00Z) one in ten to twenty restores failed, and the
+        # turn then ran on the wiped workspace and started the conversation over ("no rollout",
+        # "No saved session found", "couldn't resume"); the checkpoint itself was intact every time.
+        for attempt in range(2):
+            r = await _hydrate_relay(sid, params)
+            rec["hydrated"] = r.status_code < 400
+            rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+            if rec["hydrated"] or not want_sha:
+                break
+            rec["hydrate_error"] = f"HTTP {r.status_code} {(r.text or '')[:200]}"
+            print(f"[hydrate] restore failed sid={sid} attempt={attempt + 1} {rec['hydrate_error']}", flush=True)
+            if attempt == 0:
+                await asyncio.sleep(1.0)
         if rec["hydrated"]:
             # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
             # turn. Anything an app wrote since then has just been wiped out of it, so put it back
@@ -1975,11 +1989,13 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             # reaches this: that workspace was never wiped, so it still holds those writes.
             rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
         if not rec["hydrated"] and want_sha:
-            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed. Do NOT let this
-            # turn checkpoint over the good blob from a workspace that isn't that checkpoint.
+            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, twice. The turn
+            # must not run on this workspace (the caller refuses it), and this turn must never
+            # checkpoint over the good blob from a workspace that isn't that checkpoint.
             rec["hydrate_failed_with_checkpoint"] = True
     except Exception as e:  # noqa: BLE001
         rec["hydrate_error"] = str(e)[:200]
+        print(f"[hydrate] restore raised sid={sid} {rec['hydrate_error']}", flush=True)
         if str(v.get("ws_sha") or ""):
             rec["hydrate_failed_with_checkpoint"] = True
 
@@ -5663,6 +5679,14 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
     await _hydrate(sid, rec)
+    if rec.get("hydrate_failed_with_checkpoint"):
+        # The task has a checkpoint and it could not be restored: the turn does not run. Running it
+        # on the wiped workspace started the conversation over without a word (2026-09-06); an
+        # error the person can retry is the honest answer.
+        rec["status"] = "failed"
+        rec["error_message"] = _HYDRATE_FAILED_MESSAGE
+        rec["tried"] = [{"connection": "", "status": "failed", "error": f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}"}]
+        return "failed", [], rec
     # Capture the USER's message as the first trace event of this turn — the runner's
     # stream only carries agent/tool/result, never the prompt, so without this the
     # Traces timeline has no user turn. flatten.js renders type:'user' as a User row.
@@ -6145,6 +6169,8 @@ async def recycle_session_sandbox(sid: str) -> dict:
         raise HTTPException(409, "a turn is running; recycle after it settles")
     rec: dict = {}
     await _hydrate(sid, rec, force=True)
+    if not rec.get("hydrated"):
+        raise HTTPException(502, f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}")
     return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
             "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
