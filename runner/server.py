@@ -3505,10 +3505,33 @@ def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
     if t == "result":
         err = obj.get("error") if isinstance(obj.get("error"), dict) else None
         msg = err.get("message") if err else None
-        return [{"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
-                 "result": msg or state.get("final", ""),
-                 "usage": _norm_token_usage(obj.get("stats"))}]
+        stats = obj.get("stats") if isinstance(obj.get("stats"), dict) else {}
+        # The stats are keyed by the model the CLI actually called (convertToStreamStats, 0.58.0),
+        # and the CLI rewrites some requested ids on the way (every "-flash" id becomes
+        # gemini-3.5-flash on the API-key auth path, measured 2026-09-06): the served model rides
+        # the result so the gateway can record a substitution instead of believing the request.
+        models = stats.get("models") if isinstance(stats.get("models"), dict) else {}
+        served = ",".join(k for k in models if isinstance(k, str) and k)
+        ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
+              "result": msg or state.get("final", ""), "usage": _gemini_usage(stats)}
+        if served:
+            ev["model"] = served
+        return [ev]
     return [obj]
+
+
+def _gemini_usage(stats: dict) -> dict:
+    """gemini-cli's result stats in the runner's usage contract. Its `input_tokens` is the whole
+    prompt INCLUDING the cached part and `cached` is that part (its own `input` is the fresh count
+    and agrees), so the fresh input is the difference, the same subtraction the codex path makes;
+    without it the cached prefix (8k tokens of system prompt on a one-word turn) would be billed
+    at the full input rate."""
+    u = _norm_token_usage(stats)
+    if isinstance(stats, dict) and isinstance(stats.get("cached"), (int, float)) and stats["cached"] > 0:
+        cached = int(stats["cached"])
+        u["cache_read_tokens"] = cached
+        u["input_tokens"] = max(int(u.get("input_tokens") or 0) - cached, 0)
+    return u
 
 
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched

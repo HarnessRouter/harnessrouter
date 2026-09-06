@@ -9,7 +9,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (Auth, _agent_doc_path, _build_gemini, _gemini_to_claude,  # noqa: E402
-                    _norm_token_usage, BACKENDS)
+                    _gemini_usage, _norm_token_usage, BACKENDS)
 
 
 def _argv(**kw):
@@ -179,3 +179,21 @@ def test_normalizer_drops_non_fatal_error_events():
 
 def test_instruction_file_is_gemini_md():
     assert _agent_doc_path("/ws", "gemini").name == "GEMINI.md"
+
+
+def test_the_result_carries_the_served_model_and_the_fresh_input_beside_the_cached():
+    """Measured on the pinned 0.58.0 (2026-09-06): `-m gemini-3.6-flash` answered with stats keyed
+    "gemini-3.5-flash", because the CLI rewrites every "-flash" id on the API-key auth path. The
+    gateway can only record that substitution if the result says which model ran. The stats'
+    input_tokens include the cached prefix; the usage contract wants the fresh input and the cached
+    part apart."""
+    stats = {"total_tokens": 10835, "input_tokens": 10532, "output_tokens": 2, "cached": 8118,
+             "input": 2414, "duration_ms": 2919, "tool_calls": 0,
+             "models": {"gemini-3.5-flash": {"total_tokens": 10835, "input_tokens": 10532,
+                                             "output_tokens": 2, "cached": 8118, "input": 2414}}}
+    out = _gemini_to_claude({"type": "result", "status": "success", "stats": stats}, {"final": "PONG"})
+    assert out == [{"type": "result", "subtype": "success", "is_error": False, "result": "PONG",
+                    "usage": {"input_tokens": 2414, "output_tokens": 2, "cache_read_tokens": 8118},
+                    "model": "gemini-3.5-flash"}]
+    assert _gemini_usage({}) == _norm_token_usage({})          # the same shape as every other normalizer
+    assert _gemini_usage({"input_tokens": 100, "output_tokens": 5})["input_tokens"] == 100
