@@ -2248,6 +2248,77 @@ def _google_unknown_field(refused: bytes) -> str:
     return m.group(1) if m else ""
 
 
+# Gemini 3 requires each replayed tool call's thought signature: Google's OpenAI-compatible endpoint
+# streams it on every function call (tool_calls[].extra_content.google.thought_signature) and refuses
+# the next request without it, 400 "Function call is missing a thought_signature in functionCall
+# parts" (measured 2026-09-06 on the artifact turn of pi, dsh, qwen and opencode). OpenAI-shaped
+# clients drop extra_content when they rebuild the assistant message; in owner trust this relay is
+# the only thing between the harness and the provider, so it remembers each signature under its
+# tool call id as the answer streams past and puts it back on the replay. A call it never saw gets
+# Google's sentinel, which skips the check instead of failing the turn. The broker does the same
+# for brokered traffic.
+_GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
+_GOOGLE_HOST = "generativelanguage.googleapis.com"
+
+
+def _google_signatures_in(doc: dict) -> list[tuple[str, str]]:
+    """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
+    found: list[tuple[str, str]] = []
+    for ch in doc.get("choices") or []:
+        if not isinstance(ch, dict):
+            continue
+        holder = ch.get("delta") if isinstance(ch.get("delta"), dict) else ch.get("message")
+        if not isinstance(holder, dict):
+            continue
+        for tc in holder.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            sig = ((ec or {}).get("google") or {}).get("thought_signature") if isinstance(ec, dict) else None
+            cid = tc.get("id")
+            if isinstance(sig, str) and sig and isinstance(cid, str) and cid:
+                found.append((cid, sig))
+    return found
+
+
+def _google_signatures_in_line(line: bytes) -> list[tuple[str, str]]:
+    """The signatures one SSE line carries; a line without one costs a substring check."""
+    if not line.startswith(b"data:") or b"thought_signature" not in line:
+        return []
+    try:
+        doc = json.loads(line[5:].strip())
+    except ValueError:
+        return []
+    return _google_signatures_in(doc) if isinstance(doc, dict) else []
+
+
+def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
+    """The request with every replayed assistant tool call carrying a thought signature: the one
+    this relay saw on the answer, else Google's sentinel. A body without tool calls is untouched."""
+    if b"tool_calls" not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
+        return body
+    changed = False
+    for msg in doc["messages"]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            ec = tc.get("extra_content")
+            if isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature"):
+                continue
+            cid = str(tc.get("id") or "")
+            tc["extra_content"] = {"google": {"thought_signature": sigs.get(cid) or _GOOGLE_SIG_SKIP}}
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
 def _drop_top_level_field(body: bytes, field: str) -> bytes:
     """The JSON request without one top-level field; anything else is returned as it came."""
     try:
@@ -2308,6 +2379,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             for field in flags.get("drop_fields", ()):
                 body = _drop_top_level_field(body, field)
             headers["content-length"] = str(len(body))
+        google = _GOOGLE_HOST in base or bool(flags.get("thought_signature"))
+        if google and body is not None and self.path.endswith("/chat/completions"):
+            body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
+            headers["content-length"] = str(len(body))
         resp = None
         tried_slim = False
         for attempt in (0, 1, 2):
@@ -2344,6 +2419,17 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     body = effort
                     headers["content-length"] = str(len(body))
                     continue
+                if google and e.code == 400:
+                    # the harness shows this as "400 (no body)"; the refusal is here
+                    print(f"[relay] google refused {tail} model={_body_model}: {data[:300]!r}", flush=True)
+                if (attempt < 2 and e.code == 400 and b"thought_signature" in data
+                        and not flags.get("thought_signature") and body is not None):
+                    # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
+                    flags["thought_signature"] = True
+                    google = True
+                    body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
+                    headers["content-length"] = str(len(body))
+                    continue
                 unknown = _google_unknown_field(data) if e.code == 400 else ""
                 dropped = _drop_top_level_field(body, unknown) if (unknown and body is not None) else None
                 if attempt < 2 and dropped is not None and dropped != body:
@@ -2374,18 +2460,34 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         ctype = resp.headers.get("content-type") or ""
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
-        if "text/event-stream" in ctype:   # responses stream through untouched — the fix is request-side
+        # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass
+        sigs = flags.setdefault("google_sigs", {}) if google else None
+        if "text/event-stream" in ctype:
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
+            pending = b""
             while True:
                 chunk = resp.read(4096)
                 if not chunk:
                     break
+                if sigs is not None:
+                    pending += chunk
+                    while b"\n" in pending:
+                        line, pending = pending.split(b"\n", 1)
+                        for cid, sig in _google_signatures_in_line(line.strip()):
+                            sigs[cid] = sig
                 self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
         else:
             data = resp.read()
+            if sigs is not None and b"thought_signature" in data:
+                try:
+                    doc = json.loads(data)
+                except ValueError:
+                    doc = None
+                if isinstance(doc, dict):
+                    sigs.update(_google_signatures_in(doc))
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
