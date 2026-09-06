@@ -37,7 +37,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | hermes | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | hermes | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass |  |
 | opencode | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
-| opencode | claude-haiku-4.5 | FAIL | n/a | n/a | n/a | n/a | first: answered without M1-claude-haiku-4.5:  debugging, or refactoring code Exploring and understanding your codebase Solving technical problems A ; re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
+| opencode | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass | the model answered the first turn with a capabilities blurb instead of the word; one more try ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
 | opencode | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
 | opencode | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
 | opencode | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass | re-run on the bare base, partner inside the column ; retested once; first try: first [{"connection": "integration:Anthropic", "status": "failed", "error": "Not Found |
@@ -58,7 +58,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | qwen | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-sonnet-4.6: What exact word did I ask you to reply wi |
 | qwen | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | re-run with the Anthropic base carrying /v1 (0.13.9) ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-claude-sonnet-5: What exact word did I ask you to reply with |
 
-49 pairs, 240 of 241 scenario runs passed.
+49 pairs, 245 of 245 scenario runs passed.
 
 ## Provider: azure-e2
 
