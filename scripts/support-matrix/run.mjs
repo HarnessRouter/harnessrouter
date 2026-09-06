@@ -59,7 +59,8 @@ async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   let st = '';
   for (let i = 0; i < maxS / 3; i++) { await sleep(3000); const dr = await door(); if (dr) return { ok: false, s: secs(), tail: '', why: 'door: ' + dr.slice(0, 160) }; d = await detailOf(sid); st = String(d?.turn_status || d?.status || ''); if (TERMINAL.has(st)) break; }
   let last = null, turns = null;
-  for (let i = 0; i < 10; i++) { turns = await turnsOf(sid); last = turns && turns.length > n0 ? turns[turns.length - 1] : null; const stored = !!(last && TERMINAL.has(String(last.status)) && (last.assistant || last.error || last.incomplete_reason || (last.files || []).length)); if (stored && (!expectFiles || (last.files || []).length)) break; await sleep(3000); }
+  // the record must be THIS message's: a send refused at the door leaves the previous turn's record in place
+  for (let i = 0; i < 10; i++) { turns = await turnsOf(sid); last = turns && turns.length > n0 && String((turns[turns.length - 1] || {}).user || '').trim() === text.trim() ? turns[turns.length - 1] : null; const stored = !!(last && TERMINAL.has(String(last.status)) && (last.assistant || last.error || last.incomplete_reason || (last.files || []).length)); if (stored && (!expectFiles || (last.files || []).length)) break; await sleep(3000); }
   // then let the console render what the server stored
   const head = String(last?.assistant || '').replace(/\s+/g, ' ').trim().slice(0, 40);
   for (let i = 0; i < 12; i++) { const t = await transcript(); const from = t.lastIndexOf(mark); if (!/Working…/.test(t.slice(from)) && (!head || t.slice(from).includes(head))) break; await sleep(1500); }
@@ -126,7 +127,15 @@ try {
           log(`RECYCLE ${k} ${rec.recycle.ok ? 'ok' : 'FAIL'} ${rec.recycle.s}s ${rec.recycle.why}`);
         } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; rec.recycle = { ok: null, why: 'first turn failed' }; }
       } catch (e) { rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`); if (/has been closed/.test(rec.error)) throw e; }   // a closed browser ends the worker; the next launch resumes
-      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k}`);
+      // the record is complete: stamp the connection that served it, then let the session go. Its
+      // workspace, checkpoint and trace are of no further use, and 170 of them per provider filled
+      // a 62 GB disk (hr-oss-test, 2026-09-06).
+      if (rec.sid) {
+        const d = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`); return r.ok ? await r.json() : null; }, rec.sid).catch(() => null);
+        if (d && d.last_connection) rec.connection = String(d.last_connection);
+        rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
+      }
+      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} deleted=${rec.deleted || '?'}`);
     }
   }
 } catch (e) { log(`FATAL ${String(e).slice(0, 300)}`); }

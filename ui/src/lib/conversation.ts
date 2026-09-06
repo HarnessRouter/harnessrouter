@@ -37,6 +37,15 @@ export interface ToolStep { name: string; args: string; result?: string; callId?
 // An assistant turn is an ORDERED list of blocks appended as events arrive, so tool activity is
 // interleaved with prose in real time (not all tools hoisted to the top).
 export type Block = { kind: 'text'; text: string } | { kind: 'tools'; reasoning: string; steps: ToolStep[] };
+
+// The failure sentence reaches a message on two paths, the turn's own stream and the settled
+// read of the turns feed, and the second arrival must not print it twice: a message that already
+// ends with this exact error keeps it once (seen as "Error: X Error: X" under a refused turn).
+function withError(blocks: Block[], msg: string): Block[] {
+  const last = blocks[blocks.length - 1];
+  if (last && last.kind === 'text' && last.text.trimEnd().endsWith('Error: ' + msg)) return blocks;
+  return withText(blocks, '\n\nError: ' + msg);
+}
 export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]; status: 'running' | 'done' | 'failed' | 'cancelled' | 'incomplete';
   /** Why an incomplete turn is incomplete (max_steps | timeout | interrupted) — from the
    *  gateway's incomplete_details. Absent on records from before the field existed, which is
@@ -223,7 +232,7 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
       setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
     }
     case 'error':
-      busUpdateLast(sid, (a) => { a.blocks = withText(a.blocks, '\n\nError: ' + ((ev.message as string) || 'stream error')); }); break;
+      busUpdateLast(sid, (a) => { a.blocks = withError(a.blocks, (ev.message as string) || 'stream error'); }); break;
   }
 }
 export function useHarnessBus(harnessId: string, onActivity?: () => void) {
@@ -481,7 +490,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           onToolResult: (callId, output) => updateLast((a) => { a.blocks = withResult(a.blocks, callId, output); }),
           onTextDelta: (d) => updateLast((a) => { a.blocks = withText(a.blocks, d); }),
           onFile: (f) => updateLast((a) => { a.files = [...a.files, f]; }),
-          onError: (msg) => updateLast((a) => { a.blocks = withText(a.blocks, '\n\nError: ' + msg); }),
+          onError: (msg) => updateLast((a) => { a.blocks = withError(a.blocks, msg); }),
           onDone: (status) => {
             updateLast((a) => {
               a.status = status === 'completed' ? 'done'
@@ -527,7 +536,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
             .catch(() => { /* keep the dialog, just without a figure */ });
         }
         if (pendId) dropPending(pendId);
-        updateLast((a) => { a.blocks = withText(a.blocks, '\n\nError: ' + (e instanceof Error ? e.message : String(e))); a.status = 'failed'; });
+        updateLast((a) => { a.blocks = withError(a.blocks, e instanceof Error ? e.message : String(e)); a.status = 'failed'; });
       }
     } finally {
       sendingRef.current = false;
