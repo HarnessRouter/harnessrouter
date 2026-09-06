@@ -84,7 +84,7 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
   { id: 'qwen', name: 'Qwen Code', version: 'v0.22.1', backend: 'qwen', status: 'ready',
     // Same relay reach as pi/opencode; qwen family first since it is the backend's home family.
-    models: ['qwen3.7-max', 'qwen3.8-max', 'gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.3-codex', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'mistral-medium-3.5', 'step-3.7-flash'], defaultModel: 'qwen3.7-max', moreModels: 0,
+    models: ['qwen3.7-max', 'qwen3.8-max', 'gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'mistral-medium-3.5', 'step-3.7-flash'], defaultModel: 'qwen3.7-max', moreModels: 0,
     systemPrompt: 'You are Qwen Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'cline', name: 'Cline', version: 'v3.0.60', backend: 'cline', status: 'ready',
