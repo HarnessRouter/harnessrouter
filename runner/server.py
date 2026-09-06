@@ -2950,12 +2950,23 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
         npm = "@ai-sdk/openai"          # /v1/responses
     else:
         npm = "@ai-sdk/openai-compatible"   # /v1/chat/completions
+    # Every ai-sdk package appends its own resource to baseURL (@ai-sdk/anthropic "/messages",
+    # @ai-sdk/openai "/responses", openai-compatible "/chat/completions") and expects the "/v1"
+    # to be there already, the way pi's openai clients do (see _pi_models_json). A connection
+    # stored without it (the catalog's own default for a direct Anthropic key is
+    # https://api.anthropic.com) sent every opencode turn to https://api.anthropic.com/messages,
+    # which Anthropic answers "Not Found" (2026-09-06 support matrix, every claude model; the same
+    # key served pi and hermes, which normalise the suffix themselves). A custom endpoint is the
+    # user's exact URL and is left alone.
+    base = (auth.base_url or "").rstrip("/")
+    if not auth.api_format and not base.endswith("/v1"):
+        base += "/v1"
     cfg: dict = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
             "hr": {
                 "npm": npm,
-                "options": {"baseURL": auth.base_url, "apiKey": "{env:%s}" % _OPENCODE_KEY_ENV},
+                "options": {"baseURL": base, "apiKey": "{env:%s}" % _OPENCODE_KEY_ENV},
                 "models": {model: {}},
             }
         },
