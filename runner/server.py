@@ -2988,10 +2988,12 @@ GEMINI_PROVIDERS = {"google"}
 # gemini-cli 0.58.0's model-config aliases that carry a model of their own (alias -> parent). Read
 # off the CLI's DEFAULT_MODEL_CONFIGS table; a CLI bump re-reads it. The chat-model aliases
 # (gemini-2.5-pro, ...) are not here: a turn runs its chat model through the id resolutions.
+# "classifier" is the model router's own alias (flash-lite in the table, asked for by name through
+# generateJson); it carries a model like the others and is pinned with them.
 GEMINI_HELPER_ALIASES = {
     "gemini-2.5-flash-base": "base", "gemini-3-flash-base": "base", "gemini-3.5-flash-base": "base",
     "prompt-completion": "base", "fast-ack-helper": "base", "edit-corrector": "base",
-    "summarizer-default": "base", "summarizer-shell": "base", "loop-detection-double-check": "base",
+    "summarizer-default": "base", "summarizer-shell": "base", "classifier": "base", "loop-detection-double-check": "base",
     "chat-compression-3-pro": "", "chat-compression-3-flash": "", "chat-compression-3.1-flash-lite": "",
     "chat-compression-2.5-pro": "", "chat-compression-2.5-flash": "", "chat-compression-2.5-flash-lite": "",
     "chat-compression-default": "", "agent-history-provider-summarizer": "",

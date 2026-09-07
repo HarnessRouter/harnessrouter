@@ -297,5 +297,6 @@ def test_every_helper_alias_of_the_cli_runs_on_the_turns_model(tmp_path):
         assert custom[name]["modelConfig"] == {"model": "gemini-3.8-flash"}
         assert custom[name].get("extends") == (parent or None)
     for must in ("gemini-3-flash-base", "edit-corrector", "chat-compression-3-flash", "agent-history-provider-summarizer",
-                 "summarizer-shell", "loop-detection-double-check"):
+                 "summarizer-shell", "loop-detection-double-check", "classifier"):
         assert must in custom
+    assert len(custom) == 18
