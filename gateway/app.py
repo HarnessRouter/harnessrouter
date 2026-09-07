@@ -1989,6 +1989,9 @@ async def _brain_mint_room(sid: str) -> str | None:
 _HYDRATE_FAILED_MESSAGE = "This task's files and conversation could not be restored just now, so nothing ran. Try again in a moment."
 
 
+_HYDRATE_PAUSES = (1.0, 3.0, 6.0, 12.0, 24.0, 48.0, None)     # seven tries, 94 s: a sandbox's allocation under a burst
+
+
 async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
     pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
@@ -2016,20 +2019,26 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             except Exception:  # noqa: BLE001
                 pass                        # probe is best-effort; fall through to full hydrate
         # Stream the checkpoint tar VG blob -> runner /hydrate without buffering it (HR-INF-015).
-        # A restore that fails while a checkpoint exists is tried once more: under a burst of cold
+        # A restore that fails while a checkpoint exists is asked again: under a burst of cold
         # sessions (seven at once, 2026-09-06 11:00Z) one in ten to twenty restores failed, and the
         # turn then ran on the wiped workspace and started the conversation over ("no rollout",
         # "No saved session found", "couldn't resume"); the checkpoint itself was intact every time.
-        for attempt in range(2):
+        # A sandbox under a burst comes in tens of seconds, not a few (hosted, 23:43Z the same
+        # evening: twenty restores refused inside the ten seconds four tries covered), so the pauses
+        # span a minute and a half. A refused allocation (429) is asked again the same way. The last
+        # answer is always recorded before the decision, so a refusal names its cause, never "unknown".
+        for attempt, pause in enumerate(_HYDRATE_PAUSES):
             r = await _hydrate_relay(sid, params)
             rec["hydrated"] = r.status_code < 400
             rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
-            if rec["hydrated"] or not want_sha:
+            if rec["hydrated"]:
                 break
             rec["hydrate_error"] = f"HTTP {r.status_code} {(r.text or '')[:200]}"
             print(f"[hydrate] restore failed sid={sid} attempt={attempt + 1} {rec['hydrate_error']}", flush=True)
-            if attempt == 0:
-                await asyncio.sleep(1.0)
+            if not (want_sha or r.status_code == 429):
+                break
+            if pause is not None:
+                await asyncio.sleep(pause)
         if rec["hydrated"]:
             # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
             # turn. Anything an app wrote since then has just been wiped out of it, so put it back
@@ -2037,7 +2046,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             # reaches this: that workspace was never wiped, so it still holds those writes.
             rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
         if not rec["hydrated"] and want_sha:
-            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, twice. The turn
+            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, every time. The turn
             # must not run on this workspace (the caller refuses it), and this turn must never
             # checkpoint over the good blob from a workspace that isn't that checkpoint.
             rec["hydrate_failed_with_checkpoint"] = True
