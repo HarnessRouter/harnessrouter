@@ -2454,6 +2454,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
 
     def _upstream(self) -> tuple[str, str] | None:
         tok = (self.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+        if not tok:
+            tok = (self.headers.get("x-goog-api-key") or "").strip()     # gemini-cli's header for its key
         return _HERMES_RELAY["routes"].get(tok)
 
     def _forward(self, body: bytes | None) -> None:
@@ -2468,11 +2470,16 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             return
         base, key, flags = route
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
-        drop = {"host", "content-length", "authorization", "connection",
+        drop = {"host", "content-length", "authorization", "x-goog-api-key", "connection",
                 "accept-encoding", "transfer-encoding"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        if flags.get("google_native"):
+            # Google's native API on a provider that serves it (TokenRouter: models/google/<id>:
+            # generateContent, measured 2026-09-07): the path goes through as the CLI made it, the model
+            # already named the way the connection's vendor table does, and the key rides x-goog-api-key.
+            headers["x-goog-api-key"] = key
         # Compare the PATH only: anthropic clients append query strings (claude-code sends
         # /v1/messages?beta=true on streaming requests), and matching the raw tail let those
         # fall through to a generic forward against a host with no such route.
@@ -2748,6 +2755,22 @@ def _relay_base_with_version(base_url: str) -> str:
     if not base or ".amazonaws.com" in base or re.search(r"/v\d+[a-z]*(/|$)", base):   # /v1, /v1beta/openai
         return base
     return base + "/v1"
+
+
+def _gemini_relay_route(host_root: str, api_key: str) -> tuple[str, str]:
+    """Register one gemini turn's upstream for Google's native API on a provider that serves it: the
+    host root, no version segment, since the CLI appends /v1beta/models/<id>:... itself and names the
+    model the way the gateway resolved it through the connection's vendor table (google/<id> on
+    TokenRouter). The same shape as the hosted broker's native path: re-rooted at the provider's host,
+    the key in x-goog-api-key. → (GOOGLE_GEMINI_BASE_URL for the CLI, placeholder key)."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key, {"google_native": True})
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
 def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
@@ -3037,7 +3060,17 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
-    env["GEMINI_API_KEY"] = auth.api_key
+    if auth.base_url and _STRICT_GEMINI_HOST in auth.base_url:
+        # A TokenRouter connection: it serves Google's native API under the vendor prefix (measured
+        # 2026-09-07 for the seven Gemini ids its table carries), so the CLI is pointed at the
+        # loopback relay, which owns the prefix and the real key; the CLI keeps its own model id, so
+        # the pinned resolutions and the served-model check below are unchanged.
+        root = urllib.parse.urlsplit(auth.base_url)
+        relay_base, relay_tok = _gemini_relay_route(f"{root.scheme}://{root.netloc}", auth.api_key)
+        env["GOOGLE_GEMINI_BASE_URL"] = relay_base
+        env["GEMINI_API_KEY"] = relay_tok
+    else:
+        env["GEMINI_API_KEY"] = auth.api_key
     _gemini_settings(home, mcp_servers, model)
     cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
