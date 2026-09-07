@@ -167,6 +167,17 @@ export function turnIndexOf(msgs: Msg[]): number {
 // lag) so the Recents "working" dot is accurate the instant a turn starts/ends.
 export const _runningSids = new Set<string>();
 const _busFn: Record<string, { name: string; callId: string }> = {};
+/** Add a produced file to an answer, once. The same file can reach a tab twice: its own POST stream
+ *  renders it as the citation arrives, and the broadcast bus can deliver that same event a moment
+ *  after the stream ended and its suppression was lifted. The turn record holds one file, so the
+ *  duplicate was a transcript-only ghost that a reload cleared (2026-09-07). A file is identified by
+ *  its container and id, so re-adding the one already shown is a no-op. */
+function withFile(files: RespFile[], f: RespFile): RespFile[] {
+  const same = (x: RespFile) => (f.file_id ? x.file_id === f.file_id && x.container_id === f.container_id
+                                           : x.filename === f.filename);
+  return files.some(same) ? files : [...files, f];
+}
+
 function busUpdateLast(sid: string, fn: (a: AsstMsg) => void) {
   setConvState(sid, (s) => {
     const out = s.msgs.slice();
@@ -216,7 +227,7 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
       busUpdateLast(sid, (a) => { a.blocks = withText(a.blocks, ev.delta as string); }); break;
     case 'response.output_text.annotation.added': {
       const a = ev.annotation as Record<string, unknown>;
-      if (a?.type === 'container_file_citation') busUpdateLast(sid, (m) => { m.files = [...m.files, { container_id: a.container_id as string, file_id: a.file_id as string, filename: a.filename as string }]; });
+      if (a?.type === 'container_file_citation') busUpdateLast(sid, (m) => { m.files = withFile(m.files, { container_id: a.container_id as string, file_id: a.file_id as string, filename: a.filename as string }); });
       break;
     }
     case 'response.completed':
@@ -297,6 +308,17 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   // Stop is one-shot: disabled the moment it is clicked so a slow cancel cannot be spammed.
   const [stopping, setStopping] = useState(false);
   useEffect(() => { setStopping(false); }, [busy]);
+  // The send latch (sendingRef) collapses clicks that land in the same tick, before `busy` has
+  // re-rendered; send()'s finally releases it. But that finally only runs when the POST stream
+  // ends, and a turn can settle without it: the terminal event arrives on the broadcast bus, or
+  // the reconciliation poll reads it from the server, while the stream itself stays open. The
+  // latch then outlives its turn, and every later message is dropped by a send() that returns at
+  // the guard, with the composer looking perfectly enabled and no request ever leaving the tab
+  // (measured 2026-09-07: a task took three turns, then silently took no more until a reload).
+  // The conversation going idle is proof the turn is over, so the latch is released there too.
+  // This cannot weaken the double-click guard: the clicks it collapses land before any render,
+  // so no effect runs between them, and by the time this one runs `busy` is already true.
+  useEffect(() => { if (!busy) sendingRef.current = false; }, [busy]);
 
   // The shape of a task, never its content. No prompt, no file name, no title.
   const taskFacts = () => ({
@@ -496,7 +518,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           onToolCall: (name, args, callId) => updateLast((a) => { a.blocks = withStep(a.blocks, { name, args, callId }); }),
           onToolResult: (callId, output) => updateLast((a) => { a.blocks = withResult(a.blocks, callId, output); }),
           onTextDelta: (d) => updateLast((a) => { a.blocks = withText(a.blocks, d); }),
-          onFile: (f) => updateLast((a) => { a.files = [...a.files, f]; }),
+          onFile: (f) => updateLast((a) => { a.files = withFile(a.files, f); }),
           onError: (msg) => updateLast((a) => { a.blocks = withError(a.blocks, msg); }),
           onDone: (status) => {
             updateLast((a) => {
