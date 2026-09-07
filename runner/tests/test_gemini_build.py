@@ -232,3 +232,23 @@ def test_a_served_model_other_than_the_one_asked_for_fails_the_turn():
 
 def test_the_default_model_is_the_newest_flash():
     assert BACKENDS["gemini"]["default_model"] == "gemini-3.8-flash"
+def test_every_chain_is_one_policy_the_turns_own_model():
+    """No fallback: gemini-cli's handler switches to the chain's next policy on a quota or transient
+    error, silently in headless mode (a turn on gemini-3.8-flash finished on gemini-3-flash-preview,
+    2026-09-07). Every chain it can resolve is one policy, the turn's model."""
+    d = tempfile.mkdtemp()
+    _build_gemini("google", Auth(api_key="k"), "gemini-3.8-flash", "hi", d, {})
+    chains = json.loads(pathlib.Path(d, ".harness", "home", ".gemini", "settings.json").read_text())["modelConfigs"]["modelChains"]
+    assert set(chains) == {"preview", "default", "lite", "auto-preview", "auto-default"}
+    for name, chain in chains.items():
+        assert len(chain) == 1 and chain[0]["model"] == "gemini-3.8-flash" and chain[0]["isLastResort"] is True, name
+        assert chain[0]["stateTransitions"]["transient"] == "sticky_retry"
+
+
+def test_a_failed_result_never_reads_as_the_answer_and_a_substitution_names_the_clis_error_too():
+    st = {"input_tokens": 10, "output_tokens": 2, "cached": 0, "models": {"gemini-3.8-flash": {}}}
+    out = _gemini_to_claude({"type": "result", "status": "error", "stats": st, "error": {"type": "FatalTurnError"}}, {"model": "gemini-3.8-flash", "final": "I built the deck."})
+    assert out[0]["is_error"] is True and out[0]["result"] == "the CLI ended the turn with an error (FatalTurnError)"
+    both = _gemini_to_claude({"type": "result", "status": "error", "stats": {**st, "models": {"gemini-3.8-flash": {}, "gemini-3-flash-preview": {}}},
+                              "error": {"type": "unknown", "message": "[API Error: quota]"}}, {"model": "gemini-3.8-flash", "final": "I built the deck."})
+    assert both[0]["result"] == "the CLI ran gemini-3-flash-preview instead of gemini-3.8-flash (the CLI ended with unknown: [API Error: quota])"
