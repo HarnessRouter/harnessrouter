@@ -46,20 +46,25 @@ subset dropped, oneOf to anyOf, const to a one-value enum, exclusive bounds to b
 to one type plus nullable, a type on every node, items on every array, required limited to existing
 properties, an empty declaration dropped). The report is with TokenRouter; when their channel
 normalises, this comes out of both trees.
-## The gemini backend (Gemini CLI) lists the ids it serves as itself (2026-09-06)
+## The gemini backend (Gemini CLI) serves every Gemini id as itself (2026-09-06)
 
 gemini-cli speaks Google's native API with the raw key, so the backend runs in owner trust only and
-on Google's own ids. Measured on the OSS instance with the org holding only the Google integration,
-all five scenarios on each of the eleven ids the google provider serves, 55 of 55 runs passed, artifact
-turns included on every Gemini 3.x id (the CLI carries the thought signatures itself). The result
-event's stats are keyed by the model the CLI actually called, and that is where the catalog's rule
-bites: on the API-key auth path gemini-cli 0.58.0 (and 0.59.0-preview.0 and the 2026-09-06 nightly)
-treats "3.5 Flash GA" as launched and its resolver rewrites every id ending in "-flash" to
-gemini-3.5-flash, with no setting to turn it off. gemini-3.8-flash, 3.7-flash, 3.6-flash and 2.5-flash
-were served by gemini-3.5-flash on every turn and are listed as served-as findings, not passes; the
-backend lists the seven ids served as themselves: gemini-3.5-flash, 3.5-flash-lite, 3.1-flash-lite,
-3.1-pro-preview, 3-flash-preview, 2.5-pro, 2.5-flash-lite. The four stay reachable on the same key
-through the OpenAI-shape harnesses, where Google serves each id as requested on both API surfaces.
+on Google's own ids. On the API-key auth path the CLI's resolver rewrites every id ending in "-flash"
+to gemini-3.5-flash (0.58.0, 0.59.0-preview.0 and the 2026-09-06 nightly alike), 3.1-pro-preview to
+its customtools variant, and its default resolution table retargets 3-flash-preview, 3.5-flash and
+2.5-flash by context. The first measurement on the instance (all five scenarios on each of the
+eleven ids, org holding only the Google integration, 55 of 55 runs passed, artifact turns included on
+every Gemini 3.x id) showed gemini-3.8-flash, 3.7-flash, 3.6-flash and 2.5-flash served by
+gemini-3.5-flash on every turn. Richard's rule: the models are honest, no fallback. So the runner
+turns on gemini-cli's `experimental.dynamicModelConfiguration`, under which `-m` resolves through the
+CLI's resolution table, and writes a `modelConfigs.modelIdResolutions` entry with no contexts for
+every id the backend lists and the turn's own model, pinning each to itself (the settings deep-merge
+a user entry into the default one, so a plain default alone left 2.5-flash rewritten; the contexts
+must be emptied). Measured on the pinned 0.58.0 with those settings, all eleven served as themselves.
+And a turn the CLI ran on another model than the one asked for now fails with the reason on the
+record ("the CLI ran X instead of Y"), never completes: the matrix's served-model rule, enforced for
+the user. The backend lists all eleven; the instance column on 0.14.0 with the served-model rule as
+judge is below.
 
 ## The Gemini family, one provider at a time (2026-09-06)
 
