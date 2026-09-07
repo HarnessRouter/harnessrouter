@@ -190,7 +190,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           <section className="form-section">
             <div><h3>Agent instructions</h3><p>Persistent role, conventions, constraints, and output contract loaded on every Task.</p></div>
             <div className="field-stack">
-              <div className="field"><label htmlFor="hsInstructions">{['codex', 'hermes'].includes(base?.id || draft?.base || '') ? 'AGENTS.md' : 'CLAUDE.md'}</label>
+              <div className="field"><label htmlFor="hsInstructions">{['codex', 'hermes', 'omp', 'pi', 'opencode', 'dsh', 'qwen', 'cline'].includes(base?.id || draft?.base || '') ? 'AGENTS.md' : 'CLAUDE.md'}</label>
                 <textarea id="hsInstructions" rows={7} disabled={readOnly}
                   value={oob ? oob.systemPrompt : (draft?.systemPrompt || '')}
                   onChange={(e) => upd({ systemPrompt: e.target.value })} />

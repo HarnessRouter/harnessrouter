@@ -14,7 +14,7 @@ const LOGO: Record<string, string> = {
   qwen: '/logos/qwen.png',
   cline: '/logos/cline.png',
   gemini: '/logos/gemini.png',
-
+  omp: '/logos/omp.png',
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {
