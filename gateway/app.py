@@ -5997,7 +5997,7 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
             else:
                 sid, v = session_hint, await _vertex_get(session_hint)
         except Exception as e:  # noqa: BLE001
-            raise uhp_error(503, "retry", "The session could not be read right now. Try again.") from e
+            raise uhp_error(503, "server_error", "The session could not be read right now. Try again.") from e
         if v and str(v.get("tenant") or "") == org and str(v.get("status") or "") != "deleted":
             return await _continue(sid, v)
         if v:
