@@ -9,7 +9,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (Auth, _agent_doc_path, _build_gemini, _gemini_to_claude,  # noqa: E402
-                    _gemini_usage, _norm_token_usage, BACKENDS, GEMINI_MODELS)
+                    _gemini_usage, _norm_token_usage, BACKENDS, GEMINI_MODELS, _HERMES_RELAY)
 
 
 def _argv(**kw):
@@ -252,3 +252,20 @@ def test_a_failed_result_never_reads_as_the_answer_and_a_substitution_names_the_
     both = _gemini_to_claude({"type": "result", "status": "error", "stats": {**st, "models": {"gemini-3.8-flash": {}, "gemini-3-flash-preview": {}}},
                               "error": {"type": "unknown", "message": "[API Error: quota]"}}, {"model": "gemini-3.8-flash", "final": "I built the deck."})
     assert both[0]["result"] == "the CLI ran gemini-3-flash-preview instead of gemini-3.8-flash (the CLI ended with unknown: [API Error: quota])"
+
+
+def test_a_tokenrouter_connection_points_the_cli_at_the_relay_which_carries_the_key():
+    """TokenRouter serves Google's native API (models/google/<id>:generateContent, the key in
+    x-goog-api-key; measured 2026-09-07). The gateway names the model through the vendor table, so
+    the CLI already asks for google/<id>; the relay re-roots the path at the host and carries the key."""
+    d = tempfile.mkdtemp(); env: dict = {}
+    _build_gemini("google", Auth(api_key="tr-real", base_url="https://api.tokenrouter.com/v1"), "google/gemini-3.8-flash", "hi", d, env)
+    assert env["GOOGLE_GEMINI_BASE_URL"].startswith("http://127.0.0.1:") and env["GOOGLE_GEMINI_BASE_URL"].endswith("/v1")
+    assert env["GEMINI_API_KEY"] != "tr-real"
+    base, key, flags = _HERMES_RELAY["routes"][env["GEMINI_API_KEY"]]
+    assert base == "https://api.tokenrouter.com" and key == "tr-real" and flags == {"google_native": True}
+    cfg = json.loads(pathlib.Path(d, ".harness", "home", ".gemini", "settings.json").read_text())
+    assert cfg["modelConfigs"]["modelIdResolutions"]["google/gemini-3.8-flash"] == {"default": "google/gemini-3.8-flash", "contexts": []}
+    d2 = tempfile.mkdtemp(); env2: dict = {}
+    _build_gemini("google", Auth(api_key="AIza-t", base_url="https://generativelanguage.googleapis.com/v1beta/openai"), "gemini-3.8-flash", "hi", d2, env2)
+    assert "GOOGLE_GEMINI_BASE_URL" not in env2 and env2["GEMINI_API_KEY"] == "AIza-t"      # Google direct, as before
