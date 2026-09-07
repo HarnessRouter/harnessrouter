@@ -1995,6 +1995,9 @@ async def _brain_mint_room(sid: str) -> str | None:
 _HYDRATE_FAILED_MESSAGE = "This task's files and conversation could not be restored just now, so nothing ran. Try again in a moment."
 
 
+_HYDRATE_PAUSES = (1.0, 3.0, 6.0, 12.0, 24.0, 48.0, None)     # seven tries, 94 s: a sandbox's allocation under a burst
+
+
 async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
     pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
@@ -2022,20 +2025,26 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             except Exception:  # noqa: BLE001
                 pass                        # probe is best-effort; fall through to full hydrate
         # Stream the checkpoint tar VG blob -> runner /hydrate without buffering it (HR-INF-015).
-        # A restore that fails while a checkpoint exists is tried once more: under a burst of cold
+        # A restore that fails while a checkpoint exists is asked again: under a burst of cold
         # sessions (seven at once, 2026-09-06 11:00Z) one in ten to twenty restores failed, and the
         # turn then ran on the wiped workspace and started the conversation over ("no rollout",
         # "No saved session found", "couldn't resume"); the checkpoint itself was intact every time.
-        for attempt in range(2):
+        # A sandbox under a burst comes in tens of seconds, not a few (hosted, 23:43Z the same
+        # evening: twenty restores refused inside the ten seconds four tries covered), so the pauses
+        # span a minute and a half. A refused allocation (429) is asked again the same way. The last
+        # answer is always recorded before the decision, so a refusal names its cause, never "unknown".
+        for attempt, pause in enumerate(_HYDRATE_PAUSES):
             r = await _hydrate_relay(sid, params)
             rec["hydrated"] = r.status_code < 400
             rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
-            if rec["hydrated"] or not want_sha:
+            if rec["hydrated"]:
                 break
             rec["hydrate_error"] = f"HTTP {r.status_code} {(r.text or '')[:200]}"
             print(f"[hydrate] restore failed sid={sid} attempt={attempt + 1} {rec['hydrate_error']}", flush=True)
-            if attempt == 0:
-                await asyncio.sleep(1.0)
+            if not (want_sha or r.status_code == 429):
+                break
+            if pause is not None:
+                await asyncio.sleep(pause)
         if rec["hydrated"]:
             # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
             # turn. Anything an app wrote since then has just been wiped out of it, so put it back
@@ -2043,7 +2052,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             # reaches this: that workspace was never wiped, so it still holds those writes.
             rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
         if not rec["hydrated"] and want_sha:
-            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, twice. The turn
+            # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, every time. The turn
             # must not run on this workspace (the caller refuses it), and this turn must never
             # checkpoint over the good blob from a workspace that isn't that checkpoint.
             rec["hydrate_failed_with_checkpoint"] = True
@@ -5545,19 +5554,16 @@ _MODEL_CATALOG: dict[str, dict] = {
     # gemini-3.1-pro (the real Pro flagship) is deliberately NOT listed: Pro was dropped from the
     # free tier in 2026-04, so it would show as a choice and fail every call on a free-tier key.
     # Google's own ids only: gemini-cli speaks the native API, so the cross-vendor rows above do not
-    # apply. Measured 2026-09-06 on the OSS instance (all five scenarios per id, org holding only the
-    # Google integration, 55 of 55 runs passed) with the served model read off the CLI's own stats:
-    # on the API-key auth path gemini-cli 0.58.0 treats "3.5 Flash GA" as launched and its resolver
-    # rewrites every id ending in "-flash" to gemini-3.5-flash (resolveModel with useGemini3_5Flash,
-    # true for gemini-api-key; the same in 0.59.0-preview.0 and the 0.60 nightly; no setting turns
-    # it off), so gemini-3.8-flash, 3.7-flash, 3.6-flash and 2.5-flash were served by gemini-3.5-flash
-    # on every turn and are not listed: a completed turn on them is a turn on 3.5-flash. Those four
-    # stay reachable on the same key through the OpenAI-shape harnesses, where Google serves each id
-    # as requested. The seven below were served as themselves on every turn.
+    # apply. The ids are honest: the runner turns on gemini-cli's dynamic model configuration and
+    # pins every id here to itself, since on the API-key auth path the CLI's resolver otherwise
+    # rewrites every id ending in "-flash" to gemini-3.5-flash (0.58.0, measured 2026-09-06), and a
+    # turn the CLI ran on another model than the one asked for fails with the reason on the record,
+    # never completes. Measured 2026-09-06 on the pinned 0.58.0 with those settings: all eleven
+    # served as themselves; the instance column with the served-model rule as judge is in the notes.
     "gemini": {"default": "gemini-3.5-flash",
-               "models": ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
-                          "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro",
-                          "gemini-2.5-flash-lite"]},
+               "models": ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                          "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
     "omp": {"default": "gpt-5.4",
            "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
