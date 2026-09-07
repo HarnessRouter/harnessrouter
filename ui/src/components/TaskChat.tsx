@@ -386,6 +386,7 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
             must not be interrupted by a diagnostics peek. */}
         <div className="run-detail-fill" style={{ display: detailTab === 'conversation' ? undefined : 'none' }}>
           <Conversation key={`conv-${harnessId}-${selectedSid ?? 'new'}-${newTaskNonce}`} harnessId={harnessId} sessionId={selectedSid}
+            onMissing={(sid) => { setDeepErr(`The Task (${sid.slice(0, 18)}…) doesn't exist, it may have been deleted.`); setSelectedSid(null); setActiveSid(null); onClearDeepSid?.(); }}
             target={{ name: harnessName, backend, model, baseId: oob?.id ?? oobById(draft?.base || '')?.id,
                       runtime: (oob ?? oobById(draft?.base || ''))?.name, defaultModel: oob ? (oobDefaultModel(oob) || '') : normModel(ch?.defaultModel) }}
             additionalHeaders={(draft?.additionalHeaders || []).filter(Boolean)}
@@ -419,9 +420,11 @@ function ModelSelect({ models, value, onChange, backend }: {
 
 // ── Recents: this user's sessions for this harness (clickable → loads its chat history) ─────────
 
-function Conversation({ harnessId, sessionId, target, models, onModel, onRan, onSession, additionalHeaders, onTotals }: {
+function Conversation({ harnessId, sessionId, target, models, onModel, onRan, onSession, onMissing, additionalHeaders, onTotals }: {
   harnessId: string; sessionId: string | null; target: ChatTarget;
   models: string[]; onModel: (m: string) => void; onRan: () => void; onSession?: (sid: string) => void;
+  /** the task no longer exists (deleted): the page lets go of it instead of keeping a composer on it */
+  onMissing?: (sid: string) => void;
   additionalHeaders?: string[]; onTotals?: (t: ConvTotals) => void;
 }) {
   // Additional Headers (app-level auth): per-harness VALUES for the declared header names, kept
@@ -448,6 +451,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   // and its own composer state.
   const { msgs, busy, loading, stopping, outOfCredits, clearOutOfCredits,
           liveSessionId, send, stop, setMsgs, updateLast } = useConversationTurn({
+    onMissing,
     harnessId, sessionId, target, onRan, onSession, extraHeaders,
     onSendStart: () => { setInput(''); setFiles([]); setAtBottom(true); },
   });
