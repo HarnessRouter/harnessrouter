@@ -1080,6 +1080,11 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # reason it is absent from _CUSTOM_FORMAT_BACKENDS: a custom integration is OpenAI- or
     # Anthropic-shaped.
     ("google", "gemini"): "google",
+    # TokenRouter serves Google's native API under the vendor prefix (models/google/<id>:, key in
+    # x-goog-api-key; measured 2026-09-07) for the seven Gemini ids its table carries, so it drives
+    # the gemini backend too; the runner still builds gemini as provider google and routes the CLI
+    # through its relay when the connection is TokenRouter.
+    ("tokenrouter", "gemini"): "google",
 }
 
 

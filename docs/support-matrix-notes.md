@@ -100,3 +100,16 @@ later ones the connection of every turn record.
   gemini-3.5-flash on every turn, the CLI's own rewrite); the backend lists the seven ids served as
   themselves.
 
+## The gemini backend through TokenRouter (2026-09-07)
+
+TokenRouter serves Google's native API when the model carries its vendor prefix:
+`POST https://api.tokenrouter.com/v1beta/models/google/gemini-3.8-flash:generateContent` (and
+`:streamGenerateContent?alt=sse`) with the key in `x-goog-api-key` answers in Google's own shape;
+without the prefix, and for the ids it has no channel for (gemini-3.1-flash-lite, 2.5-pro, 2.5-flash,
+2.5-flash-lite), it refuses "No available channel". So the seven Gemini ids in TokenRouter's table run
+on the Gemini CLI through the platform key. In owner trust the CLI reaches the provider itself, so a
+TokenRouter connection points GOOGLE_GEMINI_BASE_URL at the loopback relay, which owns the vendor
+prefix and the key; the CLI keeps its own model id, so the pinned resolutions and the served-model
+check are unchanged. OpenRouter and Vercel expose only the OpenAI shape and cannot drive the CLI
+without a translating relay. The TokenRouter column for the gemini backend follows below.
+
