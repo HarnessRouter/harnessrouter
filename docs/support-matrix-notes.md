@@ -165,3 +165,17 @@ cannot be restored after a deletion-level column, because the instance masks sto
 now restores everything it can and names the rest instead of aborting whole. And a column's isolation
 deletes every other integration on the org, so nobody can test on the instance while a column runs;
 the org comes back between columns and at the end.
+
+## What the artifact row measures, and what the earlier columns were judged by (2026-09-07)
+
+Until this date the artifact scenario asked only whether SOME rendered file card carried the expected
+filename. That question cannot see a file rendered twice, and the console did render one produced file
+as two identical cards until a reload, in every harness that produces files. The row now requires the
+rendered cards to BE the turn's stored files, the same names and the same count, and fails with both
+lists side by side otherwise; the record is read after its files are attached, which the settle does a
+few seconds after the turn goes terminal.
+
+Every column in the tables above was measured before that change and was judged by the older rule. Their
+scenario counts stand as measured, and none of them is evidence either way about duplicate cards. The
+duplicate itself is fixed in 0.15.1, verified on the release across gemini, cline, qwen, dsh, opencode
+and omp: one stored file, one rendered card in each.
