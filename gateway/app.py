@@ -4125,7 +4125,15 @@ async def delete_trace(sid: str, request: Request) -> dict:
     """Delete a session for good: its trace manifest + event chunks, its durable workspace
     tarball, and tombstone the session vertex. /v1/sessions/{sid} is the protocol's name for it;
     /v1/traces/{sid} is the older path the Traces app calls, the same handler."""
-    org, v = await _owned_session(request, sid)
+    p = await _principal(request)
+    org = str(p.get("org") or "")
+    v = await _vertex_get(sid)
+    if not v or str(v.get("tenant") or "") != org:
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    # A tombstoned session may be deleted again. A card of it can outlive the first delete (a
+    # follow-up that reached the tombstone rewrote the card as "?", 2026-09-07), and this button
+    # is the only way a person has to remove it; refusing the second delete with 404 left the
+    # ghost in the list for good. Every step below is idempotent.
     # The tombstone goes down FIRST. Stopping a live turn below triggers its finalize, and a
     # reconcile can land at any moment; both write session cards, and the indexer drops a write
     # whose session is tombstoned. Written last, the tombstone missed exactly those writes and
@@ -5980,20 +5988,24 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
         await _recover_trace_cursor(tr)
         resume = (v or await _vertex_get(sid) or {}).get("cli_session_id") or None
         return sid, resume
-    if prev:
-        rec = await _resp_get(prev)
-        sid = (rec or {}).get("_session_id")
-        if sid:
-            # Same cross-tenant guard as session_hint below: a leaked/stored response id of another
-            # org's session must not let a caller continue (and re-bill/re-stamp) that session —
-            # fall through and start a fresh session in the caller's own org instead.
-            v = await _vertex_get(sid)
-            if v and str(v.get("tenant") or "") == org:
-                return await _continue(sid, v)
-    if session_hint:
-        v = await _vertex_get(session_hint)
-        if v and str(v.get("tenant") or "") == org:   # exists + belongs to this org (no cross-tenant continue)
-            return await _continue(session_hint, v)
+    if prev or session_hint:
+        try:
+            if prev:
+                rec = await _resp_get(prev)
+                sid = (rec or {}).get("_session_id")
+                v = await _vertex_get(sid) if sid else None
+            else:
+                sid, v = session_hint, await _vertex_get(session_hint)
+        except Exception as e:  # noqa: BLE001
+            raise uhp_error(503, "retry", "The session could not be read right now. Try again.") from e
+        if v and str(v.get("tenant") or "") == org and str(v.get("status") or "") != "deleted":
+            return await _continue(sid, v)
+        if v:
+            # a leaked/stored id of another org's session must not let a caller continue it; nor a
+            # deleted one of this org's: a tombstone is final, and a follow-up that reached one ran,
+            # billed, and rewrote the task's card as if it were live (2026-09-07)
+            raise uhp_error(404, "session_not_found", "No session with that id.")
+        raise uhp_error(404, "session_not_found", "No session with that id.")
     sid = "hsess" + uuid.uuid4().hex
     created = time.time()
     inv = _inv_ts(created)
