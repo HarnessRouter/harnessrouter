@@ -297,6 +297,17 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   // Stop is one-shot: disabled the moment it is clicked so a slow cancel cannot be spammed.
   const [stopping, setStopping] = useState(false);
   useEffect(() => { setStopping(false); }, [busy]);
+  // The send latch (sendingRef) collapses clicks that land in the same tick, before `busy` has
+  // re-rendered; send()'s finally releases it. But that finally only runs when the POST stream
+  // ends, and a turn can settle without it: the terminal event arrives on the broadcast bus, or
+  // the reconciliation poll reads it from the server, while the stream itself stays open. The
+  // latch then outlives its turn, and every later message is dropped by a send() that returns at
+  // the guard, with the composer looking perfectly enabled and no request ever leaving the tab
+  // (measured 2026-09-07: a task took three turns, then silently took no more until a reload).
+  // The conversation going idle is proof the turn is over, so the latch is released there too.
+  // This cannot weaken the double-click guard: the clicks it collapses land before any render,
+  // so no effect runs between them, and by the time this one runs `busy` is already true.
+  useEffect(() => { if (!busy) sendingRef.current = false; }, [busy]);
 
   // The shape of a task, never its content. No prompt, no file name, no title.
   const taskFacts = () => ({
