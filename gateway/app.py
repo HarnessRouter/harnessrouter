@@ -6172,7 +6172,14 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                            "credential cannot be brokered; refused")})
             continue
         body = {"backend": conn.get("backend", backend), "provider": conn.get("provider"),
-                "model": (conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req)),
+                # The gemini backend takes the canonical id: gemini-cli's resolution tables and the runner's
+                # served-model check key by it, and the provider's own name for it (TokenRouter's
+                # google/<id>) rides beside it for the native path. A turn handed "google/gemini-3.8-flash"
+                # ran, but its stats and pins no longer matched the id asked for (2026-09-07).
+                "model": (model_req if backend == "gemini" and model_req
+                          else (conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req))),
+                "native_model": ((conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req))
+                                 if backend == "gemini" and model_req else None),
                 "prompt": runner_prompt, "max_turns": max_step,
                 "timeout_seconds": timeout_s,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
@@ -6327,7 +6334,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                              "error": "turn hit its wall-clock cap"})
                 else:
                     rec["tried"].append({"connection": name, "status": st,
-                                         "error": (s.get("result") or s.get("error") or "")[:200]})
+                                         # The runner's `error` is the reason (the provider's refusal, the result
+                                         # event's message); its `result` is the answer so far, which a failed turn
+                                         # may still carry. Reason first: a Gemini CLI turn that failed as a
+                                         # substitution showed its finished answer as the error (2026-09-07).
+                                         "error": (s.get("error") or s.get("result") or "")[:200]})
                 break
         _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
         if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name

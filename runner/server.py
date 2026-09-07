@@ -2477,8 +2477,12 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers.setdefault("accept", "*/*")
         if flags.get("google_native"):
             # Google's native API on a provider that serves it (TokenRouter: models/google/<id>:
-            # generateContent, measured 2026-09-07): the path goes through as the CLI made it, the model
-            # already named the way the connection's vendor table does, and the key rides x-goog-api-key.
+            # generateContent, measured 2026-09-07). The CLI asks for the canonical id, which its tables
+            # and the served-model check key by; the relay names it the way the provider does on the
+            # path, as the hosted broker does, and the key rides x-goog-api-key.
+            m, nm = str(flags.get("model") or ""), str(flags.get("native_model") or "")
+            if m and nm and nm != m:
+                tail = tail.replace(f"/models/{m}:", f"/models/{nm}:", 1)
             headers["x-goog-api-key"] = key
         # Compare the PATH only: anthropic clients append query strings (claude-code sends
         # /v1/messages?beta=true on streaming requests), and matching the raw tail let those
@@ -2757,7 +2761,7 @@ def _relay_base_with_version(base_url: str) -> str:
     return base + "/v1"
 
 
-def _gemini_relay_route(host_root: str, api_key: str) -> tuple[str, str]:
+def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_model: str = "") -> tuple[str, str]:
     """Register one gemini turn's upstream for Google's native API on a provider that serves it: the
     host root, no version segment, since the CLI appends /v1beta/models/<id>:... itself and names the
     model the way the gateway resolved it through the connection's vendor table (google/<id> on
@@ -2769,7 +2773,8 @@ def _gemini_relay_route(host_root: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key, {"google_native": True})
+        _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
+                                        {"google_native": True, "model": model, "native_model": native_model})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -3030,20 +3035,26 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
             continue
         servers[name] = entry
     pinned = sorted(set(GEMINI_MODELS) | ({model} if model else set()))
-    # No fallback either: on a quota or transient error gemini-cli's fallback handler picks the next
-    # policy of the model's chain (its default preview chain ends in gemini-3-flash-preview as the
-    # last resort), and in headless mode that switch is silent; a 5-minute turn on gemini-3.8-flash
-    # finished its work on gemini-3-flash-preview that way (2026-09-07 02:10Z). Every chain the CLI
-    # can resolve for this turn is one policy, the turn's own model: with no other candidate the
-    # handler has nothing to switch to and the provider's error ends the turn, honestly. Retries
-    # stay on the same model (sticky_retry on transient and unknown failures).
+    # No fallback either: every chain the CLI can resolve for this turn is one policy, the turn's
+    # own model, so its fallback handler has no candidate to switch to and the provider's error ends
+    # the turn honestly (retries stay on the same model: sticky_retry on transient and unknown
+    # failures). Measured after this landed: headless gemini-cli has no fallback handler, so the
+    # chains were never the switch; the second model the 2026-09-07 02:10Z turn showed was the
+    # classifier tier below. The chains stay as the guard they are.
     own = [{"model": model or GEMINI_DEFAULT_MODEL, "isLastResort": True, "maxAttempts": 3,
             "actions": {"terminal": "prompt", "transient": "prompt", "not_found": "prompt", "unknown": "prompt"},
             "stateTransitions": {"terminal": "terminal", "transient": "sticky_retry", "not_found": "terminal", "unknown": "sticky_retry"}}]
     cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}},
                  # the ids are honest: -m resolves through this table, and each entry pins an id to itself
                  "experimental": {"dynamicModelConfiguration": True},
+                 # The CLI's own housekeeping calls (model routing, plan mode, context compression, the
+                 # next-speaker and loop checks) go to a "flash" or "pro" classifier tier that defaults to
+                 # gemini-3-flash-preview or gemini-3-pro-preview, and those calls land in the turn's stats
+                 # beside the answer model: a five-minute turn on gemini-3.8-flash showed
+                 # "gemini-3-flash-preview" too and failed as a substitution (2026-09-07, both trees).
+                 # Every model the CLI calls in a turn is the one asked for: both tiers pin to it.
                  "modelConfigs": {"modelIdResolutions": {m: {"default": m, "contexts": []} for m in pinned},
+                                  "classifierIdResolutions": {t: {"default": model or GEMINI_DEFAULT_MODEL, "contexts": []} for t in ("flash", "pro")},
                                   "modelChains": {k: own for k in ("preview", "default", "lite", "auto-preview", "auto-default")}}}
     if servers:
         cfg["mcpServers"] = servers
@@ -3051,7 +3062,8 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
 
 
 def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
-                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                  native_model: str | None = None) -> list[str]:
     pr = provider or "google"
     if pr not in GEMINI_PROVIDERS:
         raise HTTPException(400, f"unknown gemini provider '{pr}' (one of {sorted(GEMINI_PROVIDERS)})")
@@ -3066,7 +3078,7 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
         # loopback relay, which owns the prefix and the real key; the CLI keeps its own model id, so
         # the pinned resolutions and the served-model check below are unchanged.
         root = urllib.parse.urlsplit(auth.base_url)
-        relay_base, relay_tok = _gemini_relay_route(f"{root.scheme}://{root.netloc}", auth.api_key)
+        relay_base, relay_tok = _gemini_relay_route(f"{root.scheme}://{root.netloc}", auth.api_key, model, native_model or "")
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
     else:
@@ -4708,6 +4720,7 @@ class TurnReq(BaseModel):
     backend: str = "claude"          # claude | codex | hermes | pi | dsh
     provider: str | None = None      # see BACKENDS[...].providers
     model: str | None = None
+    native_model: str | None = None   # gemini: the provider's own name for `model` on the native path (TokenRouter's google/<id>)
     prompt: str
     max_turns: int = 400
     timeout_seconds: int | None = None     # per-turn wall-clock cap (bounded by MAX_TURN_SECONDS)
@@ -4862,7 +4875,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
-                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                            native_model=req.native_model)
     elif backend == "cline":
         model = model or CLINE_DEFAULT_MODEL
         cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
