@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -189,6 +189,7 @@ backend_bin() {
     qwen)   echo "$TOOLS/bin/qwen" ;;
     gemini) echo "$TOOLS/bin/gemini" ;;
     cline)  echo "$TOOLS/bin/cline" ;;
+    omp)    echo "$TOOLS/bin/omp" ;;
   esac
 }
 
@@ -215,6 +216,30 @@ install_opencode() {
   mkdir -p "$TOOLS/bin" && mv "$oc_tmp/opencode" "$TOOLS/bin/opencode" && chmod 755 "$TOOLS/bin/opencode" \
     || { rm -rf "$oc_tmp"; return 1; }
   rm -rf "$oc_tmp"
+}
+
+# omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases, with a SHA256SUMS.txt
+# beside them. Pinned EXACTLY, like every other backend here: upstream releases almost daily
+# (18.1.8 through 18.1.13 in five days), and 18.1.13 is the release the runner's omp code was
+# measured against (flags, the JSON event stream, the agent-dir env, resume by id, --tools). A
+# silent `latest` re-gambles all of it; the checksum makes the download the release's own bytes.
+install_omp() {
+  case "$(uname -m)" in
+    x86_64)        omp_arch="x64" ;;
+    aarch64|arm64) omp_arch="arm64" ;;
+    *) echo "unsupported architecture $(uname -m) for omp"; return 1 ;;
+  esac
+  omp_ver="${HR_OMP_VERSION:-18.1.13}"; omp_ver="${omp_ver#v}"
+  omp_base="https://github.com/can1357/oh-my-pi/releases/download/v${omp_ver}"
+  omp_tmp="$(mktemp -d)"
+  curl -fsSL "$omp_base/omp-linux-$omp_arch" -o "$omp_tmp/omp" || { rm -rf "$omp_tmp"; return 1; }
+  curl -fsSL "$omp_base/SHA256SUMS.txt" -o "$omp_tmp/SHA256SUMS.txt" || { rm -rf "$omp_tmp"; return 1; }
+  want="$(grep " omp-linux-$omp_arch\$" "$omp_tmp/SHA256SUMS.txt" | awk '{print $1}')"
+  have="$(sha256sum "$omp_tmp/omp" | awk '{print $1}')"
+  if [ -z "$want" ] || [ "$want" != "$have" ]; then
+    echo "omp $omp_ver: checksum mismatch for omp-linux-$omp_arch (want ${want:-none}, have $have)"; rm -rf "$omp_tmp"; return 1
+  fi
+  mkdir -p "$TOOLS/bin" && install -m 755 "$omp_tmp/omp" "$TOOLS/bin/omp"; rm -rf "$omp_tmp"
 }
 
 # Run an install and, if it fails, SAY WHY.
@@ -286,6 +311,11 @@ install_backends() {
     # mounts this adapter via -e only on turns that actually configure MCP servers.
     try_install "Pi" npm install -g --prefix "$TOOLS" --no-audit --no-fund --ignore-scripts \
         @earendil-works/pi-coding-agent pi-mcp-adapter || true
+  fi
+
+  if wanted omp && [ ! -x "$(backend_bin omp)" ]; then
+    echo "[harnessrouter] installing Oh My Pi (MIT)…"
+    try_install "Oh My Pi" install_omp || true
   fi
 
   if wanted dsh && [ ! -x "$(backend_bin dsh)" ]; then

@@ -126,3 +126,14 @@ model the CLI calls in a turn is the one asked for; the gemini backend takes the
 gateway and the relay names it for the provider on the native path (TokenRouter's google/<id>); and a
 failed turn's reason is the runner's error before its result.
 
+## The omp backend (Oh My Pi), pi's lineage (2026-09-07)
+
+Oh My Pi is pi's lineage: it speaks pi's `--mode json` event stream unchanged (measured on 18.1.13:
+session, message_update, message_end, tool_execution_start/end, agent_end, the same fields) and
+shares pi's normaliser; its OpenAI-shape turns ride the loopback relay as pi's do, so it reaches what
+pi reaches and its list is pi's. Every assistant message names the model omp ran, which is the
+served model on the record; a turn omp ran on another model than the one asked for fails with the
+reason, never completes. The binary is pinned to 18.1.13 and verified against the release's
+SHA256SUMS. Per-provider columns follow below as they are measured, one integration on the org at a
+time, the served-model rule as judge.
+
