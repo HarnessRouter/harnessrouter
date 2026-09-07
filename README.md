@@ -30,7 +30,7 @@ own data. Configure a harness, give it work, watch it run, with no account, no c
 > [!TIP]
 > New here? Start with [What it is](#what-it-is), or read the protocol at [unifiedharnessprotocol.org](https://unifiedharnessprotocol.org).
 
-![The console after signing in: eight built-in harnesses, ready to run](docs/images/02-first-screen-v2.png)
+![The console after signing in: ten built-in harnesses, ready to run](docs/images/02-first-screen-v2.png)
 
 ---
 
