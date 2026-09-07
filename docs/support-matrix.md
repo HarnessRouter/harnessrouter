@@ -187,7 +187,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| gemini | gemini-2.5-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio | served as gemini-3.5-flash (finding below) |
+| gemini | gemini-2.5-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-2.5-pro | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-3-flash-preview | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
@@ -195,18 +195,11 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | gemini | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-3.5-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
-| gemini | gemini-3.6-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio | served as gemini-3.5-flash (finding below) |
-| gemini | gemini-3.7-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio | served as gemini-3.5-flash (finding below) |
-| gemini | gemini-3.8-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio | served as gemini-3.5-flash (finding below) |
+| gemini | gemini-3.6-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
+| gemini | gemini-3.7-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
+| gemini | gemini-3.8-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 
-11 pairs, 35 of 35 scenario runs passed; 4 pairs served by another connection or as another model are findings, not counted.
-
-Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
-
-- gemini x gemini-2.5-flash: served as gemini-3.5-flash (the CLI reports the model it ran)
-- gemini x gemini-3.6-flash: served as gemini-3.5-flash (the CLI reports the model it ran)
-- gemini x gemini-3.7-flash: served as gemini-3.5-flash (the CLI reports the model it ran)
-- gemini x gemini-3.8-flash: served as gemini-3.5-flash (the CLI reports the model it ran)
+11 pairs, 55 of 55 scenario runs passed.
 
 ## Provider: gemini-google
 
@@ -484,6 +477,24 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | qwen | gemini-3.6-flash | pass | pass | n/a | FAIL | pass | Google AI Studio | artifact: no file card (files: none); he word HELLO, then reply DONE. QWEN CODE I will check if hello-qwen.txt exists and then write "HELLO" to it. Us ; re-run on the sponsored Tier 3 key and 0.13.14 (the relays drop the field Google refuses); first try on the Free-tier ke ; retested once; first try: first Reply with exactly: M1-gemini-3.6-flash QWEN CODE M1-gemini-3.6-flash Working… |
 
 5 pairs, 6 of 8 scenario runs passed.
+
+## Provider: omp-google
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| omp | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-3.1-flash-lite | n/a | n/a | n/a | n/a | n/a | ? | retested once; first try: artifact no file card (files: none); Create a file named hello-omp.txt containing exactly |
+| omp | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-3.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| omp | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+
+11 pairs, 50 of 50 scenario runs passed.
 
 ## Provider: openai
 

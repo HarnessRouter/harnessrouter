@@ -2600,6 +2600,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
 
     def _upstream(self) -> tuple[str, str] | None:
         tok = (self.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+        if not tok:
+            tok = (self.headers.get("x-goog-api-key") or "").strip()     # gemini-cli's header for its key
         return _HERMES_RELAY["routes"].get(tok)
 
     def _forward(self, body: bytes | None) -> None:
@@ -2614,11 +2616,20 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             return
         base, key, flags = route
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
-        drop = {"host", "content-length", "authorization", "connection",
+        drop = {"host", "content-length", "authorization", "x-goog-api-key", "connection",
                 "accept-encoding", "transfer-encoding"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        if flags.get("google_native"):
+            # Google's native API on a provider that serves it (TokenRouter: models/google/<id>:
+            # generateContent, measured 2026-09-07). The CLI asks for the canonical id, which its tables
+            # and the served-model check key by; the relay names it the way the provider does on the
+            # path, as the hosted broker does, and the key rides x-goog-api-key.
+            m, nm = str(flags.get("model") or ""), str(flags.get("native_model") or "")
+            if m and nm and nm != m:
+                tail = tail.replace(f"/models/{m}:", f"/models/{nm}:", 1)
+            headers["x-goog-api-key"] = key
         # Compare the PATH only: anthropic clients append query strings (claude-code sends
         # /v1/messages?beta=true on streaming requests), and matching the raw tail let those
         # fall through to a generic forward against a host with no such route.
@@ -2896,6 +2907,23 @@ def _relay_base_with_version(base_url: str) -> str:
     return base + "/v1"
 
 
+def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_model: str = "") -> tuple[str, str]:
+    """Register one gemini turn's upstream for Google's native API on a provider that serves it: the
+    host root, no version segment, since the CLI appends /v1beta/models/<id>:... itself and names the
+    model the way the gateway resolved it through the connection's vendor table (google/<id> on
+    TokenRouter). The same shape as the hosted broker's native path: re-rooted at the provider's host,
+    the key in x-goog-api-key. → (GOOGLE_GEMINI_BASE_URL for the CLI, placeholder key)."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
+                                        {"google_native": True, "model": model, "native_model": native_model})
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
 def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI)."""
     with _HERMES_RELAY["lock"]:
@@ -3103,6 +3131,19 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
 # of this set until the gateway side decides how (or whether) to broker it; see the gateway's
 # _BROKERABLE_PROVIDERS comment for bedrock/vertex.
 GEMINI_PROVIDERS = {"google"}
+# gemini-cli 0.58.0's model-config aliases that carry a model of their own (alias -> parent). Read
+# off the CLI's DEFAULT_MODEL_CONFIGS table; a CLI bump re-reads it. The chat-model aliases
+# (gemini-2.5-pro, ...) are not here: a turn runs its chat model through the id resolutions.
+# "classifier" is the model router's own alias (flash-lite in the table, asked for by name through
+# generateJson); it carries a model like the others and is pinned with them.
+GEMINI_HELPER_ALIASES = {
+    "gemini-2.5-flash-base": "base", "gemini-3-flash-base": "base", "gemini-3.5-flash-base": "base",
+    "prompt-completion": "base", "fast-ack-helper": "base", "edit-corrector": "base",
+    "summarizer-default": "base", "summarizer-shell": "base", "classifier": "base", "loop-detection-double-check": "base",
+    "chat-compression-3-pro": "", "chat-compression-3-flash": "", "chat-compression-3.1-flash-lite": "",
+    "chat-compression-2.5-pro": "", "chat-compression-2.5-flash": "", "chat-compression-2.5-flash-lite": "",
+    "chat-compression-default": "", "agent-history-provider-summarizer": "",
+}
 # Every Gemini id the gateway's gemini catalog lists. gemini-cli's resolver rewrites ids on the
 # API-key auth path (every "-flash" id to gemini-3.5-flash, 3.1-pro-preview to its customtools
 # variant, and by context in its default resolution table); with dynamicModelConfiguration on, -m
@@ -3153,20 +3194,38 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
             continue
         servers[name] = entry
     pinned = sorted(set(GEMINI_MODELS) | ({model} if model else set()))
-    # No fallback either: on a quota or transient error gemini-cli's fallback handler picks the next
-    # policy of the model's chain (its default preview chain ends in gemini-3-flash-preview as the
-    # last resort), and in headless mode that switch is silent; a 5-minute turn on gemini-3.8-flash
-    # finished its work on gemini-3-flash-preview that way (2026-09-07 02:10Z). Every chain the CLI
-    # can resolve for this turn is one policy, the turn's own model: with no other candidate the
-    # handler has nothing to switch to and the provider's error ends the turn, honestly. Retries
-    # stay on the same model (sticky_retry on transient and unknown failures).
+    # No fallback either: every chain the CLI can resolve for this turn is one policy, the turn's
+    # own model, so its fallback handler has no candidate to switch to and the provider's error ends
+    # the turn honestly (retries stay on the same model: sticky_retry on transient and unknown
+    # failures). Measured after this landed: headless gemini-cli has no fallback handler, so the
+    # chains were never the switch; the second model the 2026-09-07 02:10Z turn showed was the
+    # classifier tier below. The chains stay as the guard they are.
     own = [{"model": model or GEMINI_DEFAULT_MODEL, "isLastResort": True, "maxAttempts": 3,
             "actions": {"terminal": "prompt", "transient": "prompt", "not_found": "prompt", "unknown": "prompt"},
             "stateTransitions": {"terminal": "terminal", "transient": "sticky_retry", "not_found": "terminal", "unknown": "sticky_retry"}}]
+    turn_model = model or GEMINI_DEFAULT_MODEL
+    # The tiers cover the classifier only. The CLI's other helpers (edit correction, the shell and
+    # tool summarizers, the next-speaker and loop checks, web fetch, chat compression, the history
+    # summarizer) are model-config ALIASES whose model is written into the alias table itself
+    # ("gemini-3-flash-base" is gemini-3-flash-preview, "edit-corrector" is flash-lite, ...), and
+    # an alias's model is never passed through the id resolutions. A one-pager build on
+    # gemini-3.8-flash made three such calls on gemini-3-flash-preview and failed as a
+    # substitution (hosted, 2026-09-07 04:58Z). Custom aliases replace the table's entries by
+    # name, so every alias that names a model is rewritten to the turn's model, its parent kept.
+    aliases = {name: ({"extends": parent} if parent else {}) | {"modelConfig": {"model": turn_model}}
+               for name, parent in GEMINI_HELPER_ALIASES.items()}
     cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}},
                  # the ids are honest: -m resolves through this table, and each entry pins an id to itself
                  "experimental": {"dynamicModelConfiguration": True},
+                 # The CLI's own housekeeping calls (model routing, plan mode, context compression, the
+                 # next-speaker and loop checks) go to a "flash" or "pro" classifier tier that defaults to
+                 # gemini-3-flash-preview or gemini-3-pro-preview, and those calls land in the turn's stats
+                 # beside the answer model: a five-minute turn on gemini-3.8-flash showed
+                 # "gemini-3-flash-preview" too and failed as a substitution (2026-09-07, both trees).
+                 # Every model the CLI calls in a turn is the one asked for: both tiers pin to it.
                  "modelConfigs": {"modelIdResolutions": {m: {"default": m, "contexts": []} for m in pinned},
+                                  "classifierIdResolutions": {t: {"default": turn_model, "contexts": []} for t in ("flash", "pro")},
+                                  "customAliases": aliases,
                                   "modelChains": {k: own for k in ("preview", "default", "lite", "auto-preview", "auto-default")}}}
     if servers:
         cfg["mcpServers"] = servers
@@ -3174,7 +3233,8 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
 
 
 def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
-                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                  native_model: str | None = None) -> list[str]:
     pr = provider or "google"
     if pr not in GEMINI_PROVIDERS:
         raise HTTPException(400, f"unknown gemini provider '{pr}' (one of {sorted(GEMINI_PROVIDERS)})")
@@ -3183,7 +3243,17 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
-    env["GEMINI_API_KEY"] = auth.api_key
+    if auth.base_url and _STRICT_GEMINI_HOST in auth.base_url:
+        # A TokenRouter connection: it serves Google's native API under the vendor prefix (measured
+        # 2026-09-07 for the seven Gemini ids its table carries), so the CLI is pointed at the
+        # loopback relay, which owns the prefix and the real key; the CLI keeps its own model id, so
+        # the pinned resolutions and the served-model check below are unchanged.
+        root = urllib.parse.urlsplit(auth.base_url)
+        relay_base, relay_tok = _gemini_relay_route(f"{root.scheme}://{root.netloc}", auth.api_key, model, native_model or "")
+        env["GOOGLE_GEMINI_BASE_URL"] = relay_base
+        env["GEMINI_API_KEY"] = relay_tok
+    else:
+        env["GEMINI_API_KEY"] = auth.api_key
     _gemini_settings(home, mcp_servers, model)
     cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
@@ -4826,6 +4896,7 @@ class TurnReq(BaseModel):
     backend: str = "claude"          # claude | codex | hermes | pi | dsh
     provider: str | None = None      # see BACKENDS[...].providers
     model: str | None = None
+    native_model: str | None = None   # gemini: the provider's own name for `model` on the native path (TokenRouter's google/<id>)
     prompt: str
     max_turns: int = 400
     timeout_seconds: int | None = None     # per-turn wall-clock cap (bounded by MAX_TURN_SECONDS)
@@ -4985,7 +5056,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
-                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                            native_model=req.native_model)
     elif backend == "cline":
         model = model or CLINE_DEFAULT_MODEL
         cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
