@@ -5554,7 +5554,8 @@ _MODEL_CATALOG: dict[str, dict] = {
     # turn the CLI ran on another model than the one asked for fails with the reason on the record,
     # never completes. Measured 2026-09-06 on the pinned 0.58.0 with those settings: all eleven
     # served as themselves; the instance column with the served-model rule as judge is in the notes.
-    "gemini": {"default": "gemini-3.5-flash",
+    # The default is the newest flash, honest like the rest.
+    "gemini": {"default": "gemini-3.8-flash",
                "models": ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                           "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                           "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
