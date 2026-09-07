@@ -113,3 +113,16 @@ prefix and the key; the CLI keeps its own model id, so the pinned resolutions an
 check are unchanged. OpenRouter and Vercel expose only the OpenAI shape and cannot drive the CLI
 without a translating relay. The TokenRouter column for the gemini backend follows below.
 
+## The Gemini CLI's helper calls run on the turn's model (2026-09-07)
+
+A long Gemini CLI turn (a deck written over five minutes on gemini-3.8-flash, on both trees) ended
+failed with its own answer shown as the reason, and its record named a second model. The CLI's
+housekeeping calls (model routing, plan mode, context compression, the next-speaker and loop checks)
+go to a "flash" or "pro" classifier tier that defaults to gemini-3-flash-preview or
+gemini-3-pro-preview, and those calls land in the turn's stats beside the answer model; the served-
+model check read them as a switch. Headless gemini-cli has no fallback handler, so the fallback chains
+suspected first were never the switch. Both classifier tiers now pin to the turn's own model, so every
+model the CLI calls in a turn is the one asked for; the gemini backend takes the canonical id from the
+gateway and the relay names it for the provider on the native path (TokenRouter's google/<id>); and a
+failed turn's reason is the runner's error before its result.
+

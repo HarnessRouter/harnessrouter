@@ -47,3 +47,9 @@ def test_tokenrouter_drives_the_gemini_backend_for_the_ids_it_serves():
     assert "gemini-3.8-flash" in gw._integration_models(tr) and "gemini-2.5-flash" not in gw._integration_models(tr)
     # an id TokenRouter has no channel for falls through to the Google integration when the map named TokenRouter for it
     assert gw._integration_driving([tr, google], "gemini", "gemini-2.5-flash", "Google AI Studio") is google
+
+
+def test_the_failed_turn_reason_is_the_runners_error_before_its_result():
+    src = Path(gw.__file__).read_text()
+    assert '"error": (s.get("error") or s.get("result") or "")[:200]' in src
+    assert '"native_model": ((conn.get("model") if conn.get("_model_resolved") else _map_model(conn, model_req))' in src
