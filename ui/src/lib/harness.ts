@@ -94,7 +94,7 @@ export const OOB: OobHarness[] = [
     // /v1/models catalog for this backend is populated (see gateway's _MODEL_CATALOG["gemini"]).
     // Google's own ids, each served as itself: the runner pins every id in gemini-cli's resolution table (the CLI
     // otherwise rewrites every "-flash" id to gemini-3.5-flash), and a substituted turn fails rather than completes
-    models: ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'], defaultModel: 'gemini-3.5-flash', moreModels: 0,
+    models: ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'], defaultModel: 'gemini-3.8-flash', moreModels: 0,
     systemPrompt: 'You are Gemini CLI, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'cline', name: 'Cline', version: 'v3.0.60', backend: 'cline', status: 'ready',

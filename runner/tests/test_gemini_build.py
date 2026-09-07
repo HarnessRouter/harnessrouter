@@ -228,3 +228,7 @@ def test_a_served_model_other_than_the_one_asked_for_fails_the_turn():
     assert out[0]["model"] == "gemini-3.5-flash"
     ok = _gemini_to_claude({"type": "result", "status": "success", "stats": {**stats, "models": {"gemini-3.8-flash": {}}}}, {"model": "gemini-3.8-flash", "final": "PONG"})
     assert ok[0]["is_error"] is False and ok[0]["result"] == "PONG"
+
+
+def test_the_default_model_is_the_newest_flash():
+    assert BACKENDS["gemini"]["default_model"] == "gemini-3.8-flash"
