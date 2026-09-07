@@ -126,3 +126,32 @@ model the CLI calls in a turn is the one asked for; the gemini backend takes the
 gateway and the relay names it for the provider on the native path (TokenRouter's google/<id>); and a
 failed turn's reason is the runner's error before its result.
 
+
+## omp (Oh My Pi), one provider at a time (2026-09-07)
+
+The omp harness (PR #68, omp 18.1.13, pi's lineage) was measured on the pre-release 0.14.3-rc.1 built from
+its branch, one column per provider with the org holding only that provider's integration, every id the
+provider serves that the omp catalog lists, all five scenarios, one retest for a failed row. 705 of 705
+scenario runs passed: Google AI Studio 55/55 (11 ids; gemini-3.1-flash-lite failed its first try and passed
+on retest), OpenRouter 184/184 (37), Vercel AI Gateway 184/184 (37), TokenRouter 164/164 (33), Anthropic
+40/40 (8), OpenAI 39/39 (8), Azure OpenAI E2 39/39 (8). Every turn ran on the column's own integration and
+no id was served as another model. The switch scenario has one run fewer per column because the switch
+partner, gpt-5.6-sol, is not switched to itself.
+
+omp reports the model it ran on every assistant message, so its columns are the first where a provider's
+own name for a model reached the judge: OpenRouter, Vercel and TokenRouter serve claude-fable-5 as
+anthropic/claude-fable-5, gemini-3.8-flash as google/gemini-3.8-flash, mistral-medium-3.5 as
+mistralai/mistral-medium-3-5, qwen3.8-max as qwen/qwen3.8-max-0902; Anthropic serves claude-haiku-4.5 as
+claude-haiku-4-5-20251001 and claude-opus-4.7 as claude-opus-4-7. The exact rule counts each as a served
+model other than the id asked for. Beside it the tables now apply the same-model rule the hosted gateway
+uses (scripts/support-matrix/samemodel.py, identical in both trees): a vendor prefix an aggregator adds
+or drops and a dated or versioned suffix a provider appends are the provider's alias of the same model,
+noted in the row and counted; a different family, number or tier under any prefix (google/gemini-3-flash-
+preview for gemini-3.8-flash, gemini-2.5-flash-lite for gemini-2.5-flash) stays a finding and is not
+counted. A turn that ran on several models is an alias only when every one of them is the same model.
+
+Two things the run itself taught. A snapshot that holds an integration whose key only its owner knows
+cannot be restored after a deletion-level column, because the instance masks stored keys; the restore
+now restores everything it can and names the rest instead of aborting whole. And a column's isolation
+deletes every other integration on the org, so nobody can test on the instance while a column runs;
+the org comes back between columns and at the end.
