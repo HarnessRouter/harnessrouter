@@ -341,6 +341,10 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # key for custom providers — neither may travel in a checkpoint tarball.
                       "./.harness/home/.pi/agent/auth.json",
                       "./.harness/home/.pi/agent/models.json",
+                      # omp models / auth
+                      "./.harness/home/.omp/agent/auth.json",
+                      "./.harness/home/.omp/agent/models.json",
+                      "./.harness/home/.omp/agent/models.yml",
                       # dsh: the MCP cordis overlay can carry auth headers (same standing as
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
@@ -363,6 +367,7 @@ QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
+OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -640,6 +645,9 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
     elif backend == "pi":
         rootrels = [".harness/home/.pi/agent/skills"]
         entryroot = ".harness/home/.pi/agent/skills"
+    elif backend == "omp":
+        rootrels = [".harness/home/.omp/agent/skills"]
+        entryroot = ".harness/home/.omp/agent/skills"
     elif backend == "codex":
         # $CODEX_HOME/skills/<name>/SKILL.md, and CODEX_HOME is redirected into the workspace
         rootrels = [".harness/home/.codex/skills"]
@@ -795,7 +803,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     if backend == "gemini":
         return pathlib.Path(cwd) / "GEMINI.md"   # gemini-cli's own context.fileName default
     return pathlib.Path(cwd) / (
-        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline")
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp")
         else "CLAUDE.md")
 
 
@@ -1914,6 +1922,9 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
         if msg.get("role") != "assistant":
             return []
         _pi_usage_add(state, msg.get("usage"))
+        if msg.get("model"):
+            # the model the CLI ran this message on (pi and omp name it on every assistant message)
+            state.setdefault("_served", []).append(str(msg["model"]))
         if msg.get("stopReason") == "error":
             state["_pi_error"] = str(msg.get("errorMessage") or "pi provider error")
             return []
@@ -1958,12 +1969,147 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
         err = state.get("_pi_error")
         usage = dict(state.get("_pi_usage") or {})
         usage = {k: v for k, v in usage.items() if v}
-        if err:
-            return [{"type": "result", "subtype": "error", "is_error": True,
-                     "result": err, "usage": usage}]
-        return [{"type": "result", "subtype": "success", "is_error": False,
-                 "result": state.get("final", ""), "usage": usage}]
+        served = sorted(set(state.get("_served") or []))
+        requested = str(state.get("model") or "")
+        other = [m for m in served if requested and m != requested]
+        if other and not err:
+            # the models are honest, no fallback: a turn the CLI ran on another model than the one
+            # asked for fails with the reason on the record, never completes (the served-model rule
+            # the support matrix judges by, enforced for the user)
+            err = f"the CLI ran {', '.join(other)} instead of {requested}"
+        ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
+              "result": err or state.get("final", ""), "usage": usage}
+        if served:
+            ev["model"] = ",".join(served)
+        return [ev]
     return []
+
+
+# ── omp (Oh My Pi, can1357/oh-my-pi CLI) ─────────────────────────────────────────
+# OMP is built on the Pi lineage and shares its JSON event stream contract (--mode json), so it
+# shares _pi_to_claude too. Unlike raw Pi, OMP has native MCP support via <agent_dir>/mcp.json and
+# a richer built-in tool set (bash, read, write, edit, glob, grep, lsp, python, todo, task, etc.).
+# Measured on 18.1.13 (2026-09-07): -p --mode json --model --auto-approve --no-extensions --resume
+# --tools/--no-tools are its flags, PI_CODING_AGENT_DIR is honoured, sessions land under
+# <agent_dir>/sessions/<cwd slug>/<ts>_<id>.jsonl, -r <id> recalls the first message, --tools=read
+# leaves a write unwritten, and every assistant message names the model it ran.
+OMP_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+ALL_OMP_TOOLS = {"bash", "read", "write", "edit", "glob", "grep", "lsp", "python", "todo", "task", "browser", "web_search"}
+
+
+def _omp_has_session(agent_dir: pathlib.Path, session_id: str) -> bool:
+    """Is this session actually in this agent directory?
+
+    OMP writes session logs under <agent_dir>/sessions/ as *.jsonl files named with
+    the session id. If the session is missing, passing --resume would exit with an error.
+    """
+    if not session_id or not agent_dir.exists():
+        return False
+    sess_dir = agent_dir / "sessions"
+    if not sess_dir.exists():
+        return False
+    try:
+        for path in sess_dir.rglob(f"*{session_id}*.jsonl"):
+            if path.is_file():
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
+    """Write <agent_dir>/mcp.json for OMP native MCP support.
+
+    OMP supports native project and user MCP configurations with the standard
+    mcpServers schema. Returns whether any server was written.
+    """
+    entries: dict = {}
+    for s in servers or []:
+        url = (s or {}).get("url")
+        if not url:
+            continue
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
+        entry: dict = {"url": url}
+        auth = (s or {}).get("auth")
+        if auth:
+            hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            entry["headers"] = {"Authorization": hdr}
+        if isinstance((s or {}).get("headers"), dict):
+            entry.setdefault("headers", {}).update({str(k): str(v) for k, v in s["headers"].items()
+                                                    if k and v is not None})
+        entries[name] = entry
+    if not entries:
+        return False
+    path = agent_dir / "mcp.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
+    return True
+
+
+def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+               resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+               tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
+    pr = provider or "anthropic"
+    if pr not in OMP_PROVIDERS:
+        raise HTTPException(400, f"unknown omp provider '{pr}' (one of {sorted(OMP_PROVIDERS)})")
+    home = pathlib.Path(env.get("HOME") or cwd)
+    omp_agent_dir = home / ".omp" / "agent"
+    omp_agent_dir.mkdir(parents=True, exist_ok=True)
+    env["PI_CODING_AGENT_DIR"] = str(omp_agent_dir)
+    env.pop("OMP_PROFILE", None)
+    env.pop("PI_PROFILE", None)
+
+    use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
+    if use_custom:
+        if not auth.base_url:
+            raise HTTPException(400, f"omp provider '{pr}' needs a base_url (none configured)")
+        if auth.api_format == "anthropic":
+            api = "anthropic-messages"
+        elif auth.api_format == "openai":
+            api = "openai-completions"
+        elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+            api = "anthropic-messages"
+        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+            api = "openai-responses"
+        else:
+            api = "openai-completions"
+        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
+            # An OpenAI-shape turn rides the loopback relay, as pi's and qwen's do: the relay repairs
+            # the request shape in flight (Gemini 3's thought signatures, TokenRouter's schema subset,
+            # Azure's max_tokens), and the real key never lands in the workspace's models.yml. A
+            # custom endpoint keeps its own URL.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+        models_content = _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
+                                          custom_openai=bool(auth.api_format))
+        # omp reads custom providers from models.yml (its README's file; YAML takes the JSON as is);
+        # models.json is kept beside it for the pi-lineage census
+        (omp_agent_dir / "models.json").write_text(models_content)
+        (omp_agent_dir / "models.yml").write_text(models_content)
+        pname = "hr"
+    else:
+        pname = pr
+        if pr == "anthropic" and auth.api_key:
+            env["ANTHROPIC_API_KEY"] = auth.api_key
+        elif pr == "openai" and auth.api_key:
+            env["OPENAI_API_KEY"] = auth.api_key
+
+    cmd = ["omp", "-p", "--mode", "json",
+           "--model", f"{pname}/{model}" if pname == "hr" else model,
+           "--auto-approve",
+           "--no-extensions"]
+    if resume_session_id and _omp_has_session(omp_agent_dir, resume_session_id):
+        cmd += ["--resume", resume_session_id]
+    if tools_disabled:
+        disabled = {x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
+        enabled = [t for t in sorted(ALL_OMP_TOOLS) if t not in disabled]
+        if not enabled:
+            cmd += ["--no-tools"]
+        else:
+            cmd += [f"--tools={','.join(enabled)}"]
+    _omp_write_mcp(omp_agent_dir, mcp_servers)
+    cmd.append(prompt)
+    return cmd
 
 
 # ── hermes (NousResearch hermes-agent CLI) ──────────────────────────────────────────
@@ -3784,6 +3930,11 @@ BACKENDS = {
                "normalize": _gemini_to_claude},
     "cline": {"providers": sorted(CLINE_PROVIDERS), "default_model": CLINE_DEFAULT_MODEL,
               "normalize": _cline_to_claude},
+    # omp is pi's lineage and speaks pi's `--mode json` event stream unchanged (measured on 18.1.13:
+    # session, message_update, message_end, tool_execution_start/end, agent_end, with the same
+    # fields), so it shares pi's normaliser rather than carrying a copy.
+    "omp": {"providers": sorted(OMP_PROVIDERS), "default_model": OMP_DEFAULT_MODEL,
+            "normalize": _pi_to_claude},
 }
 
 
@@ -4893,6 +5044,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
+    elif backend == "omp":
+        model = model or OMP_DEFAULT_MODEL
+        cmd = _build_omp(req.provider, auth, model, req.prompt, cwd, env,
+                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
     elif backend == "qwen":
         model = model or QWEN_DEFAULT_MODEL
         cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
