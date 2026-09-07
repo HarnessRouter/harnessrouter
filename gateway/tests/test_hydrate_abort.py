@@ -1,6 +1,7 @@
-"""A checkpoint that cannot be restored is tried once more, and a turn never runs on the wiped
-workspace: under a burst of cold sessions one restore in ten to twenty failed and the conversation
-started over without a word (2026-09-06); the checkpoint itself was intact every time."""
+"""A checkpoint that cannot be restored is asked again for a minute and a half, and a turn never runs
+on the wiped workspace: under a burst of cold sessions one restore in ten to twenty failed and the
+conversation started over without a word (2026-09-06); the checkpoint itself was intact every time.
+The last answer is always recorded, so a refusal names its cause, never "unknown"."""
 import asyncio
 import sys
 from pathlib import Path
@@ -40,22 +41,41 @@ def test_a_failed_restore_is_tried_once_more(monkeypatch):
     assert len(calls) == 2 and rec["hydrated"] is True and not rec.get("hydrate_failed_with_checkpoint")
 
 
-def test_two_failed_restores_flag_the_turn(monkeypatch):
-    calls = _wire(monkeypatch, [500, 503])
+def test_every_failed_restore_is_tried_over_a_minute_and_a_half_then_flags_the_turn(monkeypatch):
+    calls = _wire(monkeypatch, [500])
+    pauses = []
+    async def sleep(s):
+        pauses.append(s)
+    monkeypatch.setattr(gw.asyncio, "sleep", sleep)
     rec = {}
     asyncio.run(gw._hydrate("hsessx", rec, force=True))
-    assert len(calls) == 2 and rec["hydrated"] is False
-    assert rec["hydrate_failed_with_checkpoint"] is True and "503" in rec["hydrate_error"]
+    assert len(calls) == 7 and rec["hydrated"] is False and rec.get("hydrate_failed_with_checkpoint")
+    assert pauses == [1.0, 3.0, 6.0, 12.0, 24.0, 48.0]           # a sandbox under a burst comes in tens of seconds
+    assert rec["hydrate_error"].startswith("HTTP 500")            # the refusal names its cause, never "unknown"
 
 
-def test_no_checkpoint_means_no_retry(monkeypatch):
-    calls = _wire(monkeypatch, [500])
+def test_a_refused_allocation_is_asked_again_even_without_a_checkpoint(monkeypatch):
+    calls = _wire(monkeypatch, [429, 429, 200])
+    async def vertex(sid):
+        return {}
+    async def sleep(s):
+        pass
+    monkeypatch.setattr(gw, "_vertex_get", vertex)
+    monkeypatch.setattr(gw.asyncio, "sleep", sleep)
+    rec = {}
+    asyncio.run(gw._hydrate("hsessx", rec, force=True))
+    assert len(calls) == 3 and rec["hydrated"] is True and not rec.get("hydrate_failed_with_checkpoint")
+
+
+def test_a_failure_without_a_checkpoint_is_not_retried_but_still_recorded(monkeypatch):
+    calls = _wire(monkeypatch, [502])
     async def vertex(sid):
         return {}
     monkeypatch.setattr(gw, "_vertex_get", vertex)
     rec = {}
     asyncio.run(gw._hydrate("hsessx", rec, force=True))
-    assert len(calls) == 1 and not rec.get("hydrate_failed_with_checkpoint")
+    assert len(calls) == 1 and rec["hydrated"] is False and not rec.get("hydrate_failed_with_checkpoint")
+    assert rec["hydrate_error"].startswith("HTTP 502")
 
 
 def test_recycle_refuses_when_the_restore_failed(monkeypatch):

@@ -3154,9 +3154,20 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
 # of this set until the gateway side decides how (or whether) to broker it; see the gateway's
 # _BROKERABLE_PROVIDERS comment for bedrock/vertex.
 GEMINI_PROVIDERS = {"google"}
+# Every Gemini id the gateway's gemini catalog lists. gemini-cli's resolver rewrites ids on the
+# API-key auth path (every "-flash" id to gemini-3.5-flash, 3.1-pro-preview to its customtools
+# variant, and by context in its default resolution table); with dynamicModelConfiguration on, -m
+# goes through the resolution table instead, and an entry with no contexts pins an id to itself.
+# The settings deep-merge a user entry into the default one, so the contexts must be emptied
+# explicitly (a plain default alone left gemini-2.5-flash rewritten, measured 2026-09-06 on 0.58.0).
+# Every listed id is pinned, and the turn's own model with it, so no context can retarget any of
+# them; a served model that still differs fails the turn (see _gemini_to_claude).
+GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+                 "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")
 
 
-def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
+def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "") -> None:
     """~/.gemini/settings.json under the redirected HOME.
 
     mcpServers uses gemini-cli's own schema (command/args/env for stdio, url/httpUrl/headers for
@@ -3192,7 +3203,11 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None
         else:
             continue
         servers[name] = entry
-    cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}}}
+    pinned = sorted(set(GEMINI_MODELS) | ({model} if model else set()))
+    cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}},
+                 # the ids are honest: -m resolves through this table, and each entry pins an id to itself
+                 "experimental": {"dynamicModelConfiguration": True},
+                 "modelConfigs": {"modelIdResolutions": {m: {"default": m, "contexts": []} for m in pinned}}}
     if servers:
         cfg["mcpServers"] = servers
     (gdir / "settings.json").write_text(json.dumps(cfg, indent=2))
@@ -3209,7 +3224,7 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
     env["GEMINI_API_KEY"] = auth.api_key
-    _gemini_settings(home, mcp_servers)
+    _gemini_settings(home, mcp_servers, model)
     cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
            # per-workspace "folder trust" prompt and an approval mode, neither of which can be
@@ -3822,6 +3837,14 @@ def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
         # the result so the gateway can record a substitution instead of believing the request.
         models = stats.get("models") if isinstance(stats.get("models"), dict) else {}
         served = ",".join(k for k in models if isinstance(k, str) and k)
+        # A substitution is a failed turn, not a served one: the model the CLI ran is what the user
+        # gets, and a turn that ran another model than the one asked for must say so, never read
+        # completed. The settings pin every id to itself; this is the check that they held.
+        requested = str(state.get("model") or "")
+        other = [m for m in served.split(",") if m and requested and m != requested]
+        if other and not err:
+            err = {"type": "model_substituted", "message": f"the CLI ran {', '.join(other)} instead of {requested}"}
+            msg = err["message"]
         ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
               "result": msg or state.get("final", ""), "usage": _gemini_usage(stats)}
         if served:

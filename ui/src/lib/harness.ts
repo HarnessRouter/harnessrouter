@@ -92,9 +92,9 @@ export const OOB: OobHarness[] = [
     // reach into the gpt/claude/deepseek/etc catalogs the way qwen/pi/opencode do, because it
     // speaks neither the OpenAI nor the Anthropic wire protocol. Placeholder until the gateway's
     // /v1/models catalog for this backend is populated (see gateway's _MODEL_CATALOG["gemini"]).
-    // the seven ids gemini-cli 0.58.0 serves as themselves on the API-key path (it rewrites every id ending in
-    // "-flash" to gemini-3.5-flash); measured 2026-09-06, all five scenarios per id through this backend
-    models: ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'], defaultModel: 'gemini-3.5-flash', moreModels: 0,
+    // Google's own ids, each served as itself: the runner pins every id in gemini-cli's resolution table (the CLI
+    // otherwise rewrites every "-flash" id to gemini-3.5-flash), and a substituted turn fails rather than completes
+    models: ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'], defaultModel: 'gemini-3.5-flash', moreModels: 0,
     systemPrompt: 'You are Gemini CLI, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'cline', name: 'Cline', version: 'v3.0.60', backend: 'cline', status: 'ready',

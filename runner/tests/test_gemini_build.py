@@ -9,7 +9,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (Auth, _agent_doc_path, _build_gemini, _gemini_to_claude,  # noqa: E402
-                    _gemini_usage, _norm_token_usage, BACKENDS)
+                    _gemini_usage, _norm_token_usage, BACKENDS, GEMINI_MODELS)
 
 
 def _argv(**kw):
@@ -197,3 +197,34 @@ def test_the_result_carries_the_served_model_and_the_fresh_input_beside_the_cach
                     "model": "gemini-3.5-flash"}]
     assert _gemini_usage({}) == _norm_token_usage({})          # the same shape as every other normalizer
     assert _gemini_usage({"input_tokens": 100, "output_tokens": 5})["input_tokens"] == 100
+
+
+def test_every_listed_id_and_the_turns_model_are_pinned_to_themselves():
+    """gemini-cli rewrites ids on the API-key auth path (every "-flash" id to gemini-3.5-flash, measured
+    2026-09-06 on 0.58.0); with dynamicModelConfiguration on and an entry with NO contexts per id, each
+    is served as itself (all eleven measured). The contexts must be emptied explicitly: the settings
+    deep-merge a user entry into the default one."""
+    d = tempfile.mkdtemp()
+    env: dict = {}
+    _build_gemini("google", Auth(api_key="k"), "gemini-3.8-flash", "hi", d, env)
+    cfg = json.loads(pathlib.Path(d, ".harness", "home", ".gemini", "settings.json").read_text())
+    assert cfg["experimental"] == {"dynamicModelConfiguration": True}
+    res = cfg["modelConfigs"]["modelIdResolutions"]
+    for m in GEMINI_MODELS:
+        assert res[m] == {"default": m, "contexts": []}
+    d2 = tempfile.mkdtemp()
+    _build_gemini("google", Auth(api_key="k"), "gemini-9-flash", "hi", d2, {})
+    res2 = json.loads(pathlib.Path(d2, ".harness", "home", ".gemini", "settings.json").read_text())["modelConfigs"]["modelIdResolutions"]
+    assert res2["gemini-9-flash"] == {"default": "gemini-9-flash", "contexts": []}     # the turn's own model too
+
+
+def test_a_served_model_other_than_the_one_asked_for_fails_the_turn():
+    """Richard's rule: the models are honest, no fallback. A substitution is a failed turn with the
+    reason on the record, never a completed one."""
+    stats = {"input_tokens": 10, "output_tokens": 2, "cached": 0, "models": {"gemini-3.5-flash": {}}}
+    out = _gemini_to_claude({"type": "result", "status": "success", "stats": stats}, {"model": "gemini-3.8-flash", "final": "PONG"})
+    assert out[0]["is_error"] is True and out[0]["subtype"] == "error"
+    assert out[0]["result"] == "the CLI ran gemini-3.5-flash instead of gemini-3.8-flash"
+    assert out[0]["model"] == "gemini-3.5-flash"
+    ok = _gemini_to_claude({"type": "result", "status": "success", "stats": {**stats, "models": {"gemini-3.8-flash": {}}}}, {"model": "gemini-3.8-flash", "final": "PONG"})
+    assert ok[0]["is_error"] is False and ok[0]["result"] == "PONG"
