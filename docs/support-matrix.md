@@ -478,6 +478,36 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 
 5 pairs, 6 of 8 scenario runs passed.
 
+## Provider: omp-anthropic
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| omp | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| omp | claude-fable-5-1 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| omp | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-haiku-4-5-20251001 (the provider's alias of the same model) |
+| omp | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-opus-4-7 (the provider's alias of the same model) |
+| omp | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-opus-4-8 (the provider's alias of the same model) |
+| omp | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic |  |
+| omp | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-sonnet-4-6 (the provider's alias of the same model) |
+| omp | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+
+8 pairs, 40 of 40 scenario runs passed.
+
+## Provider: omp-azure-e2
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| omp | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-5.3-codex | pass | pass | n/a | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+
+8 pairs, 39 of 39 scenario runs passed.
+
 ## Provider: omp-google
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
@@ -486,7 +516,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | omp | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| omp | gemini-3.1-flash-lite | n/a | n/a | n/a | n/a | n/a | ? | retested once; first try: artifact no file card (files: none); Create a file named hello-omp.txt containing exactly |
+| omp | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
@@ -494,7 +524,150 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | omp | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 
-11 pairs, 50 of 50 scenario runs passed.
+11 pairs, 55 of 55 scenario runs passed.
+
+## Provider: omp-openai
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| omp | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+| omp | gpt-5.3-codex | pass | pass | n/a | pass | pass | OpenAI |  |
+| omp | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+| omp | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+| omp | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+| omp | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+| omp | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenAI |  |
+| omp | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+
+8 pairs, 39 of 39 scenario runs passed.
+
+## Provider: omp-openrouter
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| omp | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-fable-5 (the provider's alias of the same model) |
+| omp | claude-fable-5-1 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-fable-5.1 (the provider's alias of the same model) |
+| omp | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-haiku-4.5 (the provider's alias of the same model) |
+| omp | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-opus-4.7 (the provider's alias of the same model) |
+| omp | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-opus-4.8 (the provider's alias of the same model) |
+| omp | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-opus-5 (the provider's alias of the same model) |
+| omp | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-sonnet-4.6 (the provider's alias of the same model) |
+| omp | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as anthropic/claude-sonnet-5 (the provider's alias of the same model) |
+| omp | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
+| omp | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-pro (the provider's alias of the same model) |
+| omp | gemini-2.5-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-2.5-flash (the provider's alias of the same model) |
+| omp | gemini-2.5-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-2.5-flash-lite (the provider's alias of the same model) |
+| omp | gemini-2.5-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-2.5-pro (the provider's alias of the same model) |
+| omp | gemini-3-flash-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3-flash-preview (the provider's alias of the same model) |
+| omp | gemini-3.1-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) |
+| omp | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
+| omp | gemini-3.5-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.5-flash (the provider's alias of the same model) |
+| omp | gemini-3.5-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.5-flash-lite (the provider's alias of the same model) |
+| omp | gemini-3.6-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.6-flash (the provider's alias of the same model) |
+| omp | gemini-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.7-flash (the provider's alias of the same model) |
+| omp | gemini-3.8-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.8-flash (the provider's alias of the same model) |
+| omp | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as z-ai/glm-5.3 (the provider's alias of the same model) |
+| omp | glm-5.3-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as z-ai/glm-5.3-flash (the provider's alias of the same model) |
+| omp | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as openai/gpt-5.2 (the provider's alias of the same model) |
+| omp | gpt-5.3-codex | pass | pass | n/a | pass | pass | OpenRouter | served as openai/gpt-5.3-codex (the provider's alias of the same model) |
+| omp | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as openai/gpt-5.4 (the provider's alias of the same model) |
+| omp | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as openai/gpt-5.4-mini (the provider's alias of the same model) |
+| omp | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as openai/gpt-5.5 (the provider's alias of the same model) |
+| omp | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as openai/gpt-5.6-luna (the provider's alias of the same model) |
+| omp | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenRouter | served as openai/gpt-5.6-sol (the provider's alias of the same model) |
+| omp | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as openai/gpt-5.6-terra (the provider's alias of the same model) |
+| omp | kimi-k2.7-code | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as moonshotai/kimi-k2.7-code (the provider's alias of the same model) |
+| omp | kimi-k3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as moonshotai/kimi-k3 (the provider's alias of the same model) |
+| omp | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as mistralai/mistral-medium-3-5 (the provider's alias of the same model) |
+| omp | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as qwen/qwen3.7-max (the provider's alias of the same model) |
+| omp | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as qwen/qwen3.8-max-0902 (the provider's alias of the same model) |
+| omp | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
+
+37 pairs, 184 of 184 scenario runs passed.
+
+## Provider: omp-tokenrouter
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| omp | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-fable-5 (the provider's alias of the same model) |
+| omp | claude-fable-5-1 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-fable-5.1 (the provider's alias of the same model) |
+| omp | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-haiku-4.5 (the provider's alias of the same model) |
+| omp | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-opus-4.7 (the provider's alias of the same model) |
+| omp | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-opus-4.8 (the provider's alias of the same model) |
+| omp | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-opus-5 (the provider's alias of the same model) |
+| omp | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-sonnet-4.6 (the provider's alias of the same model) |
+| omp | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as anthropic/claude-sonnet-5 (the provider's alias of the same model) |
+| omp | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
+| omp | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as deepseek/deepseek-v4-pro (the provider's alias of the same model) |
+| omp | gemini-3-flash-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as google/gemini-3-flash-preview (the provider's alias of the same model) |
+| omp | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
+| omp | gemini-3.5-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as google/gemini-3.5-flash (the provider's alias of the same model) |
+| omp | gemini-3.5-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as google/gemini-3.5-flash-lite (the provider's alias of the same model) |
+| omp | gemini-3.6-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as google/gemini-3.6-flash (the provider's alias of the same model) |
+| omp | gemini-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as google/gemini-3.7-flash (the provider's alias of the same model) |
+| omp | gemini-3.8-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as google/gemini-3.8-flash (the provider's alias of the same model) |
+| omp | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as z-ai/glm-5.3 (the provider's alias of the same model) |
+| omp | glm-5.3-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as z-ai/glm-5.3-flash (the provider's alias of the same model) |
+| omp | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as openai/gpt-5.2 (the provider's alias of the same model) |
+| omp | gpt-5.3-codex | pass | pass | n/a | pass | pass | My TokenRouter | served as openai/gpt-5.3-codex (the provider's alias of the same model) |
+| omp | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as openai/gpt-5.4 (the provider's alias of the same model) |
+| omp | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as openai/gpt-5.4-mini (the provider's alias of the same model) |
+| omp | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as openai/gpt-5.5 (the provider's alias of the same model) |
+| omp | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as openai/gpt-5.6-luna (the provider's alias of the same model) |
+| omp | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | My TokenRouter | served as openai/gpt-5.6-sol (the provider's alias of the same model) |
+| omp | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as openai/gpt-5.6-terra (the provider's alias of the same model) |
+| omp | kimi-k2.7-code | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as moonshotai/kimi-k2.7-code (the provider's alias of the same model) |
+| omp | kimi-k3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as moonshotai/kimi-k3 (the provider's alias of the same model) |
+| omp | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as mistralai/mistral-medium-3-5 (the provider's alias of the same model) |
+| omp | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as qwen/qwen3.7-max (the provider's alias of the same model) |
+| omp | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as qwen/qwen3.8-max (the provider's alias of the same model) |
+| omp | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
+
+33 pairs, 164 of 164 scenario runs passed.
+
+## Provider: omp-vercel
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| omp | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-fable-5 (the provider's alias of the same model) |
+| omp | claude-fable-5-1 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-fable-5.1 (the provider's alias of the same model) |
+| omp | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-4.5 (the provider's alias of the same model) |
+| omp | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-opus-4.7 (the provider's alias of the same model) |
+| omp | claude-opus-4.8 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-opus-4.8 (the provider's alias of the same model) |
+| omp | claude-opus-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-opus-5 (the provider's alias of the same model) |
+| omp | claude-sonnet-4.6 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-sonnet-4.6 (the provider's alias of the same model) |
+| omp | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as anthropic/claude-sonnet-5 (the provider's alias of the same model) |
+| omp | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
+| omp | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4-pro (the provider's alias of the same model) |
+| omp | gemini-2.5-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-flash (the provider's alias of the same model) |
+| omp | gemini-2.5-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-flash-lite (the provider's alias of the same model) |
+| omp | gemini-2.5-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-pro (the provider's alias of the same model) |
+| omp | gemini-3-flash-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3-flash (the provider's alias of the same model) |
+| omp | gemini-3.1-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) |
+| omp | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
+| omp | gemini-3.5-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.5-flash (the provider's alias of the same model) |
+| omp | gemini-3.5-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.5-flash-lite (the provider's alias of the same model) |
+| omp | gemini-3.6-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.6-flash (the provider's alias of the same model) |
+| omp | gemini-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.7-flash (the provider's alias of the same model) |
+| omp | gemini-3.8-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.8-flash (the provider's alias of the same model) |
+| omp | glm-5.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as zai/glm-5.3 (the provider's alias of the same model) |
+| omp | glm-5.3-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as zai/glm-5.3-flash (the provider's alias of the same model) |
+| omp | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.2 (the provider's alias of the same model) |
+| omp | gpt-5.3-codex | pass | pass | n/a | pass | pass | Vercel AI Gateway | served as openai/gpt-5.3-codex (the provider's alias of the same model) |
+| omp | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.4 (the provider's alias of the same model) |
+| omp | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.4-mini (the provider's alias of the same model) |
+| omp | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.5 (the provider's alias of the same model) |
+| omp | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-luna (the provider's alias of the same model) |
+| omp | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-sol (the provider's alias of the same model) |
+| omp | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-terra (the provider's alias of the same model) |
+| omp | kimi-k2.7-code | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as moonshotai/kimi-k2.7-code (the provider's alias of the same model) |
+| omp | kimi-k3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as moonshotai/kimi-k3 (the provider's alias of the same model) |
+| omp | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as mistral/mistral-medium-3.5 (the provider's alias of the same model) |
+| omp | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-max (the provider's alias of the same model) |
+| omp | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-max (the provider's alias of the same model) |
+| omp | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
+
+37 pairs, 184 of 184 scenario runs passed.
 
 ## Provider: openai
 
