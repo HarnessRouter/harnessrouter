@@ -1080,6 +1080,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("google", "hermes"): "openai-api",        ("google", "pi"): "openai-api",
     ("google", "dsh"): "openai-api",           ("google", "opencode"): "openai-api",
     ("google", "qwen"): "openai-api",          ("google", "cline"): "openai-api",
+    ("google", "omp"): "openai-api",            # pi's lineage, pi's reach
     # gemini (Gemini CLI) speaks Google's native API, not the OpenAI shape the rows above reach
     # through a base_url, so it is wired to the google provider as itself: the runner gets the
     # raw key (owner trust only; see _NATIVE_ONLY_BACKENDS). No ("custom", "gemini") row, for the
@@ -5564,15 +5565,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                "models": ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                           "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                           "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
-    "omp": {"default": "gpt-5.4",
-           "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
-                      "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                      "claude-opus-5", "claude-fable-5", "claude-opus-4.8", "claude-sonnet-5",
-                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                      "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                      "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+    # omp (Oh My Pi) is pi's lineage and speaks the OpenAI and Anthropic shapes through the same
+    # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
+    # measures each provider column with the served-model rule as judge (2026-09-07).
+    "omp": {"default": "gpt-5.4", "models": []},
 }
+_MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:

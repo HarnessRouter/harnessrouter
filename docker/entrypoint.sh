@@ -218,21 +218,28 @@ install_opencode() {
   rm -rf "$oc_tmp"
 }
 
-# omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases.
+# omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases, with a SHA256SUMS.txt
+# beside them. Pinned EXACTLY, like every other backend here: upstream releases almost daily
+# (18.1.8 through 18.1.13 in five days), and 18.1.13 is the release the runner's omp code was
+# measured against (flags, the JSON event stream, the agent-dir env, resume by id, --tools). A
+# silent `latest` re-gambles all of it; the checksum makes the download the release's own bytes.
 install_omp() {
   case "$(uname -m)" in
     x86_64)        omp_arch="x64" ;;
     aarch64|arm64) omp_arch="arm64" ;;
     *) echo "unsupported architecture $(uname -m) for omp"; return 1 ;;
   esac
-  omp_ref="${HR_OMP_VERSION:-latest}"
-  if [ "$omp_ref" = "latest" ]; then
-    omp_url="https://github.com/can1357/oh-my-pi/releases/latest/download/omp-linux-$omp_arch"
-  else
-    omp_url="https://github.com/can1357/oh-my-pi/releases/download/v${omp_ref#v}/omp-linux-$omp_arch"
+  omp_ver="${HR_OMP_VERSION:-18.1.13}"; omp_ver="${omp_ver#v}"
+  omp_base="https://github.com/can1357/oh-my-pi/releases/download/v${omp_ver}"
+  omp_tmp="$(mktemp -d)"
+  curl -fsSL "$omp_base/omp-linux-$omp_arch" -o "$omp_tmp/omp" || { rm -rf "$omp_tmp"; return 1; }
+  curl -fsSL "$omp_base/SHA256SUMS.txt" -o "$omp_tmp/SHA256SUMS.txt" || { rm -rf "$omp_tmp"; return 1; }
+  want="$(grep " omp-linux-$omp_arch\$" "$omp_tmp/SHA256SUMS.txt" | awk '{print $1}')"
+  have="$(sha256sum "$omp_tmp/omp" | awk '{print $1}')"
+  if [ -z "$want" ] || [ "$want" != "$have" ]; then
+    echo "omp $omp_ver: checksum mismatch for omp-linux-$omp_arch (want ${want:-none}, have $have)"; rm -rf "$omp_tmp"; return 1
   fi
-  mkdir -p "$TOOLS/bin"
-  curl -fsSL "$omp_url" -o "$TOOLS/bin/omp" && chmod 755 "$TOOLS/bin/omp" || return 1
+  mkdir -p "$TOOLS/bin" && install -m 755 "$omp_tmp/omp" "$TOOLS/bin/omp"; rm -rf "$omp_tmp"
 }
 
 # Run an install and, if it fails, SAY WHY.

@@ -33,3 +33,9 @@ def test_the_stored_aliases_still_resolve():
 def test_unknown_base_stays_empty_for_the_caller_to_infer():
     assert A._backend_of_harness({"base": "not-a-base"}) == ""
     assert A._backend_of_harness(None) == ""
+
+
+def test_omp_reaches_what_pi_reaches():
+    assert A._MODEL_CATALOG["omp"]["models"] == A._MODEL_CATALOG["pi"]["models"]
+    assert A._INTEGRATION_WIRING[("google", "omp")] == "openai-api"
+    assert "claude-fable-5-1" in A._MODEL_CATALOG["omp"]["models"]

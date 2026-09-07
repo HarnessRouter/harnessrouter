@@ -1922,6 +1922,9 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
         if msg.get("role") != "assistant":
             return []
         _pi_usage_add(state, msg.get("usage"))
+        if msg.get("model"):
+            # the model the CLI ran this message on (pi and omp name it on every assistant message)
+            state.setdefault("_served", []).append(str(msg["model"]))
         if msg.get("stopReason") == "error":
             state["_pi_error"] = str(msg.get("errorMessage") or "pi provider error")
             return []
@@ -1966,18 +1969,30 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
         err = state.get("_pi_error")
         usage = dict(state.get("_pi_usage") or {})
         usage = {k: v for k, v in usage.items() if v}
-        if err:
-            return [{"type": "result", "subtype": "error", "is_error": True,
-                     "result": err, "usage": usage}]
-        return [{"type": "result", "subtype": "success", "is_error": False,
-                 "result": state.get("final", ""), "usage": usage}]
+        served = sorted(set(state.get("_served") or []))
+        requested = str(state.get("model") or "")
+        other = [m for m in served if requested and m != requested]
+        if other and not err:
+            # the models are honest, no fallback: a turn the CLI ran on another model than the one
+            # asked for fails with the reason on the record, never completes (the served-model rule
+            # the support matrix judges by, enforced for the user)
+            err = f"the CLI ran {', '.join(other)} instead of {requested}"
+        ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
+              "result": err or state.get("final", ""), "usage": usage}
+        if served:
+            ev["model"] = ",".join(served)
+        return [ev]
     return []
 
 
 # ── omp (Oh My Pi, can1357/oh-my-pi CLI) ─────────────────────────────────────────
-# OMP is built on the Pi lineage and shares its JSON event stream contract (--mode json).
-# Unlike raw Pi, OMP features native MCP support via <agent_dir>/mcp.json and a richer
-# built-in tool set (bash, read, write, edit, glob, grep, lsp, python, todo, task, etc.).
+# OMP is built on the Pi lineage and shares its JSON event stream contract (--mode json), so it
+# shares _pi_to_claude too. Unlike raw Pi, OMP has native MCP support via <agent_dir>/mcp.json and
+# a richer built-in tool set (bash, read, write, edit, glob, grep, lsp, python, todo, task, etc.).
+# Measured on 18.1.13 (2026-09-07): -p --mode json --model --auto-approve --no-extensions --resume
+# --tools/--no-tools are its flags, PI_CODING_AGENT_DIR is honoured, sessions land under
+# <agent_dir>/sessions/<cwd slug>/<ts>_<id>.jsonl, -r <id> recalls the first message, --tools=read
+# leaves a write unwritten, and every assistant message names the model it ran.
 OMP_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
 ALL_OMP_TOOLS = {"bash", "read", "write", "edit", "glob", "grep", "lsp", "python", "todo", "task", "browser", "web_search"}
 
@@ -2058,8 +2073,17 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
             api = "openai-responses"
         else:
             api = "openai-completions"
+        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
+            # An OpenAI-shape turn rides the loopback relay, as pi's and qwen's do: the relay repairs
+            # the request shape in flight (Gemini 3's thought signatures, TokenRouter's schema subset,
+            # Azure's max_tokens), and the real key never lands in the workspace's models.yml. A
+            # custom endpoint keeps its own URL.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
         models_content = _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
                                           custom_openai=bool(auth.api_format))
+        # omp reads custom providers from models.yml (its README's file; YAML takes the JSON as is);
+        # models.json is kept beside it for the pi-lineage census
         (omp_agent_dir / "models.json").write_text(models_content)
         (omp_agent_dir / "models.yml").write_text(models_content)
         pname = "hr"
@@ -2086,81 +2110,6 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     _omp_write_mcp(omp_agent_dir, mcp_servers)
     cmd.append(prompt)
     return cmd
-
-
-def _omp_usage_add(state: dict, u: dict | None) -> None:
-    if not isinstance(u, dict):
-        return
-    tot = state.setdefault("_omp_usage", {"input_tokens": 0, "output_tokens": 0,
-                                          "cache_read_tokens": 0, "cache_write_tokens": 0})
-    for src, dst in (("input", "input_tokens"), ("output", "output_tokens"),
-                     ("cacheRead", "cache_read_tokens"), ("cacheWrite", "cache_write_tokens")):
-        v = u.get(src)
-        if isinstance(v, (int, float)):
-            tot[dst] += int(v)
-
-
-def _omp_to_claude(obj: dict, state: dict) -> list[dict]:
-    t = obj.get("type")
-    if t == "session":
-        return [{"type": "system", "subtype": "init",
-                 "session_id": obj.get("id"), "model": state.get("model")}]
-    if t == "message_update":
-        ev = obj.get("assistantMessageEvent") or {}
-        et = ev.get("type")
-        if et == "text_delta" and ev.get("delta"):
-            state["_omp_text"] = state.get("_omp_text", "") + ev["delta"]
-            state["final"] = state["_omp_text"]
-            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": ev["delta"]}]}}]
-        if et == "thinking_delta" and ev.get("delta"):
-            return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": ev["delta"]}]}}]
-        return []
-    if t == "message_end":
-        msg = obj.get("message") or {}
-        if msg.get("role") != "assistant":
-            return []
-        _omp_usage_add(state, msg.get("usage"))
-        if msg.get("stopReason") == "error":
-            state["_omp_error"] = str(msg.get("errorMessage") or "omp provider error")
-            return []
-        full = "".join(c.get("text") or "" for c in (msg.get("content") or [])
-                       if isinstance(c, dict) and c.get("type") == "text")
-        streamed = state.get("_omp_text", "")
-        state["_omp_text"] = ""
-        if full:
-            state["final"] = full
-        if full and full != streamed:
-            if not streamed:
-                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full}]}}]
-            if full.startswith(streamed):
-                return [{"type": "assistant", "message": {"content": [{"type": "text", "text": full[len(streamed):]}]}}]
-            return []
-        return []
-    if t == "tool_execution_start":
-        return [{"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": obj.get("toolCallId") or "tool",
-             "name": obj.get("toolName") or "tool", "input": obj.get("args") or {}}]}}]
-    if t == "tool_execution_end":
-        res = obj.get("result")
-        if isinstance(res, dict):
-            parts = [c.get("text") or "" for c in (res.get("content") or [])
-                     if isinstance(c, dict) and c.get("type") == "text"]
-            content = "\n".join(x for x in parts if x) or json.dumps(res, default=str)[:4000]
-        else:
-            content = str(res or "")
-        return [{"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": obj.get("toolCallId") or "tool",
-             "is_error": bool(obj.get("isError")), "content": content}]}}]
-    if t == "agent_end":
-        err = state.get("_omp_error")
-        usage = dict(state.get("_omp_usage") or {})
-        usage = {k: v for k, v in usage.items() if v}
-        if err:
-            return [{"type": "result", "subtype": "error", "is_error": True,
-                     "result": err, "usage": usage}]
-        return [{"type": "result", "subtype": "success", "is_error": False,
-                 "result": state.get("final", ""), "usage": usage}]
-    return []
 
 
 # ── hermes (NousResearch hermes-agent CLI) ──────────────────────────────────────────
@@ -3894,8 +3843,11 @@ BACKENDS = {
                "normalize": _gemini_to_claude},
     "cline": {"providers": sorted(CLINE_PROVIDERS), "default_model": CLINE_DEFAULT_MODEL,
               "normalize": _cline_to_claude},
+    # omp is pi's lineage and speaks pi's `--mode json` event stream unchanged (measured on 18.1.13:
+    # session, message_update, message_end, tool_execution_start/end, agent_end, with the same
+    # fields), so it shares pi's normaliser rather than carrying a copy.
     "omp": {"providers": sorted(OMP_PROVIDERS), "default_model": OMP_DEFAULT_MODEL,
-            "normalize": _omp_to_claude},
+            "normalize": _pi_to_claude},
 }
 
 

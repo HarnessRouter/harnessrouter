@@ -8,11 +8,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (  # noqa: E402
     _agent_doc_path,
     _build_omp,
-    _omp_has_session,
-    _omp_to_claude,
-    _omp_write_mcp,
+    _pi_to_claude,
     _write_skills,
     Auth,
+    BACKENDS,
 )
 
 
@@ -24,7 +23,7 @@ def _run_omp_events(events, model="gpt-5.4"):
     state = {"model": model, "final": ""}
     out = []
     for ev in events:
-        out.append(_omp_to_claude(ev, state))
+        out.append(_pi_to_claude(ev, state))
     return out, state
 
 
@@ -45,6 +44,38 @@ def test_omp_argv_native_provider():
     assert cmd[-1] == "hello world"
     assert env.get("ANTHROPIC_API_KEY") == "sk-ant-test"
     assert env.get("PI_CODING_AGENT_DIR") == str(pathlib.Path(d) / ".omp" / "agent")
+
+
+def test_omp_shares_pis_normaliser():
+    assert BACKENDS["omp"]["normalize"] is _pi_to_claude
+
+
+def test_an_openai_shape_turn_rides_the_loopback_relay_and_a_custom_endpoint_keeps_its_url():
+    d = tempfile.mkdtemp()
+    env = {"HOME": d}
+    _build_omp("tokenrouter", Auth(api_key="real", base_url="https://api.tokenrouter.com/v1"), "gpt-5.4", "do work", d, env)
+    cfg = json.loads((pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text())
+    assert cfg["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:")      # the relay, as pi
+    assert "real" not in (pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text()   # the key stays in the runner
+    d2 = tempfile.mkdtemp()
+    _build_omp("openai-api", Auth(api_key="sk-test", base_url="https://relay.example/v1", api_format="openai"), "gpt-5.4", "do work", d2, {"HOME": d2})
+    cfg2 = json.loads((pathlib.Path(d2) / ".omp" / "agent" / "models.yml").read_text())
+    assert cfg2["providers"]["hr"]["baseUrl"] == "https://relay.example/v1"
+
+
+def test_the_served_model_rides_the_result_and_a_substitution_fails_the_turn():
+    """omp names the model it ran on every assistant message (measured on 18.1.13). Richard's rule:
+    the models are honest, no fallback; a turn run on another model fails with the reason."""
+    ok = [{"type": "session", "id": "s"}, {"type": "message_end", "message": {"role": "assistant", "model": "gemini-3.8-flash", "provider": "hr",
+           "content": [{"type": "text", "text": "PONG"}], "usage": {"input": 5, "output": 1}, "stopReason": "stop"}}, {"type": "agent_end"}]
+    chunks, _ = _run_omp_events(ok, model="gemini-3.8-flash")
+    res = [e for e in _flat(chunks) if e.get("type") == "result"][0]
+    assert res["is_error"] is False and res["model"] == "gemini-3.8-flash" and res["result"] == "PONG"
+    swapped = [{"type": "session", "id": "s"}, {"type": "message_end", "message": {"role": "assistant", "model": "gemini-3.5-flash", "provider": "hr",
+                "content": [{"type": "text", "text": "PONG"}], "usage": {"input": 5, "output": 1}, "stopReason": "stop"}}, {"type": "agent_end"}]
+    chunks, _ = _run_omp_events(swapped, model="gemini-3.8-flash")
+    res = [e for e in _flat(chunks) if e.get("type") == "result"][0]
+    assert res["is_error"] is True and res["result"] == "the CLI ran gemini-3.5-flash instead of gemini-3.8-flash" and res["model"] == "gemini-3.5-flash"
 
 
 def test_omp_argv_custom_provider_writes_models_json():
