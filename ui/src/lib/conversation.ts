@@ -259,12 +259,14 @@ export function useHarnessBus(harnessId: string, onActivity?: () => void) {
  * Owns NO composer state on purpose. `send(text, files)` is given what to send, which is what lets
  * Tasks drive one of these from its own composer and Arena drive six from one shared composer.
  */
-export function useConversationTurn({ harnessId, sessionId, target, onRan, onSession, onSendStart, extraHeaders }: {
+export function useConversationTurn({ harnessId, sessionId, target, onRan, onSession, onSendStart, onMissing, extraHeaders }: {
   harnessId: string;
   sessionId: string | null;
   target: ChatTarget;
   onRan: () => void;
   onSession?: (sid: string) => void;
+  /** the task no longer exists (its feed answers 404, it was deleted): the thread must let go of it */
+  onMissing?: (sid: string) => void;
   /** Fired the instant a send is accepted, so a view can clear its composer. */
   onSendStart?: () => void;
   /** App-auth pass-through header values for this harness. */
@@ -321,7 +323,12 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     // Already loaded, idle, and has content → trust it (no refetch on every open).
     if (existing.loaded && !existing.busy && existing.msgs.length) return;
     setLoading(true);
-    loadSessionTurns(sessionId).then(({ turns, lastResponseId }) => {
+    loadSessionTurns(sessionId).then(({ turns, lastResponseId, missing }) => {
+      if (missing) {
+        // a deleted task: nothing to show and nothing to send to (a follow-up typed into one ran on
+        // the deleted session and billed, 2026-09-07); the page lets go of it
+        setLoading(false); onMissing?.(sessionId); return;
+      }
       const { msgs: m, running } = msgsFromTurns(turns);
       const cur = getConvState(convKey);
       if (!running) {
