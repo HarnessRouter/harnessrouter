@@ -5118,6 +5118,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-haiku-4.5":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     },
     "openai": {
+        "gpt-6-astra":   "gpt-6-astra",
         "gpt-5.6-sol":   "gpt-5.6-sol",
         "gpt-5.6-terra": "gpt-5.6-terra",
         "gpt-5.6-luna":  "gpt-5.6-luna",
@@ -5128,6 +5129,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex": "gpt-5.3-codex",
     },
     "azure-foundry": {
+        "gpt-6-astra":   "gpt-6-astra",
         "gpt-5.6-sol":   "gpt-5.6-sol",
         "gpt-5.6-terra": "gpt-5.6-terra",
         "gpt-5.6-luna":  "gpt-5.6-luna",
@@ -5138,6 +5140,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex": "gpt-5.3-codex",
     },
     "openrouter": {
+        "gpt-6-astra":        "openai/gpt-6-astra",
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
         "gpt-5.6-terra":      "openai/gpt-5.6-terra",
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
@@ -5246,6 +5249,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     # and reachable through openrouter, tokenrouter and vercel. Left alone here rather than
     # worked around in one vendor's table.
     "llmtr": {
+        "gpt-6-astra":        "openai/gpt-6-astra",
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
         "gpt-5.6-terra":      "openai/gpt-5.6-terra",
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
@@ -5437,8 +5441,18 @@ _MODEL_CATALOG: dict[str, dict] = {
     # Probe-verified against the live provider before listing (2026-07-19:
     # gpt-5.6 sol/terra/luna + gpt-5.2 deployed on the Azure resource and probed OK;
     # claude additions probed through the Bedrock path).
+    #
+    # gpt-6-astra (2026-09-07) sits with the gpt-5.6 line and for the same measured reason: called
+    # with function tools it answers on /v1/responses and is refused on /v1/chat/completions —
+    # "Function tools with reasoning_effort are not supported for gpt-6-astra in
+    # /v1/chat/completions" (OpenAI, direct call). So it is offered on the backends that can drive
+    # the Responses API (codex, hermes, pi, dsh, opencode, omp) and NOT on qwen or cline, which are
+    # chat-completions clients; listing it there would be a picker row that fails on send. Served
+    # by every provider we route to: openai and azure-foundry as `gpt-6-astra` (Azure model version
+    # 2026-09-03, GlobalStandard), openrouter, tokenrouter, vercel and llmtr as `openai/gpt-6-astra`
+    # (each provider's own /v1/models list, read the same day).
     "codex":  {"default": "gpt-5.4",
-               "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
                           # OpenAI's most capable agentic coding model, there is no 5.6-codex).
@@ -5455,7 +5469,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
     "hermes": {"default": "gpt-5.4",
-               "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
                           "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
@@ -5488,7 +5502,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # and the frontier set was probed per-model through the dsh driver (2026-08-20).
     "dsh": {"default": "deepseek-v4-pro",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash",
-                       "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                       "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -5503,7 +5517,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
     "opencode": {"default": "gpt-5.4",
-                 "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                 "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -5551,7 +5565,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
     "pi": {"default": "gpt-5.4",
-           "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+           "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",

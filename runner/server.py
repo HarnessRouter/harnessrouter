@@ -2133,7 +2133,11 @@ HERMES_PROVIDERS = {"anthropic", "bedrock", "azure-foundry", "openrouter", "open
 #
 # Matched against the provider-native id, which may be bare (gpt-5.6-sol) or vendor-qualified
 # (openai/gpt-5.6-sol) depending on the integration.
-_HERMES_RESPONSES_API_MODEL = re.compile(r"(?:^|/)(?:gpt-5|o[1-4])|codex", re.I)
+# gpt-6-astra answers function tools on /v1/responses and is refused on /v1/chat/completions with
+# the same sentence the gpt-5.x line gives, so the family test is the major version, not the 5
+# (measured against OpenAI directly, 2026-09-07). Written as a range so the next line lands
+# routed rather than 400-ing on its first turn.
+_HERMES_RESPONSES_API_MODEL = re.compile(r"(?:^|/)(?:gpt-(?:[5-9]|\d{2,})|o[1-4])|codex", re.I)
 
 
 def _hermes_api_mode(provider: str, model: str) -> str | None:
