@@ -64,7 +64,7 @@ must be emptied). Measured on the pinned 0.58.0 with those settings, all eleven 
 And a turn the CLI ran on another model than the one asked for now fails with the reason on the
 record ("the CLI ran X instead of Y"), never completes: the matrix's served-model rule, enforced for
 the user. The backend lists all eleven; the instance column on 0.14.0 with the served-model rule as
-judge is below.
+judge is below. The backend's default is gemini-3.8-flash, the newest flash, since 0.14.1.
 
 ## The Gemini family, one provider at a time (2026-09-06)
 
