@@ -2985,6 +2985,17 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
 # of this set until the gateway side decides how (or whether) to broker it; see the gateway's
 # _BROKERABLE_PROVIDERS comment for bedrock/vertex.
 GEMINI_PROVIDERS = {"google"}
+# gemini-cli 0.58.0's model-config aliases that carry a model of their own (alias -> parent). Read
+# off the CLI's DEFAULT_MODEL_CONFIGS table; a CLI bump re-reads it. The chat-model aliases
+# (gemini-2.5-pro, ...) are not here: a turn runs its chat model through the id resolutions.
+GEMINI_HELPER_ALIASES = {
+    "gemini-2.5-flash-base": "base", "gemini-3-flash-base": "base", "gemini-3.5-flash-base": "base",
+    "prompt-completion": "base", "fast-ack-helper": "base", "edit-corrector": "base",
+    "summarizer-default": "base", "summarizer-shell": "base", "loop-detection-double-check": "base",
+    "chat-compression-3-pro": "", "chat-compression-3-flash": "", "chat-compression-3.1-flash-lite": "",
+    "chat-compression-2.5-pro": "", "chat-compression-2.5-flash": "", "chat-compression-2.5-flash-lite": "",
+    "chat-compression-default": "", "agent-history-provider-summarizer": "",
+}
 # Every Gemini id the gateway's gemini catalog lists. gemini-cli's resolver rewrites ids on the
 # API-key auth path (every "-flash" id to gemini-3.5-flash, 3.1-pro-preview to its customtools
 # variant, and by context in its default resolution table); with dynamicModelConfiguration on, -m
@@ -3044,6 +3055,17 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
     own = [{"model": model or GEMINI_DEFAULT_MODEL, "isLastResort": True, "maxAttempts": 3,
             "actions": {"terminal": "prompt", "transient": "prompt", "not_found": "prompt", "unknown": "prompt"},
             "stateTransitions": {"terminal": "terminal", "transient": "sticky_retry", "not_found": "terminal", "unknown": "sticky_retry"}}]
+    turn_model = model or GEMINI_DEFAULT_MODEL
+    # The tiers cover the classifier only. The CLI's other helpers (edit correction, the shell and
+    # tool summarizers, the next-speaker and loop checks, web fetch, chat compression, the history
+    # summarizer) are model-config ALIASES whose model is written into the alias table itself
+    # ("gemini-3-flash-base" is gemini-3-flash-preview, "edit-corrector" is flash-lite, ...), and
+    # an alias's model is never passed through the id resolutions. A one-pager build on
+    # gemini-3.8-flash made three such calls on gemini-3-flash-preview and failed as a
+    # substitution (hosted, 2026-09-07 04:58Z). Custom aliases replace the table's entries by
+    # name, so every alias that names a model is rewritten to the turn's model, its parent kept.
+    aliases = {name: ({"extends": parent} if parent else {}) | {"modelConfig": {"model": turn_model}}
+               for name, parent in GEMINI_HELPER_ALIASES.items()}
     cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}},
                  # the ids are honest: -m resolves through this table, and each entry pins an id to itself
                  "experimental": {"dynamicModelConfiguration": True},
@@ -3054,7 +3076,8 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
                  # "gemini-3-flash-preview" too and failed as a substitution (2026-09-07, both trees).
                  # Every model the CLI calls in a turn is the one asked for: both tiers pin to it.
                  "modelConfigs": {"modelIdResolutions": {m: {"default": m, "contexts": []} for m in pinned},
-                                  "classifierIdResolutions": {t: {"default": model or GEMINI_DEFAULT_MODEL, "contexts": []} for t in ("flash", "pro")},
+                                  "classifierIdResolutions": {t: {"default": turn_model, "contexts": []} for t in ("flash", "pro")},
+                                  "customAliases": aliases,
                                   "modelChains": {k: own for k in ("preview", "default", "lite", "auto-preview", "auto-default")}}}
     if servers:
         cfg["mcpServers"] = servers
