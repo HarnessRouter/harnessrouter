@@ -126,7 +126,19 @@ try {
           const a = await turn(`Create a file named hello-${h}.txt containing exactly the word HELLO, then reply DONE.`, { expectFiles: true });
           // the file cards render from the settled read, a moment after the answer
           let fl = await files(); for (let i = 0; i < 10 && fl.length < (a.turn_files || []).length; i++) { await sleep(1500); fl = await files(); }
-          rec.artifact = { ...a, files: fl, ok: a.ok && fl.some((f) => f.includes(`hello-${h}.txt`)), why: a.ok && !fl.some((f) => f.includes(`hello-${h}.txt`)) ? `no file card (files: ${fl.join(',') || 'none'}); ${a.tail.slice(-160)}` : a.why };
+          // The cards the page renders must BE what the turn stored: the same names, the same count.
+          // Asking only whether SOME card carried the name let a file rendered twice pass as a produced
+          // artifact for months; the console showed two cards for one file until a reload (2026-09-07).
+          // A harness that produces files is measured on both halves, the record and what the reader sees.
+          const named = fl.some((f) => f.includes(`hello-${h}.txt`));
+          const want = (a.turn_files || []).slice().sort(), got = fl.slice().sort();
+          const agrees = want.length === got.length && want.every((w, i) => got[i].includes(w) || w.includes(got[i]));
+          rec.artifact = { ...a, files: fl, record_files: a.turn_files, cards_agree: agrees,
+            ok: a.ok && named && agrees,
+            why: !a.ok ? a.why
+               : !named ? `no file card (files: ${fl.join(',') || 'none'}); ${a.tail.slice(-160)}`
+               : !agrees ? `the cards do not match the record: cards [${fl.join(',') || 'none'}] vs record [${want.join(',') || 'none'}]`
+               : a.why };
           log(`ARTIFACT ${k} ${rec.artifact.ok ? 'ok' : 'FAIL'} ${rec.artifact.s}s ${rec.artifact.why}`);
           // the sandbox is let go on purpose (what the pool does between visits) and the next turn must
           // carry on from the durable checkpoint: the history, the files, the resume id
