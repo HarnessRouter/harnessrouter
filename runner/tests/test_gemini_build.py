@@ -8,8 +8,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import (Auth, _agent_doc_path, _build_gemini, _gemini_to_claude,  # noqa: E402
-                    _gemini_usage, _norm_token_usage, BACKENDS, GEMINI_MODELS)
+from server import (Auth, _agent_doc_path, _build_gemini, _gemini_settings, _gemini_to_claude,  # noqa: E402
+                    _gemini_usage, _norm_token_usage, BACKENDS, GEMINI_HELPER_ALIASES, GEMINI_MODELS, _HERMES_RELAY)
 
 
 def _argv(**kw):
@@ -252,3 +252,51 @@ def test_a_failed_result_never_reads_as_the_answer_and_a_substitution_names_the_
     both = _gemini_to_claude({"type": "result", "status": "error", "stats": {**st, "models": {"gemini-3.8-flash": {}, "gemini-3-flash-preview": {}}},
                               "error": {"type": "unknown", "message": "[API Error: quota]"}}, {"model": "gemini-3.8-flash", "final": "I built the deck."})
     assert both[0]["result"] == "the CLI ran gemini-3-flash-preview instead of gemini-3.8-flash (the CLI ended with unknown: [API Error: quota])"
+
+
+def test_a_tokenrouter_connection_points_the_cli_at_the_relay_which_names_the_model_and_carries_the_key():
+    """TokenRouter serves Google's native API under its own name for the model (models/google/<id>:,
+    the key in x-goog-api-key; measured 2026-09-07). The CLI asks for the canonical id, which its
+    tables and the served-model check key by; the relay names it for the provider on the path."""
+    d = tempfile.mkdtemp(); env: dict = {}
+    _build_gemini("google", Auth(api_key="tr-real", base_url="https://api.tokenrouter.com/v1"), "gemini-3.8-flash", "hi", d, env, native_model="google/gemini-3.8-flash")
+    assert env["GOOGLE_GEMINI_BASE_URL"].startswith("http://127.0.0.1:") and env["GOOGLE_GEMINI_BASE_URL"].endswith("/v1")
+    assert env["GEMINI_API_KEY"] != "tr-real"
+    base, key, flags = _HERMES_RELAY["routes"][env["GEMINI_API_KEY"]]
+    assert base == "https://api.tokenrouter.com" and key == "tr-real"
+    assert flags == {"google_native": True, "model": "gemini-3.8-flash", "native_model": "google/gemini-3.8-flash"}
+    cfg = json.loads(pathlib.Path(d, ".harness", "home", ".gemini", "settings.json").read_text())
+    assert cfg["modelConfigs"]["modelIdResolutions"]["gemini-3.8-flash"] == {"default": "gemini-3.8-flash", "contexts": []}
+    d2 = tempfile.mkdtemp(); env2: dict = {}
+    _build_gemini("google", Auth(api_key="AIza-t", base_url="https://generativelanguage.googleapis.com/v1beta/openai"), "gemini-3.8-flash", "hi", d2, env2)
+    assert "GOOGLE_GEMINI_BASE_URL" not in env2 and env2["GEMINI_API_KEY"] == "AIza-t"      # Google direct, as before
+
+
+def test_the_helper_model_tiers_are_the_turns_own_model():
+    """The CLI's routing, plan, compression and loop checks use its flash or pro classifier tier; a
+    turn's stats then name that helper model too, which read as a substitution (2026-09-07)."""
+    _, d, _ = _argv()
+    cls = json.loads(pathlib.Path(d, ".harness", "home", ".gemini", "settings.json").read_text())["modelConfigs"]["classifierIdResolutions"]
+    assert cls == {"flash": {"default": "gemini-3.6-flash", "contexts": []}, "pro": {"default": "gemini-3.6-flash", "contexts": []}}
+    # a helper model that still shows beside the answer model is a substitution, and fails the turn
+    stats = {"input_tokens": 10, "output_tokens": 2, "cached": 0, "models": {"gemini-3.8-flash": {}, "gemini-3-flash-preview": {}}}
+    out = _gemini_to_claude({"type": "result", "status": "success", "stats": stats}, {"model": "gemini-3.8-flash", "final": "done"})
+    assert out[0]["is_error"] is True and out[0]["result"] == "the CLI ran gemini-3-flash-preview instead of gemini-3.8-flash"
+
+
+def test_every_helper_alias_of_the_cli_runs_on_the_turns_model(tmp_path):
+    """The CLI's helper aliases name their model in the alias table (gemini-3-flash-base is
+    gemini-3-flash-preview, edit-corrector is flash-lite) and bypass the id resolutions; a turn on
+    gemini-3.8-flash made three helper calls on gemini-3-flash-preview (2026-09-07). Every one is
+    rewritten to the turn's model with its parent kept."""
+    _gemini_settings(tmp_path, [], "gemini-3.8-flash")
+    cfg = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
+    custom = cfg["modelConfigs"]["customAliases"]
+    assert set(custom) == set(GEMINI_HELPER_ALIASES)
+    for name, parent in GEMINI_HELPER_ALIASES.items():
+        assert custom[name]["modelConfig"] == {"model": "gemini-3.8-flash"}
+        assert custom[name].get("extends") == (parent or None)
+    for must in ("gemini-3-flash-base", "edit-corrector", "chat-compression-3-flash", "agent-history-provider-summarizer",
+                 "summarizer-shell", "loop-detection-double-check", "classifier"):
+        assert must in custom
+    assert len(custom) == 18

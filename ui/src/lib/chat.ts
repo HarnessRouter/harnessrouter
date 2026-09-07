@@ -103,9 +103,10 @@ export interface SessionTurn {
 /** Load a past session's conversation (user + assistant per turn) to show its chat history.
  *  Bounded to the last 200 turns, far beyond any real session, but it keeps a pathological
  *  long-horizon history from fanning out hundreds of storage reads on every open. */
-export async function loadSessionTurns(sid: string): Promise<{ turns: SessionTurn[]; lastResponseId: string | null }> {
+export async function loadSessionTurns(sid: string): Promise<{ turns: SessionTurn[]; lastResponseId: string | null; missing?: boolean }> {
   const res = await harnessFetch(`${BASE}/v1/sessions/${encodeURIComponent(sid)}/turns?limit=200`, { headers: authHeaders() });
-  if (!res.ok) return { turns: [], lastResponseId: null };
+  // 404 is a task that no longer exists (deleted): the caller must not keep a composer on it
+  if (!res.ok) return { turns: [], lastResponseId: null, missing: res.status === 404 };
   const d = await res.json();
   return { turns: d.turns || [], lastResponseId: d.last_response_id || null };
 }
