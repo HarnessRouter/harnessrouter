@@ -364,7 +364,7 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
-GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.6-flash")
+GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
@@ -3153,10 +3153,21 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
             continue
         servers[name] = entry
     pinned = sorted(set(GEMINI_MODELS) | ({model} if model else set()))
+    # No fallback either: on a quota or transient error gemini-cli's fallback handler picks the next
+    # policy of the model's chain (its default preview chain ends in gemini-3-flash-preview as the
+    # last resort), and in headless mode that switch is silent; a 5-minute turn on gemini-3.8-flash
+    # finished its work on gemini-3-flash-preview that way (2026-09-07 02:10Z). Every chain the CLI
+    # can resolve for this turn is one policy, the turn's own model: with no other candidate the
+    # handler has nothing to switch to and the provider's error ends the turn, honestly. Retries
+    # stay on the same model (sticky_retry on transient and unknown failures).
+    own = [{"model": model or GEMINI_DEFAULT_MODEL, "isLastResort": True, "maxAttempts": 3,
+            "actions": {"terminal": "prompt", "transient": "prompt", "not_found": "prompt", "unknown": "prompt"},
+            "stateTransitions": {"terminal": "terminal", "transient": "sticky_retry", "not_found": "terminal", "unknown": "sticky_retry"}}]
     cfg: dict = {"security": {"auth": {"selectedType": "gemini-api-key"}},
                  # the ids are honest: -m resolves through this table, and each entry pins an id to itself
                  "experimental": {"dynamicModelConfiguration": True},
-                 "modelConfigs": {"modelIdResolutions": {m: {"default": m, "contexts": []} for m in pinned}}}
+                 "modelConfigs": {"modelIdResolutions": {m: {"default": m, "contexts": []} for m in pinned},
+                                  "modelChains": {k: own for k in ("preview", "default", "lite", "auto-preview", "auto-default")}}}
     if servers:
         cfg["mcpServers"] = servers
     (gdir / "settings.json").write_text(json.dumps(cfg, indent=2))
@@ -3791,9 +3802,15 @@ def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
         # completed. The settings pin every id to itself; this is the check that they held.
         requested = str(state.get("model") or "")
         other = [m for m in served.split(",") if m and requested and m != requested]
-        if other and not err:
-            err = {"type": "model_substituted", "message": f"the CLI ran {', '.join(other)} instead of {requested}"}
+        if other:
+            # the substitution is the more specific cause; the CLI's own error, when it says one, rides along
+            tail = f" (the CLI ended with {err.get('type') or 'an error'}: {err.get('message')})" if err and err.get("message") else ""
+            err = {"type": "model_substituted", "message": f"the CLI ran {', '.join(other)} instead of {requested}{tail}"}
             msg = err["message"]
+        elif err and not msg:
+            # an error without a message: name its type, never the answer text (a failed turn whose
+            # reason read as the finished answer, 2026-09-07)
+            msg = f"the CLI ended the turn with an error ({err.get('type') or 'unknown'})"
         ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
               "result": msg or state.get("final", ""), "usage": _gemini_usage(stats)}
         if served:
