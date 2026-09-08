@@ -7,6 +7,15 @@ standard for how products work with agent harnesses, and this repository, a work
 of it. Both take contributions — the specification, the conformance suite, harness support, the
 implementation, and the documentation.
 
+## Verifying a harness
+
+A harness that answers is not a harness that works. Before a change to harness support ships, it is
+measured: five scenarios per harness and model, plus a custom harness carrying its own skill and
+tool policy, judged by rules that are enforced in code rather than by eye.
+[docs/harness-verification.md](docs/harness-verification.md) says what must be proven, how each
+claim is measured, and where the rule lives. Read it before adding a harness or changing how one
+routes, and check a change against it rather than against a green turn.
+
 ## Where things go
 
 - Proposals and bug reports: GitHub Issues.
