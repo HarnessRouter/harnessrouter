@@ -2,6 +2,12 @@
 
 **An open standard for running complete agent harnesses as shared infrastructure.**
 
+UHP provides a universal translation layer that connects agent harnesses with applications and the modules surrounding each harness, standardizing the harness-to-application interface and unifying how skills, tools, models, context, permissions, environments, sessions, files, and artifacts connect to each harness. 
+
+<img width="1254" height="1254" alt="image" src="https://github.com/user-attachments/assets/31fb595a-c3af-4996-82f1-982d8b1bbb38" />
+
+Integrate once, and UHP-compatible modules, harnesses, and applications can communicate through the same shared contract. Released under the Apache 2.0 license, UHP can be freely implemented, extended, and built upon. **With UHP, agent harnesses and their surrounding modules can become true plug-ins: portable, interchangeable, and reusable across applications through one unified interface.**
+
 A *harness* is a complete agent runtime — a loop that plans, calls tools, edits files, and reports
 back. Codex, Claude Code and Hermes are harnesses. Each one already knows how to do the work; what
 none of them agree on is how a product should *drive* one: how to start a task, follow its
@@ -14,7 +20,11 @@ Today every product answers those questions again, per harness. UHP answers them
    your product ──▶ UHP ──▶ ┌── Codex
                             ├── Claude Code
                             ├── Hermes
-                            └── the harness that ships next year
+                            ├── DeepSeek Harness
+                            ├── Gemini CLI
+                            ├── Pi
+                            ├── ...
+                            └── the harness that ships next
 ```
 
 UHP is not a model API and does not replace one. Model APIs give you a *turn*: messages in, tokens
@@ -130,3 +140,6 @@ conformance suite move together.
 
 For the story behind the name, the alternatives weighed and why *Unified* won the letters UHP, see
 [Background: the naming of UHP](naming).
+
+## Official website:
+[unifiedharnessprotocol.org](https://unifiedharnessprotocol.org/)
