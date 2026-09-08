@@ -180,6 +180,20 @@ scenario counts stand as measured, and none of them is evidence either way about
 duplicate itself is fixed in 0.15.1, verified on the release across gemini, cline, qwen, dsh, opencode
 and omp: one stored file, one rendered card in each.
 
+## dsh on the 0.1.2rc1 runtime (2026-09-08)
+
+The pin moved from 0.1.0rc7 to 0.1.2rc1 because rc7's runtime does not carry the MCP client at all
+(zero `dsh-mcp-client` strings in its binary), which is why the custom-harness dimension found dsh never
+calling a configured server. The new runtime composes an `sdk` profile that the driver overlays with a
+`--patch` file: the stock JSON-RPC server row disabled and the resume-or-create server inserted (a patch
+cannot rename a row), one `dsh-mcp-client` row per server, and the pi-ai route merged into the stock
+`llm-pi-ai` row. Measured locally through the real driver against TokenRouter with
+`deepseek/deepseek-v4-flash`: `mcp__deepwiki__read_wiki_structure` called and answered in 10 s, a second
+process resumed a session and recalled its codeword, and a bash call carried its name through the relay.
+The sdk profile also offers more tools than rc7 did (glob, grep, str_replace_editor, web_search,
+web_fetch, skill, subagent_fork, workflow); the catalog lists them. Every dsh column before this date
+was judged on rc7.
+
 ### dsh columns on 0.15.6-rc.3 (2026-09-08)
 
 The full dsh column on the 0.1.2rc1 runtime with the final composition (no sandboxing executor):

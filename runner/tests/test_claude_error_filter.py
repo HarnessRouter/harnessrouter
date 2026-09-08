@@ -50,7 +50,36 @@ def test_result_and_other_events_pass_through():
 
 
 def test_non_error_text_that_merely_mentions_api_error_is_kept():
-    # The guard anchors on a leading "API Error: <3-digit code>" — prose that happens to discuss
-    # errors must not be stripped.
+    # The guard anchors on a leading "API Error:" — prose that happens to discuss errors must not
+    # be stripped.
     ev = _asst("To handle an API error, catch the 400 status and retry.")
     assert rn._claude_passthrough(ev, {}) == [ev]
+
+
+def test_a_turn_whose_only_answer_is_the_clis_error_line_fails_with_that_reason():
+    """Qwen Code, hosted, claude-opus-5 (2026-09-08): Opus 5's safeguards refused the turn, the
+    CLI wrote "[API Error: Model stream ended with empty response text.]" and the turn completed
+    with that as its reply. Claude Code writes the same line without a status code."""
+    state = {}
+    ev = _asst("[API Error: Model stream ended with empty response text.]")
+    assert rn._claude_passthrough(ev, state) == []
+    res = {"type": "result", "subtype": "success", "result": "", "is_error": False}
+    out = rn._claude_passthrough(res, state)
+    assert out == [{"type": "result", "subtype": "error", "result": "API Error: Model stream ended with empty response text.", "is_error": True}]
+    # batch mode: the CLI's result carries the line itself
+    out = rn._claude_passthrough({"type": "result", "subtype": "success", "result": "[API Error: Model stream ended with empty response text.]", "is_error": False}, {})
+    assert out[0]["is_error"] is True and out[0]["result"] == "API Error: Model stream ended with empty response text."
+    # Claude Code's own account of a refusal, no code, and an error result without a message
+    state = {}
+    rn._claude_passthrough(_asst("API Error: Opus 5's safeguards flagged this message. Claude Code can't respond to this message with Opus 5."), state)
+    out = rn._claude_passthrough({"type": "result", "subtype": "error", "result": "", "is_error": True}, state)
+    assert out[0]["result"].startswith("API Error: Opus 5's safeguards flagged this message")
+
+
+def test_a_real_answer_after_a_retried_error_keeps_the_answer():
+    state = {"partial": True}
+    rn._claude_passthrough(_asst("API Error: 429 rate limited"), state)
+    delta = {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}}
+    rn._claude_passthrough(delta, state)
+    out = rn._claude_passthrough({"type": "result", "subtype": "success", "result": "", "is_error": False}, state)
+    assert out == [{"type": "result", "subtype": "success", "result": "Hello", "is_error": False}]

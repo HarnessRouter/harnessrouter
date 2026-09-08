@@ -4,7 +4,9 @@
 
 UHP provides a universal translation layer that connects agent harnesses with applications and the modules surrounding each harness, standardizing the harness-to-application interface and unifying how skills, tools, models, context, permissions, environments, sessions, files, and artifacts connect to each harness. 
 
-<img width="1254" height="1254" alt="image" src="https://github.com/user-attachments/assets/31fb595a-c3af-4996-82f1-982d8b1bbb38" />
+<p align="center">
+  <img src="./assets/uhp-overview.gif" width="640" alt="UHP connects applications, agent harnesses, and surrounding modules through one unified interface.">
+</p>
 
 Integrate once, and UHP-compatible modules, harnesses, and applications can communicate through the same shared contract. Released under the Apache 2.0 license, UHP can be freely implemented, extended, and built upon. **With UHP, agent harnesses and their surrounding modules can become true plug-ins: portable, interchangeable, and reusable across applications through one unified interface.**
 

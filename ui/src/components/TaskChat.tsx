@@ -6,7 +6,7 @@ import { SkelListItems, SkelPage } from '@/components/Skel';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Mermaid } from '@/components/Mermaid';
-import { OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, saveCustom, listCustom, getSkillFiles, storeMcpSecret, testMcp, type CustomHarness, type OobHarness } from '@/lib/harness';
+import { OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, saveCustom, listCustom, getSkillFiles, storeMcpSecret, testMcp, type CustomHarness, type OobHarness } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { streamResponse, subscribeHarnessEvents, containerFileUrl, downloadFile, loadSessionTurns, cancelSession, authHeaders, type RespFile, type SessionTurn } from '@/lib/chat';
 import { appendWorkspaceQuery, getCurrentWorkspaceRef } from '@/lib/workspace';
@@ -409,7 +409,7 @@ function ModelSelect({ models, value, onChange, backend }: {
       <select className="wbx-select full" value={value} onChange={(e) => onChange(e.target.value)}>
         {models.map((m) => (
           <option key={m} value={m} disabled={!modelAvailable(backend, m)}>
-            {m}{modelAvailable(backend, m) ? '' : ' (no provider)'}
+            {m}{availabilityNote(modelAvailability(backend, m)) ? ` (${availabilityNote(modelAvailability(backend, m))})` : ''}
           </option>
         ))}
       </select>
@@ -673,11 +673,11 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
         <div className="wbx-model-head">Model for this task</div>
         <div role="listbox" aria-label="Model for this task" className="uic-pop-list">
           {models.map((m) => {
-            const ok = modelAvailable(target.backend, m);
+            const state = modelAvailability(target.backend, m); const ok = state === 'yes';
             return (
               <button key={m} type="button" role="option" aria-selected={m === target.model} className={'wbx-model-opt' + (m === target.model ? ' is-on' : '')} disabled={!ok}
                 onClick={() => { onModel(m); setModelOpen(false); }}>
-                <span>{m}</span>{!ok && <span className="wbx-model-meta">no provider</span>}
+                <span>{m}</span>{!ok && <span className="wbx-model-meta">{availabilityNote(state)}</span>}
               </button>
             );
           })}

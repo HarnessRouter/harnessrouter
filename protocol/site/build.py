@@ -348,6 +348,7 @@ article p{margin:0 0 16px;color:var(--ink)}
 article ul,article ol{margin:0 0 16px;padding-left:22px}
 article li{margin:5px 0}
 article strong{font-weight:640}
+article img{max-width:100%;height:auto}
 
 code{font-family:var(--mono);font-size:.875em;background:var(--subtle);
   border:1px solid var(--line);border-radius:5px;padding:1px 5px}
@@ -1031,6 +1032,11 @@ def build() -> int:
     # so the checker sees the files the <img>/<link> tags reference.
     if (HERE / "assets").is_dir():
         shutil.copytree(HERE / "assets", DIST / "assets")
+
+    # Documentation assets live beside the protocol source so README links render identically on
+    # GitHub and on the generated site. Merge them after the site's brand assets, preserving both.
+    if (ROOT / "assets").is_dir():
+        shutil.copytree(ROOT / "assets", DIST / "assets", dirs_exist_ok=True)
 
     # Last: every link in the finished site must resolve. Runs after schema is in place so links
     # to the machine-readable files are checked against the files that actually shipped.
