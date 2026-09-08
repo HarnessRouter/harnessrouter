@@ -14,7 +14,7 @@ import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 
 const BASE = process.env.BASE;
-const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,omp').split(',');
+const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,qwen,gemini,cline,omp').split(',');   // every built-in harness, all ten
 const RESULTS = process.env.RESULTS || 'results-custom.json';
 // A harness's other kind of tool is an MCP server. A self-contained instance hosts only the
 // database and media servers, one needing a database and the other costing real money per call, so
