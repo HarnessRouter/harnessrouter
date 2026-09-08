@@ -179,3 +179,16 @@ Every column in the tables above was measured before that change and was judged 
 scenario counts stand as measured, and none of them is evidence either way about duplicate cards. The
 duplicate itself is fixed in 0.15.1, verified on the release across gemini, cline, qwen, dsh, opencode
 and omp: one stored file, one rendered card in each.
+
+### dsh columns on 0.15.6-rc.3 (2026-09-08)
+
+The full dsh column on the 0.1.2rc1 runtime with the final composition (no sandboxing executor):
+Vercel 189/189 (two one-off misses passed on retest), TokenRouter 169/169, Anthropic 40/40, OpenAI 44/44,
+Azure OpenAI E2 44/44, Google 55/55. OpenRouter is a partial: the shared account ran dry that morning, so only
+the first cheap pairs were measured (deepseek-v4-pro, deepseek-v4-flash, gpt-5.6-sol, gpt-5.6-terra, all five
+scenarios) and gpt-6-astra was refused 402 before anything ran; the column is not a finding and reruns after a
+top-up. Two earlier candidates on the same runtime were rejected by their own columns: rc.1's profile sandbox
+refused every bash command on the container (no bubblewrap, no Landlock), and rc.2's still-mounted sandboxing
+executor advertised `sandbox_permissions` and `justification` on every file tool, which GPT models filled on
+every write and the runtime then refused (five artifact misses on the Vercel column). The custom-harness
+dimension on the same candidate: ten of ten bases, MCP called on each.

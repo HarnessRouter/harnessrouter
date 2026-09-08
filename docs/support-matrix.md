@@ -183,6 +183,171 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 
 55 pairs, 267 of 271 scenario runs passed.
 
+## Provider: dsh-anthropic
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| dsh | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| dsh | claude-fable-5-1 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| dsh | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| dsh | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| dsh | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| dsh | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic |  |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| dsh | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+
+8 pairs, 40 of 40 scenario runs passed.
+
+## Provider: dsh-azure-e2
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| dsh | gpt-5.2 | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-6-astra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+
+9 pairs, 44 of 44 scenario runs passed.
+
+## Provider: dsh-google
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| dsh | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+
+11 pairs, 55 of 55 scenario runs passed.
+
+## Provider: dsh-openai
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| dsh | gpt-5.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | OpenAI |  |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| dsh | gpt-6-astra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+
+9 pairs, 44 of 44 scenario runs passed.
+
+## Provider: dsh-openrouter
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | OpenRouter |  |
+| dsh | gpt-5.5 | FAIL | n/a | n/a | n/a | n/a | OpenRouter | first: [{"connection": "integration:OpenRouter", "status": "failed", "error": "OpenAI API error (402): {\"message\":\"This request requires more cr |
+| dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gpt-6-astra | FAIL | n/a | n/a | n/a | n/a | OpenRouter | first: [{"connection": "integration:OpenRouter", "status": "failed", "error": "OpenAI API error (402): {\"message\":\"This request requires more cr |
+
+7 pairs, 25 of 27 scenario runs passed.
+
+## Provider: dsh-tokenrouter
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-fable-5-1 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-opus-4.7 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-opus-4.8 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-opus-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-sonnet-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | My TokenRouter |  |
+| dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gemini-3.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gemini-3.6-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gemini-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gemini-3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | glm-5.3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | glm-5.3-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.2 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.4 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | gpt-6-astra | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+
+34 pairs, 169 of 169 scenario runs passed.
+
+## Provider: dsh-vercel
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-fable-5-1 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-opus-4.7 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-opus-4.8 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-opus-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-sonnet-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-2.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-2.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-2.5-pro | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3.1-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3.6-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gemini-3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | glm-5.3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | glm-5.3-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.2 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.4 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | gpt-6-astra | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+
+38 pairs, 189 of 189 scenario runs passed.
+
 ## Provider: gemini-cli
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
