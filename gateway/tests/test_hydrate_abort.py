@@ -90,3 +90,58 @@ def test_recycle_refuses_when_the_restore_failed(monkeypatch):
     with pytest.raises(gw.HTTPException) as e:
         asyncio.run(gw.recycle_session_sandbox("hsessx"))
     assert e.value.status_code == 502 and "restore failed" in str(e.value.detail)
+
+
+def test_a_relay_that_raises_is_tried_again_on_the_same_ladder_and_names_its_cause(monkeypatch):
+    """Twelve restores in two minutes raised while the pool refused allocations (hosted, 2026-09-08
+    08:10Z): each was recorded as "unknown" and none was asked again. The restore is idempotent."""
+    import httpx
+    calls = []
+    async def relay(sid, params):
+        calls.append(sid)
+        if len(calls) < 3:
+            raise httpx.ReadError("")
+        return _R(200)
+    async def vertex(sid):
+        return {"ws_sha": "abc123"}
+    async def sleep(s):
+        pass
+    monkeypatch.setattr(gw, "_hydrate_relay", relay)
+    monkeypatch.setattr(gw, "_vertex_get", vertex)
+    monkeypatch.setattr(gw, "COLLAB_URL", "")
+    monkeypatch.setattr(gw.asyncio, "sleep", sleep)
+    rec = {}
+    asyncio.run(gw._hydrate("hsessx", rec, force=True))
+    assert len(calls) == 3 and rec["hydrated"] is True and not rec.get("hydrate_failed_with_checkpoint")
+
+    calls.clear()
+    async def always(sid, params):
+        calls.append(sid)
+        raise httpx.ReadError("")
+    monkeypatch.setattr(gw, "_hydrate_relay", always)
+    rec = {}
+    asyncio.run(gw._hydrate("hsessx", rec, force=True))
+    assert len(calls) == 7 and rec["hydrated"] is False and rec.get("hydrate_failed_with_checkpoint")
+    assert rec["hydrate_error"] == "ReadError"                    # the class, never "unknown"
+    assert gw._hydrate_reason(rec) == "ReadError"
+
+
+def test_a_raise_without_a_checkpoint_is_not_retried_and_a_pool_refusal_reads_as_busy(monkeypatch):
+    calls = []
+    async def relay(sid, params):
+        calls.append(sid)
+        raise RuntimeError("hydrate blob GET failed: HTTP 503")
+    async def vertex(sid):
+        return {}
+    async def sleep(s):
+        pass
+    monkeypatch.setattr(gw, "_hydrate_relay", relay)
+    monkeypatch.setattr(gw, "_vertex_get", vertex)
+    monkeypatch.setattr(gw, "COLLAB_URL", "")
+    monkeypatch.setattr(gw.asyncio, "sleep", sleep)
+    rec = {}
+    asyncio.run(gw._hydrate("hsessx", rec, force=True))
+    assert len(calls) == 1 and rec["hydrated"] is False and not rec.get("hydrate_failed_with_checkpoint")
+    assert rec["hydrate_error"] == "RuntimeError: hydrate blob GET failed: HTTP 503"
+    assert gw._hydrate_reason({"hydrate_error": "HTTP 429 Error happened when allocating pod for identifier x in pool y"}) \
+        == "the sandbox could not be started right now (busy); try again in a minute"

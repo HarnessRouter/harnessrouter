@@ -5,7 +5,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import (  # noqa: E402
+from server import (_same_model,   # noqa: E402
     _agent_doc_path,
     _build_omp,
     _pi_to_claude,
@@ -141,6 +141,28 @@ def test_omp_all_tools_disabled_passes_no_tools():
     all_tools = ["bash", "read", "write", "edit", "glob", "grep", "lsp", "python", "todo", "task", "browser", "web_search"]
     cmd = _build_omp("openai", auth, "gpt-5.4", "do task", d, env, tools_disabled=all_tools)
     assert "--no-tools" in cmd
+
+
+def test_the_omp_tool_list_is_what_the_pinned_build_accepts():
+    """Read off omp 18.1.13 by probing each name on --tools (2026-09-08): "python" and "browser"
+    were in this list and are not tools of that build, so every harness that disabled ANY tool sent
+    an allowlist omp refused ("Unknown tool in --tools") and every one of its turns died."""
+    from server import ALL_OMP_TOOLS
+    assert ALL_OMP_TOOLS == {"bash", "read", "write", "edit", "glob", "grep", "lsp", "todo", "task", "web_search"}
+    assert "python" not in ALL_OMP_TOOLS and "browser" not in ALL_OMP_TOOLS
+
+
+def test_a_disable_list_that_names_none_of_omps_tools_sends_no_allowlist():
+    """A name from another runtime ("WebSearch", say) removes nothing, so nothing is sent: an
+    allowlist is only a constraint when it removes something, and sending one for nothing is what
+    put a refused name in front of omp."""
+    d = tempfile.mkdtemp()
+    env = {"HOME": d}
+    auth = Auth(api_key="sk-test")
+    cmd = _build_omp("openai", auth, "gpt-5.4", "do task", d, env, tools_disabled=["WebSearch", "Grep (inherited)"])
+    assert not [x for x in cmd if x.startswith("--tools=")] or "grep" not in cmd[[i for i, x in enumerate(cmd) if x.startswith("--tools=")][0]]
+    cmd2 = _build_omp("openai", auth, "gpt-5.4", "do task", d, env, tools_disabled=["WebSearch"])
+    assert not [x for x in cmd2 if x.startswith("--tools=")] and "--no-tools" not in cmd2
 
 
 def test_omp_mcp_config_written():
@@ -353,3 +375,35 @@ def test_omp_turn_e2e_with_mock_llm():
     assert data.get("done") is True
     assert data.get("status") == "done"
     assert "OMP works!" in data.get("result", "")
+
+
+def test_omp_mcp_entries_carry_the_http_type_omp_requires(tmp_path):
+    """omp's docs/mcp-config.md: an http transport entry requires `type: "http"` and `url`, so the
+    entry carries it. (18.1.13 also infers http from a url when the type is absent; the entry
+    matches the documented schema rather than the inference.)"""
+    from server import _omp_write_mcp
+    ok = _omp_write_mcp(tmp_path, [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp", "auth": "tok"},
+                                   {"name": "nourl"}])
+    assert ok
+    doc = json.loads((tmp_path / "mcp.json").read_text())
+    assert doc["mcpServers"] == {"deepwiki": {"type": "http", "url": "https://mcp.deepwiki.com/mcp",
+                                              "headers": {"Authorization": "Bearer tok"}}}
+
+
+def test_the_vendors_own_spelling_of_the_requested_model_is_not_a_substitution():
+    """Through an aggregator pi asks for `anthropic/claude-opus-4.8` and Anthropic's stream names
+    `claude-opus-4-8` (pi stamps the response's model on an Anthropic-shaped message); haiku comes
+    back as its dated snapshot. Same model; a different model still fails (2026-09-08)."""
+    def run(requested, served):
+        evs = [{"type": "session", "id": "s"}, {"type": "message_end", "message": {"role": "assistant", "model": served, "provider": "hr",
+                "content": [{"type": "text", "text": "PONG"}], "usage": {"input": 5, "output": 1}, "stopReason": "stop"}}, {"type": "agent_end"}]
+        chunks, _ = _run_omp_events(evs, model=requested)
+        return [e for e in _flat(chunks) if e.get("type") == "result"][0]
+    for requested, served in (("anthropic/claude-opus-4.8", "claude-opus-4-8"), ("anthropic/claude-haiku-4.5", "claude-haiku-4-5-20251001"),
+                              ("anthropic/claude-fable-5", "claude-fable-5"), ("gpt-5.4", "openai/gpt-5.4")):
+        res = run(requested, served)
+        assert res["is_error"] is False and res["result"] == "PONG" and res["model"] == served, (requested, served)
+    res = run("anthropic/claude-sonnet-5", "claude-sonnet-4-6")
+    assert res["is_error"] is True and res["result"] == "the CLI ran claude-sonnet-4-6 instead of anthropic/claude-sonnet-5"
+    assert _same_model("gemini-3.8-flash", "gemini-3-flash-preview") is False
+    assert _same_model("gpt-5.4", "gpt-5.4-mini") is False
