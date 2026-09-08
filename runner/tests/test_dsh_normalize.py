@@ -1,6 +1,7 @@
 """The dsh normalizer and driver pieces, against live-captured wire shapes.
 
-Every fixture below is verbatim from `deepseek-harness-sdk==0.1.0rc7` runs on 2026-08-20:
+Every fixture below is verbatim from `deepseek-harness-sdk==0.1.0rc7` runs on 2026-08-20; the
+relay and event shapes were re-verified against 0.1.2rc1 on 2026-09-08 (same envelope, same types):
 the bad-key run (error terminal), the TokenRouter tool run (tool/call + tool/result +
 usage + retry ladder), and the raw TokenRouter SSE whose empty-string id/name fields are
 the reason the driver's relay exists.
@@ -186,22 +187,49 @@ def test_build_dsh_native_anthropic_default_base(tmp_path):
     assert env["HR_DSH_BASE_URL"] == "https://api.anthropic.com/v1"
 
 
-def test_compose_cordis_v1_normalization_per_api(tmp_path, monkeypatch):
+def _patch(tmp_path, servers, llm=None, model="m"):
+    import yaml
+    home = tmp_path / "home"
+    out = pathlib.Path(dsh_driver._compose_patch(home, servers, llm=llm, relay_port=9999, model=model))
+    return out.read_text(), yaml.safe_load(out.read_text())
+
+
+def test_compose_patch_v1_normalization_per_api(tmp_path):
     """anthropic-messages appends /v1/messages itself — its relay base must be bare; the openai
     apis want /v1 present. The doubled /v1/v1/messages this guards against was measured live."""
-    import types, sys as _sys
-    fake = types.ModuleType("deepseek_harness_runtime")
-    cfg = tmp_path / "bundled.yml"
-    cfg.write_text("- id: sdk-jsonrpc-server\n  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'\n")
-    fake.bundled_default_config_path = lambda: str(cfg)
-    monkeypatch.setitem(_sys.modules, "deepseek_harness_runtime", fake)
-    home = tmp_path / "home"
-    out_a = pathlib.Path(dsh_driver._compose_cordis(home, [], llm={"api": "anthropic-messages"},
-                                                    relay_port=9999, model="claude-haiku-4-5")).read_text()
-    assert "baseURL: http://127.0.0.1:9999\n" in out_a and "9999/v1" not in out_a
-    out_o = pathlib.Path(dsh_driver._compose_cordis(home, [], llm={"api": "openai-responses"},
-                                                    relay_port=9999, model="gpt-5.4-mini")).read_text()
-    assert "baseURL: http://127.0.0.1:9999/v1" in out_o
+    text_a, _ = _patch(tmp_path, [], llm={"api": "anthropic-messages"}, model="claude-haiku-4-5")
+    assert "baseURL: http://127.0.0.1:9999\n" in text_a and "9999/v1" not in text_a
+    text_o, _ = _patch(tmp_path, [], llm={"api": "openai-responses"}, model="gpt-5.4-mini")
+    assert "baseURL: http://127.0.0.1:9999/v1" in text_o
+
+
+def test_compose_patch_swaps_the_server_row_and_inserts_one_mcp_row_per_server(tmp_path):
+    """The loader's patch grammar (0.1.2rc1): a row named by id is merged, `disabled: true` stops
+    one, `insert` appends. A patch cannot rename a row, so the resume-or-create server is
+    disable-plus-insert; every MCP server becomes one dsh-mcp-client row with its headers."""
+    _, doc = _patch(tmp_path, [{"name": "deep wiki!", "url": "https://mcp.example/mcp", "auth": "tok",
+                                "headers": {"X-Trace": "1"}},
+                               {"name": "nourl"}])
+    assert doc[0] == {"id": "sdk-jsonrpc-server", "disabled": True}
+    rows = doc[1]["insert"]
+    assert rows[0]["id"] == "hr-sdk-jsonrpc-server" and rows[0]["name"].endswith("/.dsh/hr_dsh_server.mjs")
+    assert rows[0]["inject"] == ["sdkAppStartup", "loader"] and rows[0]["config"] == {"maxTokensAsSuccess": True}
+    assert (tmp_path / "home" / ".dsh" / "hr_dsh_server.mjs").exists()
+    mcp = [r for r in rows if r["name"] == "@deepseek-ai/dsh-mcp-client"]
+    assert len(mcp) == 1, "a server without a url is not a server"
+    assert mcp[0]["config"] == {"transport": "streamable-http", "serverName": "deepwiki",
+                                "url": "https://mcp.example/mcp",
+                                "headers": {"Authorization": "Bearer tok", "X-Trace": "1"}}
+    assert len(doc) == 2, "the deepseek-official path merges nothing into llm-pi-ai"
+
+
+def test_compose_patch_merges_the_route_into_the_stock_pi_ai_row(tmp_path):
+    _, doc = _patch(tmp_path, [], llm={"api": "openai-completions", "vision": False}, model="qwen/qwen3.7-max")
+    row = doc[-1]
+    assert row["id"] == "llm-pi-ai" and "name" not in row, "a patch merges by id; naming the row is a rename, which the loader refuses"
+    hr = row["config"]["providers"]["hr"]
+    assert hr["apiKeyEnv"] == "HR_RELAY_TOKEN" and hr["models"][0] == {
+        "id": "qwen/qwen3.7-max", "contextWindow": 200000, "maxTokens": 32000, "input": ["text"]}
 
 
 # ── reasoning_effort strip-and-retry (conformance T-01 against LLMTR, 2026-08-20) ──────────────

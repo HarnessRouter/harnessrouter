@@ -384,27 +384,22 @@ def _emit(method: str, payload) -> None:
     sys.stdout.flush()
 
 
-# Whether the PINNED runtime wheel bundles @deepseek-ai/dsh-mcp-client. rc7 does NOT — the
-# upstream sdk-runtime README already documents the plugin as bundled, but the wheel predates
-# it: naming the entry makes the plugin tree fail, and a failed tree leaves the runtime alive
-# with a mute stdout, which reads as a hang (measured: the initialize response simply never
-# comes). Flip this when the wheel pin moves to a build that ships the plugin — and re-verify.
-DSH_RUNTIME_HAS_MCP = False
+def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = None,
+                   relay_port: int = 0, model: str = "") -> str:
+    """Our overlay on the runtime's stock `sdk` profile, in the loader's own patch grammar: a row
+    named by id is merged, `disabled: true` stops one, and `insert` appends new rows.
 
-
-def _compose_cordis(home: pathlib.Path, servers: list[dict], llm: dict | None = None,
-                    relay_port: int = 0, model: str = "") -> str:
-    """Our runtime composition: the wheel's bundled default, with the SDK server entry swapped
-    for the resume-or-create subclass (see hr_dsh_server.cjs — packaged-bin loads
-    configuration-relative plugins), plus one dsh-mcp-client entry per enabled MCP server."""
-    import deepseek_harness_runtime as runtime
-    base = pathlib.Path(runtime.bundled_default_config_path()).read_text()
-    needle = "name: '@deepseek-ai/dsh-sdk-jsonrpc-server'"
-    if base.count(needle) != 1:
-        raise SystemExit("dsh bundled cordis no longer names the sdk server exactly once — "
-                         "re-verify hr_dsh_server.cjs against this runtime before shipping")
-    base = base.replace(needle, "name: './hr_dsh_server.cjs'")
-    blocks = []
+    The stock JSON-RPC server row is disabled and ours inserted in its place (see
+    hr_dsh_server.mjs: resume-or-create), one dsh-mcp-client row is inserted per enabled MCP
+    server, and a non-deepseek family gets its route merged into the stock dsh-llm-pi-ai row.
+    A patch cannot rename a row, which is why the server is disable-plus-insert rather than the
+    name swap the previous runtime's bundled cordis.yml allowed."""
+    entries: list = [{"id": "sdk-jsonrpc-server", "disabled": True}]
+    cjs = home / ".dsh" / "hr_dsh_server.mjs"
+    inserted: list = [{"id": "hr-sdk-jsonrpc-server", "name": str(cjs),
+                       "inject": ["sdkAppStartup", "loader"],
+                       # the stock row's default: a turn that stops on max tokens is a finished turn
+                       "config": {"maxTokensAsSuccess": True}}]
     for i, s in enumerate(servers):
         url = (s or {}).get("url")
         if not url:
@@ -420,7 +415,8 @@ def _compose_cordis(home: pathlib.Path, servers: list[dict], llm: dict | None = 
             hdrs.update({str(k): str(v) for k, v in s["headers"].items() if k and v is not None})
         if hdrs:
             entry["config"]["headers"] = hdrs
-        blocks.append(entry)
+        inserted.append(entry)
+    entries.append({"insert": inserted})
     if llm:
         # Non-deepseek families ride dsh's OWN multi-provider layer, dsh-llm-pi-ai — which is
         # pi's unified LLM library wrapped as a Cordis plugin, so the api-by-family choices are
@@ -433,7 +429,7 @@ def _compose_cordis(home: pathlib.Path, servers: list[dict], llm: dict | None = 
         # it wrong here produced /v1/v1/messages against the relay — measured, not guessed.
         base_url = (f"http://127.0.0.1:{relay_port}" if api == "anthropic-messages"
                     else f"http://127.0.0.1:{relay_port}/v1")
-        blocks.append({"id": "hr-llm", "name": "@deepseek-ai/dsh-llm-pi-ai", "config": {
+        entries.append({"id": "llm-pi-ai", "config": {
             "providers": {"hr": {
                 "displayName": "HR Gateway",
                 "apiKeyEnv": "HR_RELAY_TOKEN",
@@ -442,15 +438,12 @@ def _compose_cordis(home: pathlib.Path, servers: list[dict], llm: dict | None = 
                 "models": [{"id": model, "contextWindow": 200000, "maxTokens": 32000,
                             "input": (["text", "image"] if llm.get("vision", True) else ["text"])}],
             }}}})
-    path = home / ".dsh" / "cordis.yml"
+    path = home / ".dsh" / "hr.patch.yml"
     path.parent.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy(pathlib.Path(__file__).with_name("hr_dsh_server.cjs"), path.parent / "hr_dsh_server.cjs")
-    extra = ""
-    if blocks:
-        import yaml
-        extra = "\n" + yaml.safe_dump(blocks, sort_keys=False)
-    path.write_text(base + extra)
+    shutil.copy(pathlib.Path(__file__).with_name("hr_dsh_server.mjs"), cjs)
+    import yaml
+    path.write_text(yaml.safe_dump(entries, sort_keys=False))
     return str(path)
 
 
@@ -461,8 +454,6 @@ def main() -> int:
     UPSTREAM_KEY = os.environ.pop("HR_DSH_API_KEY", "")
     home = pathlib.Path(os.environ.get("HOME") or ".")
     cwd = job.get("cwd") or os.getcwd()
-    sessions = home / ".dsh" / "sessions"
-    sessions.mkdir(parents=True, exist_ok=True)
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Relay)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -472,19 +463,14 @@ def main() -> int:
     from deepseek_harness import DeepSeekHarness
 
     os.environ["HR_RELAY_TOKEN"] = "hr-relay"   # the placeholder the pi-ai route resolves
-    mcp = job.get("mcp_servers") or []
-    if mcp and not DSH_RUNTIME_HAS_MCP:
-        # The pi precedent: a capability the harness asked for but this build cannot provide is
-        # SAID, and the turn still runs — a loud line beats a task wedged on a mute runtime.
-        print("[dsh] MCP servers are configured on this harness, but the pinned DeepSeek Harness "
-              "runtime (0.1.0rc7) does not bundle its MCP client yet — this turn runs without "
-              "them. The next runtime pin restores them.", flush=True)
-        mcp = []
     llm = job.get("llm")   # None => the verified deepseek-official path
+    # The SDK launches `dsh --profile sdk --patch <ours>` against an explicit home; the profile
+    # keeps sessions under $DSH_HOME/sessions, so ~/.dsh/sessions is where every earlier
+    # runtime already put them.
     kwargs = dict(provider=("hr" if llm else "deepseek-official"), model=job["model"],
-                  cwd=cwd, session_root=str(sessions),
-                  cordis=_compose_cordis(home, mcp, llm=llm,
-                                         relay_port=srv.server_address[1], model=job["model"]),
+                  cwd=cwd, dsh_home=str(home / ".dsh"),
+                  patches=(_compose_patch(home, job.get("mcp_servers") or [], llm=llm,
+                                          relay_port=srv.server_address[1], model=job["model"]),),
                   # A runtime whose plugin tree failed stays alive with a mute stdout; without a
                   # bound the initialize request waits forever and the turn reads as a hang.
                   request_timeout_seconds=180.0)

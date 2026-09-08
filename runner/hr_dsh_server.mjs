@@ -5,36 +5,49 @@
  * coordinator refuses a create whose sessionId already has a persisted log (a fresh process has
  * no in-memory seed, so adoption cannot apply). That makes every cross-process follow-up die
  * with "persisted log on disk that does not match this live session (id collision)" — captured
- * live on 2026-08-20, and precisely the continuation gap the DeepSeek-Harness audit predicted.
- * The wire itself has no resume method, so the fix lives at the one seam upstream left open:
- * this file loads as a CONFIGURATION-RELATIVE plugin (a documented packaged-bin feature),
- * subclasses the exported server class from the bundled snapshot, and tries
- * ctx.agents.resume({resumeSessionId}) before falling back to the parent's create.
+ * live on 2026-08-20 against 0.1.0-rc.7 and again on 2026-09-08 against 0.1.2-rc.1. The wire
+ * itself has no resume method, so the fix lives at the one seam upstream left open: this file
+ * loads as a plugin row inserted by the driver's patch overlay (the stock server row is
+ * disabled beside it), subclasses the exported server class from the bundled snapshot, and
+ * tries ctx.agents.resume({resumeSessionId}) before falling back to the parent's create.
  *
  * Version-locked: refuses to boot against any other upstream version, loudly, because this
- * reaches into TS-private fields (this.ctx / this.provider / this.model / this.maxTokens)
- * that only exist by compiled-JS convention.
+ * reaches into TS-private fields (this.ctx / this.provider / this.model / this.reasoningEffort /
+ * this.maxTokens / this.sessions) that only exist by compiled-JS convention.
+ *
+ * An ES module on purpose: the snapshot's packages are ESM and the loader imports plugin rows
+ * concurrently, so a CommonJS require() of @deepseek-ai/dsh-session raced a load already in
+ * flight (ERR_REQUIRE_ESM_RACE_CONDITION, measured 2026-09-08). import() waits for it instead.
  */
-'use strict'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 
-// This file lives OUTSIDE the runtime's pkg snapshot, so its own require cannot resolve the
-// bundled '@deepseek-ai/*' modules. The snapshot's patched fs is process-global though, so a
-// createRequire anchored INSIDE the snapshot's node_modules resolves them fine. The anchor is
-// derived from the running entry script (…/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/
-// packaged-bin.js), which holds for both runtime carriers.
-const path = require('node:path')
-const { createRequire } = require('node:module')
+// This file lives OUTSIDE the runtime's snapshot, so a bare '@deepseek-ai/*' specifier cannot
+// resolve from here. A require anchored INSIDE the snapshot's node_modules resolves the paths;
+// the modules themselves are then imported, the way the loader loads them. The anchor is
+// derived from the running entry script (…/node_modules/@deepseek-ai/dsh/lib/bin.js).
 const entry = process.argv[1] || ''
 const nmIdx = entry.lastIndexOf('node_modules')
 if (nmIdx < 0) {
   throw new Error(`hr-sdk-jsonrpc-server: cannot locate the runtime's node_modules from entry '${entry}'`)
 }
-const sreq = createRequire(path.join(entry.slice(0, nmIdx + 'node_modules'.length), 'hr-anchor.js'))
-const base = sreq('@deepseek-ai/dsh-sdk-jsonrpc-server')
-const { SessionId } = sreq('@deepseek-ai/dsh-session')
-const { JsonRpcLineTransport } = sreq('@deepseek-ai/dsh-sdk-protocol')
+const nmRoot = entry.slice(0, nmIdx + 'node_modules'.length)
+const sreq = createRequire(path.join(nmRoot, 'hr-anchor.js'))
+const load = async (name) => {
+  let file
+  try {
+    file = sreq.resolve(name)
+  } catch {
+    file = path.join(nmRoot, name, 'lib', 'index.js')   // an import-only exports map: the compiled entry
+  }
+  return import(pathToFileURL(file).href)
+}
+const base = await load('@deepseek-ai/dsh-sdk-jsonrpc-server')
+const { SessionId } = await load('@deepseek-ai/dsh-session')
+const { JsonRpcLineTransport } = await load('@deepseek-ai/dsh-sdk-protocol')
 
-const PINNED = '0.1.0-rc.7'   // the repo-wide version the runtime wheel bundles
+const PINNED = '0.1.2-rc.1'   // the repo-wide version the runtime wheel bundles
 const got = sreq('@deepseek-ai/dsh-sdk-jsonrpc-server/package.json').version
 if (got !== PINNED) {
   throw new Error(`hr-sdk-jsonrpc-server is pinned to @deepseek-ai/dsh-sdk-jsonrpc-server@${PINNED} ` +
@@ -49,6 +62,7 @@ class HrServer extends base.HarnessSdkJsonRpcServer {
         agentOptions: {
           provider: this.provider,
           model: this.model,
+          ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
           ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
         },
       })
@@ -65,10 +79,10 @@ class HrServer extends base.HarnessSdkJsonRpcServer {
   }
 }
 
-exports.name = 'hr-sdk-jsonrpc-server'
-exports.inject = ['agents']
+export const name = 'hr-sdk-jsonrpc-server'
+export const inject = ['agents']
 
-exports.apply = function apply(ctx, config) {
+export function apply(ctx, config) {
   const rootFiber = ctx.root.fiber
   const transport = new JsonRpcLineTransport(process.stdin, process.stdout)
   const server = new HrServer(ctx, transport, {

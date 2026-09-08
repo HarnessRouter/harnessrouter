@@ -318,17 +318,23 @@ install_backends() {
     try_install "Oh My Pi" install_omp || true
   fi
 
-  if wanted dsh && [ ! -x "$(backend_bin dsh)" ]; then
-    echo "[harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…"
+  # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that
+  # already has a venv: dsh-ready names the version it was built for, and a mismatch rebuilds
+  # the venv (sessions live under ~/.dsh, not in it). The 0.1.0rc7 -> 0.1.2rc1 move is where
+  # this was learned: the image changed and every existing volume would have kept rc7.
+  DSH_PIN="0.1.2rc1"
+  if wanted dsh && [ "$("$(backend_bin dsh)" 2>/dev/null)" != "$DSH_PIN" ]; then
+    echo "[harnessrouter] installing DeepSeek Harness $DSH_PIN (MIT, developer preview — version-pinned)…"
     # Pinned EXACTLY, not 'latest': upstream is a developer preview that warns of breaking
     # changes, and the runner's driver/normalizer are written against these bytes. An upgrade
     # is an adapter-compatibility change that lands through a PR, never through a fresh volume
     # pulling a newer wheel. Own venv: its dependency tree must not fight hermes's.
+    rm -rf "$TOOLS/dsh-venv"
     try_install "DeepSeek Harness" sh -c "\"$PY\" -m venv \"$TOOLS/dsh-venv\" \
         && \"$TOOLS/dsh-venv/bin/pip\" install --no-cache-dir -q \
-             'deepseek-harness-sdk==0.1.0rc7' 'deepseek-harness-runtime-bin==0.1.0rc7' pyyaml \
+             'deepseek-harness-sdk==$DSH_PIN' 'deepseek-harness-runtime-bin==$DSH_PIN' pyyaml \
         && \"$TOOLS/dsh-venv/bin/python\" -c 'import deepseek_harness, deepseek_harness_runtime, yaml; deepseek_harness_runtime.bundled_runtime_path()' \
-        && printf '#!/bin/sh\nexit 0\n' > \"$TOOLS/dsh-venv/bin/dsh-ready\" \
+        && printf '#!/bin/sh\necho %s\n' '$DSH_PIN' > \"$TOOLS/dsh-venv/bin/dsh-ready\" \
         && chmod +x \"$TOOLS/dsh-venv/bin/dsh-ready\"" || true
     # dsh-ready exists ONLY after the import check proved the runtime executable resolves —
     # a venv whose pip half-failed must not report the backend as available.
