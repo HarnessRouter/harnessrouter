@@ -1,5 +1,8 @@
 # Support matrix suite
 
+What a harness must prove, and the rules that decide a row, are in
+[docs/harness-verification.md](../../docs/harness-verification.md). This file is how to run it.
+
 Drives the console as one user and, for every harness and every model its menu offers, runs five
 scenarios in one session: a first turn, a follow-up, a switch to another model of the harness (then
 back), an artifact (a file the task must produce, checked on the transcript's file cards), and a
