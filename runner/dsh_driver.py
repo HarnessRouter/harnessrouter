@@ -463,6 +463,14 @@ def main() -> int:
     from deepseek_harness import DeepSeekHarness
 
     os.environ["HR_RELAY_TOKEN"] = "hr-relay"   # the placeholder the pi-ai route resolves
+    # The sdk profile's sandbox policy and approval policy both read this (mode ?? 'workspace-write';
+    # approval 'never' only under danger-full-access). The default refuses EVERY command on a host
+    # with no bubblewrap and no Landlock, which is this product's container ("no sandbox backend is
+    # usable on this host; refusing to run the command unconfined", measured 2026-09-08 on
+    # 0.1.2rc1: the skill's script never ran and the agent quoted its source instead), and the
+    # 'ask' approval has no one to ask in a headless turn. The workspace and the container are the
+    # boundary here, the same standing every other backend runs with.
+    os.environ["DSH_PERMISSION_MODE"] = "danger-full-access"
     llm = job.get("llm")   # None => the verified deepseek-official path
     # The SDK launches `dsh --profile sdk --patch <ours>` against an explicit home; the profile
     # keeps sessions under $DSH_HOME/sessions, so ~/.dsh/sessions is where every earlier
