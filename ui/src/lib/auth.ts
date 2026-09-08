@@ -55,33 +55,51 @@ export function getSession(): Session | null {
  *  snapshot (e.g. the dock avatar) can re-read without a reload. */
 export const SESSION_EVENT = 'agentstudio:session';
 
-// Cross-subdomain login-state cookie. The JWT lives in localStorage (origin-scoped, so the
-// marketing apex can't read it). To let harnessrouter.ai's header reflect login without exposing
-// the app's storage, we ALSO mirror the token into a cookie scoped to the registrable domain
-// (Domain=.harnessrouter.ai) — sent to both app. and the apex. The apex never reads this cookie in
-// JS; it calls GET /api/session on the app origin, which reads the cookie server-side and returns
-// only {authed, name}. On localhost/preview (not *.harnessrouter.ai) the Domain attribute is
-// omitted so the cookie still works same-origin.
-const AUTH_COOKIE = 'hr_auth';
+// Login state for the marketing site, without a script-readable token anywhere.
+//
+// The JWT lives in localStorage (origin-scoped). The marketing apex (harnessrouter.ai) wants to
+// know whether the visitor is signed in; it asks GET /api/session on the app origin with
+// credentials, and that route answers from an hr_auth cookie it verifies server-side. That cookie
+// is set by the console's own route (POST /api/session) as HttpOnly, Secure, SameSite=Lax and
+// host-only, so no script on any subdomain can read or delete it. A JS-set copy on
+// Domain=.harnessrouter.ai used to do this job; the marketing site's cleanup expired it on every
+// visit and signed everyone out (2026-09-06).
+//
+// hr_logged_in=1 on the registrable domain is the header's fast path: non-secret, carries nothing,
+// grants nothing; a stale or forged value changes a label and nothing more.
+const HINT_COOKIE = 'hr_logged_in';
+const LEGACY_AUTH_COOKIE = 'hr_auth';
 function _cookieDomain(): string {
   if (typeof window === 'undefined') return '';
   return window.location.hostname.endsWith('harnessrouter.ai') ? '; Domain=.harnessrouter.ai' : '';
 }
-function setAuthCookie(token: string): void {
-  if (typeof window === 'undefined') return;
-  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  // 7-day lifetime matches the session; SameSite=Lax so top-level navigations from the apex carry it.
-  document.cookie = `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=604800${_cookieDomain()}; SameSite=Lax${secure}`;
+function _secure(): string {
+  return typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
 }
-function clearAuthCookie(): void {
+function setLoginHint(): void {
   if (typeof window === 'undefined') return;
-  document.cookie = `${AUTH_COOKIE}=; Path=/; Max-Age=0${_cookieDomain()}; SameSite=Lax`;
+  document.cookie = `${HINT_COOKIE}=1; Path=/; Max-Age=604800${_cookieDomain()}; SameSite=Lax${_secure()}`;
+  // the JS-set token cookie of earlier builds: gone for good on the domain it was written to
+  document.cookie = `${LEGACY_AUTH_COOKIE}=; Path=/; Max-Age=0${_cookieDomain()}; SameSite=Lax`;
+}
+function clearLoginHint(): void {
+  if (typeof window === 'undefined') return;
+  document.cookie = `${HINT_COOKIE}=; Path=/; Max-Age=0${_cookieDomain()}; SameSite=Lax`;
+  document.cookie = `${LEGACY_AUTH_COOKIE}=; Path=/; Max-Age=0${_cookieDomain()}; SameSite=Lax`;
+}
+/** The console's own route sets or clears the HttpOnly session cookie the marketing probe reads.
+ *  Best effort: the console never depends on it (its calls carry the bearer from storage). */
+function syncServerCookie(token: string | null): void {
+  if (typeof window === 'undefined') return;
+  void fetch('/api/session', token
+    ? { method: 'POST', headers: { authorization: `Bearer ${token}` }, cache: 'no-store' }
+    : { method: 'DELETE', cache: 'no-store' }).catch(() => { /* the header shows Sign up until the next sign-in */ });
 }
 
 function setSession(s: Session): void {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify(s));
-    if (s.token) setAuthCookie(s.token);
+    if (s.token) { setLoginHint(); syncServerCookie(s.token); }
     window.dispatchEvent(new CustomEvent(SESSION_EVENT));
   }
 }
@@ -89,7 +107,8 @@ function setSession(s: Session): void {
 export function clearSession(): void {
   if (typeof window !== 'undefined') {
     window.localStorage.removeItem(SESSION_KEY);
-    clearAuthCookie();
+    clearLoginHint();
+    syncServerCookie(null);
   }
 }
 
