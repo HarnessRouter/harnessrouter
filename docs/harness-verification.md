@@ -70,15 +70,26 @@ A row passes only if all five hold, each read from what the server stored:
 | The bundle reached the agent | the answer carries a token that exists ONLY inside the script |
 | The script actually ran | the file the script writes is among the turn's produced files |
 | The tool policy took effect | no disabled tool appears among the turn's tool calls |
+| The MCP server was stored, and called | it comes back on a read, and a second turn's tool calls name it |
 
 The token is generated per run and never appears in `SKILL.md` or the prompt, so an answer carrying
 it came from the bundle rather than from the model's imagination, and the written file separates a
 script that ran from one that was merely read.
 
-Not yet covered: an MCP server as a harness tool. A self-contained instance hosts only the database
-and media servers, one needing a database and the other costing real money per call, so a fair test
-needs a reachable MCP endpoint this suite does not yet stand up. The gap is named here rather than
-papered over.
+A harness's other kind of tool is an MCP server, and the same harness declares one. A self-contained
+instance hosts only the database and media servers, one needing a database and the other costing
+real money per call, so this half points at a public MCP server that needs no key and no account,
+and a second turn in the same session must call it.
+
+It is judged on the CALL, not on the answer: a public server's prose is not ours to pin, but a tool
+call is a fact in the turn record. Backends name those calls differently, some recording the server
+and tool (`deepwiki.read_wiki_structure`) and some only that an MCP tool was used (`mcp`), and since
+the harness declares exactly one server either shape identifies it.
+
+The third party is a dependency, so it is treated as one. The server is probed once before the run;
+if it is unreachable the MCP half is skipped and the row says so, because a public service being
+down is not evidence about this product. `MCP_URL=off` skips it outright, for an instance with no
+egress, and any other URL overrides the default.
 
 ## Rules for the run itself
 
