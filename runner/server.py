@@ -1895,6 +1895,26 @@ def _pi_usage_add(state: dict, u: dict | None) -> None:
             tot[dst] += int(v)
 
 
+_MODEL_SNAPSHOT_DATE = re.compile(r"-\d{8}$")
+
+
+def _same_model(requested: str, served: str) -> bool:
+    """Whether two ids name the same model. The check is about substitution (Richard: the models
+    are honest, no fallback), not spelling: a vendor names its model its own way in the response,
+    and pi puts THAT on the assistant message for an Anthropic-shaped stream (pi-ai 0.85.1
+    anthropic-messages.js: `output.model = event.message.model` on message_start; its OpenAI
+    clients stamp the configured id). Through an aggregator the requested id is the routed one,
+    `anthropic/claude-opus-4.8`, and Anthropic answers `claude-opus-4-8`; `claude-haiku-4.5` comes
+    back as the dated snapshot `claude-haiku-4-5-20251001`. Same model, so: a vendor prefix, case,
+    dots against dashes and a trailing snapshot date do not count (every hosted pi restore on an
+    Anthropic id failed as a substitution, 2026-09-08). `gemini-3-flash-preview` for
+    `gemini-3.8-flash` stays a substitution."""
+    def canon(m: str) -> str:
+        m = (m or "").strip().lower().rsplit("/", 1)[-1].replace(".", "-")
+        return _MODEL_SNAPSHOT_DATE.sub("", m)
+    return bool(requested) and bool(served) and canon(requested) == canon(served)
+
+
 def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE pi `--mode json` event to zero+ canonical claude stream-json events.
 
@@ -1971,7 +1991,7 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
         usage = {k: v for k, v in usage.items() if v}
         served = sorted(set(state.get("_served") or []))
         requested = str(state.get("model") or "")
-        other = [m for m in served if requested and m != requested]
+        other = [m for m in served if requested and not _same_model(requested, m)]
         if other and not err:
             # the models are honest, no fallback: a turn the CLI ran on another model than the one
             # asked for fails with the reason on the record, never completes (the served-model rule
@@ -3875,7 +3895,7 @@ def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
         # gets, and a turn that ran another model than the one asked for must say so, never read
         # completed. The settings pin every id to itself; this is the check that they held.
         requested = str(state.get("model") or "")
-        other = [m for m in served.split(",") if m and requested and m != requested]
+        other = [m for m in served.split(",") if m and requested and not _same_model(requested, m)]
         if other:
             # the substitution is the more specific cause; the CLI's own error, when it says one, rides along
             tail = f" (the CLI ended with {err.get('type') or 'an error'}: {err.get('message')})" if err and err.get("message") else ""
