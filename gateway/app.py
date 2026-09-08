@@ -3386,9 +3386,24 @@ def _provider_refused(err: str) -> bool:
 
 def _turn_failure_message(rec: dict) -> str:
     """What a failed turn says: the org's own key's refusal in plain words when that is why, else
-    the list of connections tried."""
+    the last connection's reason in words. Never the tried list itself: its JSON, with our
+    connection names in it, was shown to Richard as the error of a Gemini CLI turn (2026-09-07)."""
     tried = rec.get("tried") or []
-    return str(rec.get("error_message") or "") or (json.dumps(tried)[:400] if tried else "turn failed")
+    if rec.get("error_message"):
+        return str(rec["error_message"])
+    if not tried:
+        return "turn failed"
+    # The reason is what the last connection that RAN said. A connection skipped before running
+    # (not found, does not serve the model, cannot be brokered) carries no status, and its note is
+    # not why the turn failed unless nothing ran: a hermes turn Opus 5's safeguards refused read
+    # "credential cannot be brokered; refused" because the chain's next entry could not be brokered
+    # (hosted, 2026-09-08).
+    ran = [t for t in tried if t.get("status")]
+    last = (ran or tried)[-1]
+    reason = str(last.get("error") or "").strip() or f"the connection answered {last.get('status') or 'with an error'}"
+    if len(tried) > 1:
+        return f"The turn failed on every connection it tried. The last one said: {reason}"
+    return f"The turn failed: {reason}"
 
 
 async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
