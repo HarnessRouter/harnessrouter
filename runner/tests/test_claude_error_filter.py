@@ -83,3 +83,14 @@ def test_a_real_answer_after_a_retried_error_keeps_the_answer():
     rn._claude_passthrough(delta, state)
     out = rn._claude_passthrough({"type": "result", "subtype": "success", "result": "", "is_error": False}, state)
     assert out == [{"type": "result", "subtype": "success", "result": "Hello", "is_error": False}]
+
+
+def test_a_resume_the_builder_could_not_honor_is_reported_not_silent():
+    """claude and opencode start fresh when the session is not in the workspace; the turn then
+    opens with the resume_lost note the gateway renders (hermes already sends it, codex its own)."""
+    assert rn._resume_lost("opencode", ["opencode", "run", "hello"], "ses_abc") == "ses_abc"
+    assert rn._resume_lost("opencode", ["opencode", "run", "--session", "ses_abc", "hello"], "ses_abc") is None
+    assert rn._resume_lost("claude", ["claude", "-p", "hi"], "s1") == "s1"
+    assert rn._resume_lost("claude", ["claude", "-p", "--resume", "s1", "hi"], "s1") is None
+    assert rn._resume_lost("opencode", ["opencode"], None) is None
+    assert rn._resume_lost("hermes", ["hermes"], "s1") is None

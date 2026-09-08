@@ -4810,12 +4810,12 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
                                # keys its stats by served model, and rewrites some ids on the way)
                                "model": str(ev.get("model") or "")}))
     elif t == "system" and ev.get("subtype") == "resume_lost":
-        # The runner asked to continue a prior session, but it wasn't found in this sandbox — it
-        # silently started fresh instead (see harness_runner _run_hermes_bg). A caller who believed
-        # this was a continuation has no other way to learn the context was actually dropped, so
-        # surface it as a short, honest note rather than let the reply look like a real continuation.
-        out.append(("text", "_Note: couldn't resume the prior session in this sandbox — "
-                            "continuing as a new session, without earlier context._\n\n"))
+        # The runner asked to continue a prior session, but it wasn't found in this sandbox and the
+        # turn started fresh (hermes says so itself; claude and opencode through _resume_lost; codex
+        # carries its own note). A caller who believed this was a continuation has no other way to
+        # learn the context was dropped, so it is a short, honest note at the top of the reply.
+        out.append(("text", "_Note: the earlier conversation could not be restored. This reply "
+                            "continues as a new session, without that context._\n\n"))
     return out
 
 

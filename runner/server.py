@@ -241,6 +241,18 @@ def _own_tree(root: str, uid: int, from_uids: set[int]) -> None:
                 continue
 
 
+def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None) -> str | None:
+    """The session id the caller asked to continue when the built command does not carry it: the
+    builder looked for the session in the workspace, did not find it, and started fresh (claude's
+    --resume, opencode's --session). hermes says so itself; codex carries its own note. Four
+    hosted opencode sessions answered three recalls each with "there is no earlier message" as
+    completed turns (2026-09-08): the history was lost to the 2026-09-06 restore burst, and nothing
+    told the person. The gateway renders the event as a note at the top of the reply."""
+    if backend not in ("opencode", "claude") or not resume_session_id:
+        return None
+    return None if resume_session_id in cmd else resume_session_id
+
+
 def _isolate_session(ws: str) -> None:
     """Make the session directory the one place its uid can write, and make everything in it
     that uid's. Allocation happens once, under a lock, from the owners of the directories that
@@ -2199,11 +2211,16 @@ _HERMES_RESPONSES_API_MODEL = re.compile(r"(?:^|/)(?:gpt-(?:[5-9]|\d{2,})|o[1-4]
 def _hermes_api_mode(provider: str, model: str) -> str | None:
     """`model.api_mode` for config.yaml, or None to leave hermes' own detection alone.
 
-    Only for the generic OpenAI-compatible provider: that is the one whose transport hermes infers
-    from the URL. bedrock/anthropic/azure-foundry/openrouter each have their own resolution in the
-    CLI, and overriding those would replace working logic with a guess.
+    The generic OpenAI-compatible provider is the one whose transport hermes infers from the URL,
+    so the Responses family is named for it. Azure is named too: hermes 0.19.0 infers the
+    Responses API there from the prefixes codex, gpt-5, o1, o3 and o4 (hermes_cli/models.py,
+    azure_foundry_model_api_mode) and reads the config's api_mode first (runtime_provider.py), so
+    gpt-6-astra, none of those prefixes, went to chat completions, which Azure refuses for
+    function tools with reasoning (the astra column, 2026-09-08; every other Azure pair passed).
+    The same family test as the generic provider, so the next line lands routed. bedrock,
+    anthropic and openrouter keep the CLI's own resolution.
     """
-    if provider != "openai-api" or not model:
+    if provider not in ("openai-api", "azure-foundry") or not model:
         return None
     return "codex_responses" if _HERMES_RESPONSES_API_MODEL.search(model) else None
 
@@ -5137,6 +5154,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                             resume_session_id=req.resume_session_id, mcp_config=mcp_config,
                             disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages),
                             plugin_dirs=plugin_dirs)
+    resume_lost = _resume_lost(backend, cmd, req.resume_session_id)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex
     _evict_turns()
@@ -5154,6 +5172,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
             _turns[turn_id]["events"].append({"type": "assistant", "_ts": time.time(),
                                               "message": {"content": [{"type": "text", "text": codex_note}]}})
+        if resume_lost:  # the same for claude and opencode: the reply opens with the note, never a silent restart
+            _turns[turn_id]["events"].append({"type": "system", "subtype": "resume_lost", "_ts": time.time(),
+                                              "requested_session_id": resume_lost})
         if key:
             _turn_by_key[key] = turn_id
     if use_appserver:
