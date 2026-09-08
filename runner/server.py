@@ -1994,7 +1994,12 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
 # <agent_dir>/sessions/<cwd slug>/<ts>_<id>.jsonl, -r <id> recalls the first message, --tools=read
 # leaves a write unwritten, and every assistant message names the model it ran.
 OMP_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
-ALL_OMP_TOOLS = {"bash", "read", "write", "edit", "glob", "grep", "lsp", "python", "todo", "task", "browser", "web_search"}
+# The built-in tools omp 18.1.13 accepts on --tools, read off the binary by probing each name (a
+# rejected name kills the turn: "Unknown tool in --tools"). "python" and "browser" were in this
+# list and are not tools of this build, so every harness that disabled ANY tool sent an allowlist
+# omp refused, and every one of its turns died with a stack trace (found by the custom-harness
+# matrix dimension, 2026-09-08). A CLI bump re-probes this list; the test beside it pins it.
+ALL_OMP_TOOLS = {"bash", "read", "write", "edit", "glob", "grep", "lsp", "todo", "task", "web_search"}
 
 
 def _omp_has_session(agent_dir: pathlib.Path, session_id: str) -> bool:
@@ -2020,8 +2025,13 @@ def _omp_has_session(agent_dir: pathlib.Path, session_id: str) -> bool:
 def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
     """Write <agent_dir>/mcp.json for OMP native MCP support.
 
-    OMP supports native project and user MCP configurations with the standard
-    mcpServers schema. Returns whether any server was written.
+    OMP reads the user file at <agent_dir>/mcp.json (PI_CODING_AGENT_DIR) with the standard
+    mcpServers schema. `type: "http"` is what docs/mcp-config.md requires on an HTTP entry ("http
+    transport: Required: type, url"), so the entry says it. Measured on 18.1.13 (2026-09-08): the
+    loader also infers it, `transport ?? (command ? "stdio" : url ? "http" : "stdio")`, so an
+    untyped entry with a url was served too; the dimension's earlier miss on omp was its judge,
+    which reads tool names, while omp dispatches MCP as a `write` to
+    xd://mcp__<server>_<tool>. Returns whether any server was written.
     """
     entries: dict = {}
     for s in servers or []:
@@ -2029,7 +2039,7 @@ def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
         if not url:
             continue
         name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
-        entry: dict = {"url": url}
+        entry: dict = {"type": "http", "url": url}
         auth = (s or {}).get("auth")
         if auth:
             hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
@@ -2103,7 +2113,11 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     if tools_disabled:
         disabled = {x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
         enabled = [t for t in sorted(ALL_OMP_TOOLS) if t not in disabled]
-        if not enabled:
+        # A disable list that names none of omp's tools (a name from another runtime, say) changes
+        # nothing, so nothing is sent: an allowlist is only a constraint when it removes something.
+        if len(enabled) == len(ALL_OMP_TOOLS):
+            pass
+        elif not enabled:
             cmd += ["--no-tools"]
         else:
             cmd += [f"--tools={','.join(enabled)}"]
