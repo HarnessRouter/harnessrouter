@@ -7,7 +7,7 @@ import '../revamp.css';
 import { SkelPage } from '@/components/Skel';
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { isAuthed, hasActiveOrg, getSession, refreshToken } from '@/lib/auth';
+import { isAuthed, hasActiveOrg, getSession, refreshToken, reconcileLoginState } from '@/lib/auth';
 import { WorkspaceProvider } from '@/lib/workspace';
 import { Shell } from '@/components/revamp/Shell';
 import { billing } from './billing/lib';
@@ -40,6 +40,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // Slide the session TTL on every app load: an active user's token never hard-expires.
     // A 401 here (token already dead) redirects to /login via handleAuthExpired.
     void refreshToken();
+    // The marketing header's login state follows the session rather than the sign-in moment.
+    reconcileLoginState();
     setReady(true);
   }, [router]);
 

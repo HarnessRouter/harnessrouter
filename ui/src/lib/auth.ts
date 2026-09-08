@@ -88,12 +88,40 @@ function clearLoginHint(): void {
   document.cookie = `${LEGACY_AUTH_COOKIE}=; Path=/; Max-Age=0${_cookieDomain()}; SameSite=Lax`;
 }
 /** The console's own route sets or clears the HttpOnly session cookie the marketing probe reads.
- *  Best effort: the console never depends on it (its calls carry the bearer from storage). */
+ *  Best effort: the console never depends on it (its calls carry the bearer from storage).
+ *  Deduped per tab so the several session writes of one page load (sign-in, org switch, the TTL
+ *  refresh) cost one request, and only a request that actually succeeded counts as synced. */
+let _syncedToken: string | null = null;
 function syncServerCookie(token: string | null): void {
   if (typeof window === 'undefined') return;
+  if (token !== null && token === _syncedToken) return;
   void fetch('/api/session', token
     ? { method: 'POST', headers: { authorization: `Bearer ${token}` }, cache: 'no-store' }
-    : { method: 'DELETE', cache: 'no-store' }).catch(() => { /* the header shows Sign up until the next sign-in */ });
+    : { method: 'DELETE', cache: 'no-store' })
+    .then((r) => { _syncedToken = r.ok ? token : null; })
+    .catch(() => { _syncedToken = null; /* the header shows Sign up until the next write */ });
+}
+
+/** Make the login cookies match the session this tab actually holds.
+ *
+ *  The hint and the server cookie are a PROJECTION of the session, not a record of the moment it
+ *  changed: written only at the sign-in edge they never reach the people already signed in when
+ *  this ships, and the server cookie's seven days expire under a localStorage session that does
+ *  not, so a signed-in member would see "Sign up" on the marketing header. Called on app load, so
+ *  every visit reconciles. Idempotent, and cheap after the first call in a tab.
+ *
+ *  Self-hosted this is inert without a guard of its own: there is no login, the local session
+ *  carries no token, and an instance that never wrote these cookies has none to clear. */
+export function reconcileLoginState(): void {
+  if (typeof window === 'undefined') return;
+  const token = getSession()?.token;
+  if (token) { setLoginHint(); syncServerCookie(token); return; }
+  // Signed out: the hint and the server cookie are written together and cleared together, so the
+  // JS-visible one answers for both — no request on an anonymous page load that has neither.
+  if (document.cookie.includes(`${HINT_COOKIE}=`) || document.cookie.includes(`${LEGACY_AUTH_COOKIE}=`)) {
+    clearLoginHint();
+    syncServerCookie(null);
+  }
 }
 
 function setSession(s: Session): void {
