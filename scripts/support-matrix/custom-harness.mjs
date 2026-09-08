@@ -25,6 +25,17 @@ const MCP_NAME = process.env.MCP_NAME || 'deepwiki';
 // What a call to it looks like in the record. Backends name MCP calls differently: some record the
 // server and tool ("deepwiki.read_wiki_structure"), others only that an MCP tool was used ("mcp").
 // The harness declares exactly ONE server, so either shape identifies it.
+// What a tool call is named for the judge. omp dispatches MCP tools through its virtual
+// filesystem: the model `write`s JSON to xd://mcp__<server>_<tool> and the result comes back as
+// the write's result (measured 2026-09-08 on omp 18.1.13: two writes to
+// xd://mcp__deepwiki_read_wiki_structure answered the wiki structure). A judge that reads only
+// the name sees `write` and calls a served MCP turn a miss, so the call's arguments are read too.
+const toolLabel = (t) => {
+  const name = String((t && t.name) || '');
+  const args = typeof (t && t.arguments) === 'string' ? t.arguments : JSON.stringify((t && t.arguments) || '');
+  const xd = /xd:\/\/(mcp__[A-Za-z0-9_]+)/.exec(args || '');
+  return name === 'write' && xd ? xd[0] : name;
+};
 const MCP_TOOL = new RegExp(`(^|[^a-z])mcp([^a-z]|$)|${MCP_NAME}|read_wiki_structure|read_wiki_contents|ask_question`, 'i');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TERMINAL = new Set(['done', 'completed', 'failed', 'incomplete', 'cancelled']);
@@ -154,7 +165,7 @@ try {
       rec.status = last && last.status;
       const answer = String((last && last.assistant) || '');
       const files = ((last && last.files) || []).map((f) => f.filename || f.name || '');
-      const tools = ((last && last.tools) || []).map((t) => String(t.name || ''));
+      const tools = ((last && last.tools) || []).map(toolLabel);
       rec.files = files; rec.tools = tools;
       // a failed turn has to say why, or the row teaches nothing
       rec.error = String((last && (last.error || last.incomplete_reason)) || '').slice(0, 300);
@@ -180,7 +191,7 @@ try {
           const t = turns[turns.length - 1];
           if (turns.length > 1 && t && TERMINAL.has(String(t.status)) && (t.assistant || t.error)) { mlast = t; break; }
         }
-        const mtools = ((mlast && mlast.tools) || []).map((t) => String(t.name || ''));
+        const mtools = ((mlast && mlast.tools) || []).map(toolLabel);
         rec.mcp_s = Math.round((Date.now() - m0) / 1000);
         rec.mcp_status = mlast && mlast.status;
         rec.mcp_tools = mtools;

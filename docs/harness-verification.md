@@ -70,7 +70,7 @@ A row passes only if all five hold, each read from what the server stored:
 | The bundle reached the agent | the answer carries a token that exists ONLY inside the script |
 | The script actually ran | the file the script writes is among the turn's produced files |
 | The tool policy took effect | no disabled tool appears among the turn's tool calls |
-| The MCP server was stored, and called | it comes back on a read, and a second turn's tool calls name it |
+| The MCP server was stored, and called | it comes back on a read, and a second turn's tool calls name it. A call is named by its tool name, except omp, which dispatches MCP as a `write` to `xd://mcp__<server>_<tool>`: there the call's arguments name it |
 
 The token is generated per run and never appears in `SKILL.md` or the prompt, so an answer carrying
 it came from the bundle rather than from the model's imagination, and the written file separates a
