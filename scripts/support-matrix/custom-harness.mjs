@@ -114,7 +114,20 @@ try {
       });
       rec.created = created.status;
       hid = created.json && (created.json.id || created.json.harness_id);
-      if (!hid) { rec.why = `create failed: HTTP ${created.status}`; results[base] = rec; log(`CUSTOM ${base} FAIL ${rec.why}`); continue; }
+      // A base whose runtime cannot drive MCP servers refuses them at configuration, by name and
+      // with a reason. That is the product being honest, not the harness failing: the row records
+      // the refusal, drops the server, and measures everything else.
+      if (!hid && created.status === 400 && MCP_URL !== 'off' && /mcp/i.test(JSON.stringify(created.json || {}))) {
+        rec.mcp_refused = String((created.json || {}).detail || (created.json || {}).message || JSON.stringify(created.json)).slice(0, 240);
+        const again = await api('/api/harness/v1/harnesses', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: `matrix custom ${base}`, base, system_prompt: 'You follow your skills exactly.',
+                                 skills: [SKILL('matrix-stamp')], disabled_tools: ['WebSearch'] }),
+        });
+        rec.created = again.status;
+        hid = again.json && (again.json.id || again.json.harness_id);
+      }
+      if (!hid) { rec.why = `create failed: HTTP ${created.status} ${JSON.stringify(created.json || {}).slice(0, 200)}`; results[base] = rec; log(`CUSTOM ${base} FAIL ${rec.why}`); continue; }
 
       // the skill and the disabled tool must be what the server stored, not just what was sent
       const back = await api(`/api/harness/v1/harnesses/${hid}`);
@@ -165,7 +178,9 @@ try {
       // The MCP half, in the same harness and the same session: a second turn that can only be
       // answered by calling the declared server. Judged on the CALL, not on what it returned: a
       // public server's prose is not ours to pin, but a tool call is a fact in the record.
-      if (MCP_URL !== 'off' && mcpUp && rec.skill_reached) {
+      if (rec.mcp_refused) {
+        rec.mcp_called = null;   // not measured: the product said no at configuration, and said why
+      } else if (MCP_URL !== 'off' && mcpUp && rec.skill_reached) {
         const m0 = Date.now();
         await api('/api/harness/v1/responses', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -203,7 +218,7 @@ try {
         (MCP_URL !== 'off' && rec.mcp_called === false && rec.mcp_stored)
           ? `the declared MCP server was never called (tools: ${(rec.mcp_tools || []).join(',') || 'none'})${rec.mcp_error ? '; ' + rec.mcp_error : ''}` : '',
       ].filter(Boolean).join('; ');
-      log(`CUSTOM ${base} ${rec.ok ? 'ok' : 'FAIL'} ${rec.s}s mcp=${rec.mcp_called === null ? 'skipped' : rec.mcp_called} ${rec.why}`);
+      log(`CUSTOM ${base} ${rec.ok ? 'ok' : 'FAIL'} ${rec.s}s mcp=${rec.mcp_refused ? 'refused at configuration' : rec.mcp_called === null ? 'skipped' : rec.mcp_called} ${rec.why}${rec.mcp_refused ? ' [' + rec.mcp_refused + ']' : ''}`);
       if (sid) await api(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' });
     } catch (e) {
       rec.error = String(e).slice(0, 300); log(`CUSTOM ${base} ERROR ${rec.error}`);
