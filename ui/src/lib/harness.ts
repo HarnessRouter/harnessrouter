@@ -139,27 +139,31 @@ export async function fetchModelCatalog(): Promise<ModelCatalog> {
   if (_catalog) return _catalog;
   if (_catalogInflight) return _catalogInflight;
   _catalogInflight = (async () => {
-    try {
-      const r = await harnessFetch('/api/harness/v1/models', { headers: gwHeaders(), cache: 'no-store' });
-      if (!r.ok) throw new Error(String(r.status));
-      const j = await r.json();
-      const out: ModelCatalog = {};
-      for (const [backend, c] of Object.entries((j?.backends || {}) as Record<string, {
-        default?: string; models?: Array<{ id?: string; available?: boolean }> }>)) {
-        const rows = (c?.models || []).filter((m) => m?.id);
-        out[backend] = {
-          default: String(c?.default || ''),
-          models: rows.map((m) => String(m.id)),
-          unavailable: rows.filter((m) => m.available === false).map((m) => String(m.id)),
-        };
+    // A few tries, not one: the first paint of a tab races this read, and one failed read used
+    // to leave the placeholder standing in for the server for the life of the tab.
+    for (const wait of [0, 1500, 3000, 6000]) {
+      if (wait) await new Promise((r) => setTimeout(r, wait));
+      try {
+        const r = await harnessFetch('/api/harness/v1/models', { headers: gwHeaders(), cache: 'no-store' });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = await r.json();
+        const out: ModelCatalog = {};
+        for (const [backend, c] of Object.entries((j?.backends || {}) as Record<string, {
+          default?: string; models?: Array<{ id?: string; available?: boolean }> }>)) {
+          const rows = (c?.models || []).filter((m) => m?.id);
+          out[backend] = {
+            default: String(c?.default || ''),
+            models: rows.map((m) => String(m.id)),
+            unavailable: rows.filter((m) => m.available === false).map((m) => String(m.id)),
+          };
+        }
+        if (Object.keys(out).length) { _catalog = out; break; }
+      } catch {
+        // try again; the placeholder keeps painting meanwhile, with nothing offered as runnable
       }
-      if (Object.keys(out).length) _catalog = out;
-      return _catalog || {};
-    } catch {
-      return {};              // keep the placeholder; a picker that renders beats one that throws
-    } finally {
-      _catalogInflight = null;
     }
+    _catalogInflight = null;
+    return _catalog || {};
   })();
   return _catalogInflight;
 }
@@ -171,11 +175,25 @@ export const oobModels = (o: OobHarness | null | undefined): string[] => {
   return (fromServer && fromServer.length) ? fromServer : o.models;
 };
 
-/** Can this backend actually run this model? False only when the server said so — before the
- *  catalog loads (or if the fetch failed) nothing is greyed out on a guess. */
+/** Whether this backend can run this model, as three answers rather than two. "unknown" is the
+ *  state before the server's catalog has arrived (or while every read of it has failed), and it
+ *  is not "yes": the picker used to treat it that way, offering the placeholder list as runnable
+ *  for the second or two before the catalog landed, and a model picked in that window was refused
+ *  at the send ("no provider serves it") after it had been accepted. Measured 2026-09-08: a
+ *  matrix worker read the picker in that window and was offered four models the platform's
+ *  provider has no channel for. Unknown is shown as unknown, and nothing unknown can be sent. */
+export type ModelAvailability = 'yes' | 'no' | 'unknown';
+export function modelAvailability(backend: string | null | undefined, id: string): ModelAvailability {
+  const entry = backend ? _catalog?.[backend] : undefined;
+  if (!entry) return 'unknown';
+  return entry.unavailable.includes(id) ? 'no' : 'yes';
+}
+/** The picker's note beside a model that cannot be picked; one wording everywhere. */
+export function availabilityNote(state: ModelAvailability): string {
+  return state === 'no' ? 'no provider' : state === 'unknown' ? 'checking providers' : '';
+}
 export function modelAvailable(backend: string | null | undefined, id: string): boolean {
-  const list = backend ? _catalog?.[backend]?.unavailable : undefined;
-  return !list || !list.includes(id);
+  return modelAvailability(backend, id) === 'yes';
 }
 
 export const oobDefaultModel = (o: OobHarness | null | undefined): string => {

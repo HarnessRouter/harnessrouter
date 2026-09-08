@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SkelPage } from '@/components/Skel';
 import { useRouter } from 'next/navigation';
 import {
-  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
+  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
   type CustomHarness, type OobHarness,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
@@ -179,7 +179,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                   onChange={(e) => upd({ defaultModel: e.target.value })}>
                   {models.map((m) => (
                     <option key={m} value={m} disabled={!modelAvailable((oob?.backend || oobById(draft?.base || '')?.backend) || '', m)}>
-                      {m}{modelAvailable((oob?.backend || oobById(draft?.base || '')?.backend) || '', m) ? '' : ' (no provider)'}
+                      {m}{availabilityNote(modelAvailability((oob?.backend || oobById(draft?.base || '')?.backend) || '', m)) ? ` (${availabilityNote(modelAvailability((oob?.backend || oobById(draft?.base || '')?.backend) || '', m))})` : ''}
                     </option>
                   ))}
                 </select>
