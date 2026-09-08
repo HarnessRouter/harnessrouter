@@ -828,7 +828,18 @@ body {
 .qs-copy { font: inherit; font-size: 13.5px; font-weight: 600; padding: 11px 18px; border: 0; border-radius: 8px; cursor: pointer; background: var(--v2-accent); color: #fff; }
 .qs-copy:hover { background: var(--v2-accent-hover, #1447c4); }
 .qs-copy.is-done { background: #eaf5ee; color: #15803d; }
-.qs-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* Copying the guide is the one thing this page is asking for, so the button pulses until it has
+   been done and then stops — the same beat and shape as the Copy AGENTS.md button on the docs
+   site (agentCopyPulse there), in the console's own accent. */
+.qs-copy:not(.is-done) { animation: qsCopyPulse 1150ms ease-in-out infinite; }
+@keyframes qsCopyPulse {
+  0%, 100% { box-shadow: 0 8px 20px rgba(26, 92, 245, .16); transform: translateY(0); }
+  35% { box-shadow: 0 0 0 8px rgba(26, 92, 245, .12), 0 14px 30px rgba(26, 92, 245, .24); transform: translateY(-1px); }
+}
+@media (prefers-reduced-motion: reduce) { .qs-copy:not(.is-done) { animation: none; } }
+/* The agent picker sits in step 02, above the mock it changes, so it needs its own top margin
+   rather than the gap it used to get from .qs-actions. */
+.qs-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
 .qs-chip { display: flex; align-items: center; gap: 7px; font: inherit; font-size: 12.5px; font-weight: 500; padding: 6px 12px 6px 7px; border-radius: 999px; cursor: pointer; border: 1px solid var(--v2-line); background: #fff; color: var(--v2-sec); }
 .qs-chip.is-on { font-weight: 600; border-color: #c9d5f7; background: var(--v2-tint); color: var(--v2-ink); }
 .qs-chip-mark { width: 17px; height: 17px; border-radius: 5px; flex: none; object-fit: contain; }
