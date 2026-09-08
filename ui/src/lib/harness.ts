@@ -106,7 +106,7 @@ export const OOB: OobHarness[] = [
   { id: 'omp', name: 'Oh My Pi', version: 'v18.1.13', backend: 'omp', status: 'ready',
     // pi's lineage, pi's reach: the placeholder is pi's list; the gateway's catalog wins once fetched
     models: ['gpt-5.4', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'deepseek-v4-pro', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'gpt-5.4', moreModels: 0,
-    systemPrompt: 'You are Oh My Pi (OMP), an autonomous coding agent. You operate on a real git workspace with shell, file access, LSP, Python, browser, and subagents to complete engineering tasks end to end.',
+    systemPrompt: 'You are Oh My Pi (OMP), an autonomous coding agent. You operate on a real git workspace with shell, file access, LSP, web search, and subagents to complete engineering tasks end to end.',
     tools: [], skills: [] },
 ];
 

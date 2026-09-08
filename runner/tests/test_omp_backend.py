@@ -143,6 +143,28 @@ def test_omp_all_tools_disabled_passes_no_tools():
     assert "--no-tools" in cmd
 
 
+def test_the_omp_tool_list_is_what_the_pinned_build_accepts():
+    """Read off omp 18.1.13 by probing each name on --tools (2026-09-08): "python" and "browser"
+    were in this list and are not tools of that build, so every harness that disabled ANY tool sent
+    an allowlist omp refused ("Unknown tool in --tools") and every one of its turns died."""
+    from server import ALL_OMP_TOOLS
+    assert ALL_OMP_TOOLS == {"bash", "read", "write", "edit", "glob", "grep", "lsp", "todo", "task", "web_search"}
+    assert "python" not in ALL_OMP_TOOLS and "browser" not in ALL_OMP_TOOLS
+
+
+def test_a_disable_list_that_names_none_of_omps_tools_sends_no_allowlist():
+    """A name from another runtime ("WebSearch", say) removes nothing, so nothing is sent: an
+    allowlist is only a constraint when it removes something, and sending one for nothing is what
+    put a refused name in front of omp."""
+    d = tempfile.mkdtemp()
+    env = {"HOME": d}
+    auth = Auth(api_key="sk-test")
+    cmd = _build_omp("openai", auth, "gpt-5.4", "do task", d, env, tools_disabled=["WebSearch", "Grep (inherited)"])
+    assert not [x for x in cmd if x.startswith("--tools=")] or "grep" not in cmd[[i for i, x in enumerate(cmd) if x.startswith("--tools=")][0]]
+    cmd2 = _build_omp("openai", auth, "gpt-5.4", "do task", d, env, tools_disabled=["WebSearch"])
+    assert not [x for x in cmd2 if x.startswith("--tools=")] and "--no-tools" not in cmd2
+
+
 def test_omp_mcp_config_written():
     d = tempfile.mkdtemp()
     env = {"HOME": d}
@@ -353,3 +375,16 @@ def test_omp_turn_e2e_with_mock_llm():
     assert data.get("done") is True
     assert data.get("status") == "done"
     assert "OMP works!" in data.get("result", "")
+
+
+def test_omp_mcp_entries_carry_the_http_type_omp_requires(tmp_path):
+    """omp's docs/mcp-config.md: an http transport entry requires `type: "http"` and `url`, so the
+    entry carries it. (18.1.13 also infers http from a url when the type is absent; the entry
+    matches the documented schema rather than the inference.)"""
+    from server import _omp_write_mcp
+    ok = _omp_write_mcp(tmp_path, [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp", "auth": "tok"},
+                                   {"name": "nourl"}])
+    assert ok
+    doc = json.loads((tmp_path / "mcp.json").read_text())
+    assert doc["mcpServers"] == {"deepwiki": {"type": "http", "url": "https://mcp.deepwiki.com/mcp",
+                                              "headers": {"Authorization": "Bearer tok"}}}

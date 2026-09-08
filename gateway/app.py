@@ -12564,27 +12564,35 @@ _BASE_CATALOG: dict[str, dict] = {
     "omp": {
         "label": "Oh My Pi", "backend": "omp", "status": "ready",
         "system_prompt": ("You are Oh My Pi (OMP), an autonomous coding agent. You operate on "
-                          "a real git workspace with shell, file access, LSP, Python, browser, "
+                          "a real git workspace with shell, file access, LSP, web search, "
                           "and subagents to complete engineering tasks end to end."),
+        # The ten names omp 18.1.13 accepts on --tools, read by probing the binary itself (see
+        # ALL_OMP_TOOLS in runner/server.py). "python" and "browser" are not among them: omp
+        # refuses an unknown name on the switch and the turn dies before it starts, so a toggle
+        # offered here for either would have produced exactly that exit.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
                   ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"),
-                  ("lsp", "LSP"), ("python", "Python"), ("todo", "Todo"),
-                  ("task", "Task (subagents)"), ("browser", "Browser"),
+                  ("lsp", "LSP"), ("todo", "Todo"), ("task", "Task (subagents)"),
                   ("web_search", "Web Search")],
         "tool_enforcement": "hard",
     },
     "dsh": {
         "label": "DeepSeek Harness", "backend": "dsh", "status": "ready",
-        # MCP note: the pinned runtime wheel (0.1.0rc7) does not bundle dsh's MCP client yet,
-        # so configured MCP servers are announced-and-skipped per turn (see dsh_driver.py).
-        # The runner flips DSH_RUNTIME_HAS_MCP when the pin moves to a build that ships it.
+        # MCP servers ride the driver's patch overlay on the runtime's sdk profile (one
+        # dsh-mcp-client row per server, see runner/dsh_driver.py) since the 0.1.2rc1 pin.
         "system_prompt": ("You are DeepSeek Harness, an autonomous coding agent. You work on a "
                           "real git workspace, running shell commands and editing files to "
                           "complete the task end to end."),
-        # The bundled runtime's model-facing tools. No per-tool switch exists on the wire, so
-        # disabling is an instruction to the model, the same standing as codex/hermes.
+        # The sdk profile's model-facing tools, read off the request header of a 0.1.2rc1 turn
+        # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). No per-tool
+        # switch exists on the wire, so disabling is an instruction to the model, the same
+        # standing as codex/hermes.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
-                  ("edit", "Edit"), ("todo_write", "Todo"), ("subagent", "Subagent")],
+                  ("edit", "Edit"), ("str_replace_editor", "String Replace Editor"),
+                  ("glob", "Glob"), ("grep", "Grep"), ("web_search", "Web Search"),
+                  ("web_fetch", "Web Fetch"), ("todo_write", "Todo"), ("skill", "Skill"),
+                  ("subagent", "Subagent"), ("subagent_fork", "Subagent (fork)"),
+                  ("workflow", "Workflow")],
         "tool_enforcement": "instruction",
     },
     "opencode": {
