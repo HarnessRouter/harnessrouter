@@ -2026,11 +2026,12 @@ def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
     """Write <agent_dir>/mcp.json for OMP native MCP support.
 
     OMP reads the user file at <agent_dir>/mcp.json (PI_CODING_AGENT_DIR) with the standard
-    mcpServers schema. `type: "http"` is REQUIRED on an HTTP entry (docs/mcp-config.md, "http
-    transport: Required: type, url"): an entry with only a url is dropped by discovery, and
-    startup does not fail the session over a dropped server, so the turn ran with no MCP tools
-    and nothing said why (the custom-harness dimension, 2026-09-08). Returns whether any server
-    was written.
+    mcpServers schema. `type: "http"` is what docs/mcp-config.md requires on an HTTP entry ("http
+    transport: Required: type, url"), so the entry says it. Measured on 18.1.13 (2026-09-08): the
+    loader also infers it, `transport ?? (command ? "stdio" : url ? "http" : "stdio")`, so an
+    untyped entry with a url was served too; the dimension's earlier miss on omp was its judge,
+    which reads tool names, while omp dispatches MCP as a `write` to
+    xd://mcp__<server>_<tool>. Returns whether any server was written.
     """
     entries: dict = {}
     for s in servers or []:

@@ -378,9 +378,9 @@ def test_omp_turn_e2e_with_mock_llm():
 
 
 def test_omp_mcp_entries_carry_the_http_type_omp_requires(tmp_path):
-    """omp's docs/mcp-config.md: an http transport entry requires `type: "http"` and `url`. Without
-    the type, discovery drops the server and the session starts without it, silently: the
-    custom-harness dimension measured a turn that wrote a file instead of calling the server."""
+    """omp's docs/mcp-config.md: an http transport entry requires `type: "http"` and `url`, so the
+    entry carries it. (18.1.13 also infers http from a url when the type is absent; the entry
+    matches the documented schema rather than the inference.)"""
     from server import _omp_write_mcp
     ok = _omp_write_mcp(tmp_path, [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp", "auth": "tok"},
                                    {"name": "nourl"}])
