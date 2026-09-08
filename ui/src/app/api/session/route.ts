@@ -85,27 +85,46 @@ export async function OPTIONS(req: NextRequest) {
   });
 }
 
+/** Every hr_auth value the request carries, in the order the browser sent them.
+ *
+ *  During the migration a browser can hold two cookies of this name: the earlier script-set one on
+ *  the registrable domain and this route's host-only one. Both are sent, `cookies.get` returns one
+ *  of them, and which one is not ours to choose — a stale domain copy would shadow a good host-only
+ *  cookie and read as signed out. So try each; the first that verifies is the answer. */
+function authTokens(req: NextRequest): string[] {
+  const out: string[] = [];
+  for (const part of (req.headers.get('cookie') || '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1 || part.slice(0, eq).trim() !== COOKIE) continue;
+    try {
+      const v = decodeURIComponent(part.slice(eq + 1).trim());
+      if (v && !out.includes(v)) out.push(v);
+    } catch { /* a malformed value is not a session */ }
+  }
+  return out.slice(0, 2);   // two is the migration's worst case; bound the engine calls
+}
+
 export async function GET(req: NextRequest) {
   const origin = req.headers.get('origin');
   const headers = { ...corsHeaders(origin), 'content-type': 'application/json' };
   // Self-hosted has no sign-in and no engine to ask, so the answer is always "not signed in" —
   // the same fail-closed answer this route already gives when the engine can't be reached.
-  const token = SELF_HOSTED || !ENGINE ? '' : (req.cookies.get(COOKIE)?.value || '');
-  if (!token) {
-    return new Response(JSON.stringify({ authed: false }), { status: 200, headers });
-  }
+  const tokens = SELF_HOSTED || !ENGINE ? [] : authTokens(req);
+  const signedOut = new Response(JSON.stringify({ authed: false }), { status: 200, headers });
+  if (!tokens.length) return signedOut;
   try {
-    const who = await verified(token);
-    if (!who) {
-      // expired / revoked / invalid → treat as logged out
-      return new Response(JSON.stringify({ authed: false }), { status: 200, headers });
+    for (const token of tokens) {
+      const who = await verified(token);          // expired / revoked / invalid → try the next
+      if (who) {
+        return new Response(
+          JSON.stringify({ authed: true, name: who.name, dashboardUrl: DASHBOARD_URL }),
+          { status: 200, headers },
+        );
+      }
     }
-    return new Response(
-      JSON.stringify({ authed: true, name: who.name, dashboardUrl: DASHBOARD_URL }),
-      { status: 200, headers },
-    );
+    return signedOut;
   } catch {
     // engine unreachable → fail closed to logged-out (header just shows Sign up, never a token)
-    return new Response(JSON.stringify({ authed: false }), { status: 200, headers });
+    return signedOut;
   }
 }
