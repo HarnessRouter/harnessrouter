@@ -163,11 +163,16 @@ Wait for `ready on :3000`, then open the browser:
 
 ```
 [harnessrouter] installing Claude Code (Anthropic's terms apply)…
+[harnessrouter] installing opencode (MIT)…
+[harnessrouter] installing Qwen Code (Apache-2.0)…
+[harnessrouter] installing Gemini CLI (Apache-2.0)…
+[harnessrouter] installing Cline (Apache-2.0)…
 [harnessrouter] installing Codex (Apache-2.0)…
 [harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…
+[harnessrouter] installing Oh My Pi (MIT)…
 [harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…
 [harnessrouter] installing Hermes (check its upstream license before use)…
-[harnessrouter] data=/data  backends available: claude codex hermes pi dsh
+[harnessrouter] data=/data  backends available: claude codex hermes pi dsh opencode qwen gemini cline omp
 [harnessrouter] ready on :3000
 ```
 
@@ -191,10 +196,11 @@ The agent CLIs are fetched on the first start rather than shipped in the image, 
 licensing fact rather than a packaging preference. Claude Code is distributed under Anthropic's own
 terms and hermes-agent declares no license at all, so neither can be redistributed inside a public
 image. Installing them on first run means you install them yourself, from upstream, under those
-terms — which is also why you should read them before you use those two backends. Codex
-(Apache-2.0), Pi (MIT, with its MIT-licensed MCP adapter) and DeepSeek Harness (MIT,
-a developer preview pinned to an exact version) arrive the same way, so all five land
-in one place.
+terms, which is also why you should read them before you use those two backends. The rest arrive
+the same way and under their own terms: Codex, Qwen Code, Gemini CLI and Cline (Apache-2.0),
+opencode and Pi (MIT, Pi with its MIT-licensed MCP adapter), Oh My Pi (MIT, a prebuilt binary
+pinned to a release and checked against the publisher's SHA256SUMS before it is installed) and
+DeepSeek Harness (MIT, a developer preview pinned to an exact version). All ten land in one place.
 
 </details>
 
@@ -287,14 +293,16 @@ problem, because it only offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes, Pi |
-| `openai` | Codex, Hermes, Pi |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness |
-| `azure-foundry` | Codex, Hermes, Pi |
+| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `custom` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
 
 </details>
 
