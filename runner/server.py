@@ -1994,7 +1994,12 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
 # <agent_dir>/sessions/<cwd slug>/<ts>_<id>.jsonl, -r <id> recalls the first message, --tools=read
 # leaves a write unwritten, and every assistant message names the model it ran.
 OMP_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
-ALL_OMP_TOOLS = {"bash", "read", "write", "edit", "glob", "grep", "lsp", "python", "todo", "task", "browser", "web_search"}
+# The built-in tools omp 18.1.13 accepts on --tools, read off the binary by probing each name (a
+# rejected name kills the turn: "Unknown tool in --tools"). "python" and "browser" were in this
+# list and are not tools of this build, so every harness that disabled ANY tool sent an allowlist
+# omp refused, and every one of its turns died with a stack trace (found by the custom-harness
+# matrix dimension, 2026-09-08). A CLI bump re-probes this list; the test beside it pins it.
+ALL_OMP_TOOLS = {"bash", "read", "write", "edit", "glob", "grep", "lsp", "todo", "task", "web_search"}
 
 
 def _omp_has_session(agent_dir: pathlib.Path, session_id: str) -> bool:
@@ -2103,7 +2108,11 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     if tools_disabled:
         disabled = {x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
         enabled = [t for t in sorted(ALL_OMP_TOOLS) if t not in disabled]
-        if not enabled:
+        # A disable list that names none of omp's tools (a name from another runtime, say) changes
+        # nothing, so nothing is sent: an allowlist is only a constraint when it removes something.
+        if len(enabled) == len(ALL_OMP_TOOLS):
+            pass
+        elif not enabled:
             cmd += ["--no-tools"]
         else:
             cmd += [f"--tools={','.join(enabled)}"]
