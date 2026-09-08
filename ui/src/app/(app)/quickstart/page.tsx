@@ -100,14 +100,6 @@ export default function QuickstartPage() {
             </div>
             <div className="qs-actions">
               <button type="button" className={'qs-copy' + (qs.copied ? ' is-done' : '')} onClick={() => void copyMd()}>{qs.copied ? 'Copied to clipboard' : 'Copy AGENTS.md'}</button>
-              <div className="qs-chips" role="radiogroup" aria-label="Your coding agent">
-                {AGENTS.map((a) => (
-                  <button key={a.id} type="button" role="radio" aria-checked={a.id === agent.id} className={'qs-chip' + (a.id === agent.id ? ' is-on' : '')} onClick={() => update({ agent: a.id })}>
-                    {/* eslint-disable-next-line @next/next/no-img-element -- the agent's own mark, a static asset */}
-                    <img className="qs-chip-mark" src={a.logo} alt="" aria-hidden="true" /><span>{a.name}</span>
-                  </button>
-                ))}
-              </div>
               <button type="button" className={'qs-confirm' + (qs.pasted ? ' is-done' : '')} disabled={!qs.copied} title={qs.copied ? undefined : 'Copy AGENTS.md first'}
                 onClick={() => { if (qs.copied) { track('quickstart_pasted'); update({ pasted: true }); } }}>{qs.pasted ? 'Pasted' : 'Done pasting'}</button>
             </div>
@@ -121,6 +113,17 @@ export default function QuickstartPage() {
                 <div className="qs-title">Ask it to build</div>
                 <div className="qs-sub">Describe the product or feature you want. The coding agent builds the product interface and connects your backend to server-side agents through HarnessRouter.</div>
               </div>
+            </div>
+            {/* Which agent you use decides nothing in step 01 — the guide is the same text for all
+                of them — but it decides everything shown below: the mark on the pasted file, the
+                name on the composer, the kicker. So the choice lives beside what it changes. */}
+            <div className="qs-chips" role="radiogroup" aria-label="Your coding agent">
+              {AGENTS.map((a) => (
+                <button key={a.id} type="button" role="radio" aria-checked={a.id === agent.id} className={'qs-chip' + (a.id === agent.id ? ' is-on' : '')} onClick={() => update({ agent: a.id })}>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- the agent's own mark, a static asset */}
+                  <img className="qs-chip-mark" src={a.logo} alt="" aria-hidden="true" /><span>{a.name}</span>
+                </button>
+              ))}
             </div>
             <div className="qs-kicker">In {agent.name}</div>
             <div className="qs-mock" aria-label={`What you type into ${agent.name}`}>
