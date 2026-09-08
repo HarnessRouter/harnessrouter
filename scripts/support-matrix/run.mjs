@@ -149,6 +149,8 @@ try {
             await sleep(2000);
             const r5 = await turn('What exact word did I ask you to reply with in my very first message of this task? Reply with just that word.');
             rec.recycle = expectWord(r5, `M1-${m}`); rec.recycle.recycled = rc;
+            // a recall that reads the lost-history note as its answer is a failed resume, on every harness
+            if (rec.recycle.ok && /no longer available to Codex|could not be restored/i.test(rec.recycle.tail || '')) rec.recycle = { ...rec.recycle, ok: false, why: 'resumed without its history: ' + rec.recycle.tail.slice(-160) };
           } else rec.recycle = { ok: false, s: 0, why: `recycle refused: HTTP ${rc.code} ${rc.body}`, recycled: rc };
           log(`RECYCLE ${k} ${rec.recycle.ok ? 'ok' : 'FAIL'} ${rec.recycle.s}s ${rec.recycle.why}`);
         } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; rec.recycle = { ok: null, why: 'first turn failed' }; }

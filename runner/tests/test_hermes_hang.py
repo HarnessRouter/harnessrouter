@@ -147,3 +147,15 @@ def test_resume_lost_emits_visible_event_not_just_a_log_line(monkeypatch, tmp_pa
     assert any(e.get("type") == "system" and e.get("subtype") == "resume_lost"
                and e.get("requested_session_id") == "prior-not-here" for e in events), (
         "resume-lost was not signaled in the turn's event stream")
+
+
+def test_hermes_names_the_responses_api_on_azure_for_the_family_the_cli_does_not_know():
+    """hermes 0.19.0 infers the Responses API on Azure from the prefixes codex, gpt-5, o1, o3, o4
+    and reads the config's api_mode first; gpt-6-astra went to chat completions there and Azure
+    refused function tools with reasoning (the astra column, 2026-09-08)."""
+    from server import _hermes_api_mode
+    assert _hermes_api_mode("azure-foundry", "gpt-6-astra") == "codex_responses"
+    assert _hermes_api_mode("azure-foundry", "gpt-5.4") == "codex_responses"
+    assert _hermes_api_mode("azure-foundry", "gpt-4o") is None
+    assert _hermes_api_mode("openai-api", "gpt-6-astra") == "codex_responses"
+    assert _hermes_api_mode("bedrock", "gpt-6-astra") is None and _hermes_api_mode("openrouter", "openai/gpt-6-astra") is None
