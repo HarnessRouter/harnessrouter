@@ -385,7 +385,7 @@ def _emit(method: str, payload) -> None:
 
 
 def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = None,
-                   relay_port: int = 0, model: str = "") -> str:
+                   relay_port: int = 0, model: str = "", cwd: str = "") -> str:
     """Our overlay on the runtime's stock `sdk` profile, in the loader's own patch grammar: a row
     named by id is merged, `disabled: true` stops one, and `insert` appends new rows.
 
@@ -393,13 +393,29 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
     hr_dsh_server.mjs: resume-or-create), one dsh-mcp-client row is inserted per enabled MCP
     server, and a non-deepseek family gets its route merged into the stock dsh-llm-pi-ai row.
     A patch cannot rename a row, which is why the server is disable-plus-insert rather than the
-    name swap the previous runtime's bundled cordis.yml allowed."""
+    name swap the previous runtime's bundled cordis.yml allowed.
+
+    The sdk profile's sandboxing executor rows are disabled and the local executors inserted, the
+    composition rc7 shipped (dsh-bash-local, dsh-fs-local). This is the state upstream itself
+    names, "sandbox_permissions is not available in this composition (no sandboxing executor to
+    escalate)": with a sandboxing executor mounted, every file tool advertises the escalation
+    fields `sandbox_permissions` and `justification`, meant for a one-shot retry after a denial.
+    GPT models fill them on every write regardless, and under danger-full-access each such call is
+    refused as "not strictly wider than this call's current mode": twenty refused writes in one
+    turn, the file never created, on gpt-5.2 through gpt-6-astra (the dsh matrix column through
+    Vercel, 2026-09-08); DeepSeek and Claude leave the fields alone. A field that does not exist
+    cannot be filled. The workspace and the container are the boundary here, as for every other
+    backend. `permission` goes with them: it throws over an unconfined executor."""
     entries: list = [{"id": "sdk-jsonrpc-server", "disabled": True}]
+    entries += [{"id": rid, "disabled": True}
+                for rid in ("sandbox", "sandbox-policy", "bash-sandbox", "fs-sandbox", "permission")]
     cjs = home / ".dsh" / "hr_dsh_server.mjs"
     inserted: list = [{"id": "hr-sdk-jsonrpc-server", "name": str(cjs),
                        "inject": ["sdkAppStartup", "loader"],
                        # the stock row's default: a turn that stops on max tokens is a finished turn
-                       "config": {"maxTokensAsSuccess": True}}]
+                       "config": {"maxTokensAsSuccess": True}},
+                      {"id": "hr-bash-local", "name": "@deepseek-ai/dsh-bash-local", "config": {"cwd": cwd}},
+                      {"id": "hr-fs-local", "name": "@deepseek-ai/dsh-fs-local", "config": {"cwd": cwd}}]
     for i, s in enumerate(servers):
         url = (s or {}).get("url")
         if not url:
@@ -463,13 +479,13 @@ def main() -> int:
     from deepseek_harness import DeepSeekHarness
 
     os.environ["HR_RELAY_TOKEN"] = "hr-relay"   # the placeholder the pi-ai route resolves
-    # The sdk profile's sandbox policy and approval policy both read this (mode ?? 'workspace-write';
-    # approval 'never' only under danger-full-access). The default refuses EVERY command on a host
-    # with no bubblewrap and no Landlock, which is this product's container ("no sandbox backend is
-    # usable on this host; refusing to run the command unconfined", measured 2026-09-08 on
-    # 0.1.2rc1: the skill's script never ran and the agent quoted its source instead), and the
-    # 'ask' approval has no one to ask in a headless turn. The workspace and the container are the
-    # boundary here, the same standing every other backend runs with.
+    # The sdk profile's approval policy reads this ('never' only under danger-full-access, 'ask'
+    # otherwise), and a headless turn has no one to ask. The sandbox policy read it too before the
+    # sandboxing executor rows were taken out of the composition (see _compose_patch): its default
+    # refused EVERY command on a host with no bubblewrap and no Landlock, which is this product's
+    # container ("no sandbox backend is usable on this host; refusing to run the command
+    # unconfined", measured 2026-09-08 on 0.1.2rc1: the skill's script never ran and the agent
+    # quoted its source instead).
     os.environ["DSH_PERMISSION_MODE"] = "danger-full-access"
     llm = job.get("llm")   # None => the verified deepseek-official path
     # The SDK launches `dsh --profile sdk --patch <ours>` against an explicit home; the profile
@@ -478,7 +494,7 @@ def main() -> int:
     kwargs = dict(provider=("hr" if llm else "deepseek-official"), model=job["model"],
                   cwd=cwd, dsh_home=str(home / ".dsh"),
                   patches=(_compose_patch(home, job.get("mcp_servers") or [], llm=llm,
-                                          relay_port=srv.server_address[1], model=job["model"]),),
+                                          relay_port=srv.server_address[1], model=job["model"], cwd=cwd),),
                   # A runtime whose plugin tree failed stays alive with a mute stdout; without a
                   # bound the initialize request waits forever and the turn reads as a hang.
                   request_timeout_seconds=180.0)

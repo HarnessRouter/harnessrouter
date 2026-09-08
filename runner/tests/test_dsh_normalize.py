@@ -190,7 +190,7 @@ def test_build_dsh_native_anthropic_default_base(tmp_path):
 def _patch(tmp_path, servers, llm=None, model="m"):
     import yaml
     home = tmp_path / "home"
-    out = pathlib.Path(dsh_driver._compose_patch(home, servers, llm=llm, relay_port=9999, model=model))
+    out = pathlib.Path(dsh_driver._compose_patch(home, servers, llm=llm, relay_port=9999, model=model, cwd=str(tmp_path / "ws")))
     return out.read_text(), yaml.safe_load(out.read_text())
 
 
@@ -210,17 +210,22 @@ def test_compose_patch_swaps_the_server_row_and_inserts_one_mcp_row_per_server(t
     _, doc = _patch(tmp_path, [{"name": "deep wiki!", "url": "https://mcp.example/mcp", "auth": "tok",
                                 "headers": {"X-Trace": "1"}},
                                {"name": "nourl"}])
-    assert doc[0] == {"id": "sdk-jsonrpc-server", "disabled": True}
-    rows = doc[1]["insert"]
+    disabled = [e["id"] for e in doc if e.get("disabled") is True]
+    assert disabled == ["sdk-jsonrpc-server", "sandbox", "sandbox-policy", "bash-sandbox", "fs-sandbox", "permission"]
+    rows = [e for e in doc if "insert" in e][0]["insert"]
     assert rows[0]["id"] == "hr-sdk-jsonrpc-server" and rows[0]["name"].endswith("/.dsh/hr_dsh_server.mjs")
     assert rows[0]["inject"] == ["sdkAppStartup", "loader"] and rows[0]["config"] == {"maxTokensAsSuccess": True}
     assert (tmp_path / "home" / ".dsh" / "hr_dsh_server.mjs").exists()
+    # no sandboxing executor in the composition: the local executors, so no file tool advertises
+    # the escalation fields GPT models fill on every call
+    assert [(r["name"], r["config"]) for r in rows if r["id"] in ("hr-bash-local", "hr-fs-local")] == [
+        ("@deepseek-ai/dsh-bash-local", {"cwd": str(tmp_path / "ws")}), ("@deepseek-ai/dsh-fs-local", {"cwd": str(tmp_path / "ws")})]
     mcp = [r for r in rows if r["name"] == "@deepseek-ai/dsh-mcp-client"]
     assert len(mcp) == 1, "a server without a url is not a server"
     assert mcp[0]["config"] == {"transport": "streamable-http", "serverName": "deepwiki",
                                 "url": "https://mcp.example/mcp",
                                 "headers": {"Authorization": "Bearer tok", "X-Trace": "1"}}
-    assert len(doc) == 2, "the deepseek-official path merges nothing into llm-pi-ai"
+    assert not [e for e in doc if e.get("id") == "llm-pi-ai"], "the deepseek-official path merges nothing into llm-pi-ai"
 
 
 def test_compose_patch_merges_the_route_into_the_stock_pi_ai_row(tmp_path):
