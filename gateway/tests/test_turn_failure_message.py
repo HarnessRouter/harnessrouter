@@ -12,10 +12,11 @@ def test_own_key_refusal_is_said_in_words():
     assert gw._turn_failure_message(rec) == "Your openai key was refused: OpenAI API error (401): invalid api key"
 
 
-def test_an_exhausted_chain_lists_what_was_tried():
+def test_an_exhausted_chain_says_the_last_reason_and_no_connection_name():
     rec = {"tried": [{"connection": "a", "error": "not found"}, {"connection": "b", "status": "failed", "error": "boom"}]}
     m = gw._turn_failure_message(rec)
-    assert '"a"' in m and "boom" in m
+    assert m == "The turn failed on every connection it tried. The last one said: boom"
+    assert '"a"' not in m and "[" not in m
 
 
 def test_nothing_tried_still_says_something():
@@ -44,3 +45,17 @@ def test_a_models_content_refusal_is_not_a_key_refusal():
     assert not gw._provider_refused("The model refused to complete the request")
     assert not gw._provider_refused("Your tokenrouter key was refused: The model refused to complete the request")
     assert gw._provider_refused("403 Forbidden: key disabled")
+
+
+def test_the_reason_is_the_last_connection_that_ran_not_a_skipped_one():
+    """hermes on hosted, claude-opus-5, 2026-09-08: TokenRouter ran the turn and Opus 5's
+    safeguards refused it; the chain's next connection could not be brokered and its note was
+    shown as the reason."""
+    rec = {"tried": [{"connection": "integration:global:TokenRouter Sponsorship", "status": "failed",
+                      "error": "The model refused to complete the request"},
+                     {"connection": "integration:global:hermes-bedrock", "error": "credential cannot be brokered; refused"}]}
+    assert gw._turn_failure_message(rec) == \
+        "The turn failed on every connection it tried. The last one said: The model refused to complete the request"
+    only_skips = {"tried": [{"connection": "a", "error": "not found"}, {"connection": "b", "error": "credential cannot be brokered; refused"}]}
+    assert gw._turn_failure_message(only_skips) == \
+        "The turn failed on every connection it tried. The last one said: credential cannot be brokered; refused"

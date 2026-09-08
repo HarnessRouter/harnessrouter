@@ -881,18 +881,27 @@ import re as _re
 # ("API Error: 400 ...", "API Error: 429 ..."), then usually retries and continues. That
 # diagnostic is the CLI's own UX, not model output — rendering it as the reply is wrong (it made
 # a working opus-4.7/4.8 turn look failed). Drop assistant text blocks that ARE such an error line.
-_CLAUDE_ERR_RE = _re.compile(r"^\s*API Error:\s*\d{3}\b", _re.IGNORECASE)
+# The same line without a status code is the CLI's own account of a turn that ended on an error:
+# Claude Code's "API Error: Opus 5's safeguards flagged this message …" and Qwen Code's
+# "[API Error: Model stream ended with empty response text.]" (both 2026-09-08, hosted's
+# claude-opus-5 recall). Neither is an answer. The text is kept aside as the turn's reason.
+_CLAUDE_ERR_RE = _re.compile(r"^\s*\[?API Error:", _re.IGNORECASE)
 
 
-def _strip_claude_error_text(obj: dict) -> dict | None:
-    """Remove CLI-injected 'API Error: <code> …' text blocks from an assistant message. Returns the
+def _strip_claude_error_text(obj: dict, state: dict | None = None) -> dict | None:
+    """Remove CLI-injected 'API Error: …' text blocks from an assistant message. Returns the
     message with those blocks dropped (None if nothing renderable remains), or the object unchanged
-    when it carries no such block."""
+    when it carries no such block. The dropped text is remembered on `state` ("_cli_error") so a
+    turn that ends with no answer can fail with it as the reason."""
     if obj.get("type") != "assistant":
         return obj
     content = (obj.get("message") or {}).get("content")
     if not isinstance(content, list):
         return obj
+    if state is not None:
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "text" and _CLAUDE_ERR_RE.match(str(c.get("text") or "")):
+                state["_cli_error"] = str(c.get("text") or "").strip().strip("[]").strip()[:400]
     kept = [c for c in content
             if not (isinstance(c, dict) and c.get("type") == "text"
                     and _CLAUDE_ERR_RE.match(str(c.get("text") or "")))]
@@ -904,12 +913,25 @@ def _strip_claude_error_text(obj: dict) -> dict | None:
 
 
 def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
-    # Filter out CLI-injected "API Error: NNN …" diagnostics rendered as assistant text (they are
+    # Filter out CLI-injected "API Error: …" diagnostics rendered as assistant text (they are
     # not model output; the CLI retries around them). Applies to both batch + partial modes.
-    obj2 = _strip_claude_error_text(obj)
+    obj2 = _strip_claude_error_text(obj, state)
     if obj2 is None:
         return []
     obj = obj2
+    if obj.get("type") == "result":
+        # A turn whose only "answer" is the CLI's error line is a failed turn with that reason: a
+        # Qwen Code turn Opus 5 refused completed with "[API Error: Model stream ended with empty
+        # response text.]" as its reply (hosted, 2026-09-08). A real answer after a retried error
+        # keeps the answer.
+        answer = str(state.get("final") or obj.get("result") or "")
+        if _CLAUDE_ERR_RE.match(answer):
+            state["_cli_error"] = answer.strip().strip("[]").strip()[:400]
+            answer = ""
+        if not answer.strip() and state.get("_cli_error") and not obj.get("is_error"):
+            return [{**obj, "subtype": "error", "is_error": True, "result": state["_cli_error"]}]
+        if obj.get("is_error") and not str(obj.get("result") or "").strip() and state.get("_cli_error"):
+            return [{**obj, "result": state["_cli_error"]}]
     # Default (batch) mode: pass the CLI's stream-json through unchanged — the CLI emits one event
     # per COMPLETE assistant message, so text lands in a batch.
     if not state.get("partial"):
@@ -1895,6 +1917,26 @@ def _pi_usage_add(state: dict, u: dict | None) -> None:
             tot[dst] += int(v)
 
 
+_MODEL_SNAPSHOT_DATE = re.compile(r"-\d{8}$")
+
+
+def _same_model(requested: str, served: str) -> bool:
+    """Whether two ids name the same model. The check is about substitution (Richard: the models
+    are honest, no fallback), not spelling: a vendor names its model its own way in the response,
+    and pi puts THAT on the assistant message for an Anthropic-shaped stream (pi-ai 0.85.1
+    anthropic-messages.js: `output.model = event.message.model` on message_start; its OpenAI
+    clients stamp the configured id). Through an aggregator the requested id is the routed one,
+    `anthropic/claude-opus-4.8`, and Anthropic answers `claude-opus-4-8`; `claude-haiku-4.5` comes
+    back as the dated snapshot `claude-haiku-4-5-20251001`. Same model, so: a vendor prefix, case,
+    dots against dashes and a trailing snapshot date do not count (every hosted pi restore on an
+    Anthropic id failed as a substitution, 2026-09-08). `gemini-3-flash-preview` for
+    `gemini-3.8-flash` stays a substitution."""
+    def canon(m: str) -> str:
+        m = (m or "").strip().lower().rsplit("/", 1)[-1].replace(".", "-")
+        return _MODEL_SNAPSHOT_DATE.sub("", m)
+    return bool(requested) and bool(served) and canon(requested) == canon(served)
+
+
 def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE pi `--mode json` event to zero+ canonical claude stream-json events.
 
@@ -1971,7 +2013,7 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
         usage = {k: v for k, v in usage.items() if v}
         served = sorted(set(state.get("_served") or []))
         requested = str(state.get("model") or "")
-        other = [m for m in served if requested and m != requested]
+        other = [m for m in served if requested and not _same_model(requested, m)]
         if other and not err:
             # the models are honest, no fallback: a turn the CLI ran on another model than the one
             # asked for fails with the reason on the record, never completes (the served-model rule
@@ -3889,7 +3931,7 @@ def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
         # gets, and a turn that ran another model than the one asked for must say so, never read
         # completed. The settings pin every id to itself; this is the check that they held.
         requested = str(state.get("model") or "")
-        other = [m for m in served.split(",") if m and requested and m != requested]
+        other = [m for m in served.split(",") if m and requested and not _same_model(requested, m)]
         if other:
             # the substitution is the more specific cause; the CLI's own error, when it says one, rides along
             tail = f" (the CLI ended with {err.get('type') or 'an error'}: {err.get('message')})" if err and err.get("message") else ""

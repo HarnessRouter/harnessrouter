@@ -2040,14 +2040,28 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         # span a minute and a half. A refused allocation (429) is asked again the same way. The last
         # answer is always recorded before the decision, so a refusal names its cause, never "unknown".
         for attempt, pause in enumerate(_HYDRATE_PAUSES):
-            r = await _hydrate_relay(sid, params)
-            rec["hydrated"] = r.status_code < 400
-            rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
-            if rec["hydrated"]:
-                break
-            rec["hydrate_error"] = f"HTTP {r.status_code} {(r.text or '')[:200]}"
+            refused = False
+            try:
+                r = await _hydrate_relay(sid, params)
+            except Exception as e:  # noqa: BLE001
+                # The relay itself raised: the sandbox dropped the streaming POST under a burst, or
+                # the blob read failed. Twelve restores in two minutes went this way on hosted while
+                # the pool was refusing allocations (2026-09-08 08:10Z), each recorded as "unknown"
+                # (an httpx error's str is empty) and none asked again. The restore is idempotent
+                # (wipe and untar), so a raise is one more failed try on the same ladder, named by
+                # its class.
+                rec["hydrated"] = False
+                rec["hydrate"] = None
+                rec["hydrate_error"] = f"{type(e).__name__}: {str(e)[:160]}".rstrip(": ")
+            else:
+                rec["hydrated"] = r.status_code < 400
+                rec["hydrate"] = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+                if rec["hydrated"]:
+                    break
+                rec["hydrate_error"] = f"HTTP {r.status_code} {(r.text or '')[:200]}"
+                refused = r.status_code == 429
             print(f"[hydrate] restore failed sid={sid} attempt={attempt + 1} {rec['hydrate_error']}", flush=True)
-            if not (want_sha or r.status_code == 429):
+            if not (want_sha or refused):
                 break
             if pause is not None:
                 await asyncio.sleep(pause)
@@ -2063,10 +2077,19 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             # checkpoint over the good blob from a workspace that isn't that checkpoint.
             rec["hydrate_failed_with_checkpoint"] = True
     except Exception as e:  # noqa: BLE001
-        rec["hydrate_error"] = str(e)[:200]
+        rec["hydrate_error"] = f"{type(e).__name__}: {str(e)[:160]}".rstrip(": ")
         print(f"[hydrate] restore raised sid={sid} {rec['hydrate_error']}", flush=True)
         if str(v.get("ws_sha") or ""):
             rec["hydrate_failed_with_checkpoint"] = True
+
+
+def _hydrate_reason(rec: dict) -> str:
+    """The restore failure in the person's terms. The sandbox's own refusal names its pod and pool;
+    what the person can act on is that the sandbox was busy."""
+    err = str(rec.get("hydrate_error") or "")
+    if err.startswith("HTTP 429"):
+        return "the sandbox could not be started right now (busy); try again in a minute"
+    return err or "unknown"
 
 
 async def _checkpoint(sid: str, rec: dict) -> None:
@@ -3363,9 +3386,24 @@ def _provider_refused(err: str) -> bool:
 
 def _turn_failure_message(rec: dict) -> str:
     """What a failed turn says: the org's own key's refusal in plain words when that is why, else
-    the list of connections tried."""
+    the last connection's reason in words. Never the tried list itself: its JSON, with our
+    connection names in it, was shown to Richard as the error of a Gemini CLI turn (2026-09-07)."""
     tried = rec.get("tried") or []
-    return str(rec.get("error_message") or "") or (json.dumps(tried)[:400] if tried else "turn failed")
+    if rec.get("error_message"):
+        return str(rec["error_message"])
+    if not tried:
+        return "turn failed"
+    # The reason is what the last connection that RAN said. A connection skipped before running
+    # (not found, does not serve the model, cannot be brokered) carries no status, and its note is
+    # not why the turn failed unless nothing ran: a hermes turn Opus 5's safeguards refused read
+    # "credential cannot be brokered; refused" because the chain's next entry could not be brokered
+    # (hosted, 2026-09-08).
+    ran = [t for t in tried if t.get("status")]
+    last = (ran or tried)[-1]
+    reason = str(last.get("error") or "").strip() or f"the connection answered {last.get('status') or 'with an error'}"
+    if len(tried) > 1:
+        return f"The turn failed on every connection it tried. The last one said: {reason}"
+    return f"The turn failed: {reason}"
 
 
 async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
@@ -6116,7 +6154,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # error the person can retry is the honest answer.
         rec["status"] = "failed"
         rec["error_message"] = _HYDRATE_FAILED_MESSAGE
-        rec["tried"] = [{"connection": "", "status": "failed", "error": f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}"}]
+        rec["tried"] = [{"connection": "", "status": "failed", "error": f"workspace restore failed: {_hydrate_reason(rec)}"}]
         return "failed", [], rec
     # Capture the USER's message as the first trace event of this turn — the runner's
     # stream only carries agent/tool/result, never the prompt, so without this the
@@ -6619,7 +6657,7 @@ async def recycle_session_sandbox(sid: str) -> dict:
     rec: dict = {}
     await _hydrate(sid, rec, force=True)
     if not rec.get("hydrated"):
-        raise HTTPException(502, f"workspace restore failed: {rec.get('hydrate_error') or 'unknown'}")
+        raise HTTPException(502, f"workspace restore failed: {_hydrate_reason(rec)}")
     return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
             "hydrated": bool(rec.get("hydrated")), "hydrate": rec.get("hydrate"), "hydrate_error": rec.get("hydrate_error")}
 
