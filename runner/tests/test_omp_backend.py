@@ -375,3 +375,16 @@ def test_omp_turn_e2e_with_mock_llm():
     assert data.get("done") is True
     assert data.get("status") == "done"
     assert "OMP works!" in data.get("result", "")
+
+
+def test_omp_mcp_entries_carry_the_http_type_omp_requires(tmp_path):
+    """omp's docs/mcp-config.md: an http transport entry requires `type: "http"` and `url`. Without
+    the type, discovery drops the server and the session starts without it, silently: the
+    custom-harness dimension measured a turn that wrote a file instead of calling the server."""
+    from server import _omp_write_mcp
+    ok = _omp_write_mcp(tmp_path, [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp", "auth": "tok"},
+                                   {"name": "nourl"}])
+    assert ok
+    doc = json.loads((tmp_path / "mcp.json").read_text())
+    assert doc["mcpServers"] == {"deepwiki": {"type": "http", "url": "https://mcp.deepwiki.com/mcp",
+                                              "headers": {"Authorization": "Bearer tok"}}}

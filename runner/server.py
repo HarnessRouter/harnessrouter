@@ -2025,8 +2025,12 @@ def _omp_has_session(agent_dir: pathlib.Path, session_id: str) -> bool:
 def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
     """Write <agent_dir>/mcp.json for OMP native MCP support.
 
-    OMP supports native project and user MCP configurations with the standard
-    mcpServers schema. Returns whether any server was written.
+    OMP reads the user file at <agent_dir>/mcp.json (PI_CODING_AGENT_DIR) with the standard
+    mcpServers schema. `type: "http"` is REQUIRED on an HTTP entry (docs/mcp-config.md, "http
+    transport: Required: type, url"): an entry with only a url is dropped by discovery, and
+    startup does not fail the session over a dropped server, so the turn ran with no MCP tools
+    and nothing said why (the custom-harness dimension, 2026-09-08). Returns whether any server
+    was written.
     """
     entries: dict = {}
     for s in servers or []:
@@ -2034,7 +2038,7 @@ def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
         if not url:
             continue
         name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
-        entry: dict = {"url": url}
+        entry: dict = {"type": "http", "url": url}
         auth = (s or {}).get("auth")
         if auth:
             hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
