@@ -843,7 +843,7 @@ body {
 .qs-chip { display: flex; align-items: center; gap: 7px; font: inherit; font-size: 12.5px; font-weight: 500; padding: 6px 12px 6px 7px; border-radius: 999px; cursor: pointer; border: 1px solid var(--v2-line); background: #fff; color: var(--v2-sec); }
 .qs-chip.is-on { font-weight: 600; border-color: #c9d5f7; background: var(--v2-tint); color: var(--v2-ink); }
 .qs-chip-mark { width: 17px; height: 17px; border-radius: 5px; flex: none; object-fit: contain; }
-.qs-confirm { margin-left: auto; font: inherit; font-size: 13px; font-weight: 500; padding: 10px 16px; border-radius: 8px; cursor: pointer; border: 1px solid #e0dcd9; background: transparent; color: var(--v2-body); }
+.qs-confirm { font: inherit; font-size: 13px; font-weight: 500; padding: 10px 16px; border-radius: 8px; cursor: pointer; border: 1px solid #e0dcd9; background: transparent; color: var(--v2-body); }
 .qs-confirm:disabled { cursor: not-allowed; border-color: #f0eeec; color: var(--v2-cap); }
 .qs-confirm.is-done { border-color: #cfe4d6; background: #eaf5ee; color: #15803d; }
 .qs-kicker { font-family: var(--v2-mono); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--v2-cap); margin: 16px 0 9px; }
@@ -868,7 +868,7 @@ body {
 .qs-err { margin: 10px 0 0; font-size: 12.5px; color: #b4460f; }
 .qs-reveal { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 12px 14px; border: 1px solid #e0dcd9; border-radius: 8px; background: var(--v2-bg); }
 .qs-reveal code { flex: 1; min-width: 0; font-family: var(--v2-mono); font-size: 13px; color: var(--v2-ink); overflow-wrap: anywhere; }
-.qs-reveal .qs-confirm { margin-left: 0; flex: none; }
+.qs-reveal .qs-confirm { flex: none; }
 .qs-warn { display: flex; gap: 11px; margin-top: 14px; padding: 13px 15px; border: 1px solid #f0e2d4; border-radius: 8px; background: #fdf9f4; }
 .qs-warn > span:first-child { color: #b4460f; font-size: 13px; line-height: 1.5; flex: none; }
 .qs-warn > span:last-child { font-size: 12.5px; line-height: 1.6; color: #8a6a3c; }
@@ -900,7 +900,7 @@ body {
   .qs-rail { left: 10.5px; }
   .qs-card { padding: 16px 16px 18px; }
   .qs-card-head { flex-direction: column; gap: 6px; }
-  .qs-confirm { margin-left: 0; width: 100%; }
+  .qs-confirm { width: 100%; }
   .qs-flow { flex-direction: column; }
   .qs-flow-box { width: 100%; box-sizing: border-box; }
   .qs-flow-arrow { transform: rotate(90deg); }
