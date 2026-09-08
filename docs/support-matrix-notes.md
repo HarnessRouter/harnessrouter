@@ -193,3 +193,16 @@ process resumed a session and recalled its codeword, and a bash call carried its
 The sdk profile also offers more tools than rc7 did (glob, grep, str_replace_editor, web_search,
 web_fetch, skill, subagent_fork, workflow); the catalog lists them. Every dsh column before this date
 was judged on rc7.
+
+### dsh columns on 0.15.6-rc.3 (2026-09-08)
+
+The full dsh column on the 0.1.2rc1 runtime with the final composition (no sandboxing executor):
+Vercel 189/189 (two one-off misses passed on retest), TokenRouter 169/169, Anthropic 40/40, OpenAI 44/44,
+Azure OpenAI E2 44/44, Google 55/55. OpenRouter is a partial: the shared account ran dry that morning, so only
+the first cheap pairs were measured (deepseek-v4-pro, deepseek-v4-flash, gpt-5.6-sol, gpt-5.6-terra, all five
+scenarios) and gpt-6-astra was refused 402 before anything ran; the column is not a finding and reruns after a
+top-up. Two earlier candidates on the same runtime were rejected by their own columns: rc.1's profile sandbox
+refused every bash command on the container (no bubblewrap, no Landlock), and rc.2's still-mounted sandboxing
+executor advertised `sandbox_permissions` and `justification` on every file tool, which GPT models filled on
+every write and the runtime then refused (five artifact misses on the Vercel column). The custom-harness
+dimension on the same candidate: ten of ten bases, MCP called on each.
