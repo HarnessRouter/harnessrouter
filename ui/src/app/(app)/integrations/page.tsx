@@ -163,6 +163,8 @@ export default function IntegrationsPage() {
   }
 
   // Poll the open hand-off every two seconds until it is ready or gone; stop when the modal closes.
+  // This is the one path the key takes: the ready body is the record (key, endpoint, models_url,
+  // name, models), and a message from the hosted page could only carry less and land first.
   useEffect(() => {
     if (!handoff || handoff.state !== 'waiting' || !editing) return;
     let alive = true;
@@ -179,19 +181,6 @@ export default function IntegrationsPage() {
     const id = setInterval(tick, 2000);
     return () => { alive = false; clearInterval(id); };
   }, [handoff, editing, receiveKey]);
-
-  // The hosted page's "Use it here" posts the same payload to its opener.
-  useEffect(() => {
-    if (!handoff) return;
-    const origin = (() => { try { return new URL(handoff.url).origin; } catch { return ''; } })();
-    const onMessage = (ev: MessageEvent) => {
-      if (!origin || ev.origin !== origin) return;
-      const d = ev.data as { api_key?: string; endpoint?: string; models_url?: string } | null;
-      if (d && typeof d === 'object' && d.api_key) receiveKey(d);
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [handoff, receiveKey]);
 
   const catalog = useMemo(() => doc?.catalog || [], [doc]);
   const metaFor = useCallback(
