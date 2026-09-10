@@ -73,7 +73,13 @@ def test_the_connect_flow_is_proxied_and_the_secret_stays_here(monkeypatch):
     assert ready["status"] == "ready" and ready["api_key"].startswith("sk-hr-") and ready["endpoint"].endswith("/v1/provider")
     assert ready["models"] == ["gpt-5.4"] and A._VENDOR_MODELS["harnessrouter"] == {"gpt-5.4": "gpt-5.4"}
     assert [c for c in calls if c[0] == "GET" and "connect" in c[1]][0][2] == {"X-Connect-Secret": "s1"}
-    assert "c1" not in A._CONNECTS                      # a ready key is read once
+    # The hosted side hands the key over once; this side answers every later poll with the same
+    # body (no second hosted read), so a poll that overtook a slow one cannot lose the key.
+    n_hosted = len([c for c in calls if c[0] == "GET" and "connect" in c[1]])
+    again = asyncio.run(A.admin_connect_poll("c1", Req()))
+    assert again == ready and len([c for c in calls if c[0] == "GET" and "connect" in c[1]]) == n_hosted
+    # ...until the code's own lifetime is over.
+    A._CONNECTS["c1"]["at"] -= A._CONNECT_TTL + 1
     with pytest.raises(A.HTTPException) as ei:
         asyncio.run(A.admin_connect_poll("c1", Req()))
-    assert ei.value.status_code == 410
+    assert ei.value.status_code == 410 and "c1" not in A._CONNECTS

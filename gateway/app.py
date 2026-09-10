@@ -4613,6 +4613,13 @@ async def admin_integrations_get(request: Request) -> dict:
 # Codes this instance opened with the hosted service, and the secret each poll must carry. In
 # memory: a code lives thirty minutes and a ready key is readable once, so there is nothing to keep.
 _CONNECTS: dict[str, dict] = {}
+_CONNECT_TTL = 1800.0   # the hosted code's own lifetime; a delivered body is dropped with it
+
+
+def _connects_sweep() -> None:
+    now = time.time()
+    for c in [c for c, e in _CONNECTS.items() if now - float(e.get("at") or 0) > _CONNECT_TTL]:
+        _CONNECTS.pop(c, None)
 
 
 class ConnectBody(BaseModel):
@@ -4640,6 +4647,7 @@ async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
     for k, v in list(_CONNECTS.items()):        # forget codes older than an hour
         if now - v["at"] > 3600:
             _CONNECTS.pop(k, None)
+    _connects_sweep()
     _CONNECTS[code] = {"secret": secret, "at": now}
     return {"code": code, "url": str(j["url"]), "expires_in": j.get("expires_in")}
 
@@ -4650,9 +4658,14 @@ async def admin_connect_poll(code: str, request: Request):
     the key and the endpoints (then the hosted model list is refreshed with that key), 410 when
     the code expired or was already read."""
     await _require_integrations_admin(request)
+    _connects_sweep()
     entry = _CONNECTS.get(code)
     if not entry:
         raise HTTPException(410, "That key hand-off is not open. Get a key again.")
+    if entry.get("ready"):
+        # The hosted side hands the key over once; this side answers every poll after that with the
+        # same body until the code expires, so a slow or dropped answer costs nothing.
+        return entry["ready"]
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get(f"{HR_HOSTED_CONNECT_URL}/{code}", headers={"X-Connect-Secret": entry["secret"]})
@@ -4666,15 +4679,15 @@ async def admin_connect_poll(code: str, request: Request):
         raise HTTPException(410, "That key hand-off expired or was already used. Get a key again.")
     if r.status_code >= 400:
         raise HTTPException(502, f"HarnessRouter answered HTTP {r.status_code} on the key hand-off.")
-    _CONNECTS.pop(code, None)
     key = str(j.get("api_key") or "")
     endpoint = str(j.get("endpoint") or HR_HOSTED_PROVIDER_BASE)
     models_url = str(j.get("models_url") or HR_HOSTED_MODELS_URL)
     if key:
         await _hosted_models_refresh(key, force=True, models_url=models_url)
-    return {"status": "ready", "api_key": key, "endpoint": endpoint, "models_url": models_url,
-            "org": j.get("org") or "", "name": str(j.get("name") or ""),
-            "models": list(_HOSTED_MODELS["ids"])}
+    entry["ready"] = {"status": "ready", "api_key": key, "endpoint": endpoint, "models_url": models_url,
+                      "org": j.get("org") or "", "name": str(j.get("name") or ""),
+                      "models": list(_HOSTED_MODELS["ids"])}
+    return entry["ready"]
 
 
 class IntegrationsBody(BaseModel):

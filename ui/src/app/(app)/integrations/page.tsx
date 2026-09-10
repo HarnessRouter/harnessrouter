@@ -167,19 +167,24 @@ export default function IntegrationsPage() {
   // name, models), and a message from the hosted page could only carry less and land first.
   useEffect(() => {
     if (!handoff || handoff.state !== 'waiting' || !editing) return;
-    let alive = true;
+    // One poll in flight at a time: the next is scheduled when the previous has answered, so a
+    // slow answer is never overtaken by a later poll (the ready body is handed over once).
+    let alive = true; let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
       try {
         const r = await harnessFetch(`/api/harness/v1/admin/connect/${encodeURIComponent(handoff.code)}`, { headers: authHeaders() });
         if (!alive) return;
-        if (r.status === 202) return;
-        const j = await r.json().catch(() => null);
-        if (r.ok && j?.status === 'ready') { receiveKey(j); return; }
-        setHandoff((h) => h ? { ...h, state: 'failed', note: j?.detail || `The hand-off answered ${r.status}. Get a key again.` } : h);
+        if (r.status !== 202) {
+          const j = await r.json().catch(() => null);
+          if (r.ok && j?.status === 'ready') { receiveKey(j); return; }
+          setHandoff((h) => h ? { ...h, state: 'failed', note: j?.detail || `The hand-off answered ${r.status}. Get a key again.` } : h);
+          return;
+        }
       } catch { /* the next tick asks again */ }
+      if (alive) timer = setTimeout(tick, 2000);
     };
-    const id = setInterval(tick, 2000);
-    return () => { alive = false; clearInterval(id); };
+    timer = setTimeout(tick, 2000);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [handoff, editing, receiveKey]);
 
   const catalog = useMemo(() => doc?.catalog || [], [doc]);
