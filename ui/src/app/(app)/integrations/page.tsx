@@ -156,7 +156,9 @@ export default function IntegrationsPage() {
       setHandoff({ code: j.code, url: j.url, state: 'waiting', note: 'Finish on the HarnessRouter page that just opened. The key lands here on its own.' });
       window.open(j.url, '_blank');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'HarnessRouter could not be reached');
+      // The answer belongs under the card the click came from; the page notice sits behind the modal.
+      setHandoff({ code: '', url: '', state: 'failed',
+                   note: (e instanceof Error && e.message) || 'HarnessRouter could not be reached. Get a key again.' });
     }
   }
 
