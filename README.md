@@ -138,10 +138,10 @@ artifacts, errors, and the final result remain attached to its session.
 
 ## Starter kits
 
-Agent harnesses go far beyond coding: they can review contracts, create presentations, work with
-spreadsheets, build dashboards, and produce videos. Starter kits turn these capabilities into
-complete apps, each with an agent configuration and a Skill that guides its work. More kits will
-be added over time.
+Agent harnesses go far beyond coding. To help you explore what they can do and imagine what you
+could build, we created starter kits for presentations, spreadsheets, dashboards, and videos.
+Each includes an app, an agent configuration, and a Skill that guides the agent’s work.
+More kits will be added over time.
 
 <table>
   <tr>
