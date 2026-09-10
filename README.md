@@ -1,15 +1,20 @@
-<p align="center"><strong>The world’s first unified interface for agent harnesses.</strong></p>
-
 <p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="docs/images/2026-09-10-readme-category-banner-mobile.svg">
+    <img src="docs/images/2026-09-10-readme-category-banner-desktop.svg" width="100%" alt="The world’s first unified interface for agent harnesses.">
+  </picture>
+</p>
+
+<h1 align="center">
   <a href="https://harnessrouter.ai/open-source">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset=".github/images/logo-dark.png">
-      <img alt="HarnessRouter" src=".github/images/logo-light.png" width="320">
+      <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
     </picture>
   </a>
-</p>
-
-<h1 align="center">Build agent products without handling harness engineering.</h1>
+  <br>
+  Build agent products without handling harness&nbsp;engineering.
+</h1>
 
 <p align="center">
   Plug Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends.<br>
@@ -17,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/HarnessRouter/harnessrouter"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2FHarnessRouter%2Fharnessrouter&amp;query=%24.stargazers_count&amp;label=Stars&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNCIgaGVpZ2h0PSIxNCIgdmlld0JveD0iMCAwIDE2IDE2Ij48cGF0aCBmaWxsPSIjZTNiMzQxIiBkPSJNOCAuMjVhLjc1Ljc1IDAgMCAxIC42NzMuNDE4bDEuODgyIDMuODE1IDQuMjEuNjEyYS43NS43NSAwIDAgMSAuNDE2IDEuMjc5bC0zLjA0NiAyLjk3LjcxOSA0LjE5MmEuNzUuNzUgMCAwIDEtMS4wODguNzkxTDggMTIuMzQ3bC0zLjc2NiAxLjk4YS43NS43NSAwIDAgMS0xLjA4OC0uNzlsLjcyLTQuMTk0TC44MTggNi4zNzRhLjc1Ljc1IDAgMCAxIC40MTYtMS4yOGw0LjIxLS42MTFMNy4zMjcuNjY4QS43NS43NSAwIDAgMSA4IC4yNVoiLz48L3N2Zz4%3D&amp;color=e3b341&amp;style=flat&amp;cacheSeconds=300&amp;labelColor=444c56" alt="GitHub Stars, exact count" title="Dynamic GitHub star count. The badge service may cache updates."></a>
+  <a href="#top" title="Back to the top to star this repository"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2FHarnessRouter%2Fharnessrouter&amp;query=%24.stargazers_count&amp;label=Stars&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNCIgaGVpZ2h0PSIxNCIgdmlld0JveD0iMCAwIDE2IDE2Ij48cGF0aCBmaWxsPSIjZTNiMzQxIiBkPSJNOCAuMjVhLjc1Ljc1IDAgMCAxIC42NzMuNDE4bDEuODgyIDMuODE1IDQuMjEuNjEyYS43NS43NSAwIDAgMSAuNDE2IDEuMjc5bC0zLjA0NiAyLjk3LjcxOSA0LjE5MmEuNzUuNzUgMCAwIDEtMS4wODguNzkxTDggMTIuMzQ3bC0zLjc2NiAxLjk4YS43NS43NSAwIDAgMS0xLjA4OC0uNzlsLjcyLTQuMTk0TC44MTggNi4zNzRhLjc1Ljc1IDAgMCAxIC40MTYtMS4yOGw0LjIxLS42MTFMNy4zMjcuNjY4QS43NS43NSAwIDAgMSA4IC4yNVoiLz48L3N2Zz4%3D&amp;color=e3b341&amp;style=flat&amp;cacheSeconds=300&amp;labelColor=444c56" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Dynamic count; updates may be cached."></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-285AFF?logo=apache&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="License: Apache 2.0"></a>
   <a href="https://hub.docker.com/r/harnessrouter/harnessrouter"><img src="https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?style=flat&amp;logo=docker&amp;logoColor=white&amp;label=Docker+pulls&amp;labelColor=444c56&amp;color=285aff" alt="Docker pulls"></a>
   <a href="protocol/conformance"><img src="https://img.shields.io/badge/UHP-Full-16824B?style=flat&amp;labelColor=444c56" alt="UHP conformance: Full"></a>
@@ -54,14 +59,30 @@ N harnesses × M integration responsibilities. Connect your product once; Harnes
   </picture>
 </a>
 
-<a href="https://github.com/HarnessRouter/harnessrouter">
+<details>
+<summary>Benchmark data and comparison basis</summary>
+
+One recorded Care Prep task, eight Harness × Model configurations.
+
+| Metric | Observed range | Comparison |
+|---|---|---|
+| Cost | 0.47–223 credits | 99.8% lower, lowest vs. highest cost |
+| End-to-end latency | 1m 25s–4m 36s | 3.2× faster, fastest vs. slowest run |
+
+These compare separate extremes, not one configuration delivering both improvements. Results are specific to this task, not a universal ranking.
+
+[Recorded results and methodology →](https://harnessrouter.ai/benchmarks)
+
+</details>
+
+<a href="#top" title="Back to the top to star this repository">
   <picture>
     <source media="(max-width: 600px)" srcset="docs/images/github-readme-star-cta-mobile.svg">
     <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
   </picture>
 </a>
 
-**Open source and self-hosted.** Community Edition is the Apache 2.0 reference implementation of the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org). Run the Console, Gateway, and Runner in one Docker deployment on infrastructure you control.
+**HarnessRouter Community Edition** is the self-hosted, Apache 2.0 edition of the **unified interface for agent harnesses**. It implements the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org), with the Console, Gateway, and Runner in one Docker deployment on infrastructure you control.
 
 [Run locally →](#quickstart) · [Prefer managed execution? Explore Cloud →](https://harnessrouter.ai)
 
@@ -361,11 +382,11 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
 ## Star History
 
 <p align="center">
-  <a href="https://www.star-history.com/?repos=harnessrouter%2Fharnessrouter&amp;type=date&amp;legend=top-left">
+  <a href="#top" title="Back to the top to star this repository">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;theme=dark&amp;legend=top-left">
       <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left">
-      <img alt="HarnessRouter GitHub star history chart" src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
+      <img alt="HarnessRouter GitHub star history. Back to the top to star this repository." src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
     </picture>
   </a>
 </p>
