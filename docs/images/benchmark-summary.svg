@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="220" viewBox="0 0 960 220">
+<rect x="1" y="1" width="958" height="218" rx="12" fill="#f6f7ff" stroke="#bbc5ff"/>
+<path d="M12 1 Q1 1 1 13 V207 Q1 219 12 219" fill="#3158ff"/>
+<g font-family="Arial,Helvetica,sans-serif">
+<text x="28" y="34" fill="#3158ff" font-size="13" font-weight="700" letter-spacing="1">ONE RECORDED TASK</text>
+<text x="216" y="34" fill="#606875" font-size="13" font-weight="700" letter-spacing=".7">·  8 HARNESS × MODEL CONFIGURATIONS</text>
+<path d="M28 50 H932" stroke="#dde1f2"/>
+<text x="28" y="132" fill="#3158ff" font-size="48" font-weight="700" letter-spacing="-2">Save 99.8%</text>
+<rect x="365" y="73" width="275" height="62" rx="7" fill="white" stroke="#d9dce4"/>
+<rect x="652" y="73" width="280" height="62" rx="7" fill="white" stroke="#d9dce4"/>
+<text x="379" y="94" font-size="11" letter-spacing="1" fill="#606875" font-weight="700">COST</text>
+<text x="379" y="120" font-size="22" fill="#24292f" font-weight="700">0.47–223 credits</text>
+<text x="666" y="94" font-size="11" letter-spacing="1" fill="#606875" font-weight="700">LATENCY</text>
+<text x="666" y="120" font-size="22" fill="#24292f" font-weight="700">1m 25s–4m 36s</text>
+<text x="365" y="163" font-size="17" fill="#424a56">Cost and latency vary by task.</text>
+<text x="365" y="193" font-size="18" font-weight="700" fill="#0969da">See the benchmark →</text>
+</g></svg>
