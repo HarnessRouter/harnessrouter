@@ -1654,6 +1654,21 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .itg-addmap .select { width: 260px; }
     .itg-panel { max-width: 560px; }
     .itg-provider-list { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+    /* the hosted service as a provider: a card above the grid, then "or bring your own" */
+    .itg-hosted { display: grid; gap: 4px; width: 100%; text-align: left; padding: 12px 14px; margin-bottom: 10px;
+      border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; }
+    .itg-hosted.on { border-color: var(--accent); background: var(--accent-soft); }
+    .itg-hosted:disabled { opacity: .55; cursor: default; }
+    .itg-hosted-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 14px; }
+    .itg-hosted-link { font-size: 12.5px; font-weight: 600; color: var(--accent); text-decoration: none; white-space: nowrap; }
+    .itg-hosted-link:hover { text-decoration: underline; }
+    .itg-hosted-accent { font-size: 12.5px; font-weight: 600; color: var(--accent); }
+    .itg-hosted-muted { font-size: 12px; color: var(--muted); }
+    .itg-or { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; color: var(--muted);
+      font-size: 10.5px; font-weight: 700; letter-spacing: .08em; }
+    .itg-or::before, .itg-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+    .itg-handoff.ready { color: var(--accent); }
+    .itg-handoff.failed { color: var(--red); }
     .itg-provider { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
       background: var(--surface); font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
     .itg-provider.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }

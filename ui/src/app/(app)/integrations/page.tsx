@@ -84,6 +84,11 @@ export default function IntegrationsPage() {
   const [editing, setEditing] = useState<Integration | null>(null);   // panel draft
   const [editingOriginal, setEditingOriginal] = useState<string | null>(null); // name being edited, null = new
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // The hosted key hand-off: this console asks its own gateway to open one (the secret stays
+  // there), opens the hosted page in a new tab, and polls the code until the key is ready. The
+  // poll is the mechanism, so a localhost install and a blocked popup both work; the hosted page
+  // may also post the same payload to its opener, which lands the key a beat sooner.
+  const [handoff, setHandoff] = useState<{ code: string; url: string; state: 'waiting' | 'ready' | 'failed'; note: string } | null>(null);
 
   const reload = useCallback(() => {
     harnessFetch('/api/harness/v1/admin/integrations', { headers: authHeaders() })
@@ -117,6 +122,66 @@ export default function IntegrationsPage() {
       return false;
     } finally { setBusy(false); }
   }
+
+  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string }) => {
+    if (!payload?.api_key) return;
+    setEditing((cur) => cur ? {
+      ...cur,
+      name: cur.name.trim() || 'HarnessRouter',
+      provider: 'harnessrouter',
+      config: { ...cur.config, api_key: payload.api_key,
+                ...(payload.endpoint ? { base_url: payload.endpoint } : {}),
+                ...(payload.models_url ? { models_url: payload.models_url } : {}) },
+    } : cur);
+    setHandoff((h) => h ? { ...h, state: 'ready', note: 'Key received. Create the integration to finish.' } : h);
+  }, []);
+
+  async function getKey() {
+    setErr('');
+    try {
+      const r = await harnessFetch('/api/harness/v1/admin/connect', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ instance: typeof window !== 'undefined' ? window.location.host : '' }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
+      const j = await r.json() as { code: string; url: string };
+      setHandoff({ code: j.code, url: j.url, state: 'waiting', note: 'Finish on the HarnessRouter page that just opened. The key lands here on its own.' });
+      window.open(j.url, '_blank');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'HarnessRouter could not be reached');
+    }
+  }
+
+  // Poll the open hand-off every two seconds until it is ready or gone; stop when the modal closes.
+  useEffect(() => {
+    if (!handoff || handoff.state !== 'waiting' || !editing) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await harnessFetch(`/api/harness/v1/admin/connect/${encodeURIComponent(handoff.code)}`, { headers: authHeaders() });
+        if (!alive) return;
+        if (r.status === 202) return;
+        const j = await r.json().catch(() => null);
+        if (r.ok && j?.status === 'ready') { receiveKey(j); return; }
+        setHandoff((h) => h ? { ...h, state: 'failed', note: j?.detail || `The hand-off answered ${r.status}. Get a key again.` } : h);
+      } catch { /* the next tick asks again */ }
+    };
+    const id = setInterval(tick, 2000);
+    return () => { alive = false; clearInterval(id); };
+  }, [handoff, editing, receiveKey]);
+
+  // The hosted page's "Use it here" posts the same payload to its opener.
+  useEffect(() => {
+    if (!handoff) return;
+    const origin = (() => { try { return new URL(handoff.url).origin; } catch { return ''; } })();
+    const onMessage = (ev: MessageEvent) => {
+      if (!origin || ev.origin !== origin) return;
+      const d = ev.data as { api_key?: string; endpoint?: string; models_url?: string } | null;
+      if (d && typeof d === 'object' && d.api_key) receiveKey(d);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [handoff, receiveKey]);
 
   const catalog = useMemo(() => doc?.catalog || [], [doc]);
   const metaFor = useCallback(
@@ -239,7 +304,7 @@ export default function IntegrationsPage() {
             <div className="modal-header">
               <div><h2 id="itgTitle">{editingOriginal ? 'Edit Integration' : 'Add Integration'}</h2>
                 <p>A provider connection plus the models it serves.</p></div>
-              <button className="icon-button modal-close" type="button" aria-label="Close dialog" onClick={() => setEditing(null)}><iconify-icon icon="tabler:x"></iconify-icon></button>
+              <button className="icon-button modal-close" type="button" aria-label="Close dialog" onClick={() => { setEditing(null); setHandoff(null); }}><iconify-icon icon="tabler:x"></iconify-icon></button>
             </div>
             <div className="modal-body">
               <div className="field-stack">
@@ -247,8 +312,23 @@ export default function IntegrationsPage() {
                   <input id="itgName" value={editing.name} placeholder="OpenRouter production"
                     onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></div>
                 <div className="field"><label>Provider</label>
+                  {catalog.some((c) => c.id === 'harnessrouter') && (
+                    <button type="button" className={'itg-hosted' + (editing.provider === 'harnessrouter' ? ' on' : '')}
+                      disabled={Boolean(editingOriginal)}
+                      onClick={() => setEditing({ ...editing, provider: 'harnessrouter', config: {} })}>
+                      <span className="itg-hosted-head">
+                        <strong>HarnessRouter API</strong>
+                        <a className="itg-hosted-link" href="#get-key"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing({ ...editing, provider: 'harnessrouter', config: editing.provider === 'harnessrouter' ? editing.config : {} }); void getKey(); }}>
+                          Get a key ↗</a>
+                      </span>
+                      <span className="itg-hosted-accent">Every model at its listed price, no markup</span>
+                      <span className="itg-hosted-muted">One universal key, every model on the list.</span>
+                    </button>
+                  )}
+                  {catalog.some((c) => c.id === 'harnessrouter') && <div className="itg-or"><span>OR BRING YOUR OWN</span></div>}
                   <div className="itg-provider-list">
-                    {catalog.map((c) => (
+                    {catalog.filter((c) => c.id !== 'harnessrouter').map((c) => (
                       <button key={c.id} type="button"
                         className={'itg-provider' + (editing.provider === c.id ? ' on' : '')}
                         disabled={Boolean(editingOriginal)}
@@ -347,7 +427,10 @@ export default function IntegrationsPage() {
                         );
                       })}
                       {meta.base_url ? (
-                        <p className="field-help">Endpoint: <code>{meta.base_url}</code></p>
+                        <p className="field-help">Endpoint: <code>{editing.config.base_url || meta.base_url}</code></p>
+                      ) : null}
+                      {editing.provider === 'harnessrouter' && handoff ? (
+                        <p className={'field-help itg-handoff ' + handoff.state} role="status">{handoff.note}</p>
                       ) : null}
                     </div>
                   );
