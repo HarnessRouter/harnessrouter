@@ -138,8 +138,9 @@ artifacts, errors, and the final result remain attached to its session.
 
 ## Starter kits
 
-Build complete agent-powered products, not isolated demos. Each Starter Kit includes an app, an
-agent configuration, and the Skill that teaches the agent how to create its output. More kits will
+Agent harnesses go far beyond coding: they can review contracts, create presentations, work with
+spreadsheets, build dashboards, and produce videos. Starter kits turn these capabilities into
+complete apps, each with an agent configuration and a Skill that guides its work. More kits will
 be added over time.
 
 <table>
