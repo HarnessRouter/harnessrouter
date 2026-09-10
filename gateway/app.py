@@ -3384,6 +3384,26 @@ def _provider_refused(err: str) -> bool:
     return bool(_PROVIDER_REFUSAL_RE.search((err or "").split("\n", 1)[0]))
 
 
+# A Responses provider refusing a replayed history: OpenAI's encrypted reasoning items are opened
+# only by the account that produced them, and a route served from more than one upstream account
+# hands the next turn items its upstream cannot open. Measured on TokenRouter's gpt-5.4 route: a
+# same-model cold restore (opencode, hosted, 2026-09-08) and a switch of a gpt-5.4 thread into
+# gpt-6-astra (codex, the open source column, 2026-09-10), while every other id passed both ways.
+_HISTORY_REFUSED_RE = re.compile(r"encrypted content .{0,80}could not be (?:decrypted|verified)", re.I | re.S)
+
+
+def _history_refusal(rec: dict, reason: str) -> str:
+    """The sentence a turn fails with when the provider could not open the task's earlier
+    reasoning, else empty. The provider's own JSON is never the message."""
+    if not _HISTORY_REFUSED_RE.search(reason or ""):
+        return ""
+    model = str(rec.get("model_req") or rec.get("model") or "this model")
+    before = [m for m in (rec.get("models_before") or []) if m and m != model]
+    keep = f", or keep this task on {before[-1]}" if before else ""
+    return (f"{model} cannot continue this task's earlier reasoning through this provider (it was "
+            f"produced under another route). Start a new task for {model}{keep}.")
+
+
 def _turn_failure_message(rec: dict) -> str:
     """What a failed turn says: the org's own key's refusal in plain words when that is why, else
     the last connection's reason in words. Never the tried list itself: its JSON, with our
@@ -3401,6 +3421,8 @@ def _turn_failure_message(rec: dict) -> str:
     ran = [t for t in tried if t.get("status")]
     last = (ran or tried)[-1]
     reason = str(last.get("error") or "").strip() or f"the connection answered {last.get('status') or 'with an error'}"
+    if (said := _history_refusal(rec, reason)):
+        return said
     if len(tried) > 1:
         return f"The turn failed on every connection it tried. The last one said: {reason}"
     return f"The turn failed: {reason}"
@@ -6212,6 +6234,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 seen = [str(t.get("_model") or "") for t in _turns if t.get("_model")]
             except Exception:  # noqa: BLE001
                 seen = []
+        rec["model_req"], rec["models_before"] = model_req, [m for m in seen if m != model_req]
         _why = _codex_switch_refusal(seen, model_req) if resume else ""
         if _why:
             rec["error_message"] = _why
