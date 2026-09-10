@@ -1,0 +1,38 @@
+# Delete release-candidate tags from Docker Hub.
+#
+# A candidate is built from a branch, tested as an image on the test instance, then superseded by
+# the release cut from main. The VM keeps only the current image, but nothing ever removed the
+# candidates from the Hub, and by 0.15.7 twelve of them sat beside the releases. This is the one
+# place a delete can run: the Hub credential lives only in this repository's secrets. Only tags
+# with "-rc." in the name are accepted; a numbered release is never deleted here.
+name: hub-cleanup
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: Comma-separated release-candidate tags to delete (each must contain "-rc.")
+        required: true
+        type: string
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the named release-candidate tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          TAGS: ${{ inputs.tags }}
+        run: |
+          set -eu
+          jwt=$(curl -sf -X POST https://hub.docker.com/v2/users/login -H 'Content-Type: application/json' \
+                -d "{\"username\":\"$DOCKERHUB_USERNAME\",\"password\":\"$DOCKERHUB_TOKEN\"}" \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          fail=0
+          for t in $(printf '%s' "$TAGS" | tr ',' ' '); do
+            case "$t" in *-rc.*) ;; *) echo "refused: $t is not a release candidate"; fail=1; continue ;; esac
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: JWT $jwt" \
+                   "https://hub.docker.com/v2/repositories/harnessrouter/harnessrouter/tags/$t/")
+            echo "$t -> HTTP $code"
+            [ "$code" = "204" ] || fail=1
+          done
+          exit $fail
