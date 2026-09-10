@@ -92,6 +92,11 @@ export HR_SANDBOX_TRUST="${HR_SANDBOX_TRUST:-owner}"
 # bring-your-own-key, so the images an agent makes are billed to the operator's own provider
 # account and there is nothing for us to meter.
 export HR_BROKER_IMAGES="${HR_BROKER_IMAGES:-1}"
+# codex runs through its app-server, the path the hosted service runs it on (it streams the
+# assistant's text as it is written); this image never set the variable, so codex here ran
+# `codex exec` instead and the two products diverged on the same code (2026-09-10). Flip to 0
+# for an instant rollback to `codex exec`; CODEX_APPSERVER_SANDBOX is the sandbox enum.
+export HARNESS_CODEX_APPSERVER="${HARNESS_CODEX_APPSERVER:-1}"
 
 # The gateway signs its own internal calls. Generated per container if not supplied, so a
 # default install has no shared secret and nothing to leak; it never leaves this process tree.
