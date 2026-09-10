@@ -1,0 +1,6 @@
+{
+  "name": "support-matrix",
+  "private": true,
+  "description": "The support matrix and custom-harness dimension runners; npm install here, then npx playwright install chromium",
+  "dependencies": { "playwright": "^1.63.0" }
+}
