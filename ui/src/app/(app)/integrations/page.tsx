@@ -124,12 +124,13 @@ export default function IntegrationsPage() {
   }
 
   const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string }) => {
-    if (!payload?.api_key) return;
+    const key = payload?.api_key;
+    if (!key) return;
     setEditing((cur) => cur ? {
       ...cur,
       name: cur.name.trim() || 'HarnessRouter',
       provider: 'harnessrouter',
-      config: { ...cur.config, api_key: payload.api_key,
+      config: { ...cur.config, api_key: key,
                 ...(payload.endpoint ? { base_url: payload.endpoint } : {}),
                 ...(payload.models_url ? { models_url: payload.models_url } : {}) },
     } : cur);
