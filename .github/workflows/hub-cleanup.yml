@@ -5,6 +5,11 @@
 # candidates from the Hub, and by 0.15.7 twelve of them sat beside the releases. This is the one
 # place a delete can run: the Hub credential lives only in this repository's secrets. Only tags
 # with "-rc." in the name are accepted; a numbered release is never deleted here.
+#
+# The secret must be a personal access token with the "Read, Write, Delete" scope. The release
+# workflow's token needs only Read & Write, and that is what the secret held on the first run
+# (2026-09-10): the login succeeded and every tag answered HTTP 403. A 403 on every tag means the
+# scope, not the tag; create a Delete-scoped token in the Hub UI and set DOCKERHUB_TOKEN to it.
 name: hub-cleanup
 on:
   workflow_dispatch:
