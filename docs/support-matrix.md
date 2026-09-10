@@ -252,15 +252,46 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
+| dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-fable-5-1 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-opus-4.7 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-opus-4.8 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-opus-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-sonnet-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.5 | FAIL | n/a | n/a | n/a | n/a | OpenRouter | first: [{"connection": "integration:OpenRouter", "status": "failed", "error": "OpenAI API error (402): {\"message\":\"This request requires more cr |
+| dsh | gemini-2.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-2.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-2.5-pro | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3.1-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3.6-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gemini-3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | glm-5.3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | glm-5.3-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gpt-5.2 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | OpenRouter |  |
+| dsh | gpt-5.4 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-6-astra | FAIL | n/a | n/a | n/a | n/a | OpenRouter | first: [{"connection": "integration:OpenRouter", "status": "failed", "error": "OpenAI API error (402): {\"message\":\"This request requires more cr |
+| dsh | gpt-6-astra | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 
-7 pairs, 25 of 27 scenario runs passed.
+38 pairs, 189 of 189 scenario runs passed.
 
 ## Provider: dsh-tokenrouter
 
@@ -642,6 +673,14 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | qwen | gemini-3.6-flash | pass | pass | n/a | FAIL | pass | Google AI Studio | artifact: no file card (files: none); he word HELLO, then reply DONE. QWEN CODE I will check if hello-qwen.txt exists and then write "HELLO" to it. Us ; re-run on the sponsored Tier 3 key and 0.13.14 (the relays drop the field Google refuses); first try on the Free-tier ke ; retested once; first try: first Reply with exactly: M1-gemini-3.6-flash QWEN CODE M1-gemini-3.6-flash Working… |
 
 5 pairs, 6 of 8 scenario runs passed.
+
+## Provider: hermes-azure-e2
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| hermes | gpt-6-astra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+
+1 pairs, 5 of 5 scenario runs passed.
 
 ## Provider: omp-anthropic
 
