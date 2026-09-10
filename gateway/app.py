@@ -1099,11 +1099,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # the gemini backend too; the runner still builds gemini as provider google and routes the CLI
     # through its relay when the connection is TokenRouter.
     ("tokenrouter", "gemini"): "google",
+    # The hosted service serves the same shapes from one base and one key as TokenRouter does
+    # ("tokenrouter" on the runner means OpenAI/Anthropic-compatible, api by model family, base on
+    # the connection), so its rows mirror TokenRouter's row for row.
+    ("harnessrouter", "claude"): "tokenrouter", ("harnessrouter", "codex"): "tokenrouter",
+    ("harnessrouter", "hermes"): "openai-api",  ("harnessrouter", "pi"): "tokenrouter",
+    ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
+    ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
+    ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
 }
-# The hosted service serves both shapes from one base and one key, exactly TokenRouter's contract
-# ("tokenrouter" on the runner means OpenAI/Anthropic-compatible, api by model family, base on the
-# connection), so it is wired by TokenRouter's own rows: whatever TokenRouter carries, it carries.
-_INTEGRATION_WIRING.update({("harnessrouter", b): v for (p, b), v in list(_INTEGRATION_WIRING.items()) if p == "tokenrouter"})
 
 
 async def _integrations_doc() -> list[dict]:
