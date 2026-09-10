@@ -5,16 +5,16 @@
   </picture>
 </p>
 
-<p align="center">
+<h1 align="center">
   <a href="https://harnessrouter.ai/open-source">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset=".github/images/logo-dark.png">
-      <img alt="HarnessRouter" src=".github/images/logo-light.png" width="320">
+      <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
     </picture>
   </a>
-</p>
-
-<h1 align="center">Build agent products<br>without handling harness&nbsp;engineering.</h1>
+  <br>
+  Build agent products without handling harness&nbsp;engineering.
+</h1>
 
 <p align="center">
   Plug Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends.<br>
@@ -59,14 +59,30 @@ N harnesses × M integration responsibilities. Connect your product once; Harnes
   </picture>
 </a>
 
-<a href="https://github.com/HarnessRouter/harnessrouter">
+<details>
+<summary>Benchmark data and comparison basis</summary>
+
+One recorded Care Prep task, eight Harness × Model configurations.
+
+| Metric | Observed range | Comparison |
+|---|---|---|
+| Cost | 0.47–223 credits | 99.8% lower, lowest vs. highest cost |
+| End-to-end latency | 1m 25s–4m 36s | 3.2× faster, fastest vs. slowest run |
+
+These compare separate extremes, not one configuration delivering both improvements. Results are specific to this task, not a universal ranking.
+
+[Recorded results and methodology →](https://harnessrouter.ai/benchmarks)
+
+</details>
+
+<a href="#top" title="Back to the top to star this repository">
   <picture>
     <source media="(max-width: 600px)" srcset="docs/images/github-readme-star-cta-mobile.svg">
     <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
   </picture>
 </a>
 
-**Open source and self-hosted.** Community Edition is the Apache 2.0 reference implementation of the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org). Run the Console, Gateway, and Runner in one Docker deployment on infrastructure you control.
+**HarnessRouter Community Edition** is the self-hosted, Apache 2.0 edition of the **unified interface for agent harnesses**. It implements the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org), with the Console, Gateway, and Runner in one Docker deployment on infrastructure you control.
 
 [Run locally →](#quickstart) · [Prefer managed execution? Explore Cloud →](https://harnessrouter.ai)
 
