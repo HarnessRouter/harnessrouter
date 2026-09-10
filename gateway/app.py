@@ -4673,7 +4673,8 @@ async def admin_connect_poll(code: str, request: Request):
     if key:
         await _hosted_models_refresh(key, force=True, models_url=models_url)
     return {"status": "ready", "api_key": key, "endpoint": endpoint, "models_url": models_url,
-            "org": j.get("org") or "", "models": list(_HOSTED_MODELS["ids"])}
+            "org": j.get("org") or "", "name": str(j.get("name") or ""),
+            "models": list(_HOSTED_MODELS["ids"])}
 
 
 class IntegrationsBody(BaseModel):

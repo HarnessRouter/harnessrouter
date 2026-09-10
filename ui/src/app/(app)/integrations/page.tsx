@@ -123,7 +123,7 @@ export default function IntegrationsPage() {
     } finally { setBusy(false); }
   }
 
-  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string; models?: string[] }) => {
+  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string; models?: string[]; name?: string }) => {
     const key = payload?.api_key;
     if (!key) return;
     const ids = Array.isArray(payload.models) ? payload.models : null;
@@ -135,7 +135,7 @@ export default function IntegrationsPage() {
     }
     setEditing((cur) => cur ? {
       ...cur,
-      name: cur.name.trim() || 'HarnessRouter',
+      name: cur.name.trim() || (typeof payload.name === 'string' && payload.name.trim()) || 'HarnessRouter API',
       provider: 'harnessrouter',
       config: { ...cur.config, api_key: key,
                 ...(payload.endpoint ? { base_url: payload.endpoint } : {}),
