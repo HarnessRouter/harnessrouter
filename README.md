@@ -146,24 +146,24 @@ More kits will be added over time.
   <tr>
     <td width="50%" valign="top">
       <strong>Slides</strong><br>
-      Turn one brief into an editable presentation, with the agent’s work visible beside the canvas.<br><br>
+      An agent harness creates slides from your brief; you edit the text, layout, and style on the canvas.<br><br>
       <img src="docs/images/kit-slides.png" alt="HarnessRouter Slides Starter Kit" width="100%">
     </td>
     <td width="50%" valign="top">
       <strong>Sheets</strong><br>
-      Build structured tables and run an agent over each row while results fill in live.<br><br>
+      An agent column runs a harness-backed agent for each row, using preceding columns as input and filling cells with results.<br><br>
       <img src="docs/images/kit-sheets.png" alt="HarnessRouter Sheets Starter Kit" width="100%">
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <strong>Dashboards</strong><br>
-      Connect a database and turn questions into live, query-backed panels.<br><br>
+      An agent harness reads your database schema and writes SQL for charts; the dashboard refreshes queries when opened.<br><br>
       <img src="docs/images/kit-dashboard.png" alt="HarnessRouter Dashboards Starter Kit" width="100%">
     </td>
     <td width="50%" valign="top">
       <strong>Videos</strong><br>
-      Plan, generate, arrange, and export a complete video from one workspace.<br><br>
+      An agent harness plans shots and uses video tools to generate clips; you edit them on a timeline and export the film.<br><br>
       <img src="docs/images/kit-video.png" alt="HarnessRouter Videos Starter Kit" width="100%">
     </td>
   </tr>
