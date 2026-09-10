@@ -123,9 +123,16 @@ export default function IntegrationsPage() {
     } finally { setBusy(false); }
   }
 
-  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string }) => {
+  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string; models?: string[] }) => {
     const key = payload?.api_key;
     if (!key) return;
+    const ids = Array.isArray(payload.models) ? payload.models : null;
+    if (ids) {
+      // The model list is per key, so it arrives with the key: the catalog entry the open modal
+      // reads is refreshed in place rather than after a reload.
+      setDoc((cur) => cur ? { ...cur, catalog: cur.catalog.map((c) => c.id === 'harnessrouter'
+        ? { ...c, models: ids.map((m) => ({ canonical: m, provider_id: m })) } : c) } : cur);
+    }
     setEditing((cur) => cur ? {
       ...cur,
       name: cur.name.trim() || 'HarnessRouter',
@@ -447,6 +454,18 @@ export default function IntegrationsPage() {
                         <p className="field-help">
                           This integration serves the model ID you entered above. Add it in the
                           mapping table below after saving.
+                        </p>
+                      </div>
+                    );
+                  }
+                  if (!models.length) {
+                    return (
+                      <div className="field">
+                        <label>Supported models</label>
+                        <p className="field-help">
+                          {editing.provider === 'harnessrouter'
+                            ? 'Maintained here, not by you: the list of models arrives with your key.'
+                            : 'Maintained here, not by you: no models are listed for this provider yet.'}
                         </p>
                       </div>
                     );
