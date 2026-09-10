@@ -86,6 +86,13 @@ docker run -d --name harnessrouter \
 Docker pulls the image automatically if it is not already present. The named volume keeps your
 database, files, installed harness CLIs, and workspaces between restarts.
 
+If port 3000 is busy, use `-p 127.0.0.1:3100:3000` and open port 3100 instead. Keep the
+loopback binding while using the initial credentials. Do not add `--user`: the container starts
+as root to establish per-session users, then runs the product and agents without root privileges.
+
+For version pinning, Docker Compose, and scripted setup, see the
+[setup and operations guide](docs/self-hosting-guide.md#install).
+
 ### 2. Wait for the first launch
 
 ```bash
@@ -108,7 +115,9 @@ Open [http://localhost:3000](http://localhost:3000) and sign in with the initial
 | Username | `harnessrouter` |
 | Password | `harnessrouter` |
 
-Change the password from **Profile** before making the instance reachable from another machine.
+Change the password from **Profile** now. Saving briefly restarts the Console and signs out other
+browsers. If you configured `HR_AUTH_USER` or `HR_AUTH_PASSWORD`, use those credentials instead.
+Keep the instance local until you have changed the default password.
 
 <details>
 <summary>See the sign-in screen</summary>
@@ -121,6 +130,9 @@ Change the password from **Profile** before making the instance reachable from a
 
 Open **Integrations**, select **Add Integration**, choose a provider, and add its API key. Provider
 requests follow the provider and credentials you choose.
+
+Give the integration a name. There is no bundled model or trial key: a compatible provider must
+be connected before a task can run. Its supported models then become available in the Console.
 
 ![Adding a model provider in HarnessRouter](docs/images/05-add-integration.png)
 
@@ -170,6 +182,12 @@ More kits will be added over time.
 </table>
 
 [Explore the Starter Kits repository →](https://github.com/HarnessRouter/starter-kit)
+
+Launch a kit from **Starter Kits** in the Console and select a harness and model supported by your
+connected providers. Sheets agent columns require another agent to run. Dashboards require a
+reachable database, a read-only database account, and `HR_SECRET_KEY` for stored connections;
+review the sample-row setting before connecting. Video generation incurs additional per-clip costs.
+See the [kit setup details](docs/self-hosting-guide.md#starter-kits) before launching.
 
 ---
 
@@ -257,6 +275,7 @@ loopback inside the container; the Console is the entry point for both the UI an
 
 ## Resources
 
+- [Setup and operations guide](docs/self-hosting-guide.md): version pinning, Compose, credentials and recovery, provider mappings, database setup, configuration, API access, TLS and streaming proxies, and moving to Cloud.
 - [Documentation and HarnessRouter Cloud](https://harnessrouter.ai)
 - [Unified Harness Protocol](https://unifiedharnessprotocol.org)
 - [Starter kits](https://github.com/HarnessRouter/starter-kit)
