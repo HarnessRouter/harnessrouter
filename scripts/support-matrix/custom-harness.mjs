@@ -14,7 +14,12 @@ import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 
 const BASE = process.env.BASE;
-const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,qwen,gemini,cline,omp').split(',');   // every built-in harness, all ten
+const BASES = (process.env.BASES || 'codex,codex-appserver,claude-code,hermes,pi,dsh,opencode,qwen,gemini,cline,omp').split(',');   // every built-in harness, all ten, and codex's second path
+// A row is a base plus the way its turn runs. codex has two paths, `codex exec` (the default) and
+// the app-server, and they read the CLI's items in different spellings: the app-server path
+// listed userMessage and agentMessage as tools and an MCP call as "mcpToolCall" with no server
+// or tool name (hosted, 2026-09-10) while the exec row passed, so the second path is its own row.
+const rowOf = (label) => label === 'codex-appserver' ? { baseId: 'codex', turnMeta: { codex_appserver: true } } : { baseId: label, turnMeta: {} };
 const RESULTS = process.env.RESULTS || 'results-custom.json';
 // A harness's other kind of tool is an MCP server. A self-contained instance hosts only the
 // database and media servers, one needing a database and the other costing real money per call, so
@@ -108,6 +113,7 @@ try {
   }
 
   for (const base of BASES) {
+    const { baseId, turnMeta } = rowOf(base);
     const rec = { base, at: new Date().toISOString() };
     let hid = null;
     try {
@@ -116,7 +122,7 @@ try {
       const created = await api('/api/harness/v1/harnesses', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          name: `matrix custom ${base}`, base,
+          name: `matrix custom ${base}`, base: baseId,
           system_prompt: 'You follow your skills exactly.',
           skills: [SKILL('matrix-stamp')],
           disabled_tools: ['WebSearch'],
@@ -139,7 +145,7 @@ try {
       const turn = await api('/api/harness/v1/responses', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ input: 'Report this harness build stamp.', stream: false, store: true,
-                               metadata: { harness_id: hid } }),
+                               metadata: { harness_id: hid, ...turnMeta } }),
       });
       rec.turn_status = turn.status;
       const sid = turn.json && (turn.json.session_id || (turn.json.metadata || {}).session_id);
@@ -181,7 +187,7 @@ try {
         await api('/api/harness/v1/responses', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ input: `Use your ${MCP_NAME} tool to read the wiki structure of the repository modelcontextprotocol/servers, then reply with one topic it lists. Use the tool; do not answer from memory.`,
-                                 stream: false, store: true, metadata: { harness_id: hid, session_id: sid } }),
+                                 stream: false, store: true, metadata: { harness_id: hid, session_id: sid, ...turnMeta } }),
         });
         let mlast = null;
         for (let i = 0; i < 100; i++) {

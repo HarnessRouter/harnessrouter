@@ -55,6 +55,8 @@ builds, which is where this product's own promise lives: your own skill, carryin
 and control over the tools the runtime brought with it. A harness that answers on every model and
 ignores the skill you wrote is not working.
 
+A row is a base plus the way its turn runs. codex has two paths, `codex exec` (the default) and the app-server (`metadata.codex_appserver`), and they read the CLI's items in different spellings, so the dimension carries `codex-appserver` as its own row beside `codex`: the same harness, the turn flagged. A path the product offers is measured, not assumed.
+
 [`scripts/support-matrix/custom-harness.mjs`](../scripts/support-matrix/custom-harness.mjs) creates
 a harness per base, carrying a skill bundle whose `SKILL.md` tells the agent to run a script that
 ships beside it, and with one inherited tool switched off. It runs one turn, then deletes the
