@@ -221,3 +221,11 @@ reasoning items are opened only by the account that produced them (hosted saw th
 same-model cold restore of gpt-5.4 on 2026-09-08). 0.15.10 says that refusal in words instead of the
 provider's JSON. The custom-harness dimension's codex row on the app-server path: skill script ran, tool
 policy held, `deepwiki.read_wiki_structure` called by name (the item-spelling fix of 0.15.8).
+
+### The results file (2026-09-10)
+
+`docs/support-matrix-results.json` is the merged record the table is rendered from (`python3
+scripts/support-matrix/render.py docs/support-matrix-results.json`), committed beside it from this date so a
+render is reproducible. The provider-wide `tokenrouter` and `vercel` columns of 2026-09-06 are not in it:
+their result files were lost with the scratchpad, and their sections in the table are carried from the
+render of that date until the columns are measured again.
