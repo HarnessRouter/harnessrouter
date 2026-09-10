@@ -43,15 +43,9 @@ need a separate backend integration for every harness.
 
 ### One interface. The freedom to choose.
 
-> **ONE RECORDED TASK · 8 HARNESS × MODEL CONFIGURATIONS**
->
-> ### Save 99.8%
->
-> | COST | LATENCY |
-> | --- | --- |
-> | **0.47–223 credits** | **1m 25s–4m 36s** |
->
-> Cost and latency vary by task. [!](https://harnessrouter.ai/benchmarks "Across many tasks, we have seen cost savings above 90%. In some cases, lower-cost configurations were also faster.") [See the benchmark →](https://harnessrouter.ai/benchmarks)
+<a href="https://harnessrouter.ai/benchmarks" title="Across many tasks, we have seen cost savings above 90%. In some cases, lower-cost configurations were also faster.">
+  <img src="docs/images/benchmark-summary.svg" width="100%" alt="One recorded task, eight Harness × Model configurations. Save 99.8%: cost 0.47–223 credits; latency 1m 25s–4m 36s. Cost and latency vary by task. See the benchmark.">
+</a>
 
 <div align="center">
   <a href="https://github.com/HarnessRouter/harnessrouter">
