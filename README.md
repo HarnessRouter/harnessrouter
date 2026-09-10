@@ -1,4 +1,9 @@
-<p align="center"><strong>The world’s first unified interface for agent harnesses.</strong></p>
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="docs/images/2026-09-10-readme-category-banner-mobile.svg">
+    <img src="docs/images/2026-09-10-readme-category-banner-desktop.svg" width="100%" alt="The world’s first unified interface for agent harnesses.">
+  </picture>
+</p>
 
 <p align="center">
   <a href="https://harnessrouter.ai/open-source">
@@ -9,7 +14,7 @@
   </a>
 </p>
 
-<h1 align="center">Build agent products without handling harness engineering.</h1>
+<h1 align="center">Build agent products<br>without handling harness&nbsp;engineering.</h1>
 
 <p align="center">
   Plug Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends.<br>
@@ -361,11 +366,11 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
 ## Star History
 
 <p align="center">
-  <a href="https://www.star-history.com/?repos=harnessrouter%2Fharnessrouter&amp;type=date&amp;legend=top-left">
+  <a href="#top" title="Back to the top to star this repository">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;theme=dark&amp;legend=top-left">
       <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left">
-      <img alt="HarnessRouter GitHub star history chart" src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
+      <img alt="HarnessRouter GitHub star history. Back to the top to star this repository." src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
     </picture>
   </a>
 </p>

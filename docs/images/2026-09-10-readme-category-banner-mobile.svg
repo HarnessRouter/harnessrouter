@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="72" viewBox="0 0 480 72" role="img" aria-labelledby="title desc">
+  <title id="title">The world’s first unified interface for agent harnesses.</title>
+  <desc id="desc">HarnessRouter category banner, arranged on two lines for narrow screens.</desc>
+  <rect x="0.5" y="0.5" width="479" height="71" rx="6" fill="#eef3ff" stroke="#d7e0ff"/>
+  <text x="240" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="600" fill="#2247d5">
+    <tspan x="240" y="30">The world’s first unified interface</tspan>
+    <tspan x="240" y="56">for agent harnesses.</tspan>
+  </text>
+</svg>
