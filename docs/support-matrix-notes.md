@@ -205,3 +205,19 @@ refused every bash command on the container (no bubblewrap, no Landlock), and rc
 executor advertised `sandbox_permissions` and `justification` on every file tool, which GPT models filled on
 every write and the runtime then refused (five artifact misses on the Vercel column). The custom-harness
 dimension on the same candidate: ten of ten bases, MCP called on each.
+
+## codex through its app-server (0.15.9, 2026-09-10)
+
+Hosted runs codex through its app-server and the open source image ran `codex exec`, the same code on a
+flag the image never set; 0.15.9 sets it on, so every codex column before this date was measured on
+`codex exec`. The column rerun on the app-server path, per provider: Vercel 43/44, TokenRouter 43/44,
+OpenAI 44/44, Azure OpenAI E2 44/44, OpenRouter 43/44. The misses: gpt-5.6-luna's recycle recall on
+Vercel and OpenRouter, the same wrong word ("DONE", the end of its artifact turn) it gave on `codex exec`
+on 2026-09-06, a model wobble that survives a retest; and one deterministic refusal on TokenRouter, a
+gpt-5.4 thread switched into gpt-6-astra, "The encrypted content for item rs_... could not be verified",
+while six other gpt-5.x threads made the same switch on the same key and passed and the same switch
+passed on Vercel: TokenRouter serves gpt-5.4 from more than one upstream account, and OpenAI's encrypted
+reasoning items are opened only by the account that produced them (hosted saw the same refusal on a
+same-model cold restore of gpt-5.4 on 2026-09-08). 0.15.10 says that refusal in words instead of the
+provider's JSON. The custom-harness dimension's codex row on the app-server path: skill script ran, tool
+policy held, `deepwiki.read_wiki_structure` called by name (the item-spelling fix of 0.15.8).
