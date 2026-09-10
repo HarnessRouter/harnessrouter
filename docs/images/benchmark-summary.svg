@@ -1,17 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="220" viewBox="0 0 960 220">
-<rect x="1" y="1" width="958" height="218" rx="12" fill="#f6f7ff" stroke="#bbc5ff"/>
-<path d="M12 1 Q1 1 1 13 V207 Q1 219 12 219" fill="#3158ff"/>
-<g font-family="Arial,Helvetica,sans-serif">
-<text x="28" y="34" fill="#3158ff" font-size="13" font-weight="700" letter-spacing="1">ONE RECORDED TASK</text>
-<text x="216" y="34" fill="#606875" font-size="13" font-weight="700" letter-spacing=".7">·  8 HARNESS × MODEL CONFIGURATIONS</text>
-<path d="M28 50 H932" stroke="#dde1f2"/>
-<text x="28" y="132" fill="#3158ff" font-size="48" font-weight="700" letter-spacing="-2">Save 99.8%</text>
-<rect x="365" y="73" width="275" height="62" rx="7" fill="white" stroke="#d9dce4"/>
-<rect x="652" y="73" width="280" height="62" rx="7" fill="white" stroke="#d9dce4"/>
-<text x="379" y="94" font-size="11" letter-spacing="1" fill="#606875" font-weight="700">COST</text>
-<text x="379" y="120" font-size="22" fill="#24292f" font-weight="700">0.47–223 credits</text>
-<text x="666" y="94" font-size="11" letter-spacing="1" fill="#606875" font-weight="700">LATENCY</text>
-<text x="666" y="120" font-size="22" fill="#24292f" font-weight="700">1m 25s–4m 36s</text>
-<text x="365" y="163" font-size="17" fill="#424a56">Cost and latency vary by task.</text>
-<text x="365" y="193" font-size="18" font-weight="700" fill="#0969da">See the benchmark →</text>
-</g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="250" viewBox="0 0 960 250" role="img" aria-labelledby="title desc">
+  <title id="title">Compare cost and latency across eight configurations</title>
+  <desc id="desc">One recorded task. Eight Harness × Model configurations. Save 99.8%, lowest vs. highest cost: 0.47–223 credits. 3.2× faster, fastest vs. slowest run: 1m 25s–4m 36s end to end. These are separate comparisons of the observed extremes. Cost and latency vary by task.</desc>
+  <rect x="0.5" y="0.5" width="959" height="249" rx="8" fill="#f6f8ff" stroke="#d7e0ff"/>
+  <g font-family="Arial,Helvetica,sans-serif">
+    <text x="28" y="34" font-size="17" font-weight="600" fill="#62626c">One recorded task · 8 Harness × Model configurations</text>
+    <g fill="none" stroke="#62626c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <g transform="translate(29 64)">
+        <ellipse cx="9" cy="3" rx="8" ry="3"/>
+        <path d="M1 3v12c0 4 16 4 16 0V3M1 9c0 4 16 4 16 0"/>
+      </g>
+      <g transform="translate(509 64)">
+        <circle cx="9" cy="9" r="8.5"/>
+        <path d="M9 4v5l4 2"/>
+      </g>
+    </g>
+    <g font-size="18" fill="#62626c">
+      <text x="58" y="80" font-weight="600">Cost</text>
+      <text x="538" y="80"><tspan font-weight="600">Latency</tspan><tspan> · end to end</tspan></text>
+    </g>
+    <g font-size="52" font-weight="700" letter-spacing="-1.6" fill="#285aff">
+      <text x="28" y="136">Save 99.8%</text>
+      <text x="508" y="136">3.2× faster</text>
+    </g>
+    <g font-size="21" fill="#1f2328">
+      <text x="28" y="173"><tspan font-weight="700">0.47–223</tspan><tspan> credits</tspan></text>
+      <text x="508" y="173" font-weight="700">1m 25s–4m 36s</text>
+    </g>
+    <g font-size="15" fill="#62626c">
+      <text x="28" y="197">Lowest vs. highest cost</text>
+      <text x="508" y="197">Fastest vs. slowest run</text>
+      <text x="28" y="229">Cost and latency vary by task.</text>
+    </g>
+    <text x="932" y="229" text-anchor="end" font-size="17" font-weight="700" fill="#0969da">See the benchmark →</text>
+  </g>
+</svg>
