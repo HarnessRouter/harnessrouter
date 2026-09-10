@@ -138,9 +138,8 @@ artifacts, errors, and the final result remain attached to its session.
 
 ## Starter kits
 
-Agent harnesses go far beyond coding. To help you explore what they can do and imagine what you
-could build, we created starter kits for presentations, spreadsheets, dashboards, and videos.
-Each includes an app, an agent configuration, and a Skill that guides the agent’s work.
+Plug agent harnesses into your own interface to power tasks far beyond coding. To help you explore
+what’s possible, we created starter kits for presentations, spreadsheets, dashboards, and videos.
 More kits will be added over time.
 
 <table>
