@@ -2,14 +2,30 @@
 
 Detailed installation, configuration, API, and deployment instructions. For the shorter five-step path, start with the [README quickstart](../README.md#quickstart). This guide retains separate image-pull and container-start steps, so its installation sequence has six steps.
 
+## Contents
+
+- [Install](#install)
+- [Restarts, upgrades, and backups](#restarts-upgrades-and-backups)
+- [Starter kits](#starter-kits)
+- [What it is](#what-it-is)
+- [Why self-host](#why-self-host)
+- [The Unified Harness Protocol](#the-unified-harness-protocol)
+- [Configuration](#configuration)
+- [Using the API](#using-the-api)
+- [Putting it on a public URL](#putting-it-on-a-public-url)
+- [Moving to the hosted service](#moving-to-the-hosted-service)
+- [Architecture](#architecture)
+- [Resources](#resources)
+- [License](#license)
+
 ## Install
 
 Six steps, and at the end of them you have a running instance, a signed-in console, and an agent
 that has answered you.
 
 You need Docker, about 4 GB of disk, and an API key from a model provider. There is no account to
-create and nothing to sign up for. The provider key is the only credential in the story, and it
-never leaves the box except to call the provider it belongs to.
+create and nothing to sign up for. You also set a local Console password after the first sign-in.
+Model requests use the provider and credentials you configure.
 
 ### 1. Pull the image
 
@@ -22,9 +38,10 @@ About 700 MB to download.
 <details>
 <summary>Pinning a version instead of <code>latest</code></summary>
 
-`latest` is the current release, and pulling it again is how you upgrade. Pin a version only when
-you need two machines to run the same bytes, by naming a version in a compose file you share with a
-team. Releases are listed on [Docker Hub](https://hub.docker.com/r/harnessrouter/harnessrouter/tags).
+`latest` tracks the current release. Pulling downloads an image but does not update an existing
+container; follow [the upgrade steps](#restarts-upgrades-and-backups). Use a version tag for a
+specific release, or an image digest when you need the exact same image. Releases are listed on
+[Docker Hub](https://hub.docker.com/r/harnessrouter/harnessrouter/tags).
 
 </details>
 
@@ -66,8 +83,8 @@ change.
 The container must start as root, and from 0.8.2 it refuses to start any other way, with one line
 saying so. This is not the usual "runs as root" shortcut; it is the opposite. Root is needed for
 exactly one thing: every agent CLI runs as its own per-session user, which owns that session's
-workspace and nothing else. Switching to that user is what root is for, and the product itself runs
-as an unprivileged user from the first second.
+workspace and nothing else. The entrypoint and Runner retain root to manage those users. The
+Console and Gateway run as an unprivileged user; each agent process runs under its session user.
 
 What that buys you, inside one container serving many sessions:
 
@@ -111,9 +128,10 @@ just as well; it exists for a box built by a script, where nobody is going to op
 <details>
 <summary>Using Docker Compose instead</summary>
 
-`cp .env.example .env`, then `docker compose up -d`. Read `docker-compose.yml` first: it publishes
-`3000:3000` on every interface rather than on loopback. Change that one line and it behaves like the
-command above.
+Run these commands from a checkout of the repository root, where `docker-compose.yml` and
+`.env.example` live. Before starting, change the published port in
+[`docker-compose.yml`](../docker-compose.yml) from `3000:3000` to `127.0.0.1:3000:3000`.
+Then copy `.env.example` to `.env` and run `docker compose up -d`.
 
 </details>
 
@@ -144,8 +162,10 @@ Wait for `ready on :3000`, then open the browser:
 [harnessrouter] ready on :3000
 ```
 
-This wait happens once per volume. Every start after it takes a few seconds and prints no install
-lines at all.
+Installed CLIs are cached on the volume, so later starts are usually faster. New or previously
+failed backends can still trigger installation work. Press **Ctrl+C** to stop following logs;
+this does not stop the container. If the Console is not reachable immediately after the ready
+line, retry after a few seconds while its server finishes starting.
 
 <details>
 <summary>The other lines, and why the first start is the slow one</summary>
@@ -160,21 +180,16 @@ You will also see this line, and it comes back on every start until you change t
 [harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance.
 ```
 
-The agent CLIs are fetched on the first start rather than shipped in the image, and that is a
-licensing fact rather than a packaging preference. Claude Code is distributed under Anthropic's own
-terms and hermes-agent declares no license at all, so neither can be redistributed inside a public
-image. Installing them on first run means you install them yourself, from upstream, under those
-terms, which is also why you should read them before you use those two backends. The rest arrive
-the same way and under their own terms: Codex, Qwen Code, Gemini CLI and Cline (Apache-2.0),
-opencode and Pi (MIT, Pi with its MIT-licensed MCP adapter), Oh My Pi (MIT, a prebuilt binary
-pinned to a release and checked against the publisher's SHA256SUMS before it is installed) and
-DeepSeek Harness (MIT, a developer preview pinned to an exact version). All ten land in one place.
+The enabled agent CLIs are fetched from upstream on first start rather than bundled in the image.
+Each remains subject to its upstream license and terms; this repository's Apache 2.0 license does
+not replace them. Review [NOTICE](../NOTICE) and each tool's terms before use. The running
+instance's catalog reflects the backends that are actually available.
 
 </details>
 
 ### 4. Sign in
 
-Open <http://localhost:3000> and sign in with:
+Open <http://localhost:3000>, or the host port you chose in step 2, and sign in with:
 
 | | |
 |---|---|
@@ -294,8 +309,8 @@ the answer at the end.
 
 ![A task: the request, the commands, the files it wrote, and the test result](images/task-run.png)
 
-That is the whole install. State is SQLite and files on one Docker volume. Delete the volume and
-the instance is gone; copy it and you have moved the instance, harnesses, transcripts and all.
+That is the whole install. State is SQLite and files on one Docker volume. Deleting that volume
+deletes the instance's durable data. See [backups](#restarts-upgrades-and-backups) before moving it.
 
 <details>
 <summary>What is happening in that screenshot</summary>
@@ -309,13 +324,31 @@ take away, a file at a time or the lot as a zip.
 
 ---
 
+## Restarts, upgrades, and backups
+
+For a stopped container, use `docker start harnessrouter`; to restart it, use
+`docker restart harnessrouter`. Running the original `docker run` command again while a container
+with that name exists gives a name conflict.
+
+To upgrade, back up your data, pull the desired image, stop and remove only the old container, and
+recreate it with the same volume, ports, and configuration. Keep `HR_SECRET_KEY` unchanged if used.
+Do not delete the data volume. For Compose, use `docker compose pull` followed by
+`docker compose up -d`; avoid `docker compose down -v`, which removes volumes.
+
+Stop the container before copying the volume so the SQLite databases and files form a consistent
+backup. Preserve the volume's permissions and keep any configured encryption key securely
+alongside your deployment records. Restore the volume and the same configuration before starting
+the replacement instance.
+
 ## Starter kits
 
 Starter kits are worked examples, and they are here to show you what this can be pointed at.
 
 Each one is a whole agent product rather than a snippet: an app, an agent configured to drive it,
 and the skill that teaches that agent the format it writes. Use one, then read it: every kit is
-open source. More arrive over time; your instance lists the ones it has.
+available in the [Starter Kits repository](https://github.com/HarnessRouter/starter-kit), under its
+[separate licensing terms](https://github.com/HarnessRouter/starter-kit#licensing). More arrive over
+time; your instance lists the ones it has.
 
 ![The Starter Kits page, before any kit has been launched](images/dashboard-1-starter-kits.png)
 
@@ -506,20 +539,23 @@ a thin client over that API; anything the UI does, you can do from `curl`.
 same components, the same API client. Surfaces that need a service a single box doesn't have,
 such as accounts, billing, and marketplace, are simply not shown.
 
-**Supported harnesses:** Codex, Claude Code, and Hermes, installed on first run rather than shipped
-in the image, for the license reasons in step 3. Review each tool's terms before you use it.
+**Supported harnesses:** the running instance's catalog lists what is available, including Codex,
+Claude Code, Hermes, DeepSeek Harness, and other enabled backends. They are installed on first
+run rather than shipped in the image. Review each tool's upstream terms before use.
 
-**Bring your own key.** Your provider credentials are read from the environment at start-up and
-handed to the agent directly. They are never written into the image, never committed, and never
-sent anywhere but your provider.
+**Bring your own key.** Configure providers in Integrations or through environment-based connection
+policies. Credentials are not baked into the image; model requests follow your chosen provider
+and credentials.
 
 ## Why self-host
 
-- **Your keys, your bills, your data.** Nothing leaves the box except calls to your model provider.
+- **Your keys, your bills, your data.** You control the deployment and provider credentials.
+  Harnesses and tools may also make network requests needed for the tasks you run.
 - **Real workspaces.** Agents get bash, git, and a filesystem, their native environment, not a
   sandbox emulation.
-- **The same API as the hosted product.** Not a reduced fork: the same `/v1` surface, so anything
-  you build against it keeps working if you later move to the hosted service.
+- **No Console product telemetry.** Product analytics are disabled in the Community Edition Console.
+- **The same UHP contract as the hosted product.** Your application can use the shared protocol
+  in either edition; deployment, authentication, and provider configuration differ.
 - **Actually self-contained.** No control plane to phone home to, no managed database.
 
 ## The Unified Harness Protocol
@@ -535,12 +571,15 @@ specified, versioned and testable in [`protocol/`](../protocol/), and documented
 | [Conformance suite](../protocol/conformance/) | passing it is what "conformant" means, and what earns the right to the UHP name |
 | [Governance](../protocol/GOVERNANCE.md) | How the standard changes, and the naming and conformance policy |
 
-This edition is the reference implementation. The most recent published run
-[passes at class Full](../protocol/conformance/reports/harnessrouter-ce-0.3.0.json), against 0.3.0.
+This edition is the reference implementation. The [recorded conformance run](../protocol/conformance/#reference-implementation-results)
+on September 4, 2026 passed all 64 checks at class Full, with no failures, skips, or errors
+(suite `2026.8.11.post1`, protocol `2026-08-11`). This is a dated measurement, not a test rerun
+for every subsequent release.
 **The standard can be implemented without HarnessRouter Cloud**: it is an HTTP contract, and
 nothing in it requires a hosted service. Run the suite against your own server:
 
 ```bash
+# From the repository root
 pip install -e protocol/conformance
 uhp-conformance --base-url https://your-server --api-key "$KEY" --class full
 ```
@@ -560,11 +599,6 @@ docker run -e HR_BACKENDS=opencode ...                             # lean
 
 A backend that fails to install is not fatal: the others still work, and the console offers what
 the gateway's catalogue lists, so an unavailable backend simply is not shown.
-
-Previously documented here: that any value leaving out `hermes` made the container exit
-immediately with status 1. That no longer reproduces. Checked 2026-08-25 on a fresh volume with
-`HR_BACKENDS=codex` (one of the values named) and with `HR_BACKENDS=opencode`: both reach a healthy
-container with zero restarts and a gateway serving 200.
 
 Chromium is genuinely an image layer, so it stays a build flag:
 
@@ -599,11 +633,12 @@ session cookie. Sign in once and keep the cookie:
 ```bash
 curl -s -c hr.cookies http://localhost:3000/api/selfhost/login \
   -H 'content-type: application/json' \
-  -d '{"username":"harnessrouter","password":"harnessrouter"}'   # your password, not the default
+  -d '{"username":"harnessrouter","password":"<your-password>"}'
 # {"ok":true}
 ```
 
-Then run a turn. The gateway speaks the Responses API:
+Use your current username and password and adjust the host port if changed. Then run a turn with
+a harness and model served by your connected provider. The gateway speaks the Responses API:
 
 ```bash
 curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
@@ -684,32 +719,55 @@ runs straight through it.
 
 ## Moving to the hosted service
 
-When a harness is working the way you want, **Harnesses → Push to cloud** copies it into a
-hosted HarnessRouter account with your hosted API key.
+Self-host for control, or use **HarnessRouter Cloud** for managed deployment, maintenance, and
+scaling. Cloud runs tasks in serverless, isolated sandboxes through the same public API contract
+as Community Edition.
 
-This is deliberately one-way. Local is where you iterate; once promoted, the hosted copy is the
-source of truth. There is no "pull from cloud", so a harness can never be live in two places
-each claiming to be current. Your hosted key is used for that one request and is never stored.
+When a custom harness is working the way you want, save any pending changes in its **Settings**
+and select **Upload to Cloud**.
+Connect a destination with an API key created inside the target Cloud workspace. Built-in harnesses
+cannot be uploaded directly; create a custom harness first.
+
+The upload copies the harness configuration, including its skills and MCP configuration. It does
+not transfer provider keys, sessions, generated files, or the local workspace. Configure the
+required model providers in the destination separately.
+
+Update your application's base URL, authentication, and harness ID to use the destination.
+The shared API contract does not mean that local credentials or endpoint URLs work unchanged in
+Cloud. See the [Cloud authentication](https://harnessrouter.ai/docs/authentication) and
+[base URL](https://harnessrouter.ai/docs/base-url) guides.
+
+This is a manual, one-way upload. Later uploads replace the same hosted copy in that destination,
+so they can overwrite changes made in Cloud. Cloud edits are not pulled back into the local copy.
+
+Destination API keys are stored encrypted on your local instance for repeat uploads. Set
+`HR_SECRET_KEY` before connecting a destination, and preserve the same key across restarts and
+upgrades. You can remove a saved destination when it is no longer needed. See
+[restarts, upgrades, and backups](#restarts-upgrades-and-backups) before changing container settings.
 
 ## Architecture
 
 ```
-┌─ container ─────────────────────────────────────────────┐
-│  UI (Next.js)  :3000  ← the only published port         │
-│      │ same-origin proxy                                │
-│  Gateway       :8080  Responses API, harness CRUD       │
-│      │ loopback                                         │
-│  Runner        :8081  one agent CLI per session         │
-└─────────────────────────┬───────────────────────────────┘
-       /data (volume): SQLite, files, secrets, workspaces
+┌─ HarnessRouter container ─────────────────────────────────┐
+│  Console :3000   ← only published port                    │
+│       │ same-origin proxy                                 │
+│       ▼                                                   │
+│  Gateway :8080   Responses API + harness lifecycle        │
+│       │ loopback                                          │
+│       ▼                                                   │
+│  Runner  :8081   runs harnesses in session workspaces     │
+│                                                           │
+│  /data volume   database · files · secrets · workspaces   │
+└───────────────────────────────────────────────────────────┘
 ```
 
 The gateway and the runner listen on loopback inside the container and are not publishable; the
 console's port is the way in, which is why the login gate ships inside the image rather than in
 whatever proxy happens to sit in front.
 
-Sessions run concurrently and are isolated: each gets its own workspace directory, its own
-conversation state, and its own checkpoint. Turn concurrency defaults to the machine's core
+Sessions have separate workspace directories, conversation state, and checkpoints. Agent
+processes run as per-session operating-system users inside the shared container; this is not
+a separate sandbox or container per session. Turn concurrency defaults to the machine's core
 count. This box cannot scale sandboxes on demand the way the hosted deployment does, so the
 limit is what it can actually run.
 

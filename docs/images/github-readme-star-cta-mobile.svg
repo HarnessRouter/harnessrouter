@@ -1,18 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="600" height="48" viewBox="0 0 600 48" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="76" viewBox="0 0 360 76" role="img" aria-labelledby="title desc">
   <title id="title">Star the HarnessRouter repository</title>
-  <desc id="desc">Help us reach more developers and grow the HarnessRouter community. Star this repo.</desc>
-  <style>
-    .reveal { opacity: 0; transform: translateY(6px); animation: reveal .45s cubic-bezier(.22,1,.36,1) .08s forwards; }
-    @keyframes reveal { to { opacity: 1; transform: translateY(0); } }
-    @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; animation: none; } }
-  </style>
-  <g class="reveal">
-    <rect x="0.5" y="0.5" width="599" height="47" rx="7" fill="#F0FFF4" stroke="#ACEEBB"/>
-    <g transform="translate(125 16)" fill="#E3B341">
-      <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
-    </g>
-    <text x="149" y="30.5" fill="#0969DA" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20" font-weight="600">
-      Star HarnessRouter on GitHub →
-    </text>
+  <desc id="desc">Help grow the HarnessRouter community. Star this repo.</desc>
+  <rect width="360" height="76" rx="6" fill="#effbf1"/>
+  <text x="180" y="27" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="14" fill="#1f2328">Help grow the HarnessRouter community.</text>
+  <g transform="translate(103 42)" fill="#e3b341">
+    <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
   </g>
+  <text x="128" y="55" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#0969da">Star this repo →</text>
 </svg>
