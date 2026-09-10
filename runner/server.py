@@ -1033,14 +1033,31 @@ def _norm_token_usage(u: dict | None) -> dict:
     return res
 
 
+_CAMEL = re.compile(r"(?<=[a-z0-9])([A-Z])")
+
+
+def _codex_item_kind(it: dict) -> str:
+    """The item's type in one spelling. `codex exec --json` names items in snake_case
+    (command_execution, mcp_tool_call); the app-server names the same items in camelCase
+    (commandExecution, mcpToolCall, userMessage, agentMessage). Read in camelCase, every item
+    fell through to the generic branch: the record listed userMessage and agentMessage as tools
+    and an MCP call as "mcpToolCall" with no server or tool name (the custom-harness dimension,
+    codex, hosted 2026-09-10; the same code here, on the app-server path nobody had exercised)."""
+    return _CAMEL.sub(lambda m: "_" + m.group(1).lower(), str(it.get("type") or "")).lower()
+
+
 def _codex_tool_item(it: dict) -> list[dict]:
     """A completed codex tool item (command/file/mcp) -> canonical tool_use + tool_result events.
-    Shared by the exec normalizer and the app-server driver (the `item` shape is the same)."""
-    kind = it.get("type")
+    Shared by the exec normalizer and the app-server driver (the `item` shape is the same, the
+    type spelling is not: see _codex_item_kind). A message or reasoning item is not a tool and
+    yields nothing here (its text streams as deltas)."""
+    kind = _codex_item_kind(it)
+    if kind in ("user_message", "agent_message", "reasoning"):
+        return []
     if kind == "command_execution":
         tuid = it.get("id") or "cmd"
-        out = it.get("aggregated_output") or it.get("output") or ""
-        ec = it.get("exit_code")
+        out = it.get("aggregated_output") or it.get("aggregatedOutput") or it.get("output") or ""
+        ec = it.get("exit_code", it.get("exitCode"))
         return [
             {"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "id": tuid, "name": "Bash",
@@ -1059,9 +1076,13 @@ def _codex_tool_item(it: dict) -> list[dict]:
             {"type": "user", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": it.get("id") or "edit",
                  "content": summary}]}}]
+    if kind == "web_search":
+        tuid = it.get("id") or "search"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": "WebSearch", "input": {"query": it.get("query") or ""}}]}}]
     if kind == "mcp_tool_call":
         tuid = it.get("id") or "mcp"
-        name = f"{it.get('server', 'mcp')}.{it.get('tool', 'call')}"
+        name = f"{it.get('server') or it.get('serverName') or 'mcp'}.{it.get('tool') or it.get('toolName') or 'call'}"
         return [{"type": "assistant", "message": {"content": [
             {"type": "tool_use", "id": tuid, "name": name,
              "input": it.get("arguments") or {}}]}},
@@ -4298,9 +4319,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                     append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}})
             elif method == "item/completed":
                 it = p.get("item") or {}
-                if it.get("type") not in ("agent_message", "reasoning"):   # already streamed as deltas
-                    for ev in _codex_tool_item(it):
-                        append(ev)
+                for ev in _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
+                    append(ev)
             elif method == "turn/completed":
                 # Final cumulative usage may also ride the completed turn; read it as a fallback.
                 turn_obj = p.get("turn") or {}
