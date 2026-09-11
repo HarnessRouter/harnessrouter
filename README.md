@@ -360,12 +360,15 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
 
 ## The Unified Harness Protocol
 
-[Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Community Edition and HarnessRouter Cloud. This repository contains the Apache 2.0 reference implementation, machine-readable schemas, and the conformance suite.
+[Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Community Edition and HarnessRouter Cloud. Its task surface is deliberately compatible with the **OpenAI Responses API**, so existing Responses SDKs, streaming parsers, and UI components can work with a UHP server. UHP adds the harness-specific capabilities a model API does not provide: harness selection, persistent sessions, files, cancellation, and harness-managed tools and skills.
+
+This repository contains the Apache 2.0 reference implementation, machine-readable schemas, and the conformance suite.
 
 <table>
         <thead><tr><th>Resource</th><th>Purpose</th></tr></thead>
         <tbody>
           <tr><td><a href="protocol/versions/2026-08-11">Specification</a></td><td>Normative protocol behavior</td></tr>
+          <tr><td><a href="protocol/README.md#relationship-to-the-openai-responses-api">OpenAI Responses compatibility</a></td><td>How UHP extends the Responses API for harness execution</td></tr>
           <tr><td><a href="protocol/schema">OpenAPI and JSON Schema</a></td><td>Machine-readable contracts</td></tr>
           <tr><td><a href="protocol/conformance">Conformance suite</a></td><td>Testable compatibility requirements</td></tr>
           <tr><td><a href="protocol/GOVERNANCE.md">Governance</a></td><td>How the standard evolves</td></tr>
