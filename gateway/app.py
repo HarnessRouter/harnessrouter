@@ -996,6 +996,14 @@ _IMAGE_MODEL_MAP_KEY = "harness-image-model-map"
 _MEDIA_POLICY_KEY = "harness-media-policy"
 _IMAGE_MODEL_MAP_PREV_KEY = "harness-image-model-map.prev"
 _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token")
+# The hosted HarnessRouter service as a model provider. One origin, three routes: the provider
+# front door the runners call (OpenAI and Anthropic shapes and Gemini's native path, all under one
+# base), the model list it serves, and the connect flow that hands a key to this instance.
+HR_HOSTED_BASE = os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai").rstrip("/")
+HR_HOSTED_PROVIDER_BASE = f"{HR_HOSTED_BASE}/v1/provider"
+HR_HOSTED_MODELS_URL = f"{HR_HOSTED_BASE}/v1/models"
+HR_HOSTED_BALANCE_URL = f"{HR_HOSTED_BASE}/v1/balance"
+HR_HOSTED_CONNECT_URL = f"{HR_HOSTED_BASE}/v1/connect"
 # integration provider type × runner backend -> the runner-side provider that carries it.
 # Absent pair = that backend can't use the integration (mapping falls through to the chain).
 _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
@@ -1092,6 +1100,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # the gemini backend too; the runner still builds gemini as provider google and routes the CLI
     # through its relay when the connection is TokenRouter.
     ("tokenrouter", "gemini"): "google",
+    # The hosted service serves the same shapes from one base and one key as TokenRouter does
+    # ("tokenrouter" on the runner means OpenAI/Anthropic-compatible, api by model family, base on
+    # the connection), so its rows mirror TokenRouter's row for row.
+    ("harnessrouter", "claude"): "tokenrouter", ("harnessrouter", "codex"): "tokenrouter",
+    ("harnessrouter", "hermes"): "openai-api",  ("harnessrouter", "pi"): "tokenrouter",
+    ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
+    ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
+    ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
 }
 
 
@@ -3455,6 +3471,10 @@ def _provider_base_url(provider: str, base_url: str) -> str:
     under /openai/v1, and a bare base forwarded as-is 404s on every call ("Resource not found",
     the matrix's Azure column, 2026-09-06). Any other provider's base is used as given."""
     base = (base_url or "").strip().rstrip("/")
+    if provider.lower() == "harnessrouter":
+        # The hand-off's payload names the endpoint and the console stores it; a connection
+        # without one (a pasted key) gets this gateway's constant. A person never types it.
+        return base if base.endswith("/v1/provider") else HR_HOSTED_PROVIDER_BASE
     if base and provider.lower() in ("azure", "azure-foundry") and "/openai/" not in base:
         base += "/openai/v1"
     return base
@@ -4360,6 +4380,17 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
     },
+    # The hosted service as a provider: one key, every model on its list at listed prices, the
+    # endpoint fixed by this gateway (the person never types it). The key comes from the hosted
+    # "get a key" flow through /v1/admin/connect, or is pasted. Keys read sk-hr-<64 hex>.
+    "harnessrouter": {
+        "label": "HarnessRouter API",
+        "base_url": HR_HOSTED_PROVIDER_BASE,
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "sk-hr-…",
+    },
     "vercel": {
         "label": "Vercel AI Gateway",
         "base_url": "https://ai-gateway.vercel.sh/v1",
@@ -4567,13 +4598,127 @@ async def _media_chains_public() -> list[dict]:
 @app.get("/v1/admin/integrations")
 async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
-    return {"integrations": [_integration_public(i) for i in await _integrations_doc()],
+    integrations = await _integrations_doc()
+    hosted = next((i for i in integrations if str(i.get("provider") or "").lower() == "harnessrouter"), None)
+    hosted_cfg = (hosted or {}).get("config") or {}
+    await _hosted_models_refresh(str(hosted_cfg.get("api_key") or ""), models_url=str(hosted_cfg.get("models_url") or ""))
+    public = [_integration_public(i) for i in integrations]
+    if hosted:
+        # What is left to spend on the hosted account, read here with the stored key so the key never
+        # reaches the browser; absent (never a stale or made-up figure) when the read fails.
+        bal = await _hosted_balance(str(hosted_cfg.get("api_key") or ""), str(hosted_cfg.get("balance_url") or ""))
+        if bal is not None:
+            for row in public:
+                if row.get("name") == hosted.get("name"):
+                    row["balance"] = bal
+    return {"integrations": public,
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
             "catalog": _provider_catalog_public(),
             "media_chains": await _media_chains_public(),
             "media_policy": await _media_policy_doc()}
+
+
+async def _hosted_balance(api_key: str, balance_url: str = "") -> dict | None:
+    """GET <balance_url> with the stored key → {"usd", "is_deficit", "as_of"} or None. The hosted side
+    holds the figure for up to a minute; 401 (bad key) and 503 (ledger not answering) both mean
+    "show nothing", so does any other failure."""
+    if not api_key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as c:
+            r = await c.get(balance_url or HR_HOSTED_BALANCE_URL, headers={"authorization": f"Bearer {api_key}"})
+        if r.status_code != 200:
+            return None
+        j = r.json()
+        usd = j.get("balance_usd")
+        if not isinstance(usd, (int, float)):
+            return None
+        return {"usd": round(float(usd), 2), "is_deficit": bool(j.get("is_deficit")), "as_of": str(j.get("as_of") or "")}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Codes this instance opened with the hosted service, and the secret each poll must carry. In
+# memory: a code lives thirty minutes and a ready key is readable once, so there is nothing to keep.
+_CONNECTS: dict[str, dict] = {}
+_CONNECT_TTL = 1800.0   # the hosted code's own lifetime; a delivered body is dropped with it
+
+
+def _connects_sweep() -> None:
+    now = time.time()
+    for c in [c for c, e in _CONNECTS.items() if now - float(e.get("at") or 0) > _CONNECT_TTL]:
+        _CONNECTS.pop(c, None)
+
+
+class ConnectBody(BaseModel):
+    instance: str = ""
+
+
+@app.post("/v1/admin/connect")
+async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
+    """Open a key hand-off with the hosted service: the console opens the returned url in a new
+    tab and polls the code here; the secret never leaves this gateway."""
+    await _require_integrations_admin(request)
+    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.post(HR_HOSTED_CONNECT_URL, json={"instance": instance})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"HarnessRouter refused to start the key hand-off (HTTP {r.status_code}).")
+    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    code, secret = str(j.get("code") or ""), str(j.get("secret") or "")
+    if not code or not secret or not j.get("url"):
+        raise HTTPException(502, "HarnessRouter answered without a code, a secret or a url.")
+    now = time.time()
+    for k, v in list(_CONNECTS.items()):        # forget codes older than an hour
+        if now - v["at"] > 3600:
+            _CONNECTS.pop(k, None)
+    _connects_sweep()
+    _CONNECTS[code] = {"secret": secret, "at": now}
+    return {"code": code, "url": str(j["url"]), "expires_in": j.get("expires_in")}
+
+
+@app.get("/v1/admin/connect/{code}")
+async def admin_connect_poll(code: str, request: Request):
+    """One poll of the hand-off: 202 while the person is still on the hosted page, 200 once with
+    the key and the endpoints (then the hosted model list is refreshed with that key), 410 when
+    the code expired or was already read."""
+    await _require_integrations_admin(request)
+    _connects_sweep()
+    entry = _CONNECTS.get(code)
+    if not entry:
+        raise HTTPException(410, "That key hand-off is not open. Get a key again.")
+    if entry.get("ready"):
+        # The hosted side hands the key over once; this side answers every poll after that with the
+        # same body until the code expires, so a slow or dropped answer costs nothing.
+        return entry["ready"]
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(f"{HR_HOSTED_CONNECT_URL}/{code}", headers={"X-Connect-Secret": entry["secret"]})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
+    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code == 202:
+        return JSONResponse({"status": "pending"}, status_code=202)
+    if r.status_code == 410:
+        _CONNECTS.pop(code, None)
+        raise HTTPException(410, "That key hand-off expired or was already used. Get a key again.")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"HarnessRouter answered HTTP {r.status_code} on the key hand-off.")
+    key = str(j.get("api_key") or "")
+    endpoint = str(j.get("endpoint") or HR_HOSTED_PROVIDER_BASE)
+    models_url = str(j.get("models_url") or HR_HOSTED_MODELS_URL)
+    balance_url = str(j.get("balance_url") or HR_HOSTED_BALANCE_URL)
+    if key:
+        await _hosted_models_refresh(key, force=True, models_url=models_url)
+    entry["ready"] = {"status": "ready", "api_key": key, "endpoint": endpoint, "models_url": models_url,
+                      "balance_url": balance_url, "org": j.get("org") or "", "name": str(j.get("name") or ""),
+                      "models": list(_HOSTED_MODELS["ids"])}
+    return entry["ready"]
 
 
 class IntegrationsBody(BaseModel):
@@ -5385,6 +5530,57 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
                "gpt-image-1-mini": "openai/gpt-image-1-mini"},
 }
 
+
+# HarnessRouter serves canonical ids and its list is maintained there, not here: the gateway reads
+# it (at start, on a connect that handed over a key, and hourly on the admin read), keeps the last
+# good read, and the vendor table is that read. An empty read is empty: nothing is listed unprobed.
+_HOSTED_MODELS: dict = {"ids": [], "at": 0.0}
+_HOSTED_MODELS_TTL = 3600.0
+
+
+def _hosted_models_parse(doc) -> list[str]:
+    """Canonical ids from either shape the hosted list may take: this gateway's own /v1/models
+    ({"backends": {b: {"models": [{"id": ...}]}}}) or a flat OpenAI-style {"data": [{"id": ...}]}."""
+    ids: list[str] = []
+    if isinstance(doc, dict) and isinstance(doc.get("backends"), dict):
+        for c in doc["backends"].values():
+            for m in (c or {}).get("models") or []:
+                if isinstance(m, dict):
+                    if m.get("id") and m.get("available", True):
+                        ids.append(str(m["id"]))
+                elif m:
+                    ids.append(str(m))
+    elif isinstance(doc, dict) and isinstance(doc.get("data"), list):
+        ids = [str(m.get("id")) for m in doc["data"] if isinstance(m, dict) and m.get("id")]
+    elif isinstance(doc, list):
+        ids = [str(m.get("id") if isinstance(m, dict) else m) for m in doc if m]
+    return sorted(set(ids))
+
+
+async def _hosted_models_refresh(api_key: str = "", force: bool = False, models_url: str = "") -> list[str]:
+    """Read the hosted model list (the union of every backend's available ids for this key's
+    org) and make it this provider's vendor table. Keeps the last good read on any failure; the
+    key is sent when one is known (the list is computed for the key's org)."""
+    if not force and _HOSTED_MODELS["ids"] and time.time() - _HOSTED_MODELS["at"] < _HOSTED_MODELS_TTL:
+        return _HOSTED_MODELS["ids"]
+    headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(models_url or HR_HOSTED_MODELS_URL, headers=headers)
+        if r.status_code >= 400:
+            print(f"[hosted] model list answered HTTP {r.status_code}", flush=True)
+            return _HOSTED_MODELS["ids"]
+        ids = _hosted_models_parse(r.json())
+    except Exception as e:  # noqa: BLE001
+        print(f"[hosted] model list unreachable: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        return _HOSTED_MODELS["ids"]
+    if ids:
+        _HOSTED_MODELS.update({"ids": ids, "at": time.time()})
+        _VENDOR_MODELS["harnessrouter"] = {m: m for m in ids}
+    return _HOSTED_MODELS["ids"]
+
+
+_VENDOR_MODELS["harnessrouter"] = {}     # filled by _hosted_models_refresh
 
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
                                  if c not in _TOKENROUTER_NO_CHANNEL}

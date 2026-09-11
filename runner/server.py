@@ -2516,8 +2516,17 @@ _GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
 _GOOGLE_HOST = "generativelanguage.googleapis.com"
 
 
-# The relay's route carries no provider, only the upstream: TokenRouter's channels are the host.
-_STRICT_GEMINI_HOST = "api.tokenrouter.com"
+# The relay's route carries no provider, only the upstream: a Gemini channel is known by its host.
+# TokenRouter serves Google's native API under its own root, and the hosted HarnessRouter service
+# (HR_HOSTED_BASE, the same knob the gateway reads) fronts TokenRouter's channel for Gemini.
+_STRICT_GEMINI_HOSTS = tuple(h for h in (
+    "api.tokenrouter.com",
+    urllib.parse.urlsplit(os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai")).netloc) if h)
+
+
+def _gemini_channel(base: str) -> bool:
+    """Whether `base` is a provider that serves Google's native API under its own root."""
+    return any(h in base for h in _STRICT_GEMINI_HOSTS)
 # ── Gemini function declarations through a strict channel ────────────────────────────────
 # Google's native API validates function declarations against its own Schema (type, format,
 # description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
@@ -2756,7 +2765,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
             headers["content-length"] = str(len(body))
-        if (_STRICT_GEMINI_HOST in base and "gemini" in str(_body_model).lower()
+        if (_gemini_channel(base) and "gemini" in str(_body_model).lower()
                 and body is not None and self.path.endswith("/chat/completions")):
             # TokenRouter's Gemini channels hand a harness's JSON-schema tool declarations to Google's
             # validator as sent; the broker does the same normalisation for brokered traffic
@@ -3007,10 +3016,11 @@ def _relay_base_with_version(base_url: str) -> str:
 
 def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_model: str = "") -> tuple[str, str]:
     """Register one gemini turn's upstream for Google's native API on a provider that serves it: the
-    host root, no version segment, since the CLI appends /v1beta/models/<id>:... itself and names the
-    model the way the gateway resolved it through the connection's vendor table (google/<id> on
-    TokenRouter). The same shape as the hosted broker's native path: re-rooted at the provider's host,
-    the key in x-goog-api-key. → (GOOGLE_GEMINI_BASE_URL for the CLI, placeholder key)."""
+    connection's base without its /v1 version segment (TokenRouter's host root, the hosted service's
+    /v1/provider door), since the CLI appends /v1beta/models/<id>:... itself and names the model the
+    way the gateway resolved it through the connection's vendor table (google/<id> on TokenRouter,
+    the canonical id on the hosted door). The same shape as the hosted broker's native path: re-rooted
+    at the provider's base, the key in x-goog-api-key. → (GOOGLE_GEMINI_BASE_URL, placeholder key)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -3341,13 +3351,13 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
-    if auth.base_url and _STRICT_GEMINI_HOST in auth.base_url:
-        # A TokenRouter connection: it serves Google's native API under the vendor prefix (measured
-        # 2026-09-07 for the seven Gemini ids its table carries), so the CLI is pointed at the
-        # loopback relay, which owns the prefix and the real key; the CLI keeps its own model id, so
-        # the pinned resolutions and the served-model check below are unchanged.
-        root = urllib.parse.urlsplit(auth.base_url)
-        relay_base, relay_tok = _gemini_relay_route(f"{root.scheme}://{root.netloc}", auth.api_key, model, native_model or "")
+    if auth.base_url and _gemini_channel(auth.base_url):
+        # A TokenRouter or hosted connection: it serves Google's native API under its own root and
+        # its own name for the model (TokenRouter's vendor prefix, measured 2026-09-07 for the seven
+        # Gemini ids its table carries; the hosted door takes the canonical id), so the CLI is pointed
+        # at the loopback relay, which owns that name and the real key; the CLI keeps its own model
+        # id, so the pinned resolutions and the served-model check below are unchanged.
+        relay_base, relay_tok = _gemini_relay_route(auth.base_url.rstrip("/").removesuffix("/v1"), auth.api_key, model, native_model or "")
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
     else:
