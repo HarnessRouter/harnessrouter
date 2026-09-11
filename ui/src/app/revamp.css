@@ -1667,10 +1667,11 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .itg-or { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; color: var(--muted);
       font-size: 10.5px; font-weight: 700; letter-spacing: .08em; }
     .itg-or::before, .itg-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
-    /* what is left to spend on the hosted account: a pill under the row's name */
-    .itg-balance { display: inline-block; margin-top: 4px; padding: 2px 9px; border-radius: 999px;
-      font-size: 11.5px; font-weight: 600; line-height: 16px; color: var(--accent);
-      background: var(--accent-soft); border: 1px solid rgba(26, 92, 245, .22); white-space: nowrap; }
+    /* what is left to spend on the hosted account: an amber pill on its own row under the name */
+    .itg-balance-row { margin-top: 5px; }
+    .itg-balance { display: inline-block; padding: 2px 9px; border-radius: 999px;
+      font-size: 11.5px; font-weight: 600; line-height: 16px; color: #8a5a00;
+      background: #fff3cf; border: 1px solid rgba(214, 150, 0, .38); white-space: nowrap; }
     .itg-balance.out { color: var(--red); background: var(--red-soft); border-color: rgba(180, 70, 15, .28); }
     .itg-handoff.ready { color: var(--accent); }
     .itg-handoff.failed { color: var(--red); }

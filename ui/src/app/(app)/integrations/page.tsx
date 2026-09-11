@@ -249,9 +249,11 @@ export default function IntegrationsPage() {
                       onClick={() => { setEditing(JSON.parse(JSON.stringify(i))); setEditingOriginal(i.name); }}>
                       <td><strong>{i.name}</strong>
                         {i.balance && (
-                          <span className={'itg-balance' + (i.balance.usd <= 0 ? ' out' : '')}>
-                            {i.balance.usd <= 0 ? '$0.00 left, top up' : `$${i.balance.usd.toFixed(2)} left`}
-                          </span>
+                          <div className="itg-balance-row">
+                            <span className={'itg-balance' + (i.balance.usd <= 0 ? ' out' : '')}>
+                              {i.balance.usd <= 0 ? '$0.00 left, top up' : `$${i.balance.usd.toFixed(2)} left`}
+                            </span>
+                          </div>
                         )}
                       </td>
                       <td>{labelFor(i.provider)}</td>
