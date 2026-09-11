@@ -39,8 +39,6 @@
 
 <a id="one-interface-the-freedom-to-choose"></a>
 
-<br>
-
 ## Compare and switch harnesses. Optimize cost and latency.
 
 <a href="https://harnessrouter.ai/benchmarks" title="Open the methodology. The cost and latency figures compare separate extremes; results vary by task.">
