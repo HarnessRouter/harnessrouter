@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(max-width: 600px)" srcset="docs/images/2026-09-10-readme-category-banner-mobile.svg">
-    <img src="docs/images/2026-09-10-readme-category-banner-desktop.svg" width="100%" alt="The world’s first unified interface for agent harnesses.">
-  </picture>
+  <strong>The world’s first unified interface for agent harnesses.</strong>
 </p>
 
 <h1 align="center">
@@ -44,36 +41,18 @@
 
 ## N × M harness integrations → 1 unified interface.
 
-N harnesses × M integration responsibilities. Connect your product once; HarnessRouter handles the harness-specific differences.
-
 ![Animated illustration: compare four generic harnesses and 4 × 9 = 36 repeated responsibilities with one HarnessRouter product integration. Add a fifth harness in With while product integration stays one, then return to Without to see 5 × 9 = 45. With names Codex, Claude Code, Hermes, Pi, and DeepSeek Harness.](docs/images/2026-09-10-harnessrouter-integration-comparison-v4.gif)
 
 <a id="one-interface-the-freedom-to-choose"></a>
 
 ## Compare and switch harnesses. Optimize cost and latency.
 
-<a href="https://harnessrouter.ai/benchmarks" title="In many cases, we’ve seen over 90% cost savings. Lower cost doesn’t always mean slower runs.">
+<a href="https://harnessrouter.ai/benchmarks" title="Open the methodology. The cost and latency figures compare separate extremes; results vary by task.">
   <picture>
     <source media="(max-width: 600px)" srcset="docs/images/benchmark-summary-mobile.svg">
-    <img src="docs/images/benchmark-summary.svg" width="100%" alt="One recorded task, eight Harness × Model configurations. Save 99.8%, lowest vs. highest cost: 0.47–223 credits. 3.2× faster, fastest vs. slowest run: 1m 25s–4m 36s end to end. Cost and latency vary by task. See the benchmark.">
+    <img src="docs/images/benchmark-summary.svg" width="100%" alt="One recorded task, eight Harness × Model configurations. Save 99.8%, lowest vs. highest cost: 0.47–223 credits. 3.2× faster, fastest vs. slowest run: 1m 25s–4m 36s end to end. These are separate comparisons; results vary by task. Open the methodology.">
   </picture>
 </a>
-
-<details>
-<summary>Benchmark data and comparison basis</summary>
-
-One recorded Care Prep task, eight Harness × Model configurations.
-
-| Metric | Observed range | Comparison |
-|---|---|---|
-| Cost | 0.47–223 credits | 99.8% lower, lowest vs. highest cost |
-| End-to-end latency | 1m 25s–4m 36s | 3.2× faster, fastest vs. slowest run |
-
-These compare separate extremes, not one configuration delivering both improvements. Results are specific to this task, not a universal ranking.
-
-[Recorded results and methodology →](https://harnessrouter.ai/benchmarks)
-
-</details>
 
 <a href="#top" title="Back to the top to star this repository">
   <picture>
@@ -82,11 +61,13 @@ These compare separate extremes, not one configuration delivering both improveme
   </picture>
 </a>
 
-**HarnessRouter Community Edition** is the self-hosted, Apache 2.0 edition of the **unified interface for agent harnesses**. It implements the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org), with the Console, Gateway, and Runner in one Docker deployment on infrastructure you control.
+**HarnessRouter is the unified interface for agent harnesses.** Community Edition lets you self-host it under Apache 2.0, with the Console, Gateway, and Runner in one Docker deployment. It implements the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) on infrastructure you control.
 
-[Run locally →](#quickstart) · [Prefer managed execution? Explore Cloud →](https://harnessrouter.ai)
+[Run locally →](#quickstart) · [Prefer managed agent harnesses? Explore HarnessRouter Cloud →](https://harnessrouter.ai)
 
 <a id="install"></a>
+
+<br>
 
 ## Quickstart
 
@@ -161,11 +142,13 @@ Open [http://localhost:3000](http://localhost:3000), or your chosen host port, a
 
 Using an existing volume or custom credentials? [Check credential precedence and setup](docs/self-hosting-guide.md#install).
 
+These credentials sign you into the Console. You do not need a HarnessRouter API key to run tasks here.
+
 ### 4. Connect a model provider
 
 Open **Integrations → Add Integration**. Choose a provider, give the integration a name, and add its API key. Its supported models become available in the Console.
 
-Model requests use the provider and credentials you choose.
+This provider key authorizes model requests. It is separate from the HarnessRouter API key used for product integration below.
 
 <details>
 <summary>See the provider setup screen</summary>
@@ -209,18 +192,27 @@ You can change the default model later in Settings, but the base harness cannot 
 
 <a id="use-the-api-directly"></a>
 
-## Integrate into your product with one API
+<a id="integrate-into-your-product-with-one-api"></a>
 
-With HarnessRouter running, connect your product to the same OpenAI Responses-compatible API used by the Console.
+<a id="integrate-into-your-product-backend-with-one-api"></a>
 
-Sign in once to keep a local session cookie, then run a turn. To use your custom harness, replace `metadata.harness_id` with its **Harness ID**.
+<br>
+
+## Integrate your harness into your product backend with one API
+
+Treat each harness as a pluggable agent backend for your product. Integrate a built-in or custom harness through your self-hosted HarnessRouter instance’s OpenAI Responses-compatible API. `metadata.harness_id` selects the harness that runs each agent task, so you can switch harnesses without redesigning your product backend. No Cloud account or upload is required.
+
+Once your harness runs successfully in the Console:
+
+1. Open `/keys` on the same CE instance ([default local address](http://localhost:3000/keys)) and choose **Create API key**. This key is created in and used by your self-hosted CE instance; it is not a Cloud key. CE currently hides this page from the sidebar, so open the URL directly.
+2. Store the secret shown once as `HARNESSROUTER_API_KEY` in your product backend. Never expose it in browser code.
+3. Call the API with the Harness ID shown in the Console and a model served by your connected provider.
 
 ```bash
-curl -s -c hr.cookies http://localhost:3000/api/selfhost/login \
-  -H 'content-type: application/json' \
-  -d '{"username":"harnessrouter","password":"<your-password>"}'
+export HARNESSROUTER_BASE_URL=http://localhost:3000/api/harness
 
-curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
+curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
+  -H "Authorization: Bearer ${HARNESSROUTER_API_KEY:?}" \
   -H 'content-type: application/json' \
   -d '{
     "input":"Reply with exactly: it works.",
@@ -230,9 +222,9 @@ curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
   }'
 ```
 
-The task appears in the Console with the same session and transcript. Set `"stream": true` to receive server-sent events.
+The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events. This HarnessRouter API key, created in your CE instance, authenticates your product backend to that instance; it is not your Console password or model-provider key.
 
-Use your current username and password, adjust the port if needed, and choose a harness and model served by your connected provider.
+The default URL works when your backend and CE run on the same computer. From another machine or container, use a reachable URL for the CE instance. [Read the complete self-hosted API and networking guide →](docs/self-hosting-guide.md#using-the-api)
 
 <a id="one-interface-for-the-agent-lifecycle"></a>
 
@@ -240,7 +232,7 @@ Use your current username and password, adjust the port if needed, and choose a 
         <thead><tr><th scope="col">Your application can…</th><th scope="col">How</th></tr></thead>
         <tbody>
           <tr><th scope="row">Start tasks</th><td>Send instructions and check execution status</td></tr>
-          <tr><th scope="row">Continue sessions</th><td>Send follow-up instructions within the same session</td></tr>
+          <tr><th scope="row">Continue sessions</th><td>Send follow-up instructions with <code>previous_response_id</code></td></tr>
           <tr><th scope="row">Stream progress</th><td>Receive live updates as the agent works</td></tr>
           <tr><th scope="row">Work with files</th><td>Attach input files and retrieve generated outputs</td></tr>
           <tr><th scope="row">Cancel tasks</th><td>Stop work that is no longer needed</td></tr>
@@ -253,6 +245,8 @@ Treat agent harnesses as an **AI infrastructure layer**, like databases or model
 See the [API guide](docs/self-hosting-guide.md#using-the-api) for catalogs, sessions, cancellation, and traces. For the full API contract, see the [Unified Harness Protocol (UHP) specification](https://unifiedharnessprotocol.org/spec).
 
 <a id="starter-kits"></a>
+
+<br>
 
 ## See where agent harnesses fit in your product
 
@@ -302,6 +296,8 @@ Open **Starter Kits** in the Console. Select a harness and model supported by yo
 [Read the kit setup guide →](docs/self-hosting-guide.md#starter-kits)
 
 </details>
+
+<br>
 
 ## Deployment choices
 
@@ -356,6 +352,8 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
 
 <a id="unified-harness-protocol"></a>
 
+<br>
+
 ## The Unified Harness Protocol
 
 [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Community Edition and HarnessRouter Cloud. This repository contains the Apache 2.0 reference implementation, machine-readable schemas, and the conformance suite.
@@ -370,6 +368,8 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
         </tbody>
       </table>
 
+<br>
+
 ## Resources
 
 | Goal | Resources |
@@ -378,6 +378,8 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
 | **Deploy** | [Setup & operations](docs/self-hosting-guide.md) · [Local → Cloud](#local-to-cloud) · [HarnessRouter Cloud](https://harnessrouter.ai) |
 | **Protocol** | [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) |
 | **Community** | [Discord](https://discord.gg/nPcbwqVPb2) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) |
+
+<br>
 
 ## Star History
 
@@ -390,6 +392,8 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
     </picture>
   </a>
 </p>
+
+<br>
 
 ## License
 
