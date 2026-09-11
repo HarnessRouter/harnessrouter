@@ -1,7 +1,9 @@
 name: Refresh README stars
 on:
   schedule:
-    - cron: '23 */6 * * *'
+    # GitHub Actions supports a minimum five-minute interval. Offset from the
+    # start of the hour to reduce the chance of scheduler congestion.
+    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
   workflow_dispatch:
 permissions:
   contents: write
