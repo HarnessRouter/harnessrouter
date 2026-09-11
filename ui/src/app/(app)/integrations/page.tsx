@@ -26,6 +26,9 @@ interface Integration {
   /** Image models this integration can serve. Separate from `models`: an image model offered in
    *  a chat picker is a choice that cannot work. */
   image_models?: ModelRow[];
+  /** What is left to spend on the hosted account, read by the server with the stored key; absent
+   *  while unknown, so nothing is shown rather than a stale figure. */
+  balance?: { usd: number; is_deficit: boolean; as_of: string };
 }
 interface ProviderField { key: string; label: string; placeholder?: string }
 interface ProviderMeta {
@@ -84,6 +87,11 @@ export default function IntegrationsPage() {
   const [editing, setEditing] = useState<Integration | null>(null);   // panel draft
   const [editingOriginal, setEditingOriginal] = useState<string | null>(null); // name being edited, null = new
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // The hosted key hand-off: this console asks its own gateway to open one (the secret stays
+  // there), opens the hosted page in a new tab, and polls the code until the key is ready. The
+  // poll is the mechanism, so a localhost install and a blocked popup both work; the hosted page
+  // may also post the same payload to its opener, which lands the key a beat sooner.
+  const [handoff, setHandoff] = useState<{ code: string; url: string; state: 'waiting' | 'ready' | 'failed'; frame: boolean; note: string } | null>(null);
 
   const reload = useCallback(() => {
     harnessFetch('/api/harness/v1/admin/integrations', { headers: authHeaders() })
@@ -117,6 +125,71 @@ export default function IntegrationsPage() {
       return false;
     } finally { setBusy(false); }
   }
+
+  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string; balance_url?: string; models?: string[]; name?: string }) => {
+    const key = payload?.api_key;
+    if (!key) return;
+    const ids = Array.isArray(payload.models) ? payload.models : null;
+    if (ids) {
+      // The model list is per key, so it arrives with the key: the catalog entry the open modal
+      // reads is refreshed in place rather than after a reload.
+      setDoc((cur) => cur ? { ...cur, catalog: cur.catalog.map((c) => c.id === 'harnessrouter'
+        ? { ...c, models: ids.map((m) => ({ canonical: m, provider_id: m })) } : c) } : cur);
+    }
+    setEditing((cur) => cur ? {
+      ...cur,
+      name: cur.name.trim() || (typeof payload.name === 'string' && payload.name.trim()) || 'HarnessRouter API',
+      provider: 'harnessrouter',
+      config: { ...cur.config, api_key: key,
+                ...(payload.endpoint ? { base_url: payload.endpoint } : {}),
+                ...(payload.models_url ? { models_url: payload.models_url } : {}),
+                ...(payload.balance_url ? { balance_url: payload.balance_url } : {}) },
+    } : cur);
+    setHandoff((h) => h ? { ...h, state: 'ready', note: 'Key received. Create the integration to finish.' } : h);
+  }, []);
+
+  async function getKey() {
+    setErr('');
+    try {
+      const r = await harnessFetch('/api/harness/v1/admin/connect', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ instance: typeof window !== 'undefined' ? window.location.host : '' }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
+      const j = await r.json() as { code: string; url: string };
+      // The hosted steps run inside this window, in a dialog over the form; the poll below carries the key.
+      setHandoff({ code: j.code, url: j.url, state: 'waiting', frame: true, note: 'Finish in the HarnessRouter window. The key lands here on its own.' });
+    } catch (e) {
+      // The answer belongs under the card the click came from; the page notice sits behind the modal.
+      setHandoff({ code: '', url: '', state: 'failed', frame: false,
+                   note: (e instanceof Error && e.message) || 'HarnessRouter could not be reached. Get a key again.' });
+    }
+  }
+
+  // Poll the open hand-off every two seconds until it is ready or gone; stop when the modal closes.
+  // This is the one path the key takes: the ready body is the record (key, endpoint, models_url,
+  // name, models), and a message from the hosted page could only carry less and land first.
+  useEffect(() => {
+    if (!handoff || handoff.state !== 'waiting' || !editing) return;
+    // One poll in flight at a time: the next is scheduled when the previous has answered, so a
+    // slow answer is never overtaken by a later poll (the ready body is handed over once).
+    let alive = true; let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const r = await harnessFetch(`/api/harness/v1/admin/connect/${encodeURIComponent(handoff.code)}`, { headers: authHeaders() });
+        if (!alive) return;
+        if (r.status !== 202) {
+          const j = await r.json().catch(() => null);
+          if (r.ok && j?.status === 'ready') { receiveKey(j); return; }
+          setHandoff((h) => h ? { ...h, state: 'failed', note: j?.detail || `The hand-off answered ${r.status}. Get a key again.` } : h);
+          return;
+        }
+      } catch { /* the next tick asks again */ }
+      if (alive) timer = setTimeout(tick, 2000);
+    };
+    timer = setTimeout(tick, 2000);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [handoff, editing, receiveKey]);
 
   const catalog = useMemo(() => doc?.catalog || [], [doc]);
   const metaFor = useCallback(
@@ -174,7 +247,15 @@ export default function IntegrationsPage() {
                   {doc.integrations.map((i) => (
                     <tr key={i.name} className="object-row" style={{ cursor: 'pointer' }}
                       onClick={() => { setEditing(JSON.parse(JSON.stringify(i))); setEditingOriginal(i.name); }}>
-                      <td><strong>{i.name}</strong></td>
+                      <td><strong>{i.name}</strong>
+                        {i.balance && (
+                          <div className="itg-balance-row">
+                            <span className={'itg-balance' + (i.balance.usd <= 0 ? ' out' : '')}>
+                              {i.balance.usd <= 0 ? '$0.00 left, top up' : `$${i.balance.usd.toFixed(2)} left`}
+                            </span>
+                          </div>
+                        )}
+                      </td>
                       <td>{labelFor(i.provider)}</td>
                       <td className="itg-desktop-col"><span className="itg-models">{i.models.map((m) => m.canonical).join(', ') || '—'}</span></td>
                       <td className="itg-row-actions">
@@ -239,7 +320,7 @@ export default function IntegrationsPage() {
             <div className="modal-header">
               <div><h2 id="itgTitle">{editingOriginal ? 'Edit Integration' : 'Add Integration'}</h2>
                 <p>A provider connection plus the models it serves.</p></div>
-              <button className="icon-button modal-close" type="button" aria-label="Close dialog" onClick={() => setEditing(null)}><iconify-icon icon="tabler:x"></iconify-icon></button>
+              <button className="icon-button modal-close" type="button" aria-label="Close dialog" onClick={() => { setEditing(null); setHandoff(null); }}><iconify-icon icon="tabler:x"></iconify-icon></button>
             </div>
             <div className="modal-body">
               <div className="field-stack">
@@ -247,8 +328,23 @@ export default function IntegrationsPage() {
                   <input id="itgName" value={editing.name} placeholder="OpenRouter production"
                     onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></div>
                 <div className="field"><label>Provider</label>
+                  {catalog.some((c) => c.id === 'harnessrouter') && (
+                    <button type="button" className={'itg-hosted' + (editing.provider === 'harnessrouter' ? ' on' : '')}
+                      disabled={Boolean(editingOriginal)}
+                      onClick={() => setEditing({ ...editing, provider: 'harnessrouter', config: {} })}>
+                      <span className="itg-hosted-head">
+                        <strong>HarnessRouter API</strong>
+                        <a className="itg-hosted-link" href="#get-key"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing({ ...editing, provider: 'harnessrouter', config: editing.provider === 'harnessrouter' ? editing.config : {} }); void getKey(); }}>
+                          Get a key ↗</a>
+                      </span>
+                      <span className="itg-hosted-accent">Every model at its listed price, no markup</span>
+                      <span className="itg-hosted-muted">One universal key, every model on the list.</span>
+                    </button>
+                  )}
+                  {catalog.some((c) => c.id === 'harnessrouter') && <div className="itg-or"><span>OR BRING YOUR OWN</span></div>}
                   <div className="itg-provider-list">
-                    {catalog.map((c) => (
+                    {catalog.filter((c) => c.id !== 'harnessrouter').map((c) => (
                       <button key={c.id} type="button"
                         className={'itg-provider' + (editing.provider === c.id ? ' on' : '')}
                         disabled={Boolean(editingOriginal)}
@@ -347,7 +443,10 @@ export default function IntegrationsPage() {
                         );
                       })}
                       {meta.base_url ? (
-                        <p className="field-help">Endpoint: <code>{meta.base_url}</code></p>
+                        <p className="field-help">Endpoint: <code>{editing.config.base_url || meta.base_url}</code></p>
+                      ) : null}
+                      {editing.provider === 'harnessrouter' && handoff ? (
+                        <p className={'field-help itg-handoff ' + handoff.state} role="status">{handoff.note}</p>
                       ) : null}
                     </div>
                   );
@@ -363,6 +462,18 @@ export default function IntegrationsPage() {
                         <p className="field-help">
                           This integration serves the model ID you entered above. Add it in the
                           mapping table below after saving.
+                        </p>
+                      </div>
+                    );
+                  }
+                  if (!models.length) {
+                    return (
+                      <div className="field">
+                        <label>Supported models</label>
+                        <p className="field-help">
+                          {editing.provider === 'harnessrouter'
+                            ? 'Maintained here, not by you: the list of models arrives with your key.'
+                            : 'Maintained here, not by you: no models are listed for this provider yet.'}
                         </p>
                       </div>
                     );
@@ -401,6 +512,19 @@ export default function IntegrationsPage() {
                   }}>{busy ? 'Saving…' : editingOriginal ? 'Save' : 'Create'}</button>
               </div>
             </div>
+          </section>
+        </div>
+      )}
+
+      {editing && handoff && handoff.state === 'waiting' && handoff.frame && (
+        <div className="modal-backdrop itg-frame-backdrop" onClick={(e) => e.stopPropagation()}>
+          <section className="itg-frame" role="dialog" aria-modal="true" aria-label="Get a key">
+            <button type="button" className="itg-frame-close" aria-label="Close"
+              onClick={() => setHandoff((h) => h ? { ...h, frame: false } : h)}>
+              <iconify-icon icon="tabler:x"></iconify-icon>
+            </button>
+            <iframe className="itg-frame-view" title="HarnessRouter" allow="clipboard-write"
+              src={handoff.url + (handoff.url.includes('?') ? '&' : '?') + 'embed=1'} />
           </section>
         </div>
       )}

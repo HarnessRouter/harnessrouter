@@ -794,6 +794,28 @@ body {
 .v2-socials { display: flex; align-items: center; gap: 2px; padding: 0 8px 4px; }
 .v2-social { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: var(--v2-cap); font-size: 16px; text-decoration: none; }
 .v2-social:hover { background: var(--v2-row); color: var(--v2-ink); }
+button.v2-social { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; }
+button.v2-social:hover { background: var(--v2-row); }
+/* Book a call: the homepage's dialog (harnessrouter.ai globals.css, .book-demo-*), the Calendly page in a
+   frame with our mark until it is running. */
+.book-demo-dialog { margin: auto; width: min(720px, calc(100vw - 32px)); height: min(780px, calc(100dvh - 48px));
+  padding: 0; border: none; border-radius: 16px; overflow: hidden; background: #fff; position: relative; }
+.book-demo-dialog::backdrop { background: rgba(12, 14, 20, 0.55); }
+.book-demo-close { position: absolute; top: 10px; right: 10px; z-index: 3; display: inline-flex; align-items: center;
+  justify-content: center; width: 36px; height: 36px; border: none; border-radius: 50%; background: rgba(12, 14, 20, 0.06);
+  color: var(--v2-ink); font-size: 18px; cursor: pointer; }
+.book-demo-close:hover { background: rgba(12, 14, 20, 0.12); }
+.book-demo-frame { width: 100%; height: 100%; border: none; display: block; }
+.book-demo-loading { z-index: 2; position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 6px; background: #fff; text-align: center; padding: 24px; opacity: 1; transition: opacity 320ms ease-out; }
+.book-demo-loading-done { opacity: 0; pointer-events: none; }
+.book-demo-loading-mark { margin-bottom: 16px; animation: book-demo-pulse 1.6s ease-in-out infinite; }
+.book-demo-loading-title { max-width: 360px; margin: 0; font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -0.01em;
+  color: var(--v2-ink); text-wrap: balance; }
+.book-demo-loading-title em { color: var(--v2-accent); font-family: Georgia, "Times New Roman", serif; font-style: italic; font-weight: 400; }
+.book-demo-loading-subtitle { margin: 10px 0 0; font-size: 13px; color: var(--v2-cap); }
+@keyframes book-demo-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.92); } }
+@media (prefers-reduced-motion: reduce) { .book-demo-loading-mark { animation: none; } }
 
 /* ── Quickstart, per the design: four steps on a rail ── */
 .qs { display: flex; flex-direction: column; min-height: 100%; }
