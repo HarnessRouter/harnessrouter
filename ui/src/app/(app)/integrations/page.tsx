@@ -88,7 +88,7 @@ export default function IntegrationsPage() {
   // there), opens the hosted page in a new tab, and polls the code until the key is ready. The
   // poll is the mechanism, so a localhost install and a blocked popup both work; the hosted page
   // may also post the same payload to its opener, which lands the key a beat sooner.
-  const [handoff, setHandoff] = useState<{ code: string; url: string; state: 'waiting' | 'ready' | 'failed'; note: string } | null>(null);
+  const [handoff, setHandoff] = useState<{ code: string; url: string; state: 'waiting' | 'ready' | 'failed'; frame: boolean; note: string } | null>(null);
 
   const reload = useCallback(() => {
     harnessFetch('/api/harness/v1/admin/integrations', { headers: authHeaders() })
@@ -153,11 +153,11 @@ export default function IntegrationsPage() {
       });
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
       const j = await r.json() as { code: string; url: string };
-      setHandoff({ code: j.code, url: j.url, state: 'waiting', note: 'Finish on the HarnessRouter page that just opened. The key lands here on its own.' });
-      window.open(j.url, '_blank');
+      // The hosted steps run inside this window, in a dialog over the form; the poll below carries the key.
+      setHandoff({ code: j.code, url: j.url, state: 'waiting', frame: true, note: 'Finish in the HarnessRouter window. The key lands here on its own.' });
     } catch (e) {
       // The answer belongs under the card the click came from; the page notice sits behind the modal.
-      setHandoff({ code: '', url: '', state: 'failed',
+      setHandoff({ code: '', url: '', state: 'failed', frame: false,
                    note: (e instanceof Error && e.message) || 'HarnessRouter could not be reached. Get a key again.' });
     }
   }
@@ -500,6 +500,19 @@ export default function IntegrationsPage() {
                   }}>{busy ? 'Saving…' : editingOriginal ? 'Save' : 'Create'}</button>
               </div>
             </div>
+          </section>
+        </div>
+      )}
+
+      {editing && handoff && handoff.state === 'waiting' && handoff.frame && (
+        <div className="modal-backdrop itg-frame-backdrop" onClick={(e) => e.stopPropagation()}>
+          <section className="itg-frame" role="dialog" aria-modal="true" aria-label="Get a key">
+            <button type="button" className="itg-frame-close" aria-label="Close"
+              onClick={() => setHandoff((h) => h ? { ...h, frame: false } : h)}>
+              <iconify-icon icon="tabler:x"></iconify-icon>
+            </button>
+            <iframe className="itg-frame-view" title="HarnessRouter" allow="clipboard-write"
+              src={handoff.url + (handoff.url.includes('?') ? '&' : '?') + 'embed=1'} />
           </section>
         </div>
       )}
