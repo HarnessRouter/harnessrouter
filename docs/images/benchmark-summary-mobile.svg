@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="325" viewBox="0 0 360 325" role="img" aria-labelledby="title desc">
+  <title id="title">Compare cost and latency across eight configurations</title>
+  <desc id="desc">One recorded task. Eight Harness × Model configurations. Save 99.8%, lowest vs. highest cost: 0.47–223 credits. 3.2× faster, fastest vs. slowest run: 1m 25s–4m 36s end to end. These are separate comparisons of the observed extremes. Cost and latency vary by task.</desc>
+  <rect x="0.5" y="0.5" width="359" height="324" rx="8" fill="#f6f8ff" stroke="#d7e0ff"/>
+  <g font-family="Arial,Helvetica,sans-serif">
+    <text x="20" y="25" font-size="13" font-weight="600" fill="#62626c">1 task · 8 configurations</text>
+    <g fill="none" stroke="#6385ff" stroke-width="1.3">
+      <circle cx="332" cy="22" r="7"/>
+      <path d="M332 19v4M332 25.5v.25" stroke-linecap="round"/>
+    </g>
+    <g fill="none" stroke="#62626c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <g transform="translate(20 48)">
+        <ellipse cx="9" cy="3" rx="8" ry="3"/>
+        <path d="M1 3v12c0 4 16 4 16 0V3M1 9c0 4 16 4 16 0"/>
+      </g>
+      <g transform="translate(20 178)">
+        <circle cx="9" cy="9" r="8.5"/>
+        <path d="M9 4v5l4 2"/>
+      </g>
+    </g>
+    <g font-size="16" fill="#62626c">
+      <text x="49" y="64" font-weight="600">Cost</text>
+      <text x="49" y="194"><tspan font-weight="600">Latency</tspan><tspan> · end to end</tspan></text>
+    </g>
+    <g font-size="44" font-weight="700" letter-spacing="-1.3" fill="#285aff">
+      <text x="20" y="112">Save 99.8%</text>
+      <text x="20" y="242">3.2× faster</text>
+    </g>
+    <g font-size="19" fill="#1f2328">
+      <text x="20" y="141"><tspan font-weight="700">0.47–223</tspan><tspan> credits</tspan></text>
+      <text x="20" y="271" font-weight="700">1m 25s–4m 36s</text>
+    </g>
+    <g font-size="14" fill="#62626c">
+      <text x="20" y="163">Lowest vs. highest cost</text>
+      <text x="20" y="293">Fastest vs. slowest run</text>
+    </g>
+  </g>
+</svg>
