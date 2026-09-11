@@ -1082,6 +1082,10 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "omp"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
+    # A custom endpoint that speaks the OpenAI Responses API drives codex (issue #149: a proxy
+    # naming its models its own way). The runner's "tokenrouter" provider is exactly that shape:
+    # OpenAI-compatible, base on the connection, wire_api responses.
+    ("custom", "codex"): "tokenrouter",
     # Google AI Studio: one key, Gemini's OpenAI-compatible chat-completions surface. Every
     # backend that talks OpenAI's chat shape through a base_url reaches it as 'openai-api'.
     # Not claude (Anthropic's protocol) and not codex (the Responses API): unprobed is unlisted.
@@ -1209,15 +1213,24 @@ def _integration_models(integ: dict) -> dict[str, str]:
     (a stale snapshot is indistinguishable from a deliberate override, so it cannot be trusted
     to introduce models). Nothing is lost: only canonicals in the catalog can be requested.
 
-    The "custom" provider is the exception: it has no vendor table. The model comes from the
-    integration's own config — the user-supplied model_id. That is the one model this integration
-    serves, and it is its own provider-native id (the user's endpoint calls it whatever they named
-    it, and the runner sends that name verbatim).
+    The "custom" provider is the exception: it has no vendor table, so its stored rows ARE the
+    list. Each row pairs a canonical id (what a harness picks) with the name the endpoint wants on
+    the wire, an arbitrary string per row: a bare vendor id, a deployment alias, a SKU. A row
+    with no wire id sends the canonical verbatim. No transform is ever applied (issue #149: the
+    wire id a proxy expects is arbitrary and per endpoint; only an explicit map is correct).
+    An integration saved before rows existed carries a single model_id, its own name for its one
+    model; that still reads as one row.
     """
     provider = str(integ.get("provider") or "").lower()
     if provider == "custom":
-        cfg = integ.get("config") or {}
-        model_id = str(cfg.get("model_id") or "").strip()
+        rows: dict[str, str] = {}
+        for m in (integ.get("models") or []):
+            canonical = str(m.get("canonical") or "").strip()
+            if canonical:
+                rows[canonical] = str(m.get("provider_id") or "").strip() or canonical
+        if rows:
+            return rows
+        model_id = str((integ.get("config") or {}).get("model_id") or "").strip()
         return {model_id: model_id} if model_id else {}
     models = dict(_vendor_models(str(integ.get("provider") or "").lower()))
     for m in (integ.get("models") or []):
@@ -4457,7 +4470,6 @@ _PROVIDER_CATALOG: dict[str, dict] = {
             {"key": "base_url", "label": "Endpoint URL",
              "placeholder": "https://your-api.example.com"},
             {"key": "full_url", "label": "Use Full URL"},
-            {"key": "model_id", "label": "Model ID", "placeholder": "your-model-name"},
         ],
         "secret": "api_key",
         "secret_label": "API Key",
@@ -4510,6 +4522,8 @@ _CUSTOM_FORMAT_BACKENDS = {
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
+    # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
+    "responses": {"codex"},
 }
 
 
@@ -4525,19 +4539,36 @@ def _integration_serves_backend(integ: dict, backend: str) -> bool:
     return bool(_INTEGRATION_WIRING.get((provider, backend)))
 
 
+# Built-in agent tools an endpoint may refuse (a proxy that gates codex's web_search per model,
+# issue #150): named on the connection, comma-separated, and joined to the harness's own list on
+# every turn through it. Offered wherever a codex-driving provider is configured.
+_DISABLED_TOOLS_FIELD = {"key": "disabled_tools", "label": "Disabled built-in tools",
+                         "placeholder": "web_search"}
+
+
+def _catalog_canonicals() -> list[str]:
+    """Every canonical model id a harness can ask for: the union of the backends' catalogs."""
+    return sorted({m for e in _MODEL_CATALOG.values() for m in (e.get("models") or [])})
+
+
 def _provider_catalog_public() -> list[dict]:
     """The catalog the console renders its Add-Integration form from."""
-    return [{"id": pid,
-             "label": meta["label"],
-             "base_url": meta["base_url"],
-             "fields": meta["fields"],
-             "secret": meta["secret"],
-             "secret_label": meta["secret_label"],
-             "key_hint": meta.get("key_hint", ""),
-             "models": [{"canonical": c, "provider_id": v}
-                        for c, v in _VENDOR_MODELS.get(pid, {}).items()],
-             "backends": _provider_backends(pid)}
-            for pid, meta in _PROVIDER_CATALOG.items()]
+    out = []
+    for pid, meta in _PROVIDER_CATALOG.items():
+        backends = _provider_backends(pid)
+        out.append({"id": pid,
+                    "label": meta["label"],
+                    "base_url": meta["base_url"],
+                    "fields": meta["fields"] + ([_DISABLED_TOOLS_FIELD] if "codex" in backends else []),
+                    "secret": meta["secret"],
+                    "secret_label": meta["secret_label"],
+                    "key_hint": meta.get("key_hint", ""),
+                    "models": [{"canonical": c, "provider_id": v}
+                               for c, v in _VENDOR_MODELS.get(pid, {}).items()],
+                    # The custom provider's rows name any canonical; the form offers this list.
+                    "canonicals": _catalog_canonicals() if pid == "custom" else [],
+                    "backends": backends})
+    return out
 
 
 def _integration_public(integ: dict) -> dict:
@@ -4788,11 +4819,16 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         # Persisting the derived list instead is what made this list go stale — and worse, a
         # model later retired from the table would live on forever in whatever was written here.
         table = _vendor_models(provider)
-        models = [{"canonical": c, "provider_id": pid}
-                  for c, pid in ((str(m.get("canonical") or "").strip(),
-                                  str(m.get("provider_id") or "").strip())
-                                 for m in (i.get("models") or []))
-                  if c and pid and table.get(c) != pid]
+        rows = [(str(m.get("canonical") or "").strip(), str(m.get("provider_id") or "").strip())
+                for m in (i.get("models") or [])]
+        if provider == "custom":
+            # No vendor table: the rows are the endpoint's model list, kept whole (see
+            # _integration_models); a blank wire id is the canonical, written out so the stored
+            # document says what goes on the wire.
+            models = [{"canonical": c, "provider_id": pid or c} for c, pid in rows if c]
+        else:
+            models = [{"canonical": c, "provider_id": pid}
+                      for c, pid in rows if c and pid and table.get(c) != pid]
         out.append({"name": name, "provider": provider, "config": cfg, "models": models})
     names = {i["name"] for i in out}
     if len(names) != len(out):
@@ -6466,6 +6502,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                            if backend in _NATIVE_ONLY_BACKENDS else
                                            "credential cannot be brokered; refused")})
             continue
+        # Built-in tools this CONNECTION cannot use (its endpoint refuses them: a proxy that gates
+        # codex's web_search per model, issue #150) join the harness's own list for this turn.
+        conn_off = [t.strip() for t in str(conn.get("disabled_tools") or "").split(",") if t.strip()]
+        turn_tools_off = sorted(set(tools_disabled or []) | set(conn_off))
         body = {"backend": conn.get("backend", backend), "provider": conn.get("provider"),
                 # The gemini backend takes the canonical id: gemini-cli's resolution tables and the runner's
                 # served-model check key by it, and the provider's own name for it (TokenRouter's
@@ -6479,7 +6519,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "timeout_seconds": timeout_s,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "agent_doc": agent_doc,
-                "skills_suppressed": skills_suppressed, "tools_disabled": tools_disabled,
+                "skills_suppressed": skills_suppressed, "tools_disabled": turn_tools_off,
                 # Image generation, when an integration can serve it. A per-turn credential for
                 # the broker, never a provider key — see _image_auth.
                 "image_auth": image_auth,

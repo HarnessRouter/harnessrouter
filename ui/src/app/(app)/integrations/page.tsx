@@ -41,6 +41,8 @@ interface ProviderMeta {
   secret_label: string;
   key_hint?: string;
   models: ModelRow[];
+  /** For the custom provider: every canonical id a harness can ask for, the choices of its rows. */
+  canonicals?: string[];
   backends: string[];
 }
 interface Doc {
@@ -380,13 +382,16 @@ export default function IntegrationsPage() {
                                   config: { ...editing.config, [f.key]: e.target.value },
                                 })}>
                                 <option value="openai">OpenAI Chat Completions</option>
+                                <option value="responses">OpenAI Responses</option>
                                 <option value="anthropic">Anthropic Messages</option>
                               </select>
                               <p className="field-help">
                                 {editing.config['api_format'] === 'anthropic'
                                   ? 'Anthropic Messages format works with Claude Code, OpenCode, Pi, and DSH backends.'
+                                  : editing.config['api_format'] === 'responses'
+                                  ? 'OpenAI Responses format is what Codex speaks; only Codex can drive it. The endpoint gets /responses appended.'
                                   : editing.config['api_format'] === 'openai'
-                                  ? 'OpenAI Chat Completions format works with Hermes, OpenCode, Pi, and DSH backends. Codex and Claude Code cannot drive a custom OpenAI endpoint.'
+                                  ? 'OpenAI Chat Completions format works with Hermes, OpenCode, Pi, Qwen Code, Cline, Oh My Pi and DSH backends. Codex and Claude Code cannot drive a chat endpoint.'
                                   : 'If you use Claude Code, choose Anthropic Messages format.'}
                               </p>
                             </div>
@@ -414,7 +419,7 @@ export default function IntegrationsPage() {
                                     transition: 'left .15s' }} />
                                 </button>
                                 <span style={{ fontSize: 13, color: fullUrlOn ? 'var(--ink)' : 'var(--muted)' }}>
-                                  {fullUrlOn ? 'On — the URL is used as-is' : 'Off — /chat/completions is appended'}
+                                  {fullUrlOn ? 'On, the URL is used as it is' : `Off, ${editing.config['api_format'] === 'anthropic' ? '/v1/messages' : editing.config['api_format'] === 'responses' ? '/responses' : '/chat/completions'} is appended`}
                                 </span>
                               </div>
                             </div>
@@ -426,7 +431,7 @@ export default function IntegrationsPage() {
                           const fullUrl = editing.config['full_url'] === '1' || editing.config['full_url'] === 'true';
                           placeholder = fullUrl
                             ? 'Enter the full request URL, including the path. The request will use this URL directly.'
-                            : 'Enter an OpenAI-compatible API endpoint, without a trailing slash. /chat/completions will be appended to your endpoint.';
+                            : `Enter the endpoint without a trailing slash; ${editing.config['api_format'] === 'anthropic' ? '/v1/messages' : editing.config['api_format'] === 'responses' ? '/responses' : '/chat/completions'} is appended to it.`;
                         }
                         return (
                           <div className="field" key={f.key}>
@@ -456,13 +461,37 @@ export default function IntegrationsPage() {
                   const isCustom = editing.provider === 'custom';
                   const models = meta?.models || [];
                   if (isCustom) {
+                    // The endpoint names its models its own way: each row pairs the model a harness
+                    // picks with the name this endpoint wants on the wire, sent verbatim.
+                    const rows = editing.models || [];
+                    const choices = meta?.canonicals || [];
+                    const setRows = (next: ModelRow[]) => setEditing({ ...editing, models: next });
                     return (
                       <div className="field">
-                        <label>Model</label>
+                        <label>Models</label>
                         <p className="field-help">
-                          This integration serves the model ID you entered above. Add it in the
-                          mapping table below after saving.
+                          The models this endpoint serves, and the name it wants for each one. Leave the
+                          name blank to send the model id as it is.
                         </p>
+                        {rows.map((r, idx) => (
+                          <div className="itg-model-row" key={idx}>
+                            <select className="select" aria-label="Model" value={r.canonical}
+                              onChange={(e) => setRows(rows.map((x, i) => i === idx ? { ...x, canonical: e.target.value } : x))}>
+                              <option value="">Choose a model</option>
+                              {choices.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <input type="text" aria-label="Name on the wire" placeholder={r.canonical || 'same as the model id'}
+                              value={r.provider_id === r.canonical ? '' : r.provider_id}
+                              onChange={(e) => setRows(rows.map((x, i) => i === idx ? { ...x, provider_id: e.target.value } : x))} />
+                            <button type="button" className="button" aria-label="Remove model"
+                              onClick={() => setRows(rows.filter((_, i) => i !== idx))}>
+                              <iconify-icon icon="tabler:x"></iconify-icon>
+                            </button>
+                          </div>
+                        ))}
+                        <button type="button" className="button" onClick={() => setRows([...rows, { canonical: '', provider_id: '' }])}>
+                          <iconify-icon icon="tabler:plus"></iconify-icon>Add model
+                        </button>
                       </div>
                     );
                   }
@@ -506,7 +535,8 @@ export default function IntegrationsPage() {
                     const mm = Object.fromEntries(Object.entries(doc.model_map).map(([k, v]) =>
                       [k, v === editingOriginal ? editing.name.trim() : v]));
                     if (await persist({
-                      integrations: [...rest, { ...editing, name: editing.name.trim(), models: [] }],
+                      integrations: [...rest, { ...editing, name: editing.name.trim(),
+                        models: (editing.models || []).filter((m) => m.canonical.trim()) }],
                       model_map: mm,
                     })) setEditing(null);
                   }}>{busy ? 'Saving…' : editingOriginal ? 'Save' : 'Create'}</button>
