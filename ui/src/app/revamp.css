@@ -1667,6 +1667,8 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .itg-or { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; color: var(--muted);
       font-size: 10.5px; font-weight: 700; letter-spacing: .08em; }
     .itg-or::before, .itg-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+    .itg-balance { display: block; margin-top: 2px; font-size: 12px; font-weight: 500; color: var(--muted); }
+    .itg-balance.out { color: var(--red); }
     .itg-handoff.ready { color: var(--accent); }
     .itg-handoff.failed { color: var(--red); }
     /* the hosted steps (sign in, top up, key) in a dialog over the form: a white sheet holding the

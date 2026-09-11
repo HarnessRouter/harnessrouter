@@ -1002,6 +1002,7 @@ _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_
 HR_HOSTED_BASE = os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai").rstrip("/")
 HR_HOSTED_PROVIDER_BASE = f"{HR_HOSTED_BASE}/v1/provider"
 HR_HOSTED_MODELS_URL = f"{HR_HOSTED_BASE}/v1/models"
+HR_HOSTED_BALANCE_URL = f"{HR_HOSTED_BASE}/v1/balance"
 HR_HOSTED_CONNECT_URL = f"{HR_HOSTED_BASE}/v1/connect"
 # integration provider type × runner backend -> the runner-side provider that carries it.
 # Absent pair = that backend can't use the integration (mapping falls through to the chain).
@@ -4601,13 +4602,42 @@ async def admin_integrations_get(request: Request) -> dict:
     hosted = next((i for i in integrations if str(i.get("provider") or "").lower() == "harnessrouter"), None)
     hosted_cfg = (hosted or {}).get("config") or {}
     await _hosted_models_refresh(str(hosted_cfg.get("api_key") or ""), models_url=str(hosted_cfg.get("models_url") or ""))
-    return {"integrations": [_integration_public(i) for i in integrations],
+    public = [_integration_public(i) for i in integrations]
+    if hosted:
+        # What is left to spend on the hosted account, read here with the stored key so the key never
+        # reaches the browser; absent (never a stale or made-up figure) when the read fails.
+        bal = await _hosted_balance(str(hosted_cfg.get("api_key") or ""), str(hosted_cfg.get("balance_url") or ""))
+        if bal is not None:
+            for row in public:
+                if row.get("name") == hosted.get("name"):
+                    row["balance"] = bal
+    return {"integrations": public,
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
             "catalog": _provider_catalog_public(),
             "media_chains": await _media_chains_public(),
             "media_policy": await _media_policy_doc()}
+
+
+async def _hosted_balance(api_key: str, balance_url: str = "") -> dict | None:
+    """GET <balance_url> with the stored key → {"usd", "is_deficit", "as_of"} or None. The hosted side
+    holds the figure for up to a minute; 401 (bad key) and 503 (ledger not answering) both mean
+    "show nothing", so does any other failure."""
+    if not api_key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as c:
+            r = await c.get(balance_url or HR_HOSTED_BALANCE_URL, headers={"authorization": f"Bearer {api_key}"})
+        if r.status_code != 200:
+            return None
+        j = r.json()
+        usd = j.get("balance_usd")
+        if not isinstance(usd, (int, float)):
+            return None
+        return {"usd": round(float(usd), 2), "is_deficit": bool(j.get("is_deficit")), "as_of": str(j.get("as_of") or "")}
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # Codes this instance opened with the hosted service, and the secret each poll must carry. In
@@ -4682,10 +4712,11 @@ async def admin_connect_poll(code: str, request: Request):
     key = str(j.get("api_key") or "")
     endpoint = str(j.get("endpoint") or HR_HOSTED_PROVIDER_BASE)
     models_url = str(j.get("models_url") or HR_HOSTED_MODELS_URL)
+    balance_url = str(j.get("balance_url") or HR_HOSTED_BALANCE_URL)
     if key:
         await _hosted_models_refresh(key, force=True, models_url=models_url)
     entry["ready"] = {"status": "ready", "api_key": key, "endpoint": endpoint, "models_url": models_url,
-                      "org": j.get("org") or "", "name": str(j.get("name") or ""),
+                      "balance_url": balance_url, "org": j.get("org") or "", "name": str(j.get("name") or ""),
                       "models": list(_HOSTED_MODELS["ids"])}
     return entry["ready"]
 

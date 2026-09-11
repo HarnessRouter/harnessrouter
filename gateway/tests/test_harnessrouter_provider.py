@@ -71,6 +71,7 @@ def test_the_connect_flow_is_proxied_and_the_secret_stays_here(monkeypatch):
     assert pending.status_code == 202
     ready = asyncio.run(A.admin_connect_poll("c1", Req()))
     assert ready["status"] == "ready" and ready["api_key"].startswith("sk-hr-") and ready["endpoint"].endswith("/v1/provider")
+    assert ready["balance_url"] == "https://api.harnessrouter.ai/v1/balance"   # the hosted default when the payload has none
     assert ready["models"] == ["gpt-5.4"] and A._VENDOR_MODELS["harnessrouter"] == {"gpt-5.4": "gpt-5.4"}
     assert [c for c in calls if c[0] == "GET" and "connect" in c[1]][0][2] == {"X-Connect-Secret": "s1"}
     # The hosted side hands the key over once; this side answers every later poll with the same
@@ -83,3 +84,24 @@ def test_the_connect_flow_is_proxied_and_the_secret_stays_here(monkeypatch):
     with pytest.raises(A.HTTPException) as ei:
         asyncio.run(A.admin_connect_poll("c1", Req()))
     assert ei.value.status_code == 410 and "c1" not in A._CONNECTS
+
+
+def test_the_balance_is_read_here_with_the_stored_key_and_absent_when_the_read_fails(monkeypatch):
+    seen = []
+    answers = {"code": 200, "body": {"org": "o1", "plan": "free", "balance_usd": 41.22, "is_deficit": False, "currency": "usd", "as_of": "2026-09-11T03:20:00Z"}}
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url, headers=None):
+            seen.append((url, headers)); return _R(answers["code"], answers["body"])
+    monkeypatch.setattr(A.httpx, "AsyncClient", _Client)
+    bal = asyncio.run(A._hosted_balance("sk-hr-" + "b" * 64, "https://api.harnessrouter.ai/v1/balance"))
+    assert bal == {"usd": 41.22, "is_deficit": False, "as_of": "2026-09-11T03:20:00Z"}
+    assert seen[-1] == ("https://api.harnessrouter.ai/v1/balance", {"authorization": "Bearer sk-hr-" + "b" * 64})
+    assert asyncio.run(A._hosted_balance("", "")) is None and len(seen) == 1     # no key, no call
+    for code in (401, 503):
+        answers["code"] = code; answers["body"] = {"error": "x"}
+        assert asyncio.run(A._hosted_balance("sk-hr-" + "b" * 64)) is None        # nothing, never a stale figure
+    answers["code"] = 200; answers["body"] = {"balance_usd": "41.22"}
+    assert asyncio.run(A._hosted_balance("sk-hr-" + "b" * 64)) is None            # a figure that is not a number is no figure

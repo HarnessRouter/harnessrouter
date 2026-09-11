@@ -26,6 +26,9 @@ interface Integration {
   /** Image models this integration can serve. Separate from `models`: an image model offered in
    *  a chat picker is a choice that cannot work. */
   image_models?: ModelRow[];
+  /** What is left to spend on the hosted account, read by the server with the stored key; absent
+   *  while unknown, so nothing is shown rather than a stale figure. */
+  balance?: { usd: number; is_deficit: boolean; as_of: string };
 }
 interface ProviderField { key: string; label: string; placeholder?: string }
 interface ProviderMeta {
@@ -123,7 +126,7 @@ export default function IntegrationsPage() {
     } finally { setBusy(false); }
   }
 
-  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string; models?: string[]; name?: string }) => {
+  const receiveKey = useCallback((payload: { api_key?: string; endpoint?: string; models_url?: string; balance_url?: string; models?: string[]; name?: string }) => {
     const key = payload?.api_key;
     if (!key) return;
     const ids = Array.isArray(payload.models) ? payload.models : null;
@@ -139,7 +142,8 @@ export default function IntegrationsPage() {
       provider: 'harnessrouter',
       config: { ...cur.config, api_key: key,
                 ...(payload.endpoint ? { base_url: payload.endpoint } : {}),
-                ...(payload.models_url ? { models_url: payload.models_url } : {}) },
+                ...(payload.models_url ? { models_url: payload.models_url } : {}),
+                ...(payload.balance_url ? { balance_url: payload.balance_url } : {}) },
     } : cur);
     setHandoff((h) => h ? { ...h, state: 'ready', note: 'Key received. Create the integration to finish.' } : h);
   }, []);
@@ -243,7 +247,13 @@ export default function IntegrationsPage() {
                   {doc.integrations.map((i) => (
                     <tr key={i.name} className="object-row" style={{ cursor: 'pointer' }}
                       onClick={() => { setEditing(JSON.parse(JSON.stringify(i))); setEditingOriginal(i.name); }}>
-                      <td><strong>{i.name}</strong></td>
+                      <td><strong>{i.name}</strong>
+                        {i.balance && (
+                          <span className={'itg-balance' + (i.balance.usd <= 0 ? ' out' : '')}>
+                            {i.balance.usd <= 0 ? '$0.00 left, top up' : `$${i.balance.usd.toFixed(2)} left`}
+                          </span>
+                        )}
+                      </td>
                       <td>{labelFor(i.provider)}</td>
                       <td className="itg-desktop-col"><span className="itg-models">{i.models.map((m) => m.canonical).join(', ') || '—'}</span></td>
                       <td className="itg-row-actions">
