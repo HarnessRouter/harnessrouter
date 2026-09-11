@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="190" viewBox="0 0 960 190" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="210" viewBox="0 0 960 210" role="img" aria-labelledby="title desc">
   <title id="title">Compare cost and latency across eight configurations</title>
   <desc id="desc">One recorded task. Eight Harness × Model configurations. Save 99.8%, lowest vs. highest cost: 0.47–223 credits. 3.2× faster, fastest vs. slowest run: 1m 25s–4m 36s end to end. These are separate comparisons of the observed extremes. Cost and latency vary by task.</desc>
-  <rect x="0.5" y="0.5" width="959" height="189" rx="8" fill="#f6f8ff" stroke="#d7e0ff"/>
+  <rect x="0.5" y="0.5" width="959" height="209" rx="8" fill="#f6f8ff" stroke="#d7e0ff"/>
   <g font-family="Arial,Helvetica,sans-serif">
     <text x="28" y="29" font-size="17" font-weight="600" fill="#62626c">One recorded task · 8 Harness × Model configurations</text>
     <g fill="none" stroke="#6385ff" stroke-width="1.3">
@@ -33,6 +33,7 @@
     <g font-size="15" fill="#62626c">
       <text x="28" y="174">Lowest vs. highest cost</text>
       <text x="508" y="174">Fastest vs. slowest run</text>
+      <text x="28" y="198" font-size="13">Separate comparisons; results vary by task.</text>
     </g>
   </g>
 </svg>
