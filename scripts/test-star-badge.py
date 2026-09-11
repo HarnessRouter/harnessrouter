@@ -18,6 +18,9 @@ class BadgeTests(unittest.TestCase):
             root = ET.fromstring(badge.render(count))
             self.assertEqual(root.attrib["aria-label"], f"Stars: {count}")
             self.assertGreaterEqual(int(root.attrib["width"]), 117)
+            labels = list(root.iter("{http://www.w3.org/2000/svg}text"))
+            self.assertEqual(labels[-1].text, str(count))
+            self.assertEqual(labels[-1].attrib["fill"], "white")
 
     def test_invalid_data_rejected(self):
         for value in [None, True, -1, "1213", 1.5, 1000000000]:
