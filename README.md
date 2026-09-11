@@ -39,11 +39,15 @@
 
 <a id="one-integration"></a>
 
+<br>
+
 ## N × M harness integrations → 1 unified interface.
 
 ![Animated illustration: compare four generic harnesses and 4 × 9 = 36 repeated responsibilities with one HarnessRouter product integration. Add a fifth harness in With while product integration stays one, then return to Without to see 5 × 9 = 45. With names Codex, Claude Code, Hermes, Pi, and DeepSeek Harness.](docs/images/2026-09-10-harnessrouter-integration-comparison-v4.gif)
 
 <a id="one-interface-the-freedom-to-choose"></a>
+
+<br>
 
 ## Compare and switch harnesses. Optimize cost and latency.
 
