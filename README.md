@@ -368,7 +368,7 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
         <thead><tr><th>Resource</th><th>Purpose</th></tr></thead>
         <tbody>
           <tr><td><a href="protocol/versions/2026-08-11">Specification</a></td><td>Normative protocol behavior</td></tr>
-          <tr><td><a href="protocol/README.md#relationship-to-the-openai-responses-api">OpenAI Responses compatibility</a></td><td>How UHP extends the Responses API for harness execution</td></tr>
+          <tr><td><a href="protocol/README.md#relationship-to-the-openai-responses-api">OpenAI Responses compatibility</a></td><td>Compatibility with existing OpenAI Responses API clients</td></tr>
           <tr><td><a href="protocol/schema">OpenAPI and JSON Schema</a></td><td>Machine-readable contracts</td></tr>
           <tr><td><a href="protocol/conformance">Conformance suite</a></td><td>Testable compatibility requirements</td></tr>
           <tr><td><a href="protocol/GOVERNANCE.md">Governance</a></td><td>How the standard evolves</td></tr>
