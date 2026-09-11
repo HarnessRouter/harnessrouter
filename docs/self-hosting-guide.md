@@ -198,11 +198,14 @@ Open <http://localhost:3000>, or the host port you chose in step 2, and sign in 
 
 ![The sign-in screen](images/01-login.png)
 
-**Change the password now**, from **Profile** in the account menu at the top right. Saving restarts
-the console, which takes about a second.
+**Change the password now**, from **Profile** in the account menu. Saving briefly restarts
+the Console.
 
 If you set `HR_AUTH_USER` or `HR_AUTH_PASSWORD` at `docker run`, sign in with those instead — the
 defaults are then refused.
+
+These credentials sign you into the Console. You do not need a HarnessRouter API key to run tasks
+there. Create one later when [integrating your product backend](#using-the-api).
 
 <details>
 <summary>Where the password lives, and what to do if you forget it</summary>
@@ -234,7 +237,7 @@ instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
 hiding in the image.
 
 Open **Integrations** and press **Add Integration**. It asks three things: a name, the provider,
-and your API key.
+and that provider's API key. This key authorizes model requests; it is not a HarnessRouter API key.
 
 ![Adding a provider on the Integrations page](images/05-add-integration.png)
 
@@ -626,22 +629,56 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 
 ## Using the API
 
-The console is optional: it is a thin client over the same API. On a default install that API is
-reached through the console's own port, and **the login gate covers it too**, so a call needs the
-session cookie. Sign in once and keep the cookie:
+A harness is a pluggable agent backend that runs agent tasks for your product. Integrate a built-in
+or custom harness through your self-hosted HarnessRouter instance's OpenAI Responses-compatible
+API. `metadata.harness_id` selects the harness that runs each task, so you can switch harnesses
+without redesigning your product backend. No Cloud account or upload is required.
+
+Three credentials have three separate jobs:
+
+| Credential | Held by | Purpose |
+|---|---|---|
+| Console password | A person using the browser | Manage this CE instance and run tasks in its Console |
+| Provider API key | HarnessRouter | Call the model provider configured under **Integrations** |
+| HarnessRouter API key | Your product backend | Authenticate API calls to this CE instance and its workspace |
+
+For the default local installation, the API base is `http://localhost:3000/api/harness`. Use the
+host and port of the CE instance you actually started. If your backend runs on another machine
+or in another container, `localhost` refers to that caller, not automatically to HarnessRouter.
+The default Docker command publishes port 3000 only on the host's loopback interface. Keep that
+default for same-machine development. For remote callers, deliberately make the instance reachable
+through a trusted network or reverse proxy and use HTTPS; see [Putting it on a public URL](#putting-it-on-a-public-url).
+
+Before wiring in a product, connect a provider and run one task in the Console with the harness and
+model you intend to call. That verifies the execution path before adding network and backend-auth
+variables. It is a setup check, not a technical prerequisite for the API.
+
+### Create a key on this CE instance for your backend
+
+1. Sign in to the Console of the CE instance your product will call, then open `/keys` on that same host and port ([default local address](http://localhost:3000/keys)). Community Edition currently hides this page from the sidebar, so use its URL directly.
+2. Confirm the workspace containing the harness, then select **Create API key**. Give it a name and select **Create key**.
+3. Copy the secret shown once. Store it in your product backend's secret store or environment. The examples call this variable `HARNESSROUTER_API_KEY`.
+
+The key is scoped to the selected workspace and can be rotated or revoked on the same page.
+It is created in this self-hosted instance and authenticates requests to that CE deployment. It is
+neither a Cloud key, your Console password, nor the model-provider key configured
+in **Integrations**. Never put it in browser-side code or commit it to Git.
+
+### Run a task
+
+This example assumes `HARNESSROUTER_API_KEY` is already set. Choose an installed harness and a
+model served by your connected provider. For a custom harness, use its **Harness ID** as
+`metadata.harness_id`.
+
+Set the base URL to the CE instance as seen by your backend. Creating a task requires **POST**. The
+command below supplies a request body, so curl uses POST; opening the endpoint in a browser's
+address bar sends GET and does not run a task.
 
 ```bash
-curl -s -c hr.cookies http://localhost:3000/api/selfhost/login \
-  -H 'content-type: application/json' \
-  -d '{"username":"harnessrouter","password":"<your-password>"}'
-# {"ok":true}
-```
+export HARNESSROUTER_BASE_URL=http://localhost:3000/api/harness
 
-Use your current username and password and adjust the host port if changed. Then run a turn with
-a harness and model served by your connected provider. The gateway speaks the Responses API:
-
-```bash
-curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
+curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
+  -H "Authorization: Bearer ${HARNESSROUTER_API_KEY:?}" \
   -H 'content-type: application/json' \
   -d '{"input":"Reply with exactly this and nothing else: it works.",
        "metadata":{"harness_id":"codex"},
@@ -661,20 +698,52 @@ curl -s -b hr.cookies http://localhost:3000/api/harness/v1/responses \
  "metadata":{"session_id":"hsessa79756fab07a4bf58fa072be24d5ce59"}}
 ```
 
-That turn is not a side channel: it appears in the console under **Tasks**, against the same
-harness, with its full transcript. The console and the API are the same instance seen twice.
+The task and its transcript appear in the key's workspace in the same Console. API calls
+authenticate with the key alone: your backend does not need to log in with a password or maintain
+a Console session cookie. Your application's own user authentication and authorization remain
+your responsibility.
 
 <details>
 <summary>The rest of the surface</summary>
 
-`harness_id` accepts one of the built-in ids the console shows on the Harnesses page: `codex`,
-`claude-code`, `hermes`, or the id of a harness you created. Harness CRUD (`/v1/harnesses`), the
-model catalog (`/v1/models`), sessions (`/v1/sessions/{id}/turns`, `/cancel`) and task listing
-(`/v1/traces`) are all on the same prefix. Set `"stream":true` for server-sent events instead of
-one response at the end.
+All paths below are relative to the API base above and use the same Bearer key.
 
-If the box is one nobody else can reach, `HR_AUTH_DISABLED=1` removes the gate entirely and the
-same calls work with no cookie at all.
+| Action | API operation |
+|---|---|
+| Discover harnesses and models | `GET /v1/harnesses`, `GET /v1/models` |
+| Start a task or continue a session | `POST /v1/responses`; set `previous_response_id` to continue a previous turn |
+| Check a response | `GET /v1/responses/{response_id}` |
+| Stream progress | Set `"stream": true` on the response request for server-sent events |
+| Read session history | `GET /v1/sessions/{session_id}/turns` |
+| Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
+| Cancel work | `POST /v1/responses/{response_id}/cancel` |
+| Inspect execution | `GET /v1/traces/{session_id}` and `/v1/traces/{session_id}/events` |
+
+For file attachment and download formats, see the [UHP specification](https://unifiedharnessprotocol.org/spec).
+
+</details>
+
+<a id="console-session-auth"></a>
+
+<details>
+<summary>Optional: use a Console session for local debugging</summary>
+
+The Console uses a session cookie. You can also use that session from a local terminal when
+debugging. This is also supported by self-hosted CE; it is not a Cloud-only flow. The cookie can
+authenticate task requests to `POST /v1/responses` as well as the model-list request below.
+It is not required for API-key authentication or recommended as your product's backend credential.
+
+```bash
+curl --fail-with-body -sS -c hr.cookies http://localhost:3000/api/selfhost/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"harnessrouter","password":"<your-password>"}'
+
+curl --fail-with-body -sS -b hr.cookies http://localhost:3000/api/harness/v1/models
+```
+
+Use your current Console credentials, not the initial defaults if you changed them. Treat
+`hr.cookies` as a secret, do not commit it, and remove it when finished. Keep authentication enabled;
+you do not need `HR_AUTH_DISABLED=1` to integrate your backend.
 
 </details>
 
