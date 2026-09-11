@@ -4,9 +4,9 @@
   <rect x="0.5" y="0.5" width="959" height="189" rx="8" fill="#f6f8ff" stroke="#d7e0ff"/>
   <g font-family="Arial,Helvetica,sans-serif">
     <text x="28" y="29" font-size="17" font-weight="600" fill="#62626c">One recorded task · 8 Harness × Model configurations</text>
-    <g fill="none" stroke="#6385ff" stroke-width="1.5">
-      <circle cx="930" cy="24" r="10"/>
-      <path d="M930 19v7M930 29v.5" stroke-linecap="round"/>
+    <g fill="none" stroke="#6385ff" stroke-width="1.3">
+      <circle cx="930" cy="24" r="8"/>
+      <path d="M930 20.5v5M930 28v.25" stroke-linecap="round"/>
     </g>
     <g fill="none" stroke="#62626c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
       <g transform="translate(29 48)">
