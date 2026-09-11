@@ -18,6 +18,8 @@
   <strong>One API for them all.</strong>
 </p>
 
+<a id="github-stars"></a>
+
 <p align="center">
   <a href="#top" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-285AFF?logo=apache&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="License: Apache 2.0"></a>
@@ -48,7 +50,7 @@
   </picture>
 </a>
 
-<a href="#top" title="Back to the top to star this repository">
+<a href="#user-content-github-stars" title="Jump to the README star badge">
   <picture>
     <source media="(max-width: 600px)" srcset="docs/images/github-readme-star-cta-mobile.svg">
     <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
@@ -375,11 +377,11 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
 ## Star History
 
 <p align="center">
-  <a href="#top" title="Back to the top to star this repository">
+  <a href="#user-content-github-stars" title="Jump to the README star badge">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;theme=dark&amp;legend=top-left">
       <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left">
-      <img alt="HarnessRouter GitHub star history. Back to the top to star this repository." src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
+      <img alt="HarnessRouter GitHub star history. Jump to the README star badge." src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
     </picture>
   </a>
 </p>

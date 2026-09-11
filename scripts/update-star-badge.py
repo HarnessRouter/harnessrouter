@@ -23,13 +23,13 @@ def render(count):
     width = 73 + right
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="20" viewBox="0 0 {width} 20" role="img" aria-label="Stars: {count}">
   <title>Stars: {count}</title>
-  <desc>Official GitHub repository star count. Periodically refreshed; retains the last successful value when a refresh fails.</desc>
+  <desc>Official GitHub repository star count. Refreshed every five minutes when GitHub Actions runs; retains the last successful value if refresh fails.</desc>
   <rect width="{width}" height="20" rx="3" fill="#444c56"/>
   <path fill="#e3b341" d="M73 0h{right-3}a3 3 0 0 1 3 3v14a3 3 0 0 1-3 3H73Z"/>
   <path fill="#e3b341" d="m12 3 2.16 4.38L19 8.08l-3.5 3.41.83 4.82L12 14.04l-4.33 2.27.83-4.82L5 8.08l4.84-.7Z"/>
   <g font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" text-anchor="middle">
     <text x="46" y="14" fill="white">Stars</text>
-    <text x="{73+right/2:g}" y="14" fill="#24292f">{count}</text>
+    <text x="{73+right/2:g}" y="14" fill="white">{count}</text>
   </g>
 </svg>
 '''
