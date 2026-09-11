@@ -1460,10 +1460,12 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     if _codex_web_search_off(tools_disabled):
         # The one built-in codex tool with a hard switch. Codex offers web_search by default on
         # the Responses wire and an endpoint that gates it per model answers 400 "The following
-        # tool is not allowed" on every turn (issue #150); the top-level key is the only knob
+        # tool is not allowed" on every turn (issue #150); the TOP-LEVEL key is the only knob
         # (verified on codex 0.147 and 0.154: `[tools] web_search = false` parses and does
-        # nothing). The harness's disabled list or the connection's names it, and it is gone.
-        cfg += 'web_search = "disabled"\n'
+        # nothing). It goes before the first table header: appended at the end it would belong
+        # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
+        head, sep, tail = cfg.partition("\n[")
+        cfg = head + '\nweb_search = "disabled"' + sep + tail
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
