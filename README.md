@@ -50,7 +50,7 @@
   </picture>
 </a>
 
-<a href="#github-stars" title="Jump to the README star badge">
+<a href="#user-content-github-stars" title="Jump to the README star badge">
   <picture>
     <source media="(max-width: 600px)" srcset="docs/images/github-readme-star-cta-mobile.svg">
     <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
@@ -377,7 +377,7 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
 ## Star History
 
 <p align="center">
-  <a href="#github-stars" title="Jump to the README star badge">
+  <a href="#user-content-github-stars" title="Jump to the README star badge">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;theme=dark&amp;legend=top-left">
       <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left">
