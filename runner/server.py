@@ -1410,8 +1410,15 @@ def _codex_resume_thread_id(cfg_dir: "pathlib.Path", wanted: str | None) -> str 
     return max(ids)[1] if ids else None
 
 
+def _codex_web_search_off(tools_disabled: list[str] | None) -> bool:
+    """Whether the turn's disabled list names codex's built-in web search (either spelling)."""
+    return any(x.split(" (")[0].strip().lower().replace("-", "_") in ("web_search", "websearch")
+               for x in (tools_disabled or []) if x and x.strip())
+
+
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
-                       env: dict, mcp_toml: str = "", resume: bool = False) -> "pathlib.Path":
+                       env: dict, mcp_toml: str = "", resume: bool = False,
+                       tools_disabled: list[str] | None = None) -> "pathlib.Path":
     """Shared codex setup for BOTH exec and app-server: write config.toml (model/provider/base_url +
     MCP), point CODEX_HOME at the checkpointed workspace, set provider auth + TMPDIR. Returns the
     CODEX_HOME dir. Mutates env."""
@@ -1450,6 +1457,15 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
+    if _codex_web_search_off(tools_disabled):
+        # The one built-in codex tool with a hard switch. Codex offers web_search by default on
+        # the Responses wire and an endpoint that gates it per model answers 400 "The following
+        # tool is not allowed" on every turn (issue #150); the TOP-LEVEL key is the only knob
+        # (verified on codex 0.147 and 0.154: `[tools] web_search = false` parses and does
+        # nothing). It goes before the first table header: appended at the end it would belong
+        # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
+        head, sep, tail = cfg.partition("\n[")
+        cfg = head + '\nweb_search = "disabled"' + sep + tail
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
@@ -1581,9 +1597,11 @@ def _sanitize_codex_rollout(rollouts: list[str], *, content_only: bool = True) -
 
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
-                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> tuple[list[str], str]:
+                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None,
+                 tools_disabled: list[str] | None = None) -> tuple[list[str], str]:
     """The exec command, and the note the transcript must carry when a follow-up's rollout is gone."""
-    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id))
+    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id),
+                                 tools_disabled=tools_disabled)
     # Drop --ephemeral so codex PERSISTS the rollout to $CODEX_HOME/sessions (inside the checkpointed
     # workspace) — that's what makes a follow-up history-aware. Mirror the claude resume guard: only
     # `resume <id>` if the rollout is actually present in the (re)hydrated workspace, else start fresh
@@ -5131,10 +5149,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or CODEX_DEFAULT_MODEL
         mcp_toml = _codex_mcp_toml(req.mcp_servers)
         if use_appserver:
-            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id))   # config.toml + CODEX_HOME + auth
+            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id),
+                               tools_disabled=req.tools_disabled)   # config.toml + CODEX_HOME + auth
         else:
             cmd, codex_note = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
-                                           mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)
+                                           mcp_toml=mcp_toml, resume_session_id=req.resume_session_id, tools_disabled=req.tools_disabled)
     elif backend == "hermes":
         model = model or HERMES_DEFAULT_MODEL
         hermes_provider = (req.provider or "bedrock").lower()

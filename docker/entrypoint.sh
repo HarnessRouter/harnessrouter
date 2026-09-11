@@ -304,9 +304,14 @@ install_backends() {
     try_install "Cline" npm install -g --prefix "$TOOLS" --no-audit --no-fund "cline@${HR_CLINE_VERSION:-3.0.60}" || true
   fi
 
-  if wanted codex && [ ! -x "$(backend_bin codex)" ]; then
-    echo "[harnessrouter] installing Codex (Apache-2.0)…"
-    try_install "Codex" npm install -g --prefix "$TOOLS" --no-audit --no-fund @openai/codex || true
+  # Pinned, and re-pinned on every start: an install from a fresh volume used to take whatever
+  # npm served that day (an August volume ran 0.147, a September one 0.154, on the same image), so
+  # the runner's codex behaviour was measured against a version the operator could not name.
+  # The pin is the version the support matrix ran on; bumping it is a PR with a matrix rerun.
+  CODEX_PIN="${HR_CODEX_VERSION:-0.154.0}"
+  if wanted codex && [ "$("$(backend_bin codex)" --version 2>/dev/null | awk '{print $2}')" != "$CODEX_PIN" ]; then
+    echo "[harnessrouter] installing Codex $CODEX_PIN (Apache-2.0, version-pinned)…"
+    try_install "Codex" npm install -g --prefix "$TOOLS" --no-audit --no-fund "@openai/codex@$CODEX_PIN" || true
   fi
 
   if wanted pi && [ ! -x "$(backend_bin pi)" ]; then

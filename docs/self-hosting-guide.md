@@ -254,6 +254,59 @@ integration there is nothing to set.
 </details>
 
 <details>
+<summary>Your own endpoint: a proxy or a gateway that names its models its own way</summary>
+
+Pick the **Custom** provider. It asks for the API format the endpoint speaks (OpenAI Chat
+Completions, OpenAI Responses for Codex, or Anthropic Messages), the endpoint URL, the key, and
+the **models** it serves. Each model row pairs the id a harness picks (the same ids every other
+provider uses, `gpt-5.5`, `claude-opus-4.8`) with the name this endpoint wants on the wire. That
+name is an arbitrary string per row and is sent verbatim: a bare vendor id, a deployment alias, a
+versioned SKU. Leave it blank to send the model id as it is. No transform is applied, because the
+name a proxy expects is a fact about that proxy and nothing else.
+
+The mapping is a property of the connection, not of a harness: a harness picks a model by its id,
+the connection decides how that id is written for its endpoint. Two harnesses that need different
+vocabularies on one endpoint are two connections to it.
+
+**Disabled built-in tools.** Some endpoints refuse an agent's built-in tools per model (a proxy
+that answers `400 The following tool is not allowed for model 'gpt-5.5': web_search` to Codex).
+Name those tools on the connection, comma-separated, and every turn through it runs without them;
+for Codex's `web_search` that is a hard switch in its configuration, not a request. The same field
+exists on each harness, for tools you want off regardless of the endpoint.
+
+</details>
+
+<details>
+<summary>The same, from a script (the integrations document)</summary>
+
+The console saves one document, and you can write it yourself. `PUT /v1/admin/integrations` with the
+console's session (or a key of this instance) takes the whole document; `GET` reads it back with
+keys redacted. Rows are matched by `name`, so a `PUT` with an existing name replaces that row.
+
+```json
+{
+  "integrations": [
+    {"name": "proxy-anthropic", "provider": "custom",
+     "config": {"api_format": "anthropic", "base_url": "https://proxy.internal/anthropic", "api_key": "…"},
+     "models": [{"canonical": "claude-opus-4.8", "provider_id": "anthropic--claude-4.8-opus"}]},
+    {"name": "proxy-openai", "provider": "custom",
+     "config": {"api_format": "responses", "base_url": "https://proxy.internal/openai/v1", "api_key": "…",
+                "disabled_tools": "web_search"},
+     "models": [{"canonical": "gpt-5.5", "provider_id": "gpt-5.5"},
+                {"canonical": "gpt-5.4", "provider_id": "prod-gpt-v2"}]}
+  ],
+  "model_map": {"claude-opus-4.8": "proxy-anthropic", "gpt-5.5": "proxy-openai", "gpt-5.4": "proxy-openai"}
+}
+```
+
+`models` on a custom row is the endpoint's whole list. On every other provider the list comes from
+the product's own table for that vendor, and a `models` row there only changes the wire id of a
+model that table already lists. `model_map` routes a model id to the integration that serves it;
+a model with no route goes to the first integration that can serve it.
+
+</details>
+
+<details>
 <summary>Setting it from the environment instead, for a scripted deploy</summary>
 
 A connection names a provider and its credential; a policy says which connection a backend uses.
@@ -288,7 +341,7 @@ problem, because it only offers you providers that work.
 | `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi |
 | `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
 | `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
-| `custom` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
 
 </details>
 
