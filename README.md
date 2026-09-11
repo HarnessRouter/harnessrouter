@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-<a href="https://github.com/HarnessRouter/harnessrouter.git#top" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
+<a href="https://www.github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-285AFF?logo=apache&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="License: Apache 2.0"></a>
   <a href="https://hub.docker.com/r/harnessrouter/harnessrouter"><img src="https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?style=flat&amp;logo=docker&amp;logoColor=white&amp;label=Docker+pulls&amp;labelColor=444c56&amp;color=285aff" alt="Docker pulls"></a>
   <a href="protocol/conformance"><img src="https://img.shields.io/badge/UHP-Full-16824B?style=flat&amp;labelColor=444c56" alt="UHP conformance: Full"></a>
@@ -48,7 +48,7 @@
   </picture>
 </a>
 
-<a href="https://github.com/HarnessRouter/harnessrouter.git#top" title="Back to the top to star this repository">
+<a href="https://www.github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository">
   <picture>
     <source media="(max-width: 600px)" srcset="docs/images/github-readme-star-cta-mobile.svg">
     <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
@@ -375,7 +375,7 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
 ## Star History
 
 <p align="center">
-  <a href="https://github.com/HarnessRouter/harnessrouter.git#top" title="Back to the top to star this repository">
+  <a href="https://www.github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;theme=dark&amp;legend=top-left">
       <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left">
