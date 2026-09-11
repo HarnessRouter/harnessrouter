@@ -33,6 +33,7 @@
     <g font-size="14" fill="#62626c">
       <text x="20" y="163">Lowest vs. highest cost</text>
       <text x="20" y="293">Fastest vs. slowest run</text>
+      <text x="20" y="316" font-size="12">Separate comparisons; results vary by task.</text>
     </g>
   </g>
 </svg>

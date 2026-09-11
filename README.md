@@ -19,16 +19,10 @@
 </p>
 
 <p align="center">
-  <a href="#top" title="Back to the top to star this repository"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2FHarnessRouter%2Fharnessrouter&amp;query=%24.stargazers_count&amp;label=Stars&amp;logo=github&amp;logoColor=white&amp;color=e3b341&amp;style=flat&amp;cacheSeconds=300&amp;labelColor=444c56" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Dynamic count; updates may be cached."></a>
+  <a href="#top" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-285AFF?logo=apache&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="License: Apache 2.0"></a>
   <a href="https://hub.docker.com/r/harnessrouter/harnessrouter"><img src="https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?style=flat&amp;logo=docker&amp;logoColor=white&amp;label=Docker+pulls&amp;labelColor=444c56&amp;color=285aff" alt="Docker pulls"></a>
   <a href="protocol/conformance"><img src="https://img.shields.io/badge/UHP-Full-16824B?style=flat&amp;labelColor=444c56" alt="UHP conformance: Full"></a>
-</p>
-
-<p align="center">
-  <a href="https://discord.gg/nPcbwqVPb2"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="Discord: Join"></a>
-  <a href="https://linkedin.com/company/harnessrouter/"><img src="https://img.shields.io/badge/LinkedIn-Follow-0A66C2?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTIwLjQ1IDIwLjQ1aC0zLjU2di01LjU3YzAtMS4zMy0uMDMtMy4wNC0xLjg1LTMuMDQtMS44NSAwLTIuMTQgMS40NS0yLjE0IDIuOTR2NS42N0g5LjM0VjloMy40MnYxLjU2aC4wNWMuNDgtLjkgMS42NC0xLjg1IDMuMzctMS44NSAzLjYgMCA0LjI3IDIuMzcgNC4yNyA1LjQ2djYuMjhaTTUuMzIgNy40M2EyLjA3IDIuMDcgMCAxIDEgMC00LjE0IDIuMDcgMi4wNyAwIDAgMSAwIDQuMTRaTTcuMSAyMC40NUgzLjU0VjlINy4xdjExLjQ1WiIvPjwvc3ZnPg%3D%3D&amp;style=flat&amp;labelColor=444c56" alt="LinkedIn: Follow"></a>
-  <a href="https://x.com/HARNESSROUTER"><img src="https://img.shields.io/badge/X-Follow-000000?logo=x&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="X: Follow"></a>
 </p>
 
 <p align="center">
@@ -38,8 +32,6 @@
 <a id="what-it-is"></a>
 
 <a id="one-integration"></a>
-
-<br>
 
 ## N × M harness integrations → 1 unified interface.
 
@@ -186,9 +178,7 @@ You can change the default model later in Settings, but the base harness cannot 
 
 [![Start a custom harness from the New harness button](docs/images/2026-09-10-harnessrouter-custom-harness-feedback-configuration-v5-poster.png)](docs/images/2026-09-10-harnessrouter-custom-harness-feedback-configuration-v5.mp4?raw=true)
 
-[▶ Watch the walkthrough · MP4 · 48 seconds](docs/images/2026-09-10-harnessrouter-custom-harness-feedback-configuration-v5.mp4?raw=true)
-
-<sub>Customer-feedback analysis with DeepSeek Harness. The final still is a sidebar reference screenshot.</sub>
+<sub>Configure DeepSeek Harness for customer-feedback analysis.</sub>
 
 </details>
 
@@ -204,12 +194,12 @@ You can change the default model later in Settings, but the base harness cannot 
 
 ## Integrate your harness into your product backend with one API
 
-Treat each harness as a pluggable agent backend for your product. Integrate a built-in or custom harness through your self-hosted HarnessRouter instance’s OpenAI Responses-compatible API. `metadata.harness_id` selects the harness that runs each agent task, so you can switch harnesses without redesigning your product backend. No Cloud account or upload is required.
+Run product tasks with built-in or custom harnesses as pluggable agent backends. Call your self-hosted instance’s OpenAI Responses-compatible API and select the harness with `metadata.harness_id`. No Cloud deployment is required.
 
 Once your harness runs successfully in the Console:
 
-1. Open `/keys` on the same CE instance ([default local address](http://localhost:3000/keys)) and choose **Create API key**. This key is created in and used by your self-hosted CE instance; it is not a Cloud key. CE currently hides this page from the sidebar, so open the URL directly.
-2. Store the secret shown once as `HARNESSROUTER_API_KEY` in your product backend. Never expose it in browser code.
+1. Open `/keys` on the same CE instance ([default local address](http://localhost:3000/keys)) and choose **Create API key**. Open this URL directly if API keys is not visible in the sidebar.
+2. Store the secret shown once as `HARNESSROUTER_API_KEY` in your product backend. Never expose it in browser code. This CE-issued key is separate from your Console password and provider key.
 3. Call the API with the Harness ID shown in the Console and a model served by your connected provider.
 
 ```bash
@@ -226,7 +216,7 @@ curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
   }'
 ```
 
-The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events. This HarnessRouter API key, created in your CE instance, authenticates your product backend to that instance; it is not your Console password or model-provider key.
+The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events.
 
 The default URL works when your backend and CE run on the same computer. From another machine or container, use a reachable URL for the CE instance. [Read the complete self-hosted API and networking guide →](docs/self-hosting-guide.md#using-the-api)
 
@@ -244,17 +234,13 @@ The default URL works when your backend and CE run on the same computer. From an
         </tbody>
       </table>
 
-Treat agent harnesses as an **AI infrastructure layer**, like databases or model APIs. HarnessRouter gives your product one unified interface to this **harness layer**.
-
-See the [API guide](docs/self-hosting-guide.md#using-the-api) for catalogs, sessions, cancellation, and traces. For the full API contract, see the [Unified Harness Protocol (UHP) specification](https://unifiedharnessprotocol.org/spec).
-
 <a id="starter-kits"></a>
 
 <br>
 
 ## See where agent harnesses fit in your product
 
-Plug agent harnesses into your own interface to power features and tasks far beyond coding. To help you explore what’s possible, we created starter kits for presentations, spreadsheets, dashboards, and videos. More kits will be added over time.
+Build beyond coding: explore harness-powered presentations, spreadsheets, dashboards, and videos.
 
 <table>
   <tr>
@@ -360,7 +346,7 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
 
 ## The Unified Harness Protocol
 
-[Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Community Edition and HarnessRouter Cloud. Its task surface is deliberately compatible with the **OpenAI Responses API**, so existing Responses SDKs, streaming parsers, and UI components can work with a UHP server. UHP adds the harness-specific capabilities a model API does not provide: harness selection, persistent sessions, files, cancellation, and harness-managed tools and skills.
+[Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Community Edition and HarnessRouter Cloud. Its task surface is deliberately compatible with the **OpenAI Responses API**, so existing Responses SDKs, streaming parsers, and UI components can work with a UHP server. UHP defines harness execution semantics for harness selection, persistent sessions, files, cancellation, and harness-managed tools and skills.
 
 This repository contains the Apache 2.0 reference implementation, machine-readable schemas, and the conformance suite.
 
@@ -384,7 +370,7 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
 | **Build** | [Cloud & integration docs](https://harnessrouter.ai/docs) · [API guide](#use-the-api-directly) · [Starter kits](https://github.com/HarnessRouter/starter-kit) |
 | **Deploy** | [Setup & operations](docs/self-hosting-guide.md) · [Local → Cloud](#local-to-cloud) · [HarnessRouter Cloud](https://harnessrouter.ai) |
 | **Protocol** | [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) |
-| **Community** | [Discord](https://discord.gg/nPcbwqVPb2) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) |
+| **Community** | [Discord](https://discord.gg/nPcbwqVPb2) · [LinkedIn](https://linkedin.com/company/harnessrouter/) · [X](https://x.com/HARNESSROUTER) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) |
 
 <br>
 

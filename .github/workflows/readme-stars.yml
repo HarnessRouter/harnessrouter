@@ -1,0 +1,36 @@
+name: Refresh README stars
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: readme-stars
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.repository == 'HarnessRouter/harnessrouter' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-star-badge.py
+      - name: Fetch official count
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/update-star-badge.py
+      - name: Publish only the badge to its resource branch
+        run: |
+          set -euo pipefail
+          candidate=$(mktemp)
+          cp docs/images/github-stars.svg "$candidate"
+          git restore docs/images/github-stars.svg
+          git fetch origin readme-badges
+          git switch --detach origin/readme-badges
+          cp "$candidate" docs/images/github-stars.svg
+          if git diff --quiet -- docs/images/github-stars.svg; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/images/github-stars.svg
+          git commit -m 'docs: refresh official star count'
+          git push origin HEAD:readme-badges
