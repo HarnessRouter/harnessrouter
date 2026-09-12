@@ -18,7 +18,7 @@ import uuid
 
 from .registry import Skip, check
 
-SPEC = "protocol/versions/2026-08-11"
+SPEC = "protocol/versions/2026-09-12"
 
 
 # ── shared fixtures ────────────────────────────────────────────────────────────────────
@@ -809,6 +809,310 @@ def f06(ctx):
     assert got.get("disabledTools") == ["WebSearch"], (
         f"disabledTools round-tripped as {got.get('disabledTools')}")
     return "mcp + disabledTools preserved"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Full — plugins (capability `plugins`, Plugins chapter)
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Every P- check creates its harnesses through _managed_harness, so F-07 below removes them.
+
+_AP_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+_AP_MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+
+
+def _plugins_supported(ctx) -> None:
+    """Skip, with the reason, unless discovery reports the capability. Plugins are a MAY."""
+    d = ctx.state.get("discovery") or ctx.client.get("/v1/uhp", auth=False).json or {}
+    ctx.state["discovery"] = d
+    if not (d.get("capabilities") or {}).get("plugins"):
+        raise Skip("this server reports the plugins capability false or absent, and the Plugins "
+                   "chapter is optional at every class")
+
+
+def _package(name: str = "uhp-conformance-plugin", *, manifest: dict | None = None,
+             mcp: dict | None = None, skill: bool = True, extra: list | None = None) -> list[dict]:
+    """An Agent Plugins package as UHP files: manifest, mcp.json, one skill folder with a nested
+    reference and a binary member. `manifest=None` omits plugin.json; `mcp=None` omits mcp.json."""
+    files = []
+    if manifest is not None:
+        files.append({"path": "plugin.json", "content": json.dumps(manifest)})
+    if mcp is not None:
+        files.append({"path": "mcp.json", "content": json.dumps(mcp)})
+    if skill:
+        files += [
+            {"path": "skills/conformance-skill/SKILL.md",
+             "content": "---\nname: conformance-skill\ndescription: A conformance fixture.\n---\n\n"
+                        "See references/data.md.\n"},
+            {"path": "skills/conformance-skill/references/data.md", "content": "nested reference\n"},
+            {"path": "bin/tool.bin", "content_b64": "AAECAwQF"},
+        ]
+    return files + (extra or [])
+
+
+_PLUGIN_MANIFEST = {"$schema": _AP_MANIFEST_SCHEMA, "name": "uhp-conformance-plugin",
+                    "version": "1.0.0", "description": "A conformance fixture."}
+_PLUGIN_MCP = {"$schema": _AP_MCP_SCHEMA, "mcpServers": {
+    "conformance-http": {"type": "streamable-http", "url": "https://mcp.example.invalid/mcp"},
+    "conformance-stdio": {"type": "stdio", "command": "./bin/tool.bin",
+                          "args": ["--data", "${PLUGIN_DATA}"]},
+}}
+_PLUGIN_FILES = _package(manifest=_PLUGIN_MANIFEST, mcp=_PLUGIN_MCP)
+_PLUGIN_PATHS = sorted(f["path"] for f in _PLUGIN_FILES)
+
+
+def _error_code(r) -> str:
+    return str((((r.json or {}) if isinstance(r.json, dict) else {}).get("error") or {}).get("code") or "")
+
+
+def _plugin_files(ctx, hid: str, name: str) -> list[str]:
+    r = ctx.client.get(f"/v1/harnesses/{hid}/plugins/{name}/files")
+    assert r.status == 200, f"plugin files endpoint returned HTTP {r.status}"
+    body = r.json
+    files = body.get("files") if isinstance(body, dict) else body
+    ctx.state["_last_plugin_files"] = files or []
+    return sorted(str((f or {}).get("path")) for f in (files or []))
+
+
+@check("P-01", "The plugins capability names the manifest schemas it installs", "full",
+       f"{SPEC}/plugins.md#7-discovery")
+def p01(ctx):
+    _plugins_supported(ctx)
+    schemas = (ctx.state.get("discovery") or {}).get("plugin_schemas")
+    assert isinstance(schemas, list) and schemas and all(isinstance(s, str) and s for s in schemas), (
+        f"capabilities.plugins is true but plugin_schemas is {schemas!r}. A client cannot tell which "
+        "packages this server will install, so it cannot offer any.")
+    return f"plugin_schemas={schemas}"
+
+
+@check("P-02", "A plugin package round-trips, and is derived rather than copied", "full",
+       f"{SPEC}/plugins.md#2-the-plugin-object")
+def p02(ctx):
+    _plugins_supported(ctx)
+    h = _managed_harness(ctx, plugins=[{"files": _PLUGIN_FILES}])
+    got = ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}
+    plugins = got.get("plugins") or []
+    assert len(plugins) == 1, f"installed one plugin, read back {len(plugins)}"
+    pl = plugins[0]
+    ctx.validate(pl, "Plugin")
+    assert pl.get("name") == "uhp-conformance-plugin", (
+        f"the plugin's name is {pl.get('name')!r}; it must be the manifest's name")
+    assert (pl.get("manifest") or {}).get("name") == "uhp-conformance-plugin", (
+        "manifest was not derived from plugin.json")
+    servers = {s.get("name"): s for s in (pl.get("mcpServers") or [])}
+    assert set(servers) == {"conformance-http", "conformance-stdio"}, (
+        f"mcpServers derived from mcp.json are {sorted(servers)}, expected both entries")
+    assert servers["conformance-http"].get("transport") == "http", "streamable-http did not map to http"
+    st = servers["conformance-stdio"]
+    assert st.get("transport") == "stdio" and st.get("command") == "./bin/tool.bin", (
+        f"the stdio entry came back as {st}")
+    assert "${PLUGIN_DATA}" in json.dumps(st.get("args")), (
+        "the placeholder was expanded in what the client sees; a sandbox path is not the client's "
+        "business and changes from turn to turn")
+    assert [s.get("name") for s in pl.get("skills") or []] == ["conformance-skill"], (
+        f"skills derived from skills/ are {pl.get('skills')}, expected conformance-skill")
+    assert isinstance(pl.get("skipped"), list) and not pl["skipped"], (
+        f"skipped must be present and empty for a clean package, got {pl.get('skipped')!r}")
+    # The compatibility rule: the direct fields report what was written to them, and nothing was.
+    assert not got.get("mcpServers") and not got.get("skills"), (
+        f"the harness's own mcpServers/skills absorbed the plugin's ({got.get('mcpServers')}, "
+        f"{got.get('skills')}). A client that PUTs back what it read would then install them twice, "
+        "and uninstalling the plugin would leave them behind.")
+    paths = _plugin_files(ctx, h["id"], "uhp-conformance-plugin")
+    assert paths == _PLUGIN_PATHS, (
+        f"the package did not round-trip: got {paths}, expected {_PLUGIN_PATHS}. A plugin's skills "
+        "carry references and its stdio servers carry executables; a partial package breaks both.")
+    assert "AAECAwQF" in json.dumps(ctx.state.get("_last_plugin_files")), (
+        "the binary member's content_b64 was not preserved byte-for-byte")
+    return f"{len(paths)} files, 2 servers, 1 skill derived"
+
+
+@check("P-03", "A package without plugin.json is refused at configuration time", "full",
+       f"{SPEC}/plugins.md#21-files")
+def p03(ctx):
+    _plugins_supported(ctx)
+    base = _supported_base(ctx)
+    r = ctx.client.post("/v1/harnesses", body={
+        "name": "uhp-conformance-nomanifest", "base": base,
+        "plugins": [{"files": _package(manifest=None, mcp=_PLUGIN_MCP)}]})
+    if r.status == 200:
+        ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
+        raise AssertionError(
+            "a package with no plugin.json was accepted; there is no plugin without a manifest, and "
+            "storing one means it is silently ignored at run time")
+    assert r.status in (400, 422), f"expected 400/422, got HTTP {r.status}"
+    assert _error_code(r) == "plugin_invalid", (
+        f"refused with code {_error_code(r)!r}, expected plugin_invalid")
+    return f"refused with HTTP {r.status} plugin_invalid"
+
+
+@check("P-04", "A component name collision across the harness and a plugin is refused", "full",
+       f"{SPEC}/plugins.md#42-one-namespace-checked-at-configuration-time")
+def p04(ctx):
+    _plugins_supported(ctx)
+    base = _supported_base(ctx)
+    direct = [{"name": "conformance-http", "url": "https://direct.example.invalid/mcp",
+               "transport": "http"}]
+    r = ctx.client.post("/v1/harnesses", body={
+        "name": "uhp-conformance-collision", "base": base,
+        "mcp_servers": direct, "plugins": [{"files": _PLUGIN_FILES}]})
+    if r.status == 200:
+        ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
+        raise AssertionError(
+            "a plugin whose MCP server shares a name with the harness's own was accepted. The agent "
+            "sees one flat namespace, so one of the two is silently lost at run time.")
+    assert r.status == 409, f"expected 409, got HTTP {r.status}"
+    assert _error_code(r) == "plugin_conflict", (
+        f"refused with code {_error_code(r)!r}, expected plugin_conflict")
+    detail = (((r.json or {}).get("error") or {}).get("detail") or {})
+    assert detail.get("component") == "mcp_server" and detail.get("name") == "conformance-http", (
+        f"detail does not say which component collided: {detail}")
+    return "refused with 409 plugin_conflict"
+
+
+@check("P-05", "An unrelated harness edit does not destroy plugin contents", "full",
+       f"{SPEC}/plugins.md#3-installing-a-plugin")
+def p05(ctx):
+    _plugins_supported(ctx)
+    h = _managed_harness(ctx, plugins=[{"files": _PLUGIN_FILES}])
+    hid = h["id"]
+    got = ctx.client.get(f"/v1/harnesses/{hid}").json or {}
+    if got.get("mcpServers") or got.get("skills"):
+        raise Skip("the harness's own mcpServers/skills carry the plugin's components, which P-02 "
+                   "reports; a round trip on top of that cannot be measured separately")
+    if _plugin_files(ctx, hid, "uhp-conformance-plugin") != _PLUGIN_PATHS:
+        raise Skip("the package is already incomplete before any edit, which P-02 reports")
+    # Rename only, sending back exactly what was read: the case the round-trip rule exists for.
+    r = ctx.client.put(f"/v1/harnesses/{hid}", body={
+        "name": "uhp-conformance-renamed", "base": got.get("base"),
+        "plugins": got.get("plugins") or [], "skills": got.get("skills") or [],
+        "mcp_servers": got.get("mcpServers") or [], "disabled_tools": got.get("disabledTools") or []})
+    assert r.status == 200, f"rename returned HTTP {r.status}: {r.body[:160]!r}"
+    paths = _plugin_files(ctx, hid, "uhp-conformance-plugin")
+    assert paths == _PLUGIN_PATHS, (
+        f"after renaming the harness the package is {paths} — the round trip lost contents, which a "
+        "user cannot detect until an agent behaves oddly.")
+    after = ctx.client.get(f"/v1/harnesses/{hid}").json or {}
+    assert [p.get("name") for p in after.get("plugins") or []] == ["uhp-conformance-plugin"], (
+        f"after the rename the plugin list is {after.get('plugins')}")
+
+
+@check("P-06", "A harness exports as a package that installs, without its credentials", "full",
+       f"{SPEC}/plugins.md#5-exporting-a-harness-as-a-plugin")
+def p06(ctx):
+    _plugins_supported(ctx)
+    direct = [{"name": "conformance-direct", "url": "https://mcp.example.invalid/mcp",
+               "transport": "http", "headers": {"X-Team": "conformance"}, "auth": "secret-token"}]
+    h = _managed_harness(ctx, mcp_servers=direct, skills=[_SKILL_BUNDLE])
+    r = ctx.client.get(f"/v1/harnesses/{h['id']}/plugin")
+    assert r.status == 200, f"export returned HTTP {r.status}"
+    pl = r.json if isinstance(r.json, dict) else {}
+    ctx.validate(pl, "Plugin")
+    files = {str((f or {}).get("path")): (f or {}) for f in pl.get("files") or []}
+    assert "plugin.json" in files, f"the export has no plugin.json; files: {sorted(files)}"
+    manifest = json.loads(files["plugin.json"].get("content") or "{}")
+    ctx.validate(manifest, "PluginManifest")
+    assert manifest.get("name") == pl.get("name"), "the export's name and its manifest's disagree"
+    assert "mcp.json" in files, f"the enabled MCP server was not exported; files: {sorted(files)}"
+    mcp = json.loads(files["mcp.json"].get("content") or "{}")
+    entry = (mcp.get("mcpServers") or {}).get("conformance-direct") or {}
+    assert entry.get("type") == "streamable-http" and entry.get("url"), (
+        f"the http server exported as {entry}, expected type streamable-http with its url")
+    assert "headers" not in entry and "auth" not in entry, (
+        f"the export carries the operator's credentials: {sorted(entry)}. An export is meant to leave.")
+    assert json.dumps(entry).find("secret-token") < 0, "the bearer token leaked into the export"
+    skipped = json.dumps(pl.get("skipped") or [])
+    assert "conformance-direct" in skipped, (
+        "the omitted credentials are not recorded in skipped, so whoever imports the package cannot "
+        "know what to re-enter")
+    want = {"skills/uhp-conformance-skill/SKILL.md", "skills/uhp-conformance-skill/references/data.md",
+            "skills/uhp-conformance-skill/assets/blob.bin"}
+    assert want <= set(files), f"the skill folder was not exported whole: {sorted(files)}"
+    # The promise is that the result installs unchanged.
+    h2 = _managed_harness(ctx, plugins=[{"files": list(files.values())}])
+    got = (ctx.client.get(f"/v1/harnesses/{h2['id']}").json or {}).get("plugins") or []
+    assert len(got) == 1 and got[0].get("name") == pl.get("name"), (
+        f"the exported package did not install into a fresh harness: {got}")
+    assert [s.get("name") for s in got[0].get("mcpServers") or []] == ["conformance-direct"], (
+        f"the reinstalled plugin's servers are {got[0].get('mcpServers')}")
+    assert [s.get("name") for s in got[0].get("skills") or []] == ["uhp-conformance-skill"], (
+        f"the reinstalled plugin's skills are {got[0].get('skills')}")
+    return f"exported {len(files)} files as {pl.get('name')!r}, reinstalled"
+
+
+@check("P-07", "A component that fails to load is recorded, not silently dropped", "full",
+       f"{SPEC}/plugins.md#22-what-the-server-derives")
+def p07(ctx):
+    _plugins_supported(ctx)
+    mcp = {"$schema": _AP_MCP_SCHEMA, "mcpServers": {
+        "conformance-http": {"type": "streamable-http", "url": "https://mcp.example.invalid/mcp"},
+        "conformance-broken": {"type": "carrier-pigeon", "url": "https://mcp.example.invalid/x"}}}
+    h = _managed_harness(ctx, plugins=[{"files": _package(manifest=_PLUGIN_MANIFEST, mcp=mcp)}])
+    pl = ((ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}).get("plugins") or [{}])[0]
+    names = [s.get("name") for s in pl.get("mcpServers") or []]
+    assert names == ["conformance-http"], (
+        f"derived servers are {names}: the invalid entry must be skipped and the valid one kept")
+    skipped = pl.get("skipped") or []
+    hit = [s for s in skipped if "conformance-broken" in str(s.get("path"))]
+    assert hit, (
+        f"the invalid server was dropped without a skipped entry (skipped={skipped}). Ignoring is "
+        "allowed; silent ignoring is not.")
+    assert hit[0].get("reason"), "the skipped entry carries no reason"
+    return f"skipped: {hit[0].get('path')}"
+
+
+@check("P-08", "A disabled plugin stays installed, and stays disabled", "full",
+       f"{SPEC}/plugins.md#3-installing-a-plugin")
+def p08(ctx):
+    _plugins_supported(ctx)
+    h = _managed_harness(ctx, plugins=[{"files": _PLUGIN_FILES, "enabled": False}])
+    pl = ((ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}).get("plugins") or [{}])[0]
+    assert pl.get("name") == "uhp-conformance-plugin", f"the disabled plugin was not kept: {pl}"
+    assert pl.get("enabled") is False, (
+        "enabled: false was not preserved; a client cannot tell an inert plugin from an active one, "
+        "and the difference decides whether a third party's server is launched")
+
+
+@check("P-09", "An unsupported manifest schema is refused, naming the supported ones", "full",
+       f"{SPEC}/plugins.md#22-what-the-server-derives")
+def p09(ctx):
+    _plugins_supported(ctx)
+    base = _supported_base(ctx)
+    manifest = {**_PLUGIN_MANIFEST,
+                "$schema": "https://agent-plugins.org/schemas/0.0.1/plugin.schema.json"}
+    r = ctx.client.post("/v1/harnesses", body={
+        "name": "uhp-conformance-oldschema", "base": base,
+        "plugins": [{"files": _package(manifest=manifest, mcp=None)}]})
+    if r.status == 200:
+        ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
+        raise AssertionError(
+            "a manifest targeting an Agent Plugins version this server never claimed to support was "
+            "accepted; its rules were not applied, so whatever it declares was interpreted by guess")
+    assert r.status == 422, f"expected 422, got HTTP {r.status}"
+    assert _error_code(r) == "unsupported_plugin_schema", (
+        f"refused with code {_error_code(r)!r}, expected unsupported_plugin_schema")
+    supported = ((((r.json or {}).get("error") or {}).get("detail") or {}).get("supported"))
+    assert isinstance(supported, list) and supported, (
+        f"detail.supported is {supported!r}; the refusal must say what would have been accepted")
+    return f"refused; supported={supported}"
+
+
+@check("P-10", "Two plugins with the same name are refused", "full",
+       f"{SPEC}/plugins.md#3-installing-a-plugin")
+def p10(ctx):
+    _plugins_supported(ctx)
+    base = _supported_base(ctx)
+    twin = _package(manifest=_PLUGIN_MANIFEST, mcp=None, skill=False)
+    r = ctx.client.post("/v1/harnesses", body={
+        "name": "uhp-conformance-twins", "base": base,
+        "plugins": [{"files": _PLUGIN_FILES}, {"files": twin}]})
+    if r.status == 200:
+        ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
+        raise AssertionError("two plugins named uhp-conformance-plugin were installed side by side; "
+                             "the name is the address of the files endpoint, so one is unreachable")
+    assert r.status == 409, f"expected 409, got HTTP {r.status}"
+    assert _error_code(r) == "plugin_conflict", (
+        f"refused with code {_error_code(r)!r}, expected plugin_conflict")
+    return "refused with 409 plugin_conflict"
 
 
 @check("F-07", "Configured harnesses are cleaned up", "full", f"{SPEC}/harnesses.md#53-delete")

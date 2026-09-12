@@ -28,12 +28,14 @@ except ImportError:  # pragma: no cover
 HERE = pathlib.Path(__file__).parent
 ROOT = HERE.parent                        # protocol/
 DIST = HERE / "dist"
-VERSION = "2026-08-11"
+VERSION = "2026-09-12"
 # Published specification versions, latest first. The spec is served under a per-version path
 # (/spec/<date>/…, mirroring MCP's /specification/<date>/…) so every version keeps a permanent
 # address: a citation to the 2026-08-11 architecture never silently becomes a later version. Only
 # the specification is versioned this way; conformance, governance and versioning are living docs.
-VERSIONS = ["2026-08-11"]
+# Every version listed is built from its own frozen tree under protocol/versions/<date>/; the latest
+# is the one in the sidebar, the rest are served at their dated addresses with a notice.
+VERSIONS = ["2026-09-12", "2026-08-11"]
 SITE = "unifiedharnessprotocol.org"
 
 # The specification's chapters, in reading order. NAV builds their per-version paths from this so
@@ -43,6 +45,7 @@ SPEC_CHAPTERS = [
     ("architecture", "Architecture"),
     ("lifecycle", "Lifecycle"),
     ("harnesses", "Harnesses"),
+    ("plugins", "Plugins"),
     ("tasks", "Tasks"),
     ("streaming", "Streaming"),
     ("sessions", "Sessions"),
@@ -51,6 +54,21 @@ SPEC_CHAPTERS = [
     ("security", "Security"),
     ("schema", "Schema"),
 ]
+
+
+
+def chapters_for(version: str):
+    """The chapters a version actually has: a chapter added later has no page in an earlier
+    version, and the build must not invent one. The frozen tree is the authority."""
+    return [(name, title) for name, title in SPEC_CHAPTERS
+            if (ROOT / "versions" / version / f"{name}.md").exists()]
+
+
+def archived_pages():
+    """Pages of every version but the latest, served at their dated addresses, not in the nav."""
+    return [(f"spec/{v}/{name}.html", title, ROOT / f"versions/{v}/{name}.md")
+            for v in VERSIONS[1:] for name, title in chapters_for(v)]
+
 
 # ── information architecture ────────────────────────────────────────────────────────────
 # Mirrors the shape a protocol site is expected to have — an introduction, a versioned
@@ -116,6 +134,9 @@ DESCRIPTIONS = {
     "spec/harnesses.html":
         "UHP harness discovery: the harness object, model availability, and how a conformant "
         "server advertises what can run a client's work.",
+    "spec/plugins.html":
+        "UHP plugins: Agent Plugins packages of tools and skills installed into a harness as one "
+        "unit, how they compose with the harness's own, and how a harness exports as one.",
     "spec/tasks.html":
         "UHP tasks: one unit of work, input in and result out — the request shape, execution "
         "semantics, and response contract clients build on.",
@@ -404,6 +425,9 @@ hr{border:0;border-top:1px solid var(--line);margin:32px 0}
 .card-sm span{color:var(--muted);font-size:13px;line-height:1.5}
 @media (max-width:640px){.cards-primary,.cards-secondary{grid-template-columns:1fr}}
 
+.vnotice{margin:0 0 22px;padding:12px 16px;border:1px solid var(--line);border-left:3px solid var(--brand);
+  border-radius:8px;background:var(--subtle);font-size:14px;color:var(--muted)}
+.vnotice b{color:var(--ink)}
 .pager{display:flex;justify-content:space-between;gap:16px;margin-top:56px;
   padding-top:20px;border-top:1px solid var(--line);max-width:var(--content)}
 .pager a{font-size:14px;font-weight:560}
@@ -577,15 +601,19 @@ def toc_html(toc):
             f'<ul>{items}</ul></nav>')
 
 
-def rewrite_links(html_text: str, depth: int) -> str:
-    """Point in-repo markdown links at their built pages (root-absolute, see url_for)."""
+def rewrite_links(html_text: str, depth: int, version: str = VERSION) -> str:
+    """Point in-repo markdown links at their built pages (root-absolute, see url_for).
+
+    `version` is the version of the page being rendered: a same-directory link on a 2026-08-11
+    chapter stays inside 2026-08-11, so a citation into an older version never drifts forward."""
     up = "/"
-    samedir = f"/spec/{VERSION}/" if depth else "/"
+    samedir = f"/spec/{version}/" if depth else "/"
+    ver = r"(\d{4}-\d{2}-\d{2})"
     pairs = [
         # The spec overview is served at /spec/<version> (index stripped), so map it before the
         # general chapter rule, which would otherwise turn index.md into …/index (a 404).
-        (rf'href="(?:\.\./)*versions/{VERSION}/index\.md"', rf'href="{up}spec/{VERSION}"'),
-        (rf'href="(?:\.\./)*versions/{VERSION}/([a-z]+)\.md"', rf'href="{up}spec/{VERSION}/\1"'),
+        (rf'href="(?:\.\./)*versions/{ver}/index\.md"', rf'href="{up}spec/\1"'),
+        (rf'href="(?:\.\./)*versions/{ver}/([a-z]+)\.md"', rf'href="{up}spec/\1/\2"'),
         (r'href="(?:\.\./)*README\.md"', f'href="{url_for("index.html", up)}"'),
         (r'href="(?:\.\./)*VERSIONING\.md"', f'href="{up}versioning"'),
         (r'href="(?:\.\./)*GOVERNANCE\.md"', f'href="{up}governance"'),
@@ -596,17 +624,19 @@ def rewrite_links(html_text: str, depth: int) -> str:
         (r'href="(?:\.\./)*conformance/README\.md"', f'href="{up}conformance"'),
         (r'href="(?:\.\./)*conformance/?"', f'href="{up}conformance"'),
         (r'href="(?:\.\./)*\.\./conformance/"', f'href="{up}conformance"'),
+        # A same-directory chapter link, with or without a section anchor, stays in this version.
+        (r'href="([a-z]+)\.md#([^"]+)"', rf'href="{samedir}\1#\2"'),
         (r'href="([a-z]+)\.md"', rf'href="{samedir}\1"'),
         (r'href="(?:\.\./)*schema/([^"/]+)"',
          rf'href="{up}schema/\1"'),                       # the machine-readable files ship with the site
-        (r'href="(?:\.\./)*schema/"', f'href="{up}spec/{VERSION}/schema"'),
-        (rf'href="versions/{VERSION}/"', f'href="{up}spec/{VERSION}"'),
+        (r'href="(?:\.\./)*schema/"', f'href="{up}spec/{version}/schema"'),
+        (rf'href="versions/{ver}/"', rf'href="{up}spec/\1"'),
         # An anchor into another document's section: keep the section, retarget the document.
         (r'href="(?:\.\./)*VERSIONING\.md#([^"]+)"', rf'href="{up}versioning#\1"'),
         (r'href="(?:\.\./)*GOVERNANCE\.md#([^"]+)"', rf'href="{up}governance#\1"'),
         (r'href="(?:\.\./)*README\.md#([^"]+)"', rf'href="{url_for("index.html", up)}#\1"'),
-        (rf'href="(?:\.\./)*versions/{VERSION}/([a-z]+)\.md#([^"]+)"',
-         rf'href="{up}spec/{VERSION}/\1#\2"'),
+        (rf'href="(?:\.\./)*versions/{ver}/([a-z]+)\.md#([^"]+)"',
+         rf'href="{up}spec/\1/\2#\3"'),
     ]
     for pat, repl in pairs:
         html_text = re.sub(pat, repl, html_text)
@@ -643,7 +673,7 @@ def desc_key(path: str) -> str:
     """Map a built page path to its description key. Spec pages carry the version in their path
     (spec/2026-08-11/architecture.html) but their descriptions are authored per chapter, version-
     independent (spec/architecture.html) — one description serves every version of a chapter."""
-    return re.sub(rf"^spec/{re.escape(VERSION)}/", "spec/", path)
+    return re.sub(r"^spec/\d{4}-\d{2}-\d{2}/", "spec/", path)
 
 
 def section_of(path):
@@ -708,6 +738,16 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
     # On a dated spec page the pill names that page's version; elsewhere it names the latest.
     page_ver = next((v for v in VERSIONS if current.startswith(f"spec/{v}/")), VERSION)
     shell_wide = "" if toc else " no-toc"
+    notice = ""
+    if page_ver != VERSION:
+        # An older version stays at its address, and says so: a reader who arrived by citation
+        # should know a newer version exists without being moved off the text they were sent to.
+        chapter = current.rsplit("/", 1)[-1]
+        target = f"/spec/{VERSION}" if chapter == "index.html" else f"/spec/{VERSION}/{chapter[:-5]}"
+        if not (DIST / target.lstrip("/")).with_suffix(".html").exists() and chapter != "index.html":
+            target = f"/spec/{VERSION}"
+        notice = (f'<div class="vnotice">This is version <b>{page_ver}</b> of the specification. '
+                  f'The current version is <a href="{target}">{VERSION}</a>.</div>')
     pages = flat_pages()
     idx = next((i for i, (p, _, _) in enumerate(pages) if p == current), -1)
     prev_ = pages[idx - 1] if idx > 0 else None
@@ -791,7 +831,7 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
 <div class="shell{shell_wide}">
   <aside>{sidebar(current, depth)}</aside>
   <main>
-    {hero}
+    {hero}{notice}
     <article>{body}</article>
     {pager}
     <footer>
@@ -892,7 +932,7 @@ def check_count() -> int:
 
 HERO = f"""
 <div class="quicklinks">
-  <a class="card-sm" href="/spec/{VERSION}"><b>Specification</b><span>The normative contract — ten versioned chapters.</span></a>
+  <a class="card-sm" href="/spec/{VERSION}"><b>Specification</b><span>The normative contract — {len(SPEC_CHAPTERS) - 1} versioned chapters.</span></a>
   <a class="card-sm" href="/conformance"><b>Conformance suite</b><span>{check_count()} runnable checks; the definition of conformant.</span></a>
   <a class="card-sm" href="/connecting"><b>Implement a client</b><span>Discovery, tasks, events, artifacts — over HTTP.</span></a>
   <a class="card-sm" href="/serving"><b>Implement a server</b><span>The operations a server answers behind the contract.</span></a>
@@ -919,7 +959,8 @@ def build() -> int:
 
     if DIST.exists():
         shutil.rmtree(DIST)
-    (DIST / "spec" / VERSION).mkdir(parents=True)
+    for v in VERSIONS:
+        (DIST / "spec" / v).mkdir(parents=True)
 
     built = 0
     search_index = []
@@ -976,6 +1017,19 @@ def build() -> int:
                              "body": plain_text(body)[:1400]})
         built += 1
 
+    # Earlier versions: each chapter from its own frozen tree, links kept inside that version,
+    # a notice pointing at the current one. Not in the sidebar, but sitemapped and citable.
+    for path, title, src in archived_pages():
+        v = path.split("/")[1]
+        depth = path.count("/")
+        rendered, toc = render_markdown(src.read_text())
+        body = rewrite_links(rendered, depth, version=v)
+        (DIST / path).write_text(page(path, title, body, depth, "", toc_html(toc)))
+        search_index.append({"title": f"{title} ({v})", "section": f"Specification {v}",
+                             "url": url_for(path).lstrip("/"),
+                             "body": plain_text(body)[:1400]})
+        built += 1
+
     # The dropdown offers every entry in VERSIONS; each must actually have been built, or a reader
     # who picks it lands on a 404. Today NAV emits only the latest version's chapters, so adding a
     # second version means teaching the build to emit its pages too — this assertion makes that a
@@ -994,7 +1048,7 @@ def build() -> int:
     (DIST / "robots.txt").write_text(
         f"User-agent: *\nAllow: /\nSitemap: https://{SITE}/sitemap.xml\n")
     urls = "".join(f"  <url><loc>https://{SITE}/{url_for(p).lstrip('./')}</loc></url>\n"
-                   for p, _, _ in flat_pages() + EXTRA)
+                   for p, _, _ in flat_pages() + EXTRA + archived_pages())
     (DIST / "sitemap.xml").write_text(
         f'<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}</urlset>\n')
@@ -1009,6 +1063,11 @@ def build() -> int:
     llms.append("\n## Background\n")
     for p, title, _ in EXTRA:
         llms.append(f"- [{title}](https://{SITE}/{url_for(p).lstrip('./')}): {DESCRIPTIONS[desc_key(p)]}")
+    if VERSIONS[1:]:
+        llms.append("\n## Earlier specification versions\n")
+        for v in VERSIONS[1:]:
+            llms.append(f"- [Specification {v}](https://{SITE}/spec/{v}): the {v} version, "
+                        f"kept at its own address; the current version is {VERSION}.")
     (DIST / "llms.txt").write_text("\n".join(llms) + "\n", encoding="utf-8")
 
     # Search index: every page's title and plain-text body, built from the same render as the
