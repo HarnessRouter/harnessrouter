@@ -272,6 +272,20 @@ def test_a_tokenrouter_connection_points_the_cli_at_the_relay_which_names_the_mo
     assert "GOOGLE_GEMINI_BASE_URL" not in env2 and env2["GEMINI_API_KEY"] == "AIza-t"      # Google direct, as before
 
 
+def test_a_hosted_connection_points_the_cli_at_the_relay_rooted_at_the_provider_door():
+    """The hosted HarnessRouter service serves Google's native API under its /v1/provider door with
+    the CANONICAL id on the path (<base>/v1beta/models/gemini-3.8-flash:...): the relay keeps the
+    door as the root (only a trailing /v1 version segment is dropped, TokenRouter's case) and, the
+    gateway having resolved the same id, rewrites nothing on the path."""
+    d = tempfile.mkdtemp(); env: dict = {}
+    _build_gemini("google", Auth(api_key="sk-hr-real", base_url="https://api.harnessrouter.ai/v1/provider"), "gemini-3.8-flash", "hi", d, env, native_model="gemini-3.8-flash")
+    assert env["GOOGLE_GEMINI_BASE_URL"].startswith("http://127.0.0.1:")
+    assert env["GEMINI_API_KEY"] != "sk-hr-real"
+    base, key, flags = _HERMES_RELAY["routes"][env["GEMINI_API_KEY"]]
+    assert base == "https://api.harnessrouter.ai/v1/provider" and key == "sk-hr-real"
+    assert flags == {"google_native": True, "model": "gemini-3.8-flash", "native_model": "gemini-3.8-flash"}
+
+
 def test_the_helper_model_tiers_are_the_turns_own_model():
     """The CLI's routing, plan, compression and loop checks use its flash or pro classifier tier; a
     turn's stats then name that helper model too, which read as a substitution (2026-09-07)."""

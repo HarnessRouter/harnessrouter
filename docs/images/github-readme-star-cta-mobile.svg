@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="76" viewBox="0 0 360 76" role="img" aria-labelledby="title desc">
+  <title id="title">Star the HarnessRouter repository</title>
+  <desc id="desc">Help grow the HarnessRouter community. Star this repo.</desc>
+  <rect width="360" height="76" rx="6" fill="#effbf1"/>
+  <text x="180" y="27" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="14" fill="#1f2328">Help grow the HarnessRouter community.</text>
+  <g transform="translate(103 42)" fill="#e3b341">
+    <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
+  </g>
+  <text x="128" y="55" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#0969da">Star this repo →</text>
+</svg>

@@ -1061,14 +1061,31 @@ def _norm_token_usage(u: dict | None) -> dict:
     return res
 
 
+_CAMEL = re.compile(r"(?<=[a-z0-9])([A-Z])")
+
+
+def _codex_item_kind(it: dict) -> str:
+    """The item's type in one spelling. `codex exec --json` names items in snake_case
+    (command_execution, mcp_tool_call); the app-server names the same items in camelCase
+    (commandExecution, mcpToolCall, userMessage, agentMessage). Read in camelCase, every item
+    fell through to the generic branch: the record listed userMessage and agentMessage as tools
+    and an MCP call as "mcpToolCall" with no server or tool name (the custom-harness dimension,
+    codex, hosted 2026-09-10; the same code here, on the app-server path nobody had exercised)."""
+    return _CAMEL.sub(lambda m: "_" + m.group(1).lower(), str(it.get("type") or "")).lower()
+
+
 def _codex_tool_item(it: dict) -> list[dict]:
     """A completed codex tool item (command/file/mcp) -> canonical tool_use + tool_result events.
-    Shared by the exec normalizer and the app-server driver (the `item` shape is the same)."""
-    kind = it.get("type")
+    Shared by the exec normalizer and the app-server driver (the `item` shape is the same, the
+    type spelling is not: see _codex_item_kind). A message or reasoning item is not a tool and
+    yields nothing here (its text streams as deltas)."""
+    kind = _codex_item_kind(it)
+    if kind in ("user_message", "agent_message", "reasoning"):
+        return []
     if kind == "command_execution":
         tuid = it.get("id") or "cmd"
-        out = it.get("aggregated_output") or it.get("output") or ""
-        ec = it.get("exit_code")
+        out = it.get("aggregated_output") or it.get("aggregatedOutput") or it.get("output") or ""
+        ec = it.get("exit_code", it.get("exitCode"))
         return [
             {"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "id": tuid, "name": "Bash",
@@ -1087,9 +1104,13 @@ def _codex_tool_item(it: dict) -> list[dict]:
             {"type": "user", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": it.get("id") or "edit",
                  "content": summary}]}}]
+    if kind == "web_search":
+        tuid = it.get("id") or "search"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": "WebSearch", "input": {"query": it.get("query") or ""}}]}}]
     if kind == "mcp_tool_call":
         tuid = it.get("id") or "mcp"
-        name = f"{it.get('server', 'mcp')}.{it.get('tool', 'call')}"
+        name = f"{it.get('server') or it.get('serverName') or 'mcp'}.{it.get('tool') or it.get('toolName') or 'call'}"
         return [{"type": "assistant", "message": {"content": [
             {"type": "tool_use", "id": tuid, "name": name,
              "input": it.get("arguments") or {}}]}},
@@ -1417,8 +1438,15 @@ def _codex_resume_thread_id(cfg_dir: "pathlib.Path", wanted: str | None) -> str 
     return max(ids)[1] if ids else None
 
 
+def _codex_web_search_off(tools_disabled: list[str] | None) -> bool:
+    """Whether the turn's disabled list names codex's built-in web search (either spelling)."""
+    return any(x.split(" (")[0].strip().lower().replace("-", "_") in ("web_search", "websearch")
+               for x in (tools_disabled or []) if x and x.strip())
+
+
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
-                       env: dict, mcp_toml: str = "", resume: bool = False) -> "pathlib.Path":
+                       env: dict, mcp_toml: str = "", resume: bool = False,
+                       tools_disabled: list[str] | None = None) -> "pathlib.Path":
     """Shared codex setup for BOTH exec and app-server: write config.toml (model/provider/base_url +
     MCP), point CODEX_HOME at the checkpointed workspace, set provider auth + TMPDIR. Returns the
     CODEX_HOME dir. Mutates env."""
@@ -1457,6 +1485,15 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
+    if _codex_web_search_off(tools_disabled):
+        # The one built-in codex tool with a hard switch. Codex offers web_search by default on
+        # the Responses wire and an endpoint that gates it per model answers 400 "The following
+        # tool is not allowed" on every turn (issue #150); the TOP-LEVEL key is the only knob
+        # (verified on codex 0.147 and 0.154: `[tools] web_search = false` parses and does
+        # nothing). It goes before the first table header: appended at the end it would belong
+        # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
+        head, sep, tail = cfg.partition("\n[")
+        cfg = head + '\nweb_search = "disabled"' + sep + tail
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
@@ -1588,9 +1625,11 @@ def _sanitize_codex_rollout(rollouts: list[str], *, content_only: bool = True) -
 
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
-                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None) -> tuple[list[str], str]:
+                 env: dict, mcp_toml: str = "", resume_session_id: str | None = None,
+                 tools_disabled: list[str] | None = None) -> tuple[list[str], str]:
     """The exec command, and the note the transcript must carry when a follow-up's rollout is gone."""
-    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id))
+    cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id),
+                                 tools_disabled=tools_disabled)
     # Drop --ephemeral so codex PERSISTS the rollout to $CODEX_HOME/sessions (inside the checkpointed
     # workspace) — that's what makes a follow-up history-aware. Mirror the claude resume guard: only
     # `resume <id>` if the rollout is actually present in the (re)hydrated workspace, else start fresh
@@ -2523,8 +2562,17 @@ _GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
 _GOOGLE_HOST = "generativelanguage.googleapis.com"
 
 
-# The relay's route carries no provider, only the upstream: TokenRouter's channels are the host.
-_STRICT_GEMINI_HOST = "api.tokenrouter.com"
+# The relay's route carries no provider, only the upstream: a Gemini channel is known by its host.
+# TokenRouter serves Google's native API under its own root, and the hosted HarnessRouter service
+# (HR_HOSTED_BASE, the same knob the gateway reads) fronts TokenRouter's channel for Gemini.
+_STRICT_GEMINI_HOSTS = tuple(h for h in (
+    "api.tokenrouter.com",
+    urllib.parse.urlsplit(os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai")).netloc) if h)
+
+
+def _gemini_channel(base: str) -> bool:
+    """Whether `base` is a provider that serves Google's native API under its own root."""
+    return any(h in base for h in _STRICT_GEMINI_HOSTS)
 # ── Gemini function declarations through a strict channel ────────────────────────────────
 # Google's native API validates function declarations against its own Schema (type, format,
 # description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
@@ -2763,7 +2811,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
             headers["content-length"] = str(len(body))
-        if (_STRICT_GEMINI_HOST in base and "gemini" in str(_body_model).lower()
+        if (_gemini_channel(base) and "gemini" in str(_body_model).lower()
                 and body is not None and self.path.endswith("/chat/completions")):
             # TokenRouter's Gemini channels hand a harness's JSON-schema tool declarations to Google's
             # validator as sent; the broker does the same normalisation for brokered traffic
@@ -3014,10 +3062,11 @@ def _relay_base_with_version(base_url: str) -> str:
 
 def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_model: str = "") -> tuple[str, str]:
     """Register one gemini turn's upstream for Google's native API on a provider that serves it: the
-    host root, no version segment, since the CLI appends /v1beta/models/<id>:... itself and names the
-    model the way the gateway resolved it through the connection's vendor table (google/<id> on
-    TokenRouter). The same shape as the hosted broker's native path: re-rooted at the provider's host,
-    the key in x-goog-api-key. → (GOOGLE_GEMINI_BASE_URL for the CLI, placeholder key)."""
+    connection's base without its /v1 version segment (TokenRouter's host root, the hosted service's
+    /v1/provider door), since the CLI appends /v1beta/models/<id>:... itself and names the model the
+    way the gateway resolved it through the connection's vendor table (google/<id> on TokenRouter,
+    the canonical id on the hosted door). The same shape as the hosted broker's native path: re-rooted
+    at the provider's base, the key in x-goog-api-key. → (GOOGLE_GEMINI_BASE_URL, placeholder key)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -3348,13 +3397,13 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
-    if auth.base_url and _STRICT_GEMINI_HOST in auth.base_url:
-        # A TokenRouter connection: it serves Google's native API under the vendor prefix (measured
-        # 2026-09-07 for the seven Gemini ids its table carries), so the CLI is pointed at the
-        # loopback relay, which owns the prefix and the real key; the CLI keeps its own model id, so
-        # the pinned resolutions and the served-model check below are unchanged.
-        root = urllib.parse.urlsplit(auth.base_url)
-        relay_base, relay_tok = _gemini_relay_route(f"{root.scheme}://{root.netloc}", auth.api_key, model, native_model or "")
+    if auth.base_url and _gemini_channel(auth.base_url):
+        # A TokenRouter or hosted connection: it serves Google's native API under its own root and
+        # its own name for the model (TokenRouter's vendor prefix, measured 2026-09-07 for the seven
+        # Gemini ids its table carries; the hosted door takes the canonical id), so the CLI is pointed
+        # at the loopback relay, which owns that name and the real key; the CLI keeps its own model
+        # id, so the pinned resolutions and the served-model check below are unchanged.
+        relay_base, relay_tok = _gemini_relay_route(auth.base_url.rstrip("/").removesuffix("/v1"), auth.api_key, model, native_model or "")
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
     else:
@@ -4696,9 +4745,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                     append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}})
             elif method == "item/completed":
                 it = p.get("item") or {}
-                if it.get("type") not in ("agent_message", "reasoning"):   # already streamed as deltas
-                    for ev in _codex_tool_item(it):
-                        append(ev)
+                for ev in _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
+                    append(ev)
             elif method == "turn/completed":
                 # Final cumulative usage may also ride the completed turn; read it as a fallback.
                 turn_obj = p.get("turn") or {}
@@ -5499,10 +5547,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or CODEX_DEFAULT_MODEL
         mcp_toml = _codex_mcp_toml(req.mcp_servers)
         if use_appserver:
-            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id))   # config.toml + CODEX_HOME + auth
+            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id),
+                               tools_disabled=req.tools_disabled)   # config.toml + CODEX_HOME + auth
         else:
             cmd, codex_note = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
-                                           mcp_toml=mcp_toml, resume_session_id=req.resume_session_id)
+                                           mcp_toml=mcp_toml, resume_session_id=req.resume_session_id, tools_disabled=req.tools_disabled)
     elif backend == "hermes":
         model = model or HERMES_DEFAULT_MODEL
         hermes_provider = (req.provider or "bedrock").lower()

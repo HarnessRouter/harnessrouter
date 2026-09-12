@@ -17,6 +17,14 @@ on:
     branches: [main]
 
 jobs:
+  readme-badge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-star-badge.py
+
   gateway:
     runs-on: ubuntu-latest
     steps:

@@ -7,6 +7,7 @@
 import 'iconify-icon';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuickstart, quickstartDone } from '@/lib/quickstart';
+import { BookCallDialog } from '@/components/BookCallDialog';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { getSession, logout } from '@/lib/auth';
@@ -43,7 +44,8 @@ function highlight(text: string, q: string): React.ReactNode {
 // the owner's direction the current chat workbench is embedded untouched until he guides that
 // migration, and it must stay reachable. Unbuilt pages (Benchmark) are not listed at all.
 type NavItem = { href?: string; icon?: string; img?: string; label: string; soon?: boolean };
-/** Where the community is. Shown as a row of marks in the expanded sidebar; as menu entries on the rail. */
+/** Where the community is. Shown as a row of marks in the expanded sidebar; as menu entries on the rail.
+ *  A fifth mark, the calendar, books a call with us in a dialog (the homepage's). */
 const SOCIALS = [
   { label: 'Discord', href: 'https://discord.gg/nPcbwqVPb2', icon: 'tabler:brand-discord' },
   { label: 'GitHub', href: 'https://github.com/HarnessRouter', icon: 'tabler:brand-github' },
@@ -89,6 +91,7 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
   const [wsBusy, setWsBusy] = useState(false);
   const [wsErr, setWsErr] = useState('');
   const [acctMenu, setAcctMenu] = useState(false);
+  const [bookCall, setBookCall] = useState(false);          // the Book a call dialog
   // Not a build-time constant: the image is built once and credentials are set when it runs.
   const [selfHostUser, setSelfHostUser] = useState('');
   useEffect(() => {
@@ -475,6 +478,9 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
                   <iconify-icon icon={x.icon}></iconify-icon>
                 </a>
               ))}
+              <button type="button" className="v2-social" title="Book a call" aria-label="Book a call" onClick={() => setBookCall(true)}>
+                <iconify-icon icon="tabler:calendar"></iconify-icon>
+              </button>
             </div>
           )}
           <button className="v2-account" type="button" aria-expanded={acctMenu}
@@ -505,6 +511,9 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
               {railed && SOCIALS.map((x) => (
                 <a key={x.label} className="menu-item" href={x.href} target="_blank" rel="noreferrer"><iconify-icon icon={x.icon}></iconify-icon>{x.label}</a>
               ))}
+              {railed && (
+                <button className="menu-item" type="button" onClick={() => { setAcctMenu(false); setBookCall(true); }}><iconify-icon icon="tabler:calendar"></iconify-icon>Book a call</button>
+              )}
               {SELF_HOSTED ? (
                 <button className="menu-item" type="button" onClick={async () => {
                   setAcctMenu(false);
@@ -518,6 +527,7 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
             </div>
           )}
         </div>
+        <BookCallDialog open={bookCall} onClose={() => setBookCall(false)} />
       </aside>
 
       {/* Cmd+K search: the v2 chrome has no header, so search lives in a palette overlay. All
