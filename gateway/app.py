@@ -5924,10 +5924,34 @@ _MODEL_CATALOG: dict[str, dict] = {
     # rows as "the id completed a turn", not "the id served it", until the matrix column measures
     # them against the provider's own reporting.
     "goose": {"default": "gpt-5.4",
-              "models": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "claude-sonnet-4.6",
-                         "claude-haiku-4.5", "deepseek-v4-pro"]},
+              # Every id a chat-shaped provider this harness is wired to can serve, measured by the
+              # goose column on 2026-09-12 (five scenarios per model on TokenRouter, Vercel,
+              # OpenRouter, OpenAI, Azure, Anthropic and the hosted door; the served model read by
+              # the relay, no substitution). One id left out: claude-opus-5 answers "The model
+              # returned an empty response" on every tool-using turn through goose's chat wire, on
+              # its own vendor as much as through every aggregator (0 of 8 artifact/recall checks).
+              # The Responses-only ids stay out: goose is chat-only.
+              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                         "gpt-5.4-mini", "gpt-5.2",
+                         "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
+                         "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
+                         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                         "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash",
+                         "gemini-2.5-flash-lite",
+                         "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
+                         "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
+                         "glm-5.3", "glm-5.3-flash",
+                         # the rest of what Vercel and OpenRouter serve through this shape
+                         "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# Ids OpenAI serves on the Responses API only (refused on /v1/chat/completions, measured
+# 2026-09-05/07), and the harnesses that speak chat/completions and nothing else. A limitation, not
+# an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
+# test forbids listing such an id for such a harness.
+RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:

@@ -2,6 +2,38 @@
 import json, sys, collections, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from samemodel import alias_of  # noqa: E402
+# The gateway's own tables say what each provider serves and what each harness offers, so a pair a
+# provider serves but a harness cannot run is listed as NOT RUN with its reason, per provider, the
+# same way for every harness, rather than being absent from the table.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gateway"))
+os.environ.setdefault("HR_BACKING", "local")
+import app as gw  # noqa: E402
+LABEL_VENDOR = {"tokenrouter": "tokenrouter", "vercel": "vercel", "openrouter": "openrouter", "openai": "openai",
+                "azure-e2": "azure-foundry", "azure-openai": "azure-foundry", "anthropic": "anthropic",
+                "google": "google", "harnessrouter": "tokenrouter"}   # the hosted door serves TokenRouter's table
+HARNESS_BACKEND = {"claude-code": "claude", "gemini-cli": "gemini"}
+def vendor_of(label):
+    for pre in ("gemini-cli-", "gemini-", "dsh-", "omp-", "codex-", "goose-", "cline-", "qwen-", "pi-", "hermes-", "opencode-", "claude-code-", "claude-"):
+        if label.startswith(pre) and label[len(pre):] in LABEL_VENDOR: return LABEL_VENDOR[label[len(pre):]]
+    return LABEL_VENDOR.get(label)
+def not_run(label, rows):
+    vendor = vendor_of(label)
+    if not vendor: return []
+    served = set(gw._VENDOR_MODELS.get(vendor) or {})
+    out = []
+    for h in sorted({r["harness"] for r in rows}):
+        backend = HARNESS_BACKEND.get(h, h)
+        offered = set((gw._MODEL_CATALOG.get(backend) or {}).get("models") or [])
+        ran = {r["model"] for r in rows if r["harness"] == h}
+        for m in sorted(served - ran):
+            if m in gw.RESPONSES_ONLY_MODELS and backend in gw.CHAT_ONLY_BACKENDS:
+                why = "the model answers on the Responses API only and this harness speaks chat/completions only"
+            elif m not in offered:
+                why = "not in this harness's catalog (unmeasured or excluded, see the catalog's note)"
+            else:
+                why = "not run in this column"
+            out.append(f"- {h} x {m}: not run, {why}")
+    return out
 res = json.load(open(sys.argv[1]))
 mark = lambda r: 'n/a' if not r or r.get('ok') is None else ('pass' if r.get('ok') else 'FAIL')
 by = collections.defaultdict(list)
@@ -42,4 +74,7 @@ for prov, rows in sorted(by.items()):
     out += ["", f"{len(rows)} pairs, {ok} of {tot} scenario runs passed" + (f"; {len(rows) - len(clean)} pairs served by another connection or as another model are findings, not counted." if len(clean) < len(rows) else "."), ""]
     if findings:
         out += ["Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:", ""] + [f"- {f}" for f in findings] + [""]
+    nr = not_run(prov, rows)
+    if nr:
+        out += [f"Not run in this column, {len(nr)} pairs the provider serves that the harness did not run, with the reason:", ""] + nr + [""]
 print("\n".join(out))
