@@ -2760,6 +2760,27 @@ def _served_model_in(data: bytes) -> str:
     return m.group(1).decode("utf-8", "replace") if m else ""
 
 
+_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
+
+
+def _finish_reason_in(data: bytes) -> str:
+    """The last finish_reason an OpenAI-shaped answer names in these bytes ("" when none)."""
+    hits = _FINISH_RE.findall(data)
+    return hits[-1].decode() if hits else ""
+
+
+def _relay_last_finish(env: dict) -> str:
+    """The finish_reason of the LAST provider answer on this turn's route, as the relay saw it.
+    A "content_filter" here is the provider declining the request; a CLI that reports it as an
+    empty answer (goose: "The model returned an empty response") has hidden a failure."""
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            if route:
+                return str((route[2] or {}).get("last_finish") or "")
+    return ""
+
+
 def _relay_served_model(env: dict) -> str:
     """What the relay saw the provider serve on this turn's route, "" when the turn did not ride
     the relay or nothing answered yet. The route is found by the placeholder bearer the CLI was
@@ -2933,6 +2954,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             pending = b""
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
+            fcarry = b""     # tail of the previous chunk, for the finish_reason field
             while True:
                 chunk = resp.read(4096)
                 if not chunk:
@@ -2946,6 +2968,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         # served_model stays empty and the turn is simply not substitution-checked.
                         # 256 bytes covers the longest id this can carry (the regex caps at 200).
                         carry = chunk[-256:]
+                # the last finish_reason, across read boundaries (64 bytes covers the field)
+                fr = _finish_reason_in(fcarry + chunk)
+                if fr:
+                    flags["last_finish"] = fr
+                fcarry = chunk[-64:]
                 if sigs is not None:
                     pending += chunk
                     while b"\n" in pending:
@@ -2961,6 +2988,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 sm = _served_model_in(data[:65536])
                 if sm:
                     flags["served_model"] = sm
+            fr = _finish_reason_in(data[-65536:])
+            if fr:
+                flags["last_finish"] = fr
             if sigs is not None and b"thought_signature" in data:
                 try:
                     doc = json.loads(data)
@@ -4703,6 +4733,15 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             if ev.get("type") == "result":
                 result_ev = ev
                 state["final"] = state.get("final") or ev.get("result") or ""
+    if (result_ev is not None and not result_ev.get("is_error")
+            and _relay_last_finish(env) == "content_filter"):
+        # The provider declined the last request (finish_reason content_filter, seen by the relay)
+        # and the CLI reported that as an answer (goose: "The model returned an empty response",
+        # measured with claude-opus-5 after a model switch, 2026-09-12). The turn failed, and the
+        # reason is the provider's, not a sentence of the CLI's.
+        result_ev.update(subtype="error", is_error=True,
+                         result="the provider declined the request (finish_reason content_filter)")
+        state["final"] = result_ev["result"]
     rec["result"] = state.get("final", "")
     rec["status"] = ("cancelled" if rec.get("cancelled")
                      else "timeout" if rec.get("capped")
