@@ -235,8 +235,9 @@ render of that date until the columns are measured again.
 Seven columns for the goose harness (PR #164), five scenarios per model, two workers per column,
 the served model read by the relay (goose's CLI never reports one): TokenRouter 158/160, Vercel
 177/180, OpenRouter 178/180, OpenAI 35/35, Azure OpenAI e2 35/35, Anthropic 38/40, and the hosted
-HarnessRouter door 158/160 through the official key ($3.36 for its 160 checks). Zero substitutions.
-Every miss but two is claude-opus-5 answering "The model returned an empty response" on the
+HarnessRouter door 158/160 through the official key ($3.36 for its 160 checks). Zero substitutions. Five ids only Vercel and OpenRouter serve (hunyuan-3, ling-3.0-flash,
+minimax-m3, nemotron-3-ultra, qwen3.7-flash) were measured on those two after the first pass
+(all five scenarios each), so goose's list is 40. Every miss but two is claude-opus-5 answering "The model returned an empty response" on the
 artifact and recall turns, on every provider including Anthropic itself, while its plain turns pass:
 left off goose's list. gemini-3.5-flash-lite answered one recall with a tool call on Vercel only.
 The custom-harness dimension for goose needs `MCP_URL=https://mcp.context7.com/mcp` (deepwiki cannot
