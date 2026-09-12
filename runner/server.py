@@ -2748,6 +2748,30 @@ def _drop_top_level_field(body: bytes, field: str) -> bytes:
     return json.dumps(doc).encode()
 
 
+_SERVED_MODEL_RE = re.compile(rb'"model"\s*:\s*"([^"]{1,200})"')
+
+
+def _served_model_in(data: bytes) -> str:
+    """The `model` an OpenAI- or Anthropic-shaped answer names, read off the bytes as they pass the
+    relay: the first "model":"…" in a JSON body or an SSE line. This is the provider's own statement
+    of what it ran, available for every backend that rides the relay, whether or not the CLI
+    reports one (goose never does; cline and qwen do not either)."""
+    m = _SERVED_MODEL_RE.search(data)
+    return m.group(1).decode("utf-8", "replace") if m else ""
+
+
+def _relay_served_model(env: dict) -> str:
+    """What the relay saw the provider serve on this turn's route, "" when the turn did not ride
+    the relay or nothing answered yet. The route is found by the placeholder bearer the CLI was
+    handed, whichever variable the backend keeps it in."""
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            if route:
+                return str((route[2] or {}).get("served_model") or "")
+    return ""
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -2904,6 +2928,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 chunk = resp.read(4096)
                 if not chunk:
                     break
+                if not flags.get("served_model"):
+                    sm = _served_model_in(chunk)
+                    if sm:
+                        flags["served_model"] = sm
                 if sigs is not None:
                     pending += chunk
                     while b"\n" in pending:
@@ -2915,6 +2943,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
         else:
             data = resp.read()
+            if not flags.get("served_model"):
+                sm = _served_model_in(data[:65536])
+                if sm:
+                    flags["served_model"] = sm
             if sigs is not None and b"thought_signature" in data:
                 try:
                     doc = json.loads(data)
@@ -4619,6 +4651,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 continue
             for ev in normalize(obj, state):
                 ev.setdefault("_ts", time.time())
+                if ev.get("type") == "result" and not ev.get("model"):
+                    # The CLI did not say what ran; the relay saw the provider say it. Set before
+                    # the event is visible, so the gateway never reads it unlabelled.
+                    served = _relay_served_model(env)
+                    if served:
+                        ev["model"] = served
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -4642,6 +4680,10 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     if eof is not None and result_ev is None:
         for ev in eof(state, rc):
             ev.setdefault("_ts", time.time())
+            if ev.get("type") == "result" and not ev.get("model"):
+                served = _relay_served_model(env)
+                if served:
+                    ev["model"] = served
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
