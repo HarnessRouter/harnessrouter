@@ -5941,7 +5941,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gemini-2.5-flash-lite",
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
                          "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
-                         "glm-5.3", "glm-5.3-flash"]},
+                         "glm-5.3", "glm-5.3-flash",
+                         # the rest of what Vercel and OpenRouter serve through this shape
+                         "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
