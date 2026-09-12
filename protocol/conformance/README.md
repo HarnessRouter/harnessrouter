@@ -37,13 +37,13 @@ anything that only inspects a schema.
 
 ## What it checks
 
-64 checks across three classes.
+74 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
 | **Core** | 40 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
 | **Extended** | +8 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
-| **Full** | +15 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing |
+| **Full** | +25 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export) |
 
 Every check names the section of the specification it enforces, so a failure points at the sentence
 it violates rather than at a test name.
@@ -64,6 +64,11 @@ A few of them are worth calling out, because they catch things a schema check ne
   own origin.
 - **X-08** — artifact ids do not traverse out of their container. Probes for `../` and its
   percent-encoded form.
+- **P-02/P-06** — a plugin package is derived, not copied, and a harness exports as a package
+  that installs again. P-02 fails a server whose own `mcpServers` absorb a plugin's servers, the
+  mistake that makes every read-then-write install them twice; P-06 fails an export that carries
+  the operator's credentials, and one that omits them without saying so. Both series skip, never
+  fail, on a server that reports the `plugins` capability false, because the chapter is optional.
 - **T-08/T-09/T-10** — the reserved fields `tools` and `include` are accepted, and reported as
   ignored. Both halves matter: before these, the suite sent neither field, so a server that
   rejected them outright and a server that silently acted on them scored the same as a correct
@@ -122,7 +127,7 @@ live instance on 2026-09-04 (suite 2026.8.11.post1):
 ```
   Summary
     64/64 passed · 0 failed · 0 skipped · 0 errored
-    CONFORMANT — UHP 2026-08-11 (full)
+    CONFORMANT — UHP 2026-09-12 (full)   (the version the server serves; a 2026-08-11 server reads 2026-08-11)
 ```
 <!-- conformance-recorded-run:end -->
 

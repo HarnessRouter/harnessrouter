@@ -2,8 +2,8 @@
 
 ## The scheme
 
-UHP versions are dates — `YYYY-MM-DD`, the day the version was published. `2026-08-11` is the
-current version.
+UHP versions are dates — `YYYY-MM-DD`, the day the version was published. `2026-09-12` is the
+current version; `2026-08-11` remains published and served.
 
 Dates were chosen over semantic versioning deliberately. SemVer's promise is that a major bump means
 "expect breakage" and a minor bump means "safe" — a promise that is only as good as the discipline
@@ -52,7 +52,9 @@ A server MUST:
 2. Reject an unsupported requested version with `unsupported_protocol_version` rather than serving a
    different one.
 3. Support at least one full version at a time, and SHOULD support the previous version for at least
-   six months after a new one is published.
+   six months after a new one is published. When the newer version is additive, as `2026-09-12` is
+   to `2026-08-11`, both are served from one code path: the same objects answer either request,
+   and the only difference a client sees is the version echoed in the header.
 
 ## Deprecation
 
