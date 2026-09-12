@@ -170,9 +170,10 @@ Wait for `ready on :3000`, then open the browser:
 [harnessrouter] installing Codex (Apache-2.0)…
 [harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…
 [harnessrouter] installing Oh My Pi (MIT)…
+[harnessrouter] installing goose (Apache-2.0)…
 [harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…
 [harnessrouter] installing Hermes (check its upstream license before use)…
-[harnessrouter] data=/data  backends available: claude codex hermes pi dsh opencode qwen gemini cline omp
+[harnessrouter] data=/data  backends available: claude codex hermes pi dsh opencode qwen gemini cline omp goose
 [harnessrouter] ready on :3000
 ```
 
@@ -199,8 +200,10 @@ image. Installing them on first run means you install them yourself, from upstre
 terms, which is also why you should read them before you use those two backends. The rest arrive
 the same way and under their own terms: Codex, Qwen Code, Gemini CLI and Cline (Apache-2.0),
 opencode and Pi (MIT, Pi with its MIT-licensed MCP adapter), Oh My Pi (MIT, a prebuilt binary
-pinned to a release and checked against the publisher's SHA256SUMS before it is installed) and
-DeepSeek Harness (MIT, a developer preview pinned to an exact version). All ten land in one place.
+pinned to a release and checked against the publisher's SHA256SUMS before it is installed), goose
+(Apache-2.0, a prebuilt binary pinned to a release — that project publishes no checksum file, so
+the pinned tag is the whole of the guarantee) and DeepSeek Harness (MIT, a developer preview pinned
+to an exact version). All eleven land in one place.
 
 </details>
 
@@ -293,16 +296,16 @@ problem, because it only offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
-| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
-| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose |
 | `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
-| `custom` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose |
+| `custom` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose |
 
 </details>
 
@@ -586,7 +589,7 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 

@@ -108,16 +108,56 @@ egress, and any other URL overrides the default.
 
 ## Adding a harness
 
-A new harness is registered in five places, and is not finished until it has a measured column:
+A new harness is registered in the places below, and is not finished until it has a measured
+column. Every one of them fails SILENTLY when missed — the harness still builds, still answers, and
+loses one capability without saying so. The single exception is the console's backend union type,
+which fails the type-check, and that is the only one a compiler will find for you.
 
-1. `runner/server.py`, `BACKENDS`: its providers, default model, and the normaliser that turns its
-   output into the shape the gateway stores.
-2. `gateway/app.py`, `_MODEL_CATALOG`: the ids it offers, honestly (see rule 4), and
-   `_INTEGRATION_WIRING`: which provider types can drive it.
-3. `ui/src/lib/harness.ts`, `OOB`: the built-in harness the console lists, with its mark and models.
-4. `docker/entrypoint.sh`, how the CLI is installed on first start, under its own licence, pinned.
-5. `docs/support-matrix.md`, a column per provider, produced by the suite, with its notes in
-   `docs/support-matrix-notes.md`.
+**The runner** — `runner/server.py`:
+
+1. `BACKENDS`: its providers, default model, and the normaliser that turns its output into the
+   shape the gateway stores.
+2. The `turn()` dispatch branch that builds its argv.
+3. `_write_skills`: where a skill bundle has to land for THAT CLI's loader to find it. Prefer a
+   path under `.harness/`: the workspace root is collected as produced files, so a skills folder
+   written there is handed back to the user as a deliverable on every turn.
+4. `_agent_doc_path`: `AGENTS.md` or `CLAUDE.md` — whichever the CLI actually reads. Getting it
+   wrong writes the file and the agent never sees it, so the workspace contract never arrives.
+5. `_resume_lost`: how a turn that could not continue the conversation says so, if this CLI can
+   lose one. Silence here reads as a completed turn that has forgotten everything.
+6. `CHECKPOINT_EXCLUDE` and `_git_ensure`'s ignore list: any file the CLI writes that can hold a
+   credential.
+
+**The gateway** — `gateway/app.py`:
+
+7. `_MODEL_CATALOG`: the ids it offers, honestly (see rule 4).
+8. `_BASE_CATALOG`: label, system prompt, the tool list **in the CLI's own tool names**, and
+   `tool_enforcement` — `hard` only where the runtime really can withhold a tool, per UHP §4.3,
+   which forbids both overstating and understating it. A tool id that matches nothing is dropped
+   on the way through and disables nothing while the console reports it as off.
+9. `_INTEGRATION_WIRING`: which provider types can drive it.
+10. `_CUSTOM_FORMAT_BACKENDS`: which custom endpoint formats it can actually speak.
+
+`_HID_PREFIX_RE`, `_backend_of_builtin` and `_backend_of_harness` are DERIVED from `_BASE_CATALOG`
+and need no edit — they were hand-written lists once, and each silently missed a base.
+
+**The console** — and note only the first of these is caught by the type-check:
+
+11. `ui/src/lib/harness.ts`: the `backend` union type, and `OOB`, the built-in harness the console
+    lists with its mark and models.
+12. `ui/src/components/HarnessLogo.tsx`: its brand mark, if there is one. A mapping to a file that
+    does not exist renders a broken image — worse than the generic glyph it falls back to.
+13. `ui/src/components/HarnessSettings.tsx`: the instruction-file label, which must agree with
+    `_agent_doc_path` or the settings page names a file the runner does not write.
+
+**Install and measurement:**
+
+14. `docker/entrypoint.sh`: `HR_BACKENDS`, `backend_bin`, an installer, and its call in
+    `install_backends` — the CLI installed on first start, under its own licence, pinned exactly.
+15. `scripts/support-matrix/custom-harness.mjs`, `BASES`: otherwise the custom-harness dimension
+    never measures this harness at all.
+16. `docs/support-matrix.md`, a column per provider, produced by the suite, with its notes in
+    `docs/support-matrix-notes.md`.
 
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.

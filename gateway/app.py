@@ -1065,6 +1065,16 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "cline"): "openai-api",
     ("tokenrouter", "cline"): "tokenrouter",   ("vercel", "cline"): "tokenrouter",
     ("llmtr", "cline"): "tokenrouter",
+    # goose (aaif-goose/goose) is a pure OpenAI chat/completions client through the loopback
+    # relay — its provider takes the endpoint as OPENAI_HOST + OPENAI_BASE_PATH, and the runner
+    # splits the relay's base into that pair — so it is wired like cline, for cline's reasons.
+    # No ("google", "goose") row: unprobed is unlisted, and Gemini through this surface is a
+    # request-shape question the matrix has to answer first (see cline's own gemini caveat).
+    ("anthropic", "goose"): "anthropic",       ("openai", "goose"): "openai",
+    ("azure-foundry", "goose"): "azure",
+    ("openrouter", "goose"): "openai-api",
+    ("tokenrouter", "goose"): "tokenrouter",   ("vercel", "goose"): "tokenrouter",
+    ("llmtr", "goose"): "tokenrouter",
     # custom: user-supplied endpoint + model + key. Maps to runner providers that can actually
     # drive a bring-your-own OpenAI/Anthropic endpoint — NOT codex, whose current releases speak
     # only the OpenAI Responses API and so cannot reach a custom chat/completions endpoint.
@@ -1074,6 +1084,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "omp"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
+    ("custom", "goose"): "openai-api",
     # Google AI Studio: one key, Gemini's OpenAI-compatible chat-completions surface. Every
     # backend that talks OpenAI's chat shape through a base_url reaches it as 'openai-api'.
     # Not claude (Anthropic's protocol) and not codex (the Responses API): unprobed is unlisted.
@@ -4455,7 +4466,11 @@ def _provider_backends(provider: str) -> list[str]:
 _CUSTOM_FORMAT_BACKENDS = {
     # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp"},
+    # goose speaks OpenAI chat/completions only on the path the runner builds (OPENAI_HOST +
+    # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
+    # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
+    # until it is — the picker greys out what the router cannot actually run.
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
 }
 
@@ -5635,6 +5650,27 @@ _MODEL_CATALOG: dict[str, dict] = {
     # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
     # measures each provider column with the served-model rule as judge (2026-09-07).
     "omp": {"default": "gpt-5.4", "models": []},
+    # goose reaches models the way cline and qwen do — one OpenAI chat/completions client pointed
+    # at the loopback relay — so the serving PATHS here are the ones cline's rows already earned.
+    # The list deliberately starts small rather than inheriting cline's thirty-five: a serving path
+    # is not a completed turn, which is what the bar at the top of this table asks for.
+    #
+    # All six completed a real first turn through the gateway on a Vercel AI Gateway connection
+    # (2026-09-12); gpt-5.4 also completed follow-up, a model switch to claude-sonnet-4.6 and back,
+    # an artifact turn whose produced file matched the rendered card, and a turn after a forced
+    # sandbox recycle that still recalled the first message.
+    #
+    # HALF the bar, and the missing half is named rather than papered over: these turns are NOT
+    # substitution-checked, because on this backend they cannot be. The served model would have to
+    # come from goose's own message metadata (metadata.inference.resolvedModel), and only the
+    # databricks provider format populates that — crates/goose-providers/src/openai.rs, the path
+    # every turn here takes, never sets it (v1.50.0). So served_model is always empty for goose and
+    # a silent substitution by the provider would not be visible the way gemini's is. Treat these
+    # rows as "the id completed a turn", not "the id served it", until the matrix column measures
+    # them against the provider's own reporting.
+    "goose": {"default": "gpt-5.4",
+              "models": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "claude-sonnet-4.6",
+                         "claude-haiku-4.5", "deepseek-v4-pro"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
@@ -12632,6 +12668,29 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("subagent", "Subagent"), ("subagent_fork", "Subagent (fork)"),
                   ("workflow", "Workflow")],
         "tool_enforcement": "instruction",
+    },
+    "goose": {
+        "label": "goose", "backend": "goose", "status": "ready",
+        "system_prompt": ("You are goose, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The `developer` platform extension's tools, verbatim from DeveloperClient::get_tools()
+        # (v1.50.0). FIVE, and there is no file-read tool: reading is `shell` (cat), `tree` lists a
+        # directory. Labels are goose's own ToolAnnotations display names. A name that matches no
+        # tool would be dropped from the runner's available_tools allowlist and disable nothing
+        # while this table says otherwise — the silent no-op the opencode/qwen entries warn about,
+        # which is why this list is copied from the source rather than from the docs.
+        "tools": [("shell", "Shell"), ("write", "File Write"), ("edit", "Edit"),
+                  ("tree", "Tree"), ("read_image", "Read Image")],
+        # HARD, and it survives headless auto-approval — the two mechanisms are independent.
+        # GOOSE_MODE=auto makes the permission inspector return Allow before it ever reads the
+        # permission table (permission_inspector.rs), so permission.yaml's NeverAllow is NOT the
+        # lever here. available_tools is: extension_manager's fetch_all_tools gates on
+        # config.is_tool_available while BUILDING the model's tool list, so a tool left out never
+        # reaches the model and never reaches the inspector either. UHP §4.3 requires a hard block
+        # wherever the runtime supports per-tool restriction, so reporting this as "instruction"
+        # would understate what is actually enforced.
+        "tool_enforcement": "hard",
     },
     "opencode": {
         "label": "OpenCode", "backend": "opencode", "status": "ready",

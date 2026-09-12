@@ -11,7 +11,10 @@ import app as gw  # noqa: E402
 # refused on /v1/chat/completions. gpt-6-astra joined them on 2026-09-07 with the same sentence,
 # "Function tools with reasoning_effort are not supported for gpt-6-astra in /v1/chat/completions".
 RESPONSES_ONLY = {"gpt-5.3-codex", "gpt-6-astra"}
-CHAT_ONLY_BACKENDS = ("qwen", "cline")
+# goose speaks chat/completions and nothing else: its provider takes OPENAI_HOST plus an
+# OPENAI_BASE_PATH the runner fixes at "…/chat/completions", so a Responses-only id listed for it
+# would be a picker row that fails on send, exactly as for qwen and cline.
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose")
 RESPONSES_BACKENDS = ("codex", "hermes", "pi", "dsh", "opencode", "omp")
 
 

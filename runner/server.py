@@ -248,8 +248,14 @@ def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None) ->
     hosted opencode sessions answered three recalls each with "there is no earlier message" as
     completed turns (2026-09-08): the history was lost to the 2026-09-06 restore burst, and nothing
     told the person. The gateway renders the event as a note at the top of the reply."""
-    if backend not in ("opencode", "claude") or not resume_session_id:
+    if backend not in ("opencode", "claude", "goose") or not resume_session_id:
         return None
+    if backend == "goose":
+        # goose carries the id as `-n <name>` on EVERY turn — it names a fresh session as well as
+        # selecting an existing one — so the id being present in cmd says nothing. `-r` is the
+        # flag that means "continue", and _build_goose adds it only once the session was found in
+        # this workspace's database.
+        return None if "-r" in cmd else resume_session_id
     return None if resume_session_id in cmd else resume_session_id
 
 
@@ -357,6 +363,12 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       "./.harness/home/.omp/agent/auth.json",
                       "./.harness/home/.omp/agent/models.json",
                       "./.harness/home/.omp/agent/models.yml",
+                      # goose keeps provider keys in its own secrets.yaml beside config.yaml. The
+                      # runner never writes it (credentials go in the env, and only the relay's
+                      # per-turn placeholder at that), but `goose configure` inside a task would,
+                      # and a secret that reaches a checkpoint tarball is published — the hole
+                      # pi's auth.json and hermes's .env each had to be closed for.
+                      "./.harness/goose/config/secrets.yaml",
                       # dsh: the MCP cordis overlay can carry auth headers (same standing as
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
@@ -380,6 +392,7 @@ GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash"
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
+GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -460,6 +473,7 @@ def _git_ensure(ws: str) -> None:
         "tmp/", ".gcp-sa.json", ".codex/", ".credentials.json", ".harness/**/.credentials.json",
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
+        ".harness/goose/config/secrets.yaml",
         "",
     ]))
     if not (p / ".git").exists():
@@ -680,6 +694,17 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # separate skills.enabled/disabled key — that key toggles skills, it doesn't relocate them.
         rootrels = [".harness/home/.gemini/skills"]
         entryroot = ".harness/home/.gemini/skills"
+    elif backend == "goose":
+        # <GOOSE_PATH_ROOT>/config/skills — a GLOBAL, writable skills root in goose's own
+        # discovery list (all_skill_dirs_with_config pushes Paths::config_dir().join("skills"),
+        # crates/goose/src/skills/mod.rs). Deliberately NOT the project root's .agents/skills,
+        # which goose also reads: that lives in the workspace, and _PRODUCED_EXCLUDE_PREFIX does
+        # not exclude .agents/, so every harness skill would be handed back to the user as a
+        # deliverable on every turn. This path is under .harness/ and is therefore already
+        # excluded and already checkpointed. Note goose refuses a skill whose SKILL.md `name`
+        # frontmatter does not match its directory name.
+        rootrels = [".harness/goose/config/skills"]
+        entryroot = ".harness/goose/config/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -815,7 +840,10 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     if backend == "gemini":
         return pathlib.Path(cwd) / "GEMINI.md"   # gemini-cli's own context.fileName default
     return pathlib.Path(cwd) / (
-        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp")
+        # goose reads AGENTS.md natively and first: its default context-file list is
+        # ["AGENTS.md", ".goosehints"], overridable only via CONTEXT_FILE_NAMES.
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
+                                   "goose")
         else "CLAUDE.md")
 
 
@@ -3980,6 +4008,372 @@ def _gemini_usage(stats: dict) -> dict:
     return u
 
 
+# ── goose (aaif-goose/goose, Apache-2.0 — the block/goose repo moved there) ────────────────────
+# Every shape below was read off the v1.50.0 source tree the installer pins, never the docs: the
+# docs name the stream-json event TYPES and publish no field-level example, which is the exact gap
+# that made the first gemini normalizer guess id/name/input and render every tool call as a
+# content-free row on a live turn.
+GOOSE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+# The `developer` platform extension's tools, verbatim from DeveloperClient::get_tools()
+# (crates/goose/src/agents/platform_extensions/developer/mod.rs). FIVE, and there is deliberately
+# no file-read tool: reading is `shell` (cat) and `tree` lists a directory. Do NOT add a `read`
+# here — a name matching no tool is dropped from available_tools below, which disables nothing
+# while the console reports the tool as off: the silent no-op the opencode/qwen tables warn about.
+# The definition carries unprefixed_tools: true, so the model sees these bare, not developer__x.
+ALL_GOOSE_TOOLS = ("write", "edit", "shell", "tree", "read_image")
+_GOOSE_DEV_EXT = "developer"
+
+# ONE goose conversation per workspace, under a fixed name.
+#
+# goose emits no init event — its stream opens straight into `message` — so the id its session
+# manager generates is never visible to us, and _run_turn_bg learns a conversation id ONLY from a
+# normalized system/init event (it is what becomes the next turn's resume id). A name we choose is
+# therefore the only id that can round-trip at all.
+#
+# It does not have to be unique: every session gets its own workspace, so it gets its own
+# GOOSE_PATH_ROOT and its own sessions.db, and two sessions can no more collide here than they can
+# in each other's files. Fixed rather than minted also means a restored checkpoint resumes by the
+# same name it was written under, which is exactly what the recycle scenario asks for.
+_GOOSE_SESSION_NAME = "harness"
+
+
+def _goose_root(cwd: str) -> pathlib.Path:
+    """Everything goose keeps, under ONE directory inside the workspace.
+
+    Paths::get_dir (crates/goose/src/config/paths.rs) reads GOOSE_PATH_ROOT first and, when it is
+    an ABSOLUTE path, derives config/, data/ and state/ from it; only when it is unset does it fall
+    back to the etcetera app-strategy (~/.config/goose on Linux). So one env var places the config
+    file, the sessions database and the skills directory at once — no HOME redirection and no guess
+    about XDG, which is what every other backend here has to make.
+
+    Inside .harness/ on purpose, and that placement is load-bearing twice over: the directory
+    travels in the checkpoint (HARNESS_STATE), which is what makes resume survive a recycled
+    sandbox, and _PRODUCED_EXCLUDE_PREFIX already excludes it, so the config and the harness's own
+    skill folders are never handed back to the user as deliverables — the trap _opencode_config
+    records, where a root-level config file showed up as agent output on every turn."""
+    return pathlib.Path(cwd, ".harness", "goose")
+
+
+def _goose_split_base(base_url: str) -> tuple[str, str]:
+    """(OPENAI_HOST, OPENAI_BASE_PATH) for one relay base.
+
+    goose's OpenAI provider takes the endpoint in TWO pieces, not one: OPENAI_HOST is the origin
+    and OPENAI_BASE_PATH the path it serves (both ConfigKeys in
+    crates/goose-providers/src/openai.rs). Every other OpenAI-shape backend here takes a single
+    base_url, so the relay keeps handing out one URL and it is split HERE rather than teaching the
+    relay a second shape.
+
+    Handing the whole relay URL to OPENAI_HOST instead would send every turn to
+    /v1/v1/chat/completions, which the relay answers 404 with no body — indistinguishable, from the
+    trace, from the CLI simply dying."""
+    u = urllib.parse.urlsplit((base_url or "").rstrip("/"))
+    host = f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else (base_url or "").rstrip("/")
+    path = (u.path or "").strip("/")
+    return host, (f"{path}/chat/completions" if path else "chat/completions")
+
+
+def _goose_extensions(mcp_servers: list[dict] | None, tools_disabled: list[str] | None) -> dict:
+    """config.yaml's `extensions` map: key -> {enabled, ...ExtensionConfig} (ExtensionEntry, which
+    flattens the config's serde tag into the entry, crates/goose/src/config/extensions.rs).
+
+    PARTIAL ON PURPOSE. A config-load migration seeds an entry for every platform extension this
+    map does not mention, using that definition's own default_enabled (crates/goose/src/config/
+    migrations.rs), and it PRESERVES available_tools on the entries that are already here. So
+    naming `developer` to restrict its tools does not switch off Skills, Todo or Analyze, which is
+    what writing a complete map would have done — and what would have silently broken every
+    harness skill while every other scenario still passed.
+
+    MCP servers become streamable_http entries rather than the --with-streamable-http-extension
+    flag, because that flag's parser takes only a url and `timeout=N` and drops every other k=v
+    (parse_streamable_http_extension in goose-cli/src/cli.rs). UHP §4.1 puts headers and auth in
+    the contract, and a server that advertises MCP it cannot deliver is exactly what the spec
+    forbids — so the config file, which has a real `headers` map, is the only honest door."""
+    out: dict = {}
+    off = {(raw or "").split(" (")[0].strip().lower() for raw in tools_disabled or []}
+    keep = [t for t in ALL_GOOSE_TOOLS if t not in off]
+    if off & set(ALL_GOOSE_TOOLS):
+        # available_tools is an ALLOWLIST, so it is written only when something is actually
+        # disabled: left empty (or absent) every tool is available, which is the default we want.
+        out[_GOOSE_DEV_EXT] = {"enabled": True, "type": "platform", "name": _GOOSE_DEV_EXT,
+                               "available_tools": keep}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        cmd = sv.get("command")
+        if url:
+            entry: dict = {"enabled": True, "type": "streamable_http", "name": name,
+                           "uri": url, "timeout": 300}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif cmd:
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            argv = [str(a) for a in argv] + [str(a) for a in (sv.get("args") or [])]
+            entry = {"enabled": True, "type": "stdio", "name": name,
+                     "cmd": argv[0], "args": argv[1:], "timeout": 300}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["envs"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        out[name] = entry
+    return out
+
+
+def _goose_config(root: pathlib.Path, model: str, mcp_servers: list[dict] | None,
+                  tools_disabled: list[str] | None) -> None:
+    """Write <root>/config/config.yaml fresh each turn — the harness config is the source of truth,
+    the same contract the agent doc has, so a stale file never outlives the setting that made it.
+    Same writer hermes's config.yaml already uses."""
+    cdir = root / "config"
+    cdir.mkdir(parents=True, exist_ok=True)
+    cfg: dict = {"GOOSE_PROVIDER": "openai", "GOOSE_MODEL": model}
+    ext = _goose_extensions(mcp_servers, tools_disabled)
+    if ext:
+        cfg["extensions"] = ext
+    (cdir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+
+def _goose_has_session(root: pathlib.Path, name: str) -> bool:
+    """Is this goose session actually in this workspace's database?
+
+    Same evidence as _opencode_has_session, and for the same reason: goose keeps conversations in
+    SQLite (data/sessions/sessions.db — SESSIONS_FOLDER + DB_NAME in
+    crates/goose/src/session/session_manager.rs), so there is no per-session file to stat. The name
+    is a distinctive token, so the check is whether the database bytes contain it — schema
+    independent, which is what a version-pinned CLI needs. The write-ahead log is searched too: a
+    session written by the previous turn can still be sitting in it.
+
+    Without this check, `-r -n <name>` against a database that does not hold it fails the turn
+    outright ("No session found with name '<name>'", get_or_create_session_id in
+    goose-cli/src/cli.rs) — and since every later turn passes the same name, the conversation is
+    wedged for good rather than for one turn."""
+    if not name:
+        return False
+    base = root / "data" / "sessions"
+    needle = name.encode()
+    for fn in ("sessions.db", "sessions.db-wal"):
+        f = base / fn
+        try:
+            if f.exists() and needle in f.read_bytes():
+                return True
+        except Exception:  # noqa: BLE001 — unreadable is "not there", never a crash
+            continue
+    return False
+
+
+def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None, max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in GOOSE_PROVIDERS:
+        raise HTTPException(400, f"unknown goose provider '{pr}' (one of {sorted(GOOSE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "goose needs a base_url (none configured)")
+    if auth.api_key:
+        # EVERY goose turn rides the loopback relay, as qwen's and cline's do: request shapes
+        # strict endpoints refuse are repaired in flight, and the real key never enters the CLI's
+        # environment — which matters here because goose takes its credential ONLY via env.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    root = _goose_root(cwd)
+    root.mkdir(parents=True, exist_ok=True)
+    host, base_path = _goose_split_base(auth.base_url or "")
+    env["GOOSE_PATH_ROOT"] = str(root)
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["OPENAI_HOST"] = host
+    env["OPENAI_BASE_PATH"] = base_path
+    # The sandbox is the trust boundary, so tools are approved up front: nobody is attached to
+    # answer a prompt. Same rationale as claude --dangerously-skip-permissions, pi --approve and
+    # opencode --auto. NOTE this does NOT weaken disabled tools: auto returns Allow before the
+    # permission table is consulted (permission_inspector.rs), but a tool left out of
+    # available_tools is never put in the model's tool list at all (extension_manager.rs's
+    # fetch_all_tools gates on config.is_tool_available), so the two are independent.
+    env["GOOSE_MODE"] = "auto"
+    # Otherwise every turn pays an extra background model call to invent a session name we never
+    # read — the name is ours, set with -n below.
+    env["GOOSE_DISABLE_SESSION_NAMING"] = "true"
+    _goose_config(root, model, mcp_servers, tools_disabled)
+    # -n names the session on a fresh run and selects it on a resume (get_or_create_session_id
+    # matches s.name == name || s.id == name), so it is the handle in both directions and nothing
+    # has to be read back out of the stream. --session-id is NOT usable here: it sits in the same
+    # clap group, which is multiple = false, and it is rejected outright without --resume.
+    cmd = ["goose", "run", "--output-format", "stream-json", "--model", model,
+           "-n", _GOOSE_SESSION_NAME, "-t", prompt]
+    if max_turns:
+        # The harness's step budget, which the gateway sends as max_turns (its max_step, default
+        # 40). goose's own default is 1000, so without this the budget an operator set is ignored
+        # by a factor of 25 and a looping task runs to goose's ceiling instead of theirs. Same
+        # knob claude takes as --max-turns and hermes as agent.max_turns in its config.
+        cmd += ["--max-turns", str(int(max_turns))]
+    if resume_session_id:
+        if _goose_has_session(root, _GOOSE_SESSION_NAME):
+            cmd += ["-r"]
+        else:
+            # Same guard claude and opencode carry. The conversation is not in this workspace —
+            # the checkpoint did not carry it, the sandbox was recycled, a prior turn died before
+            # it was written — so start a fresh thread in the SAME workspace, which keeps the
+            # files and lets the follow-up run, and say so (see _resume_lost) rather than
+            # answering "there is no earlier message" as a completed turn. Passing -r anyway would
+            # fail the turn outright: goose errors "No session found with name".
+            print(f"[resume] goose: session {_GOOSE_SESSION_NAME} not in this workspace "
+                  f"(asked for {resume_session_id}) — starting fresh", flush=True)
+    return cmd
+
+
+def _goose_usage(ev: dict) -> dict:
+    """goose's terminal `complete` event in the runner's usage contract.
+
+    Its cache counters are cache_read_input_tokens / cache_write_input_tokens (StreamEvent
+    ::Complete, goose-cli/src/session/mod.rs). _norm_token_usage's picker already knows the READ
+    name, but its write list carries cacheWriteInputTokens in camel and NOT the snake form goose
+    emits — so the cache-write count would be silently dropped and billed as nothing. Named here
+    rather than widened in the shared picker, the same way _gemini_usage handles gemini's `cached`.
+
+    Whether `input_tokens` is gross (cache read included) or net is the provider's choice and goose
+    passes it straight through (MessageUsage::from_provider_usage), so NO subtraction is made here
+    until a live turn says one is needed — inventing one would under-report input on a provider
+    that already reports net, which is the mirror of the bug the subtraction exists to fix."""
+    u = _norm_token_usage(ev)
+    w = ev.get("cache_write_input_tokens") if isinstance(ev, dict) else None
+    if isinstance(w, (int, float)) and w:
+        u["cache_write_tokens"] = int(w)
+    return u
+
+
+def _goose_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `goose run --output-format stream-json` line to zero+ canonical claude events.
+
+    Shapes verified 2026-09-11 against the v1.50.0 source the installer pins (StreamEvent and
+    emit_stream_event in crates/goose-cli/src/session/mod.rs; Message, MessageContentBlock and
+    tool_result_serde in crates/goose-provider-types/src/conversation/). One JSON object per line.
+
+    TWO NAMING CONVENTIONS IN ONE STREAM, and getting either wrong is silent:
+      - the top-level event tag is snake_case  (#[serde(tag="type", rename_all="snake_case")]):
+            message | notification | error | complete
+      - the content-block tag is camelCase     (#[serde(tag="type", rename_all="camelCase")]):
+            text | thinking | redactedThinking | toolRequest | toolResponse | error
+
+        message:      {type, message:{id, role:"user"|"assistant", created, content:[…], metadata}}
+        toolRequest:  {type:"toolRequest", id, toolCall:{status:"success", value:{name, arguments}}}
+                      — the call is TWO levels down, under toolCall.value, and `status` is Rust's
+                      Result rendered by tool_result_serde: on failure it is
+                      {status:"error", error:"<string>"}, a string and not an object.
+        toolResponse: {type:"toolResponse", id, toolResult:{status, value:<CallToolResult>}}
+        complete:     {type:"complete", total_tokens, input_tokens, output_tokens,
+                       cache_read_input_tokens, cache_write_input_tokens, cost_usd}
+                      — terminal, and carries NO text: the answer is only ever the accumulated
+                      assistant text, the same as gemini's result event.
+        error:        {type:"error", error:"<string>"} — emitted by handle_agent_error, which also
+                      ends the run, so unlike gemini's non-fatal `error` this one IS terminal.
+
+    The served model rides message.metadata.inference: {provider, requestedModel, resolvedModel}
+    (InferenceMetadata, camelCase). That is a per-message statement of what the provider actually
+    ran, so a substitution is visible without inferring it from usage stats the way gemini's is."""
+    t = obj.get("type")
+    if t == "message":
+        msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+        role = msg.get("role") or "assistant"
+        meta = msg.get("metadata") if isinstance(msg.get("metadata"), dict) else {}
+        inf = meta.get("inference") if isinstance(meta.get("inference"), dict) else {}
+        served = str(inf.get("resolvedModel") or "")
+        if served:
+            state["_goose_served"] = served
+        out: list[dict] = []
+        if not state.get("_goose_init"):
+            # goose emits no init of its own, so one is synthesized off the first message. It MUST
+            # carry a session id: _run_turn_bg records the conversation id only from this event,
+            # and that recorded id is what the next turn resumes with — without it every follow-up
+            # would silently start a new conversation.
+            state["_goose_init"] = True
+            out.append({"type": "system", "subtype": "init",
+                        "session_id": _GOOSE_SESSION_NAME,
+                        "model": served or state.get("model")})
+        for c in (msg.get("content") if isinstance(msg.get("content"), list) else []):
+            if not isinstance(c, dict):
+                continue
+            ct = c.get("type")
+            if ct == "text":
+                txt = c.get("text") or ""
+                if not txt:
+                    continue
+                if role == "assistant":
+                    # Each message carries a WHOLE text part (there is no delta flag on this
+                    # stream), and claude's result semantics take the last assistant text as the
+                    # answer, so a completed part replaces rather than accumulates — the same
+                    # choice _opencode_to_claude makes and for the same reason.
+                    state["final"] = txt
+                out.append({"type": role, "message": {"content": [{"type": "text", "text": txt}]}})
+            elif ct == "thinking":
+                th = c.get("thinking") or ""
+                if th:
+                    out.append({"type": "assistant",
+                                "message": {"content": [{"type": "thinking", "thinking": th}]}})
+            elif ct == "toolRequest":
+                call = c.get("toolCall") if isinstance(c.get("toolCall"), dict) else {}
+                val = call.get("value") if isinstance(call.get("value"), dict) else {}
+                if call.get("status") == "error":
+                    state.setdefault("_goose_tool_errors", []).append(str(call.get("error") or ""))
+                    continue
+                out.append({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "id": c.get("id") or "tool",
+                     "name": val.get("name") or "tool",
+                     "input": val.get("arguments") or {}}]}})
+            elif ct == "toolResponse":
+                res = c.get("toolResult") if isinstance(c.get("toolResult"), dict) else {}
+                is_err = res.get("status") == "error"
+                if is_err:
+                    body = str(res.get("error") or "")
+                else:
+                    # CallToolResult is MCP's own shape: {content:[{type:"text", text}], …}
+                    val = res.get("value") if isinstance(res.get("value"), dict) else {}
+                    parts = val.get("content") if isinstance(val.get("content"), list) else []
+                    body = "".join(p.get("text") or "" for p in parts if isinstance(p, dict))
+                out.append({"type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": c.get("id") or "tool",
+                     "is_error": is_err, "content": body}]}})
+            elif ct == "error":
+                state["_goose_error"] = str(c.get("message") or "goose error")
+        return out
+    if t == "error":
+        # handle_agent_error emits this and then ends the run, so it is the turn's cause of death
+        # and not an aside — the opposite of gemini's `error`, which is non-fatal by contract.
+        state["_goose_error"] = str(obj.get("error") or "goose error")
+        return []
+    if t == "complete":
+        state["_goose_completed"] = True   # the eof handler must not emit a second result
+        err = state.get("_goose_error") or ""
+        ev = {"type": "result", "subtype": "error" if err else "success", "is_error": bool(err),
+              "result": err or state.get("final", ""), "usage": _goose_usage(obj)}
+        served = state.get("_goose_served")
+        if served:
+            ev["model"] = served
+        return [ev]
+    return []   # notification: progress/log noise, nothing to render
+
+
+def _goose_eof(state: dict, rc: int) -> list[dict]:
+    """A run that ended without its `complete` event — the CLI died, was killed, or failed before
+    the agent loop started. `complete` is emitted only on the normal path, so without this the turn
+    would end with no result event at all and read as "finished, said nothing"."""
+    if state.get("_goose_completed"):
+        return []
+    err = state.get("_goose_error") or ""
+    tools = state.get("_goose_tool_errors") or []
+    if not err and rc == 0:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    why = err or "; ".join(t for t in tools if t)[:500] or f"goose exited {rc} without reporting an error"
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": state.get("final") or why, "usage": {}}]
+
+
+_goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -4012,6 +4406,10 @@ BACKENDS = {
     # fields), so it shares pi's normaliser rather than carrying a copy.
     "omp": {"providers": sorted(OMP_PROVIDERS), "default_model": OMP_DEFAULT_MODEL,
             "normalize": _pi_to_claude},
+    # goose's stream-json is its OWN schema (Rust serde, two rename rules in one stream), so it
+    # carries its own normaliser rather than sharing one — see _goose_to_claude's docstring.
+    "goose": {"providers": sorted(GOOSE_PROVIDERS), "default_model": GOOSE_DEFAULT_MODEL,
+              "normalize": _goose_to_claude},
 }
 
 
@@ -5139,6 +5537,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or CLINE_DEFAULT_MODEL
         cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+    elif backend == "goose":
+        model = model or GOOSE_DEFAULT_MODEL
+        cmd = _build_goose(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                           tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "opencode":
         model = model or OPENCODE_DEFAULT_MODEL
         # _write_skills already ran for this backend, so the directory it produced is on disk and

@@ -34,3 +34,20 @@ def test_dsh_advertises_tools_its_profile_offers():
     names = {n for n, _ in A._BASE_CATALOG["dsh"]["tools"]}
     assert names <= DSH_OFFERED, f"not offered by the sdk profile: {sorted(names - DSH_OFFERED)}"
     assert A._BASE_CATALOG["dsh"]["tool_enforcement"] == "instruction"
+
+
+def test_goose_advertises_exactly_what_its_allowlist_can_restrict():
+    """goose disables a tool by leaving it OUT of the extension's available_tools allowlist, which
+    the runner builds from ALL_GOOSE_TOOLS. A name here that is not in that set is dropped on the
+    way through and disables nothing while this table says it does — the omp failure above, in the
+    other direction. Both sides are the `developer` extension's get_tools() (v1.50.0)."""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "runner"))
+    from server import ALL_GOOSE_TOOLS  # noqa: PLC0415 — the runner is not a gateway import
+
+    names = {n for n, _ in A._BASE_CATALOG["goose"]["tools"]}
+    assert names == set(ALL_GOOSE_TOOLS), \
+        f"drifted from the runner's allowlist: {sorted(names ^ set(ALL_GOOSE_TOOLS))}"
+    # Hard, not instruction: available_tools is applied while BUILDING the model's tool list, so it
+    # holds under GOOSE_MODE=auto, which short-circuits the permission table. UHP §4.3 requires the
+    # hard block to be reported as one wherever the runtime supports it.
+    assert A._BASE_CATALOG["goose"]["tool_enforcement"] == "hard"
