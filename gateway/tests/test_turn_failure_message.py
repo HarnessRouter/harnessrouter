@@ -59,3 +59,21 @@ def test_the_reason_is_the_last_connection_that_ran_not_a_skipped_one():
     only_skips = {"tried": [{"connection": "a", "error": "not found"}, {"connection": "b", "error": "credential cannot be brokered; refused"}]}
     assert gw._turn_failure_message(only_skips) == \
         "The turn failed on every connection it tried. The last one said: credential cannot be brokered; refused"
+
+
+def test_a_provider_refusing_the_tasks_earlier_reasoning_is_said_in_words():
+    """TokenRouter's gpt-5.4 route: a gpt-5.4 thread switched into gpt-6-astra fails with the
+    provider's JSON (the open source column, 2026-09-10); a same-model cold restore failed the same
+    way on hosted on 2026-09-08. The person reads what to do, never the JSON."""
+    raw = ('{"error":{"message":"The encrypted content for item rs_0f75 could not be verified. Reason: '
+           'Encrypted content could not be decrypted or parsed.","type":"invalid_request_error"}}')
+    rec = {"model_req": "gpt-6-astra", "models_before": ["gpt-5.4"],
+           "tried": [{"connection": "integration:My TokenRouter", "status": "failed", "error": "The turn failed: " + raw}]}
+    m = gw._turn_failure_message(rec)
+    assert m == ("gpt-6-astra cannot continue this task's earlier reasoning through this provider (it was "
+                 "produced under another route). Start a new task for gpt-6-astra, or keep this task on gpt-5.4.")
+    same = {"model_req": "gpt-5.4", "models_before": [], "tried": [{"connection": "c", "status": "failed", "error": raw}]}
+    assert gw._turn_failure_message(same).endswith("Start a new task for gpt-5.4.")
+    assert "invalid_request_error" not in gw._turn_failure_message(rec)
+    plain = {"tried": [{"connection": "c", "status": "failed", "error": "boom"}]}
+    assert gw._turn_failure_message(plain) == "The turn failed: boom"
