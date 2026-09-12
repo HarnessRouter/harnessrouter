@@ -5952,10 +5952,14 @@ _MODEL_CATALOG: dict[str, dict] = {
               # The 40 ids the goose column MEASURED on 2026-09-12: five scenarios per model on
               # TokenRouter, Vercel, OpenRouter, OpenAI, Azure, Anthropic and the hosted door, the served
               # model read by the relay, zero substitutions (the last five, Vercel's and OpenRouter's own
-              # additions, on those two). One id measured and left OUT: claude-opus-5 answers "The model
-              # returned an empty response" on every tool-using turn through goose's chat wire, on its own
-              # vendor as much as through every aggregator (0 of 8 artifact/recall checks). The
-              # Responses-only ids stay out: goose is chat-only.
+              # additions, on those two). One id measured and left OUT: claude-opus-5. Once a session holds a
+              # turn by another model (the matrix's switch scenario), Anthropic answers every further
+              # opus-5 request from goose with an empty stream and finish_reason "content_filter", which
+              # goose renders as "The model returned an empty response"; the same session without the
+              # switch completes the tool task. Reproduced through the relay against Anthropic directly on
+              # 2026-09-12; the aggregators forward that answer unchanged, so every column showed it (0 of 8
+              # artifact/recall checks). The other Claude ids continue such a history. The Responses-only
+              # ids stay out: goose is chat-only.
               "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
