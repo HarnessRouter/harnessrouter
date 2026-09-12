@@ -4086,6 +4086,22 @@ _GOOSE_DEV_EXT = "developer"
 # same name it was written under, which is exactly what the recycle scenario asks for.
 _GOOSE_SESSION_NAME = "harness"
 
+# A PROVIDER ERROR ARRIVES AS ASSISTANT PROSE, not as the `error` event.
+#
+# When the upstream fails mid-turn, goose does not emit StreamEvent::Error: the agent loop catches
+# it and pushes an assistant `message` whose text is this prefix plus the provider's sentence, then
+# ends the run normally with `complete`. Measured on TokenRouter's 503 ("system disk overloaded")
+# during the PR-164 support-matrix column: the turn read `status: completed` and its answer was
+# "Ran into this error: Server error: …", so a failed turn reported as a success whose answer was
+# the failure — and the next turn in that session answered from a history carrying that prose.
+#
+# Both prefixes are verbatim in the pinned v1.50.0 executable (`strings goose | grep "Ran into
+# this error"` returns exactly these two and nothing else). This is the same shape claude injects
+# as "API Error: …" and that _CLAUDE_ERR_RE turns into a failed result; goose gets the same
+# treatment for the same reason. The trailing space is not required by the match: only the prefix
+# through the colon is pinned, so a formatting change upstream still fails the turn correctly.
+_GOOSE_ERR_RE = _re.compile(r"^\s*Ran into this error(?: trying to compact)?:", _re.IGNORECASE)
+
 
 def _goose_root(cwd: str) -> pathlib.Path:
     """Everything goose keeps, under ONE directory inside the workspace.
@@ -4189,12 +4205,22 @@ def _goose_config(root: pathlib.Path, model: str, mcp_servers: list[dict] | None
 def _goose_has_session(root: pathlib.Path, name: str) -> bool:
     """Is this goose session actually in this workspace's database?
 
-    Same evidence as _opencode_has_session, and for the same reason: goose keeps conversations in
-    SQLite (data/sessions/sessions.db — SESSIONS_FOLDER + DB_NAME in
-    crates/goose/src/session/session_manager.rs), so there is no per-session file to stat. The name
-    is a distinctive token, so the check is whether the database bytes contain it — schema
-    independent, which is what a version-pinned CLI needs. The write-ahead log is searched too: a
-    session written by the previous turn can still be sitting in it.
+    goose keeps conversations in SQLite (data/sessions/sessions.db — SESSIONS_FOLDER + DB_NAME in
+    crates/goose/src/session/session_manager.rs), so there is no per-session file to stat, and the
+    question has to be put to the database.
+
+    ASK IT, do not search its bytes. This was a substring search for the session name over the db
+    and its write-ahead log, and that is only as good as the name is distinctive: `harness` also
+    occurs in the workspace path (/data/workspaces/<sid>/.harness/...) that tool output and the
+    AGENTS.md contract carry, so a database holding one message and no session could match. The
+    consequence was bounded but exactly what the check exists to prevent — a false positive adds
+    -r and the turn dies on "No session found". The query below cannot be fooled by a path.
+
+    The schema is fixed by the pinned CLI (sessions: id TEXT PRIMARY KEY, name TEXT NOT NULL), and
+    get_or_create_session_id matches s.name == name || s.id == name, so this asks precisely what
+    the CLI will ask. A drift on a pin bump fails test_session_lookup_asks_the_database rather
+    than a live turn. Opened read-only; sqlite reads the WAL itself, so the previous turn's
+    not-yet-checkpointed write is visible without naming the -wal file.
 
     Without this check, `-r -n <name>` against a database that does not hold it fails the turn
     outright ("No session found with name '<name>'", get_or_create_session_id in
@@ -4202,16 +4228,23 @@ def _goose_has_session(root: pathlib.Path, name: str) -> bool:
     wedged for good rather than for one turn."""
     if not name:
         return False
-    base = root / "data" / "sessions"
-    needle = name.encode()
-    for fn in ("sessions.db", "sessions.db-wal"):
-        f = base / fn
-        try:
-            if f.exists() and needle in f.read_bytes():
-                return True
-        except Exception:  # noqa: BLE001 — unreadable is "not there", never a crash
-            continue
-    return False
+    db_path = root / "data" / "sessions" / "sessions.db"
+    if not db_path.exists():
+        return False
+    db = None
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+        row = db.execute("SELECT 1 FROM sessions WHERE name = ? OR id = ? LIMIT 1",
+                         (name, name)).fetchone()
+        return row is not None
+    except Exception:  # noqa: BLE001 — no table yet, mid-write, unreadable: "not there"
+        return False
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
@@ -4318,6 +4351,8 @@ def _goose_to_claude(obj: dict, state: dict) -> list[dict]:
                       assistant text, the same as gemini's result event.
         error:        {type:"error", error:"<string>"} — emitted by handle_agent_error, which also
                       ends the run, so unlike gemini's non-fatal `error` this one IS terminal.
+                      NOT the only way a turn fails: a provider error is narrated as assistant
+                      text instead, and only _GOOSE_ERR_RE catches that one.
 
     The served model rides message.metadata.inference: {provider, requestedModel, resolvedModel}
     (InferenceMetadata, camelCase). That is a per-message statement of what the provider actually
@@ -4348,6 +4383,15 @@ def _goose_to_claude(obj: dict, state: dict) -> list[dict]:
             if ct == "text":
                 txt = c.get("text") or ""
                 if not txt:
+                    continue
+                if role == "assistant" and _GOOSE_ERR_RE.match(txt):
+                    # The provider failed and goose narrated it instead of raising it (see
+                    # _GOOSE_ERR_RE). It is the turn's cause of death, not its answer: record it
+                    # so `complete` yields subtype error, and drop the block rather than let it
+                    # become `final` and be reported as what the model said. Dropping matches
+                    # _strip_claude_error_text — the reason still reaches the caller, as the
+                    # failed result's `result`.
+                    state["_goose_error"] = txt.strip()[:400]
                     continue
                 if role == "assistant":
                     # Each message carries a WHOLE text part (there is no delta flag on this
@@ -4415,9 +4459,11 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
     if not err and rc == 0:
         return [{"type": "result", "subtype": "success", "is_error": False,
                  "result": state.get("final", ""), "usage": {}}]
-    why = err or "; ".join(t for t in tools if t)[:500] or f"goose exited {rc} without reporting an error"
+    why = "; ".join(t for t in tools if t)[:500] or f"goose exited {rc} without reporting an error"
+    # A reported error outranks whatever text arrived before it: the turn died of that, and it is
+    # the same answer `complete` would have given had the run reached it.
     return [{"type": "result", "subtype": "error", "is_error": True,
-             "result": state.get("final") or why, "usage": {}}]
+             "result": err or state.get("final") or why, "usage": {}}]
 
 
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
