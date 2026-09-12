@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover
 from .client import Client
 
 SCHEMA_PATH = (pathlib.Path(__file__).resolve().parents[2]
-               / "schema" / "uhp-2026-08-11.schema.json")
+               / "schema" / "uhp-2026-09-12.schema.json")
 
 
 @dataclass

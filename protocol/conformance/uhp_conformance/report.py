@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from . import __version__
+from . import UHP_VERSION, __version__
 from .registry import CLASSES, Outcome
 
 GREEN, RED, YELLOW, GREY, BOLD, RESET = (
@@ -22,7 +22,7 @@ def render(results, target: str, cls: str, plain: bool = False) -> str:
 
     lines = [""]
     lines.append(c(f"UHP conformance — {target}", BOLD))
-    lines.append(f"protocol 2026-08-11 · requested class: {cls}")
+    lines.append(f"protocol {UHP_VERSION} · requested class: {cls}")
     lines.append("")
 
     for k in CLASSES[: CLASSES.index(cls) + 1]:
@@ -56,10 +56,10 @@ def render(results, target: str, cls: str, plain: bool = False) -> str:
             lines.append(f"    Highest class fully passed: {achieved}")
     elif n[Outcome.SKIP]:
         # Same vocabulary as the JSON report: skips demote the verdict, they never vanish into it.
-        lines.append(c(f"    CONFORMANT WITH SKIPS — UHP 2026-08-11 ({cls})", YELLOW))
+        lines.append(c(f"    CONFORMANT WITH SKIPS — UHP {UHP_VERSION} ({cls})", YELLOW))
         lines.append(c("    Note: skipped checks were not verified. A skip is not a pass.", YELLOW))
     else:
-        lines.append(c(f"    CONFORMANT — UHP 2026-08-11 ({cls})", GREEN))
+        lines.append(c(f"    CONFORMANT — UHP {UHP_VERSION} ({cls})", GREEN))
     lines.append("")
     return "\n".join(lines)
 
@@ -102,12 +102,12 @@ def to_json(results, target: str, cls: str) -> str:
     n = {o.value: sum(1 for r in results if r.outcome is o) for o in Outcome}
     return json.dumps({
         "protocol": "uhp",
-        "protocol_version": "2026-08-11",
+        "protocol_version": UHP_VERSION,
         # The suite revision and the moment of the run, because this file is published as
         # EVIDENCE (GOVERNANCE.md § Conformance claims) and evidence that cannot be dated or
         # tied to the suite that produced it has to be dated in prose somewhere else — which is
         # exactly what happened to the 0.3.0 report. A report without these fields predates
-        # suite 2026.8.11.post1.
+        # suite 2026.9.12.
         "suite_version": __version__,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "target": target,

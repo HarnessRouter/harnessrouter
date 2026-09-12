@@ -2,7 +2,7 @@
 
 How to put an agent harness behind the Unified Harness Protocol — what a server must
 answer, in what order to build it, and how to prove it works. This guide is the
-practical companion to the [specification](versions/2026-08-11/index.md); where the two
+practical companion to the [specification](versions/2026-09-12/index.md); where the two
 disagree, the specification wins.
 
 ## What a UHP server is
@@ -26,20 +26,20 @@ Build in the order the conformance suite tests, because each stage is testable o
 own:
 
 1. **Discovery** — advertise the harnesses you run and the models they accept.
-   [Harnesses chapter](versions/2026-08-11/harnesses.md).
+   [Harnesses chapter](versions/2026-09-12/harnesses.md).
 2. **Tasks** — accept one unit of work, run it, return the result. The task surface is
    deliberately shaped like a responses API, plus what a harness needs and a model
-   endpoint has no concept of. [Tasks chapter](versions/2026-08-11/tasks.md).
+   endpoint has no concept of. [Tasks chapter](versions/2026-09-12/tasks.md).
 3. **Streaming** — report progress while long tasks run, and survive a dropped
-   connection. [Streaming chapter](versions/2026-08-11/streaming.md).
+   connection. [Streaming chapter](versions/2026-09-12/streaming.md).
 4. **Sessions** — let a task continue where a previous one left off.
-   [Sessions chapter](versions/2026-08-11/sessions.md).
+   [Sessions chapter](versions/2026-09-12/sessions.md).
 5. **Files** — take files in, hand artifacts back.
-   [Files chapter](versions/2026-08-11/files.md).
+   [Files chapter](versions/2026-09-12/files.md).
 6. **Cancellation and errors** — stop running work cleanly and fail in the documented
-   taxonomy. [Errors chapter](versions/2026-08-11/errors.md).
+   taxonomy. [Errors chapter](versions/2026-09-12/errors.md).
 
-The [schema chapter](versions/2026-08-11/schema.md) publishes OpenAPI 3.1 and JSON
+The [schema chapter](versions/2026-09-12/schema.md) publishes OpenAPI 3.1 and JSON
 Schema 2020-12 for every version — generate your types instead of writing them.
 
 ## Prove it

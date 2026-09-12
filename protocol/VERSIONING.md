@@ -2,8 +2,8 @@
 
 ## The scheme
 
-UHP versions are dates — `YYYY-MM-DD`, the day the version was published. `2026-08-11` is the
-current version.
+UHP versions are dates — `YYYY-MM-DD`, the day the version was published. `2026-09-12` is the
+current version; `2026-08-11` remains published and served.
 
 Dates were chosen over semantic versioning deliberately. SemVer's promise is that a major bump means
 "expect breakage" and a minor bump means "safe" — a promise that is only as good as the discipline

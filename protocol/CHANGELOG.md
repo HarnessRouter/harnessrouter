@@ -2,7 +2,73 @@
 
 All notable changes to the Unified Harness Protocol.
 
-## Unreleased — additive to 2026-08-11
+## 2026-09-12
+
+Additive to `2026-08-11`: every request and object valid under the previous version is valid
+here, and a client written against it keeps working against a server that serves this one. The
+previous version stays published at its own address and a server SHOULD keep serving it.
+
+### Added
+
+- **Plugins** ([Plugins](versions/2026-09-12/plugins.md)), the Harness Plugins sub-protocol. A
+  plugin is an [Agent Plugins](https://agent-plugins.org/specification) 1.0.0 package, carried as
+  files and installed into a harness through a new `plugins` array on the harness object. The
+  server derives `manifest`, `mcpServers`, `skills` and `skipped` from the package on every write;
+  the package's servers and skills join the harness's own for every turn. UHP defines no package
+  format of its own: as Agent Plugins wraps Agent Skills by saying where a skill lives and deferring
+  the skill's format, this chapter wraps Agent Plugins by saying how a package travels, binds and
+  runs, and defers the package's contents.
+
+- **The composition rule** ([Plugins §4](versions/2026-09-12/plugins.md#4-composition-what-the-agent-gets)).
+  A harness's own `mcpServers` and `skills` keep exactly the meaning they had: what a client wrote
+  there, never a plugin's components copied in. This is what makes the version additive. A harness
+  configured before this version is byte-for-byte a valid harness now, with `plugins` empty, and a
+  client that reads a harness and writes it back cannot install a plugin's servers twice.
+  Component names are unique within a harness across the direct lists and every enabled plugin;
+  a collision is refused at configuration time with `plugin_conflict` rather than resolved
+  silently at run time.
+
+- **Export** ([Plugins §5](versions/2026-09-12/plugins.md#5-exporting-a-harness-as-a-plugin)):
+  `GET /v1/harnesses/{id}/plugin` returns the harness's own tools and skills as an Agent Plugins
+  package, credentials omitted and each omission recorded, that installs into another harness or
+  any other Agent Plugins client unchanged. The direct fields were always the contents of a plugin
+  without a name; this makes that an operation.
+
+- **`stdio` MCP transport** ([Harnesses §4.1](versions/2026-09-12/harnesses.md#41-mcp-servers)):
+  `command`, `args`, `env` and `cwd`, with the rules of the Agent Plugins `mcp.json` format, so a
+  server declared in a plugin and one attached directly are the same object. `url` is required
+  only for `http` and `sse`. A server whose base cannot run a transport refuses the configuration
+  with `unsupported_transport`.
+
+- **Discovery**: the `plugins` capability, optional at every class, and `plugin_schemas`, the
+  Agent Plugins manifest schemas the server installs
+  ([Lifecycle §2](versions/2026-09-12/lifecycle.md#2-capability-discovery)).
+
+- **Error codes**: `plugin_invalid` (422), `unsupported_plugin_schema` (422),
+  `unsupported_transport` (422), `plugin_conflict` (409), `plugin_not_found` (404)
+  ([Errors §3](versions/2026-09-12/errors.md#3-error-codes)).
+
+- **Security §9, plugins are third-party code** ([Security](versions/2026-09-12/security.md#9-plugins-are-third-party-code)):
+  stdio servers run inside the agent's sandbox and nowhere else, only the two placeholders are
+  ever expanded, plugins are installed by whoever manages the harness and never per request.
+
+- **Schema**: `Plugin`, `PluginManifest`, `PluginSkill`, `PluginSkipped`, `FileList`; the skill
+  files endpoint, which the prose named and the OpenAPI document omitted, is now in both.
+
+### Conformance
+
+- **P-01 to P-10**, class Full, gated on the `plugins` capability: the schema list, package round
+  trip and derivation, refusal of a package without a manifest, refusal of a name collision,
+  survival of an unrelated edit, export that installs again without credentials, skipped
+  components recorded, `enabled: false` preserved, refusal of an unsupported manifest schema,
+  refusal of duplicate plugin names. Each is proven against a defect stub carrying one mistake at
+  a time, the way the R-series is. The suite is now 74 checks.
+
+## 2026-08-11, additive clarifications
+
+These were published as additive changes to `2026-08-11` before `2026-09-12` and are carried
+into it unchanged.
+
 
 ### Clarified
 
