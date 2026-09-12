@@ -172,7 +172,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -190,6 +190,7 @@ backend_bin() {
     gemini) echo "$TOOLS/bin/gemini" ;;
     cline)  echo "$TOOLS/bin/cline" ;;
     omp)    echo "$TOOLS/bin/omp" ;;
+    goose)  echo "$TOOLS/bin/goose" ;;
   esac
 }
 
@@ -216,6 +217,36 @@ install_opencode() {
   mkdir -p "$TOOLS/bin" && mv "$oc_tmp/opencode" "$TOOLS/bin/opencode" && chmod 755 "$TOOLS/bin/opencode" \
     || { rm -rf "$oc_tmp"; return 1; }
   rm -rf "$oc_tmp"
+}
+
+# goose (Apache-2.0) ships one prebuilt binary per target on GitHub releases — the archive holds
+# exactly ./goose — so it is fetched the same way opencode's is, and NOT through the vendor's
+# download_cli.sh: piping a remote script into a shell inside an entrypoint is a supply-chain
+# surface this product does not need, and that script installs to its own path anyway.
+#
+# Pinned EXACTLY, like every other backend here. Upstream ships weekly (1.49.0 -> 1.50.0 in five
+# days) and 1.50.0 is the release runner/server.py's goose code was written against: the
+# stream-json event schema, GOOSE_PATH_ROOT, the available_tools allowlist and -n/-r resume were
+# all read out of THIS version's source. A silent `latest` re-gambles all of it.
+#
+# Note the repo moved from block/goose to aaif-goose/goose, and unlike omp this project publishes
+# no SHA256SUMS.txt, so there is no checksum to verify against — the pinned tag is the whole of
+# the guarantee. Say so rather than leaving the asymmetry to be discovered.
+install_goose() {
+  case "$(uname -m)" in
+    x86_64)        gs_arch="x86_64" ;;
+    aarch64|arm64) gs_arch="aarch64" ;;
+    *) echo "unsupported architecture $(uname -m) for goose"; return 1 ;;
+  esac
+  gs_ver="${HR_GOOSE_VERSION:-1.50.0}"; gs_ver="${gs_ver#v}"
+  gs_url="https://github.com/aaif-goose/goose/releases/download/v${gs_ver}/goose-${gs_arch}-unknown-linux-gnu.tar.gz"
+  gs_tmp="$(mktemp -d)"
+  curl -fsSL "$gs_url" -o "$gs_tmp/goose.tar.gz" || { rm -rf "$gs_tmp"; return 1; }
+  tar -xzf "$gs_tmp/goose.tar.gz" -C "$gs_tmp" || { rm -rf "$gs_tmp"; return 1; }
+  [ -f "$gs_tmp/goose" ] || { echo "release archive contained no goose binary"; rm -rf "$gs_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$gs_tmp/goose" "$TOOLS/bin/goose" \
+    || { rm -rf "$gs_tmp"; return 1; }
+  rm -rf "$gs_tmp"
 }
 
 # omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases, with a SHA256SUMS.txt
@@ -316,6 +347,11 @@ install_backends() {
   if wanted omp && [ ! -x "$(backend_bin omp)" ]; then
     echo "[harnessrouter] installing Oh My Pi (MIT)…"
     try_install "Oh My Pi" install_omp || true
+  fi
+
+  if wanted goose && [ ! -x "$(backend_bin goose)" ]; then
+    echo "[harnessrouter] installing goose (Apache-2.0)…"
+    try_install "goose" install_goose || true
   fi
 
   # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that
