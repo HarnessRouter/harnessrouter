@@ -5924,13 +5924,16 @@ _MODEL_CATALOG: dict[str, dict] = {
     # rows as "the id completed a turn", not "the id served it", until the matrix column measures
     # them against the provider's own reporting.
     "goose": {"default": "gpt-5.4",
-              # Every id a chat-shaped provider this harness is wired to can serve (the union the
-              # qwen/cline rows already earned, minus nothing: goose speaks the same wire), then
-              # trimmed to what the goose column measured on 2026-09-12 (five scenarios per model,
-              # served model read by the relay). The Responses-only ids stay out: goose is chat-only.
+              # Every id a chat-shaped provider this harness is wired to can serve, measured by the
+              # goose column on 2026-09-12 (five scenarios per model on TokenRouter, Vercel,
+              # OpenRouter, OpenAI, Azure, Anthropic and the hosted door; the served model read by
+              # the relay, no substitution). One id left out: claude-opus-5 answers "The model
+              # returned an empty response" on every tool-using turn through goose's chat wire, on
+              # its own vendor as much as through every aggregator (0 of 8 artifact/recall checks).
+              # The Responses-only ids stay out: goose is chat-only.
               "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
-                         "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
+                         "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
