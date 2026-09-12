@@ -184,6 +184,9 @@ def build_harness(body: dict, existing: dict | None = None) -> dict:
         if not any(f.get("path") == "SKILL.md" for f in files):
             raise Refuse(422, "invalid_input", "a skill needs a SKILL.md")
         skills.append({"name": s.get("name"), "enabled": s.get("enabled", True) is not False, "files": files})
+    for s in body.get("mcp_servers") or []:
+        if not isinstance(s.get("url"), str):
+            raise Refuse(422, "invalid_input", "a harness MCP server needs a url")
     plugins = [load_package(p) for p in body.get("plugins") or []]
     if existing and DEFECT == "loses_files_on_rename":
         for p in plugins:
@@ -239,20 +242,14 @@ def export(h: dict) -> dict:
         if s.get("enabled", True) is False:
             continue
         t = s.get("transport") or "http"
-        if t == "stdio":
-            e = {"type": "stdio", "command": s.get("command")}
-            for k in ("args", "env", "cwd"):
-                if k in s:
+        e = {"type": "streamable-http" if t == "http" else "sse", "url": s.get("url")}
+        for k in ("auth", "headers"):
+            if k in s:
+                if DEFECT == "export_leaks_credentials":
                     e[k] = s[k]
-        else:
-            e = {"type": "streamable-http" if t == "http" else "sse", "url": s.get("url")}
-            for k in ("auth", "headers"):
-                if k in s:
-                    if DEFECT == "export_leaks_credentials":
-                        e[k] = s[k]
-                    elif DEFECT != "export_unrecorded":
-                        skipped.append({"path": f"mcp.json#/mcpServers/{s['name']}/{k}",
-                                        "reason": "credentials are not exported"})
+                elif DEFECT != "export_unrecorded":
+                    skipped.append({"path": f"mcp.json#/mcpServers/{s['name']}/{k}",
+                                    "reason": "credentials are not exported"})
         entries[s["name"]] = e
     if entries:
         files.append({"path": "mcp.json", "content": json.dumps({"$schema": MCP_SCHEMA, "mcpServers": entries})})

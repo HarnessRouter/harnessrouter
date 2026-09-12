@@ -77,7 +77,7 @@ Rules:
 | `unsupported_base` | 422 | The requested harness base is not supported by this server. |
 | `plugin_invalid` | 422 | The package is not a valid Agent Plugins package: no manifest, a fatal manifest error, a path that escapes the root, or a `name` that contradicts the manifest. `detail.path` and `detail.reason` say where. |
 | `unsupported_plugin_schema` | 422 | The manifest's `$schema` names an Agent Plugins version this server does not install. `detail.supported` lists what it does. |
-| `unsupported_transport` | 422 | An MCP server's `transport` cannot be run for this harness base. `detail.transport` and `detail.base` say which. |
+| `unsupported_transport` | 422 | A plugin declares an MCP server whose transport cannot be run for this harness base. `detail.transport` and `detail.base` say which. |
 
 ### 3.2 Authentication and limits
 

@@ -57,7 +57,8 @@ advertising is a promise, and a client that trusts it and receives a `404` has b
 it cannot recover from.
 
 The [conformance suite](../../conformance/) tests each class separately and reports per class. A
-server that passes at a class MAY describe itself as "UHP 2026-09-12 conformant (<class>)". No
+server that passes at a class MAY describe itself as "UHP <version> conformant (<class>)", naming
+the version its discovery document serves as `default_version`, which the suite reports. No
 other use of the term "conformant" is meaningful.
 
 ## 3. Object model

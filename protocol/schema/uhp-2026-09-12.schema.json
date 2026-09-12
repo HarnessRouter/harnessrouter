@@ -196,13 +196,53 @@
     "McpServer": {
       "type": "object",
       "required": [
-        "name"
+        "name",
+        "url"
       ],
-      "description": "An MCP server attached to a harness, directly or through a plugin. Only enabled entries are\nconnected for a turn; a disabled entry must not be contacted at all. An unreachable server\nmust not fail the task. `url` is required for the remote transports and `command` for\n`stdio`; the fields are those of the Agent Plugins `mcp.json` format, so a server declared in\na plugin and one attached directly are the same object.\n",
+      "description": "A remote MCP server attached to a harness. Only enabled entries are connected for a turn; a\ndisabled entry must not be contacted at all. An unreachable server must not fail the task.\nUnchanged from 2026-08-11: a process (stdio) server is declared inside a plugin, see\nPluginMcpServer.\n",
       "properties": {
         "name": {
           "type": "string",
           "description": "Sanitised to a CLI-safe identifier by the server."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "http",
+            "sse"
+          ],
+          "default": "http"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "auth": {
+          "type": "string",
+          "description": "Bearer token, or a server-side reference the server resolves. A server must never return\na resolved credential to a client.\n"
+        }
+      },
+      "additionalProperties": true
+    },
+    "PluginMcpServer": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "description": "An MCP server a plugin's mcp.json declares, derived by the server. The harness MCP server\nobject plus the `stdio` transport: `url` is required for `http` and `sse`, `command` for\n`stdio`. Placeholders are reported unexpanded; `enabled` is always true, the plugin's own\n`enabled` governs.\n",
+      "properties": {
+        "name": {
+          "type": "string"
         },
         "transport": {
           "type": "string",
@@ -219,20 +259,12 @@
           "format": "uri",
           "description": "Endpoint (`http` and `sse`)."
         },
-        "enabled": {
-          "type": "boolean",
-          "default": true
-        },
         "headers": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
           "description": "Fixed request headers (`http` and `sse`). Never subject to placeholder expansion."
-        },
-        "auth": {
-          "type": "string",
-          "description": "Bearer token, or a server-side reference the server resolves (`http` and `sse`). A server\nmust never return a resolved credential to a client.\n"
         },
         "command": {
           "type": "string",
@@ -243,18 +275,22 @@
           "items": {
             "type": "string"
           },
-          "description": "Arguments (`stdio`). `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expand inside a plugin."
+          "description": "Arguments (`stdio`). `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expand at run time."
         },
         "env": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Environment overlay (`stdio`). Must not name PLUGIN_ROOT or PLUGIN_DATA; the server sets\nthose. Values expand inside a plugin.\n"
+          "description": "Environment overlay (`stdio`). Must not name PLUGIN_ROOT or PLUGIN_DATA; the server sets\nthose. Values expand at run time.\n"
         },
         "cwd": {
           "type": "string",
-          "description": "Working directory (`stdio`). Defaults to the plugin root. Must stay within the plugin root\nor PLUGIN_DATA when set inside a plugin.\n"
+          "description": "Working directory (`stdio`). Defaults to the plugin root; must stay within the plugin\nroot or PLUGIN_DATA.\n"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
         }
       },
       "allOf": [
@@ -392,7 +428,7 @@
         "mcpServers": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/McpServer"
+            "$ref": "#/$defs/PluginMcpServer"
           },
           "description": "Derived from `mcp.json`. Placeholders are reported unexpanded; `enabled` is always true,\nthe plugin's own `enabled` governs.\n"
         },

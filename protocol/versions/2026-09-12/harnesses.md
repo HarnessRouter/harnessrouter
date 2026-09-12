@@ -132,24 +132,15 @@ the harness object and are set the same way it is.
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | yes | Identifies the server to the agent; sanitised to a CLI-safe identifier |
-| `transport` | no | `http` (Streamable HTTP, default), `sse`, or `stdio` |
-| `url` | for `http` and `sse` | Endpoint |
-| `headers` | no | Extra request headers (`http` and `sse`) |
-| `auth` | no | Bearer token, or a server-side reference the server resolves (`http` and `sse`) |
-| `command` | for `stdio` | One executable token: a bare name, or a path beginning with `./` |
-| `args` | no | Arguments to the executable (`stdio`) |
-| `env` | no | Environment variables for the process (`stdio`) |
-| `cwd` | no | Working directory for the process (`stdio`) |
+| `url` | yes | Endpoint |
+| `transport` | no | `http` (Streamable HTTP, default) or `sse` |
 | `enabled` | no | Absent or `true` means enabled |
+| `headers` | no | Extra request headers |
+| `auth` | no | Bearer token, or a server-side reference the server resolves |
 
-A `stdio` server is a process the server launches inside the sandbox that runs the agent, with the
-agent's own privileges and nowhere else. `command` is one token, never a shell string: a server MUST
-NOT pass it through a shell. The fields and their rules are those of the Agent Plugins `mcp.json`
-format, so a server declared in a plugin and one attached directly are the same object; the
-placeholders `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` are defined only inside a plugin
-([Plugins §6](plugins.md#6-running-with-plugins)) and MUST remain literal anywhere else. A server
-whose harness base cannot run a transport MUST refuse the configuration with `unsupported_transport`
-rather than accept it and skip the server at run time.
+This list carries remote servers only, exactly as it did in the previous version. An MCP server that
+runs as a process (`stdio`) is declared inside a plugin, which is what gives it a root to run from
+and a directory to keep state in ([Plugins §2.2](plugins.md#22-what-the-server-derives)).
 
 A server MUST connect only the **enabled** entries for a turn. A disabled entry MUST NOT be
 contacted at all — not connected and then hidden, which would still leak the turn's existence to

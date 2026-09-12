@@ -15,9 +15,10 @@ info:
     Conformance is defined by the suite in `protocol/conformance/`, not by this document.
 
     This version is additive to 2026-08-11. It adds plugins (packages of tools and skills in the
-    Agent Plugins format, installed into a harness), the `stdio` MCP transport, the `plugins`
-    capability, and the error codes those need. Every request and object valid under 2026-08-11
-    is valid here.
+    Agent Plugins format, installed into a harness, with stdio MCP servers inside them), the
+    `plugins` capability, and the error codes those need. Every request and object valid under
+    2026-08-11 is valid here, and no object 2026-08-11 defined changes shape, so a server serves
+    both versions from one code path.
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -759,15 +760,35 @@ components:
 
     McpServer:
       type: object
-      required: [name]
+      required: [name, url]
       description: |
-        An MCP server attached to a harness, directly or through a plugin. Only enabled entries are
-        connected for a turn; a disabled entry must not be contacted at all. An unreachable server
-        must not fail the task. `url` is required for the remote transports and `command` for
-        `stdio`; the fields are those of the Agent Plugins `mcp.json` format, so a server declared in
-        a plugin and one attached directly are the same object.
+        A remote MCP server attached to a harness. Only enabled entries are connected for a turn; a
+        disabled entry must not be contacted at all. An unreachable server must not fail the task.
+        Unchanged from 2026-08-11: a process (stdio) server is declared inside a plugin, see
+        PluginMcpServer.
       properties:
         name: { type: string, description: Sanitised to a CLI-safe identifier by the server. }
+        url: { type: string, format: uri }
+        transport: { type: string, enum: [http, sse], default: http }
+        enabled: { type: boolean, default: true }
+        headers: { type: object, additionalProperties: { type: string } }
+        auth:
+          type: string
+          description: |
+            Bearer token, or a server-side reference the server resolves. A server must never return
+            a resolved credential to a client.
+      additionalProperties: true
+
+    PluginMcpServer:
+      type: object
+      required: [name]
+      description: |
+        An MCP server a plugin's mcp.json declares, derived by the server. The harness MCP server
+        object plus the `stdio` transport: `url` is required for `http` and `sse`, `command` for
+        `stdio`. Placeholders are reported unexpanded; `enabled` is always true, the plugin's own
+        `enabled` governs.
+      properties:
+        name: { type: string }
         transport:
           type: string
           enum: [http, sse, stdio]
@@ -776,16 +797,10 @@ components:
             `http` is Streamable HTTP (`streamable-http` in mcp.json); `sse` the older HTTP+SSE
             transport; `stdio` a process the server launches inside the agent's sandbox.
         url: { type: string, format: uri, description: Endpoint (`http` and `sse`). }
-        enabled: { type: boolean, default: true }
         headers:
           type: object
           additionalProperties: { type: string }
           description: Fixed request headers (`http` and `sse`). Never subject to placeholder expansion.
-        auth:
-          type: string
-          description: |
-            Bearer token, or a server-side reference the server resolves (`http` and `sse`). A server
-            must never return a resolved credential to a client.
         command:
           type: string
           description: |
@@ -794,18 +809,19 @@ components:
         args:
           type: array
           items: { type: string }
-          description: Arguments (`stdio`). `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expand inside a plugin.
+          description: Arguments (`stdio`). `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expand at run time.
         env:
           type: object
           additionalProperties: { type: string }
           description: |
             Environment overlay (`stdio`). Must not name PLUGIN_ROOT or PLUGIN_DATA; the server sets
-            those. Values expand inside a plugin.
+            those. Values expand at run time.
         cwd:
           type: string
           description: |
-            Working directory (`stdio`). Defaults to the plugin root. Must stay within the plugin root
-            or PLUGIN_DATA when set inside a plugin.
+            Working directory (`stdio`). Defaults to the plugin root; must stay within the plugin
+            root or PLUGIN_DATA.
+        enabled: { type: boolean, default: true }
       allOf:
         - if:
             properties: { transport: { const: stdio } }
@@ -895,7 +911,7 @@ components:
         manifest: { $ref: '#/components/schemas/PluginManifest' }
         mcpServers:
           type: array
-          items: { $ref: '#/components/schemas/McpServer' }
+          items: { $ref: '#/components/schemas/PluginMcpServer' }
           description: |
             Derived from `mcp.json`. Placeholders are reported unexpanded; `enabled` is always true,
             the plugin's own `enabled` governs.

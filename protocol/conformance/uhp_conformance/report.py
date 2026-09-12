@@ -13,7 +13,16 @@ MARK = {Outcome.PASS: f"{GREEN}PASS{RESET}", Outcome.FAIL: f"{RED}FAIL{RESET}",
         Outcome.SKIP: f"{YELLOW}SKIP{RESET}", Outcome.ERROR: f"{RED}ERR {RESET}"}
 
 
-def render(results, target: str, cls: str, plain: bool = False) -> str:
+def served_version(discovery: dict | None) -> str:
+    """The version the server says it serves by default. The suite measures the contract of
+    UHP_VERSION; the claim a run supports names the version the server actually answered
+    with, because a 2026-08-11 server that passes every applicable check is 2026-08-11
+    conformant, not 2026-09-12 conformant, and the label must not promote it."""
+    d = discovery or {}
+    return str(d.get("default_version") or (d.get("versions") or [""])[0] or "unknown")
+
+
+def render(results, target: str, cls: str, plain: bool = False, discovery: dict | None = None) -> str:
     def c(s, colour):
         return s if plain else f"{colour}{s}{RESET}"
 
@@ -22,7 +31,11 @@ def render(results, target: str, cls: str, plain: bool = False) -> str:
 
     lines = [""]
     lines.append(c(f"UHP conformance — {target}", BOLD))
-    lines.append(f"protocol {UHP_VERSION} · requested class: {cls}")
+    served = served_version(discovery)
+    lines.append(f"suite {UHP_VERSION} · server serves {served} · requested class: {cls}")
+    if served != UHP_VERSION and served in ("2026-08-11",):
+        lines.append(f"    ({served} is the previous version; {UHP_VERSION} is additive to it, so every "
+                     f"check applies and the plugin series skips)")
     lines.append("")
 
     for k in CLASSES[: CLASSES.index(cls) + 1]:
@@ -56,10 +69,10 @@ def render(results, target: str, cls: str, plain: bool = False) -> str:
             lines.append(f"    Highest class fully passed: {achieved}")
     elif n[Outcome.SKIP]:
         # Same vocabulary as the JSON report: skips demote the verdict, they never vanish into it.
-        lines.append(c(f"    CONFORMANT WITH SKIPS — UHP {UHP_VERSION} ({cls})", YELLOW))
+        lines.append(c(f"    CONFORMANT WITH SKIPS — UHP {served} ({cls})", YELLOW))
         lines.append(c("    Note: skipped checks were not verified. A skip is not a pass.", YELLOW))
     else:
-        lines.append(c(f"    CONFORMANT — UHP {UHP_VERSION} ({cls})", GREEN))
+        lines.append(c(f"    CONFORMANT — UHP {served} ({cls})", GREEN))
     lines.append("")
     return "\n".join(lines)
 
@@ -98,11 +111,14 @@ def _wrap(text: str, width: int):
     return out or [""]
 
 
-def to_json(results, target: str, cls: str) -> str:
+def to_json(results, target: str, cls: str, discovery: dict | None = None) -> str:
     n = {o.value: sum(1 for r in results if r.outcome is o) for o in Outcome}
     return json.dumps({
         "protocol": "uhp",
-        "protocol_version": UHP_VERSION,
+        # The version the server served, which is what the verdict is a claim about; the
+        # suite's own version is the contract it measured against.
+        "protocol_version": served_version(discovery),
+        "suite_protocol_version": UHP_VERSION,
         # The suite revision and the moment of the run, because this file is published as
         # EVIDENCE (GOVERNANCE.md § Conformance claims) and evidence that cannot be dated or
         # tied to the suite that produced it has to be dated in prose somewhere else — which is

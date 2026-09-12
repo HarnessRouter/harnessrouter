@@ -62,8 +62,8 @@ The `plugins` column entries are served only by a server whose discovery documen
 
 This version is additive to `2026-08-11`: every request and object that was valid then is valid
 now, and a client written against the previous version keeps working against a server that serves
-this one. It adds the [Plugins](plugins.md) chapter, the `stdio` MCP transport, the `plugins`
-capability, and five error codes. The [changelog](../../CHANGELOG.md) has the full list.
+this one. It adds the [Plugins](plugins.md) chapter, with `stdio` MCP servers inside plugins, the
+`plugins` capability, and five error codes. A server may serve both versions from one code path. The [changelog](../../CHANGELOG.md) has the full list.
 
 ## Conformance
 

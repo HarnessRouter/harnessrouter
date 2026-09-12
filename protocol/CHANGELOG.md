@@ -34,11 +34,12 @@ previous version stays published at its own address and a server SHOULD keep ser
   any other Agent Plugins client unchanged. The direct fields were always the contents of a plugin
   without a name; this makes that an operation.
 
-- **`stdio` MCP transport** ([Harnesses §4.1](versions/2026-09-12/harnesses.md#41-mcp-servers)):
-  `command`, `args`, `env` and `cwd`, with the rules of the Agent Plugins `mcp.json` format, so a
-  server declared in a plugin and one attached directly are the same object. `url` is required
-  only for `http` and `sse`. A server whose base cannot run a transport refuses the configuration
-  with `unsupported_transport`.
+- **`stdio` MCP servers, inside plugins** ([Plugins §2.2](versions/2026-09-12/plugins.md#22-what-the-server-derives)):
+  a plugin's `mcp.json` may declare a process (`command`, `args`, `env`, `cwd`), reported on the
+  plugin as a `PluginMcpServer`. The harness's own `mcpServers` list stays remote-only and
+  byte-for-byte what it was, because a process needs the root and data directory only a package
+  provides. A server whose base cannot run a transport refuses the plugin with
+  `unsupported_transport`.
 
 - **Discovery**: the `plugins` capability, optional at every class, and `plugin_schemas`, the
   Agent Plugins manifest schemas the server installs

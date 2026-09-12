@@ -127,7 +127,7 @@ live instance on 2026-09-04 (suite 2026.8.11.post1):
 ```
   Summary
     64/64 passed · 0 failed · 0 skipped · 0 errored
-    CONFORMANT — UHP 2026-09-12 (full)
+    CONFORMANT — UHP 2026-09-12 (full)   (the version the server serves; a 2026-08-11 server reads 2026-08-11)
 ```
 <!-- conformance-recorded-run:end -->
 

@@ -85,7 +85,7 @@ A plugin carries three things, and the harness object already had a place for tw
 | `files` | array | client | The package, as files relative to the plugin root |
 | `blob` | string | server | Handle for a package the server stores out of line |
 | `manifest` | object | server | `plugin.json`, parsed |
-| `mcpServers` | array | server | The servers `mcp.json` declares, as harness MCP server objects |
+| `mcpServers` | array | server | The servers `mcp.json` declares, as plugin MCP server objects (`PluginMcpServer`) |
 | `skills` | array | server | The skills found under `skills/`: `name` and `description` each |
 | `skipped` | array | server | Components the server found and could not load, each with the reason |
 
@@ -125,7 +125,7 @@ top-level field, or a non-object `extensions`, is not fatal: the field is ignore
 `skipped`. Any other violation is fatal, and the write is refused with `plugin_invalid`.
 
 **`mcpServers`.** From `mcp.json`, read as Agent Plugins §7.2 says. Each valid server entry becomes
-one harness MCP server object, mapped as follows. An invalid entry is recorded in `skipped` and the
+one plugin MCP server object, mapped as follows. An invalid entry is recorded in `skipped` and the
 rest still load. If `mcp.json` itself is invalid, or its `$schema` names a different Agent Plugins
 version than `plugin.json`, every server in it is skipped with that reason.
 
@@ -139,6 +139,21 @@ version than `plugin.json`, every server in it is skipped with that reason.
 in what it returns to a client: the expansion is a filesystem path inside the server's sandbox, which
 is not the client's business and changes from turn to turn. `enabled` on each derived server is
 always `true`; the plugin's own `enabled` is what turns them off, together.
+
+A plugin MCP server object is the harness MCP server object of
+[Harnesses §4.1](harnesses.md#41-mcp-servers) plus the `stdio` transport, with `command`, `args`,
+`env` and `cwd` in place of `url`, `headers` and `auth`. `command` is one executable token, never a
+shell string: a bare name, or a plugin-relative path beginning with `./`.
+
+> **Why is `stdio` declared only inside a plugin?**
+> A process needs somewhere to run from and somewhere to keep state, and a plugin is the object
+> that provides both: `PLUGIN_ROOT` and `PLUGIN_DATA` are defined by the package, not by the
+> harness. A stdio server on the harness's own list would need a second set of rules for a root
+> it does not have, and it could not be exported, because its executable would not travel with
+> it. So the harness's own list stays what it was in the previous version, remote servers only,
+> and a process is two files away: a `plugin.json` and an `mcp.json` make a complete plugin. That
+> keeps every object the previous version defined byte-for-byte unchanged, which is what lets a
+> server serve both versions from one code path ([§4.1](#41-the-direct-fields-are-unchanged)).
 
 **`skills`.** Each immediate child directory of `skills/` that contains a regular file named
 `SKILL.md` is one skill, per Agent Plugins §7.1. A server MUST NOT search deeper. Each skill MUST
@@ -233,6 +248,13 @@ the previous version keeps working, by the client rules in [Versioning](../../VE
 ignores `plugins` and sees a harness with fewer tools than the agent actually has, which is already
 what it sees for tools the base provides on its own.
 
+The converse holds too. Nothing this version defines changes the shape of an object the previous
+version defined, so a server that implements plugins serves both versions from one code path: it
+lists both in `versions`, answers a `2026-08-11` request with the same objects, and the `plugins`
+field is simply one more field that version's clients ignore. A server that has not implemented
+plugins keeps serving `2026-08-11`, reports the `plugins` capability `false`, and is conformant
+at every class under this version's suite; the plugin checks skip, and a skip is never a pass.
+
 > **Why not report the effective set in `mcpServers`?**
 > Because of the round trip. A client that reads a harness and `PUT`s it back after an unrelated
 > edit is the case [Harnesses §4.2](harnesses.md#42-skills) is designed around. If `mcpServers`
@@ -276,7 +298,7 @@ into any other Agent Plugins client by writing its files to disk.
 | In the package | Built from |
 |---|---|
 | `plugin.json` | `$schema` for Agent Plugins 1.0.0 and `name` derived from the harness `name` |
-| `mcp.json` | The enabled direct `mcpServers`; `http` becomes `streamable-http`, `sse` and `stdio` are unchanged |
+| `mcp.json` | The enabled direct `mcpServers`; `http` becomes `streamable-http`, `sse` stays `sse` |
 | `skills/<name>/…` | Each enabled direct skill, the whole folder |
 
 - The derived `name` is the harness `name` lower-cased, with every run of characters outside
