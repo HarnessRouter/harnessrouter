@@ -5946,6 +5946,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# Ids OpenAI serves on the Responses API only (refused on /v1/chat/completions, measured
+# 2026-09-05/07), and the harnesses that speak chat/completions and nothing else. A limitation, not
+# an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
+# test forbids listing such an id for such a harness.
+RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
