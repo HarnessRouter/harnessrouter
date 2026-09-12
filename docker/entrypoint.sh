@@ -177,7 +177,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -195,6 +195,7 @@ backend_bin() {
     gemini) echo "$TOOLS/bin/gemini" ;;
     cline)  echo "$TOOLS/bin/cline" ;;
     omp)    echo "$TOOLS/bin/omp" ;;
+    goose)  echo "$TOOLS/bin/goose" ;;
   esac
 }
 
@@ -221,6 +222,57 @@ install_opencode() {
   mkdir -p "$TOOLS/bin" && mv "$oc_tmp/opencode" "$TOOLS/bin/opencode" && chmod 755 "$TOOLS/bin/opencode" \
     || { rm -rf "$oc_tmp"; return 1; }
   rm -rf "$oc_tmp"
+}
+
+# goose (Apache-2.0) ships one prebuilt binary per target on GitHub releases — the archive holds
+# exactly ./goose — so it is fetched the same way opencode's is, and NOT through the vendor's
+# download_cli.sh: piping a remote script into a shell inside an entrypoint is a supply-chain
+# surface this product does not need, and that script installs to its own path anyway.
+#
+# Pinned EXACTLY, like every other backend here. Upstream ships weekly (1.49.0 -> 1.50.0 in five
+# days) and 1.50.0 is the release runner/server.py's goose code was written against: the
+# stream-json event schema, GOOSE_PATH_ROOT, the available_tools allowlist and -n/-r resume were
+# all read out of THIS version's source. A silent `latest` re-gambles all of it.
+#
+# Note the repo moved from block/goose to aaif-goose/goose. Unlike omp this project publishes no
+# SHA256SUMS.txt, so there is nothing to fetch and compare against — but that does not mean the
+# download has to go unverified: the digests are pinned HERE instead, computed from the v1.50.0
+# release assets (each archive holds exactly ./goose). That is strictly stronger than the tag
+# alone, which can be moved and whose asset can be re-uploaded.
+install_goose() {
+  case "$(uname -m)" in
+    x86_64)        gs_arch="x86_64";  gs_sha="6389eea4440178de006fa148d466ac411021315ff7f72b1014beae2d445851e2" ;;
+    aarch64|arm64) gs_arch="aarch64"; gs_sha="febd71a6a25c3aff7dbcf566f78d2864e87d886c33c4ef1fee2f67fedd334063" ;;
+    *) echo "unsupported architecture $(uname -m) for goose"; return 1 ;;
+  esac
+  gs_ver="${HR_GOOSE_VERSION:-1.50.0}"; gs_ver="${gs_ver#v}"
+  if [ "$gs_ver" != "1.50.0" ]; then
+    # The pinned digests describe 1.50.0 and nothing else. An operator overriding the version
+    # supplies the digest for the version they chose, or is TOLD the download is unverified —
+    # silently skipping the check while the code above advertises one is the dishonest option.
+    if [ -n "${HR_GOOSE_SHA256:-}" ]; then
+      gs_sha="$HR_GOOSE_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_GOOSE_VERSION=$gs_ver overrides the pinned 1.50.0, and no"
+      echo "[harnessrouter]       HR_GOOSE_SHA256 was given — this goose archive is UNVERIFIED."
+      gs_sha=""
+    fi
+  fi
+  gs_url="https://github.com/aaif-goose/goose/releases/download/v${gs_ver}/goose-${gs_arch}-unknown-linux-gnu.tar.gz"
+  gs_tmp="$(mktemp -d)"
+  curl -fsSL "$gs_url" -o "$gs_tmp/goose.tar.gz" || { rm -rf "$gs_tmp"; return 1; }
+  if [ -n "$gs_sha" ]; then
+    gs_have="$(sha256sum "$gs_tmp/goose.tar.gz" | awk '{print $1}')"
+    if [ "$gs_sha" != "$gs_have" ]; then
+      echo "goose $gs_ver: archive digest mismatch for $gs_arch (want $gs_sha, have $gs_have)"
+      rm -rf "$gs_tmp"; return 1
+    fi
+  fi
+  tar -xzf "$gs_tmp/goose.tar.gz" -C "$gs_tmp" || { rm -rf "$gs_tmp"; return 1; }
+  [ -f "$gs_tmp/goose" ] || { echo "release archive contained no goose binary"; rm -rf "$gs_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$gs_tmp/goose" "$TOOLS/bin/goose" \
+    || { rm -rf "$gs_tmp"; return 1; }
+  rm -rf "$gs_tmp"
 }
 
 # omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases, with a SHA256SUMS.txt
@@ -326,6 +378,11 @@ install_backends() {
   if wanted omp && [ ! -x "$(backend_bin omp)" ]; then
     echo "[harnessrouter] installing Oh My Pi (MIT)…"
     try_install "Oh My Pi" install_omp || true
+  fi
+
+  if wanted goose && [ ! -x "$(backend_bin goose)" ]; then
+    echo "[harnessrouter] installing goose (Apache-2.0)…"
+    try_install "goose" install_goose || true
   fi
 
   # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that

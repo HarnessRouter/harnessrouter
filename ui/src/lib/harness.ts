@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'qwen' | 'gemini' | 'cline' | 'omp' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -107,6 +107,15 @@ export const OOB: OobHarness[] = [
     // pi's lineage, pi's reach: the placeholder is pi's list; the gateway's catalog wins once fetched
     models: ['gpt-5.4', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'deepseek-v4-pro', 'kimi-k3', 'qwen3.7-max'], defaultModel: 'gpt-5.4', moreModels: 0,
     systemPrompt: 'You are Oh My Pi (OMP), an autonomous coding agent. You operate on a real git workspace with shell, file access, LSP, web search, and subagents to complete engineering tasks end to end.',
+    tools: [], skills: [] },
+  { id: 'goose', name: 'goose', version: 'v1.50.0', backend: 'goose', status: 'ready',
+    // Placeholder only, like every list above: the gateway's catalog wins once fetched. It started
+    // short — inheriting cline's serving path is not a completed turn — and grew to what the goose
+    // column measured on 2026-09-12 across seven providers, substitution-checked with the served
+    // model the relay reads off the provider's own answer. The last five are not yet measured;
+    // see the gateway's _MODEL_CATALOG["goose"], which says which are which.
+    models: ['gpt-5.4', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5', 'claude-fable-5-1', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.7-max', 'qwen3.8-max', 'mistral-medium-3.5', 'step-3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'hunyuan-3', 'ling-3.0-flash', 'minimax-m3', 'nemotron-3-ultra', 'qwen3.7-flash'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are goose, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
 ];
 
