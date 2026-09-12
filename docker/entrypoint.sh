@@ -234,19 +234,40 @@ install_opencode() {
 # stream-json event schema, GOOSE_PATH_ROOT, the available_tools allowlist and -n/-r resume were
 # all read out of THIS version's source. A silent `latest` re-gambles all of it.
 #
-# Note the repo moved from block/goose to aaif-goose/goose, and unlike omp this project publishes
-# no SHA256SUMS.txt, so there is no checksum to verify against — the pinned tag is the whole of
-# the guarantee. Say so rather than leaving the asymmetry to be discovered.
+# Note the repo moved from block/goose to aaif-goose/goose. Unlike omp this project publishes no
+# SHA256SUMS.txt, so there is nothing to fetch and compare against — but that does not mean the
+# download has to go unverified: the digests are pinned HERE instead, computed from the v1.50.0
+# release assets (each archive holds exactly ./goose). That is strictly stronger than the tag
+# alone, which can be moved and whose asset can be re-uploaded.
 install_goose() {
   case "$(uname -m)" in
-    x86_64)        gs_arch="x86_64" ;;
-    aarch64|arm64) gs_arch="aarch64" ;;
+    x86_64)        gs_arch="x86_64";  gs_sha="6389eea4440178de006fa148d466ac411021315ff7f72b1014beae2d445851e2" ;;
+    aarch64|arm64) gs_arch="aarch64"; gs_sha="febd71a6a25c3aff7dbcf566f78d2864e87d886c33c4ef1fee2f67fedd334063" ;;
     *) echo "unsupported architecture $(uname -m) for goose"; return 1 ;;
   esac
   gs_ver="${HR_GOOSE_VERSION:-1.50.0}"; gs_ver="${gs_ver#v}"
+  if [ "$gs_ver" != "1.50.0" ]; then
+    # The pinned digests describe 1.50.0 and nothing else. An operator overriding the version
+    # supplies the digest for the version they chose, or is TOLD the download is unverified —
+    # silently skipping the check while the code above advertises one is the dishonest option.
+    if [ -n "${HR_GOOSE_SHA256:-}" ]; then
+      gs_sha="$HR_GOOSE_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_GOOSE_VERSION=$gs_ver overrides the pinned 1.50.0, and no"
+      echo "[harnessrouter]       HR_GOOSE_SHA256 was given — this goose archive is UNVERIFIED."
+      gs_sha=""
+    fi
+  fi
   gs_url="https://github.com/aaif-goose/goose/releases/download/v${gs_ver}/goose-${gs_arch}-unknown-linux-gnu.tar.gz"
   gs_tmp="$(mktemp -d)"
   curl -fsSL "$gs_url" -o "$gs_tmp/goose.tar.gz" || { rm -rf "$gs_tmp"; return 1; }
+  if [ -n "$gs_sha" ]; then
+    gs_have="$(sha256sum "$gs_tmp/goose.tar.gz" | awk '{print $1}')"
+    if [ "$gs_sha" != "$gs_have" ]; then
+      echo "goose $gs_ver: archive digest mismatch for $gs_arch (want $gs_sha, have $gs_have)"
+      rm -rf "$gs_tmp"; return 1
+    fi
+  fi
   tar -xzf "$gs_tmp/goose.tar.gz" -C "$gs_tmp" || { rm -rf "$gs_tmp"; return 1; }
   [ -f "$gs_tmp/goose" ] || { echo "release archive contained no goose binary"; rm -rf "$gs_tmp"; return 1; }
   mkdir -p "$TOOLS/bin" && install -m 755 "$gs_tmp/goose" "$TOOLS/bin/goose" \

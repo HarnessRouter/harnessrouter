@@ -18,6 +18,7 @@ Source anchors (all v1.50.0):
   skill discovery roots            crates/goose/src/skills/mod.rs
 """
 import pathlib
+import sqlite3
 import sys
 import tempfile
 
@@ -215,27 +216,91 @@ def test_the_reported_session_id_is_the_one_the_next_turn_resumes_with():
     assert cmd[cmd.index("-n") + 1] == init["session_id"]
 
 
+def _sessions_db(cwd: str, *rows: tuple[str, str]) -> pathlib.Path:
+    """A sessions.db with goose's own schema, holding (id, name) for each row given."""
+    d = _goose_root(cwd) / "data" / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(d / "sessions.db")
+    db.execute("CREATE TABLE IF NOT EXISTS sessions ("
+               "id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', working_dir TEXT)")
+    db.executemany("INSERT INTO sessions (id, name, working_dir) VALUES (?, ?, ?)",
+                   [(i, n, cwd) for i, n in rows])
+    db.commit()
+    db.close()
+    return d / "sessions.db"
+
+
 def test_resume_only_once_the_session_is_in_this_workspace():
     cmd, d, env = _argv(resume_session_id=_GOOSE_SESSION_NAME)
     assert "-r" not in cmd, "nothing in the database yet, so -r would fail the turn outright"
-    db = _goose_root(d) / "data" / "sessions"
-    db.mkdir(parents=True, exist_ok=True)
-    (db / "sessions.db").write_bytes(b"\x00\x01" + _GOOSE_SESSION_NAME.encode() + b"\x00")
+    _sessions_db(d, ("01J-generated-id", _GOOSE_SESSION_NAME))
     cmd2 = _build_goose("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
                         "gpt-5.4", "again", d, {}, resume_session_id=_GOOSE_SESSION_NAME)
     assert "-r" in cmd2
 
 
-def test_session_in_the_write_ahead_log_counts():
-    """A session written by the previous turn can still be sitting in the WAL rather than the
-    database file."""
+def test_session_lookup_asks_the_database():
+    """THE check, and it must be exact in both directions.
+
+    goose matches s.name == name || s.id == name (get_or_create_session_id), so both columns
+    count. A schema drift on a pin bump fails HERE rather than on a live turn — which is the
+    whole reason the lookup queries rather than searching bytes."""
     d = tempfile.mkdtemp()
-    db = _goose_root(d) / "data" / "sessions"
-    db.mkdir(parents=True, exist_ok=True)
-    (db / "sessions.db").write_bytes(b"nothing here")
-    (db / "sessions.db-wal").write_bytes(b"\x00sess_b\x00")
-    assert _goose_has_session(_goose_root(d), "sess_b")
-    assert not _goose_has_session(_goose_root(d), "sess_c")
+    _sessions_db(d, ("01J-generated-id", _GOOSE_SESSION_NAME))
+    assert _goose_has_session(_goose_root(d), _GOOSE_SESSION_NAME)
+    assert _goose_has_session(_goose_root(d), "01J-generated-id"), "id matches too"
+    assert not _goose_has_session(_goose_root(d), "some-other-session")
+    assert not _goose_has_session(_goose_root(d), "")
+
+
+def test_a_message_mentioning_the_workspace_path_is_not_a_session():
+    """Why the byte search had to go. The session name occurs inside the workspace path that tool
+    output and the AGENTS.md contract carry (/data/workspaces/<sid>/.harness/...), so a database
+    holding one message and NO session matched it — and the false positive added -r, which fails
+    the turn outright with "No session found": exactly what the check exists to prevent."""
+    d = tempfile.mkdtemp()
+    db_path = _sessions_db(d)          # schema, no rows
+    db = sqlite3.connect(db_path)
+    db.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    db.execute("INSERT INTO messages VALUES (?, ?)",
+               ("s1", f"wrote /data/workspaces/s1/.{_GOOSE_SESSION_NAME}/goose/config/config.yaml"))
+    db.commit()
+    db.close()
+    assert _GOOSE_SESSION_NAME.encode() in db_path.read_bytes(), "the bytes DO contain the name"
+    assert not _goose_has_session(_goose_root(d), _GOOSE_SESSION_NAME), "but the session does not"
+
+
+def test_a_session_still_in_the_write_ahead_log_is_visible():
+    """A session the previous turn wrote can be sitting in the WAL rather than in the database
+    file — that is why the old byte search read sessions.db-wal too. The query does not have to:
+    sqlite reads the WAL itself. Pinned with the WAL deliberately UNCHECKPOINTED (the writer is
+    still open, as goose's would be mid-run), because closing the last connection checkpoints it
+    and would make this pass for the wrong reason."""
+    d = tempfile.mkdtemp()
+    db_path = _sessions_db(d)
+    writer = sqlite3.connect(db_path)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("INSERT INTO sessions (id, name, working_dir) VALUES (?, ?, ?)",
+                   ("01J-b", "sess_b", d))
+    writer.commit()
+    try:
+        wal = db_path.parent / "sessions.db-wal"
+        assert wal.exists() and wal.stat().st_size > 0, "the row must really be in the WAL"
+        assert _goose_has_session(_goose_root(d), "sess_b")
+        assert not _goose_has_session(_goose_root(d), "sess_c")
+    finally:
+        writer.close()
+
+
+def test_an_unreadable_database_starts_fresh_rather_than_crashing():
+    """A database mid-write, truncated, or from a schema we do not know is "no session": the turn
+    restarts loudly (see _resume_lost) instead of raising inside the builder."""
+    d = tempfile.mkdtemp()
+    base = _goose_root(d) / "data" / "sessions"
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "sessions.db").write_bytes(b"not a database at all")
+    assert not _goose_has_session(_goose_root(d), _GOOSE_SESSION_NAME)
 
 
 def test_a_lost_conversation_is_reported_not_silently_restarted():
@@ -321,6 +386,57 @@ def test_error_event_is_terminal_and_becomes_the_result():
     out, _ = _norm([{"type": "error", "error": "provider refused"}, {"type": "complete"}])
     assert out[-1]["is_error"] is True
     assert out[-1]["result"] == "provider refused"
+
+
+def test_a_provider_error_narrated_as_prose_fails_the_turn():
+    """THE miss this backend had, measured on the PR-164 matrix column.
+
+    goose does not emit StreamEvent::Error when the upstream fails mid-turn: it pushes the
+    provider's sentence as ASSISTANT TEXT and then ends the run normally with `complete`. The
+    turn therefore completed, its answer was the error, and the next turn in the session answered
+    from a history carrying that prose. UHP asks that a turn which failed reads as failed."""
+    out, state = _norm([
+        _msg({"type": "text",
+              "text": "Ran into this error: Server error: 503 system disk overloaded"}),
+        {"type": "complete", "total_tokens": 12}])
+    res = out[-1]
+    assert res["subtype"] == "error" and res["is_error"] is True, "this turn FAILED"
+    assert "503 system disk overloaded" in res["result"], "the provider's reason is the reason"
+    assert state.get("final") in (None, ""), "the error must never become the answer"
+    assert not [e for e in out if e.get("type") == "assistant"], \
+        "and it is not rendered as something the model said"
+
+
+def test_the_compaction_error_prefix_is_caught_too():
+    """Both prefixes are verbatim in the pinned v1.50.0 binary; catching one and not the other
+    would leave the same silent success on the path that is harder to reproduce."""
+    out, _ = _norm([_msg({"type": "text",
+                          "text": "Ran into this error trying to compact: context too large"}),
+                    {"type": "complete"}])
+    assert out[-1]["is_error"] is True
+    assert "context too large" in out[-1]["result"]
+
+
+def test_an_answer_that_merely_mentions_an_error_is_still_an_answer():
+    """The match is anchored at the start of the block, so a turn that TALKS about errors — which
+    a coding agent does constantly — is not turned into a failure."""
+    out, state = _norm([_msg({"type": "text",
+                              "text": "The build failed. Ran into this error: in their log, not "
+                                      "mine — fixed by pinning the version."}),
+                        {"type": "complete"}])
+    assert out[-1]["subtype"] == "success" and out[-1]["is_error"] is False
+    assert state["final"].startswith("The build failed.")
+
+
+def test_a_failed_run_that_never_reached_complete_reports_the_error_not_the_prose():
+    """Same reason on the eof path: the CLI dying after the error line must not report whatever
+    text arrived earlier as the turn's result."""
+    state: dict = {"model": "gpt-5.4"}
+    _goose_to_claude(_msg({"type": "text", "text": "working on it"}), state)
+    _goose_to_claude(_msg({"type": "text", "text": "Ran into this error: upstream 503"}), state)
+    out = _goose_to_claude.eof(state, 1)
+    assert out[0]["is_error"] is True
+    assert "upstream 503" in out[0]["result"]
 
 
 def test_notifications_render_nothing():
