@@ -14,6 +14,19 @@ def test_the_model_is_read_off_json_and_sse_bytes():
     assert rs._served_model_in(b'data: [DONE]\n') == ""
 
 
+def test_a_field_split_across_two_reads_is_still_seen():
+    """The relay reads the stream in 4096-byte chunks and a boundary can fall inside
+    "model":"…". The miss would be SILENT — served_model stays empty and the turn is simply not
+    substitution-checked — so the loop carries the previous chunk's tail; this pins that the
+    carry is long enough for the longest id the reader accepts."""
+    body = b'data: {"id":"c","object":"chat.completion.chunk","model":"openai/gpt-5.4","choices":[]}\n\n'
+    cut = body.index(b'"model"') + 4        # split INSIDE the field name
+    head, tail = body[:cut], body[cut:]
+    assert rs._served_model_in(head) == "" and rs._served_model_in(tail) == "", "the split must be real"
+    carry = head[-256:]
+    assert rs._served_model_in(carry + tail) == "openai/gpt-5.4"
+
+
 def test_the_turns_route_is_found_by_its_placeholder_bearer_and_answers_the_served_model():
     tok = "hr-relay-" + "a" * 32
     rs._HERMES_RELAY["routes"][tok] = ("https://api.example/v1", "real", {"served_model": "openai/gpt-5.4"})

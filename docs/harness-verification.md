@@ -38,6 +38,16 @@ number or tier under any prefix (`google/gemini-3-flash-preview` for `gemini-3.8
 `gemini-2.5-flash-lite` for `gemini-2.5-flash`) is another model, and stays a finding.
 Enforced in `scripts/support-matrix/samemodel.py`, pinned by `test_samemodel.py`.
 
+Where the served model comes from is the CLI's choice, and some report none: goose reports one only
+on a provider format it never uses, and cline and qwen report none either. That used to make this
+rule unenforceable for those three — half the bar, on three harnesses. It no longer is. Every turn
+on those backends rides the loopback relay and the provider's own answer names `model`, so the
+relay reads it off the bytes as they pass and the runner stamps it on a result the CLI left
+unlabelled (`_served_model_in` and `_relay_served_model` in `runner/server.py`, pinned by
+`runner/tests/test_relay_served_model.py`); a CLI that reports its own keeps it. So the question to
+ask of a new harness is not "does this CLI report a served model" but "does it ride the relay" — if
+it does, rule 2 applies whether the CLI cooperates or not.
+
 **3. What the reader sees is what was stored.** The artifact row requires the rendered file cards to
 BE the turn's stored files: same names, same count. Asking only whether some card carried the
 expected name let a file rendered twice pass as a produced artifact for months.
