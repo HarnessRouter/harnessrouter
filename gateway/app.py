@@ -5444,6 +5444,17 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "hunyuan-3":          "tencent/hy3",
         "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
         "qwen3.7-flash":      "qwen/qwen3.7-flash",
+        # Added 2026-09-12 from the aggregators' own lists (OpenRouter and Vercel serve all seven,
+        # TokenRouter all but qwen3.8-27b): DeepSeek V4.1 Flash (Sept), Qwen 3.8 Flash (Aug 26) and the
+        # open-weight Qwen 3.8 27B, Qwen 3.7 Plus, Tencent Hy4 preview (Aug 28), NVIDIA Nemotron 3.5
+        # Lightning (Aug 11) and Nemotron 3 Super. Measured by the matrix before they are offered.
+        "deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+        "qwen3.8-flash":      "qwen/qwen3.8-flash",
+        "qwen3.8-27b":        "qwen/qwen3.8-27b",
+        "qwen3.7-plus":       "qwen/qwen3.7-plus",
+        "hunyuan-4-preview":  "tencent/hy4-preview",
+        "nemotron-3.5-lightning": "nvidia/nemotron-3.5-lightning",
+        "nemotron-3-super":   "nvidia/nemotron-3-super-120b-a12b",
     },
     # LLMTR is a Turkey-hosted gateway: models running on its own infrastructure in Turkey
     # beside the global frontier catalogue, behind one base_url and one key. Ids are
@@ -5566,6 +5577,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 # Re-test with a newer hermes before adding it back.
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
+    "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
     # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not these four.
     "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 }
@@ -5659,6 +5671,9 @@ _VERCEL_RESLUG = {
     "qwen3.7-max":        "alibaba/qwen3.7-max",
     "qwen3.8-max":        "alibaba/qwen3.8-max",
     "qwen3.7-flash":      "alibaba/qwen3.7-flash",
+    "qwen3.8-flash":      "alibaba/qwen3.8-flash",
+    "qwen3.8-27b":        "alibaba/qwen3.8-27b",
+    "qwen3.7-plus":       "alibaba/qwen3.7-plus",
     "mistral-medium-3.5": "mistral/mistral-medium-3.5",
     # Vercel publishes the z-ai models under `zai/`, not the `z-ai/` the other aggregators use.
     "glm-5.3":            "zai/glm-5.3",
@@ -5789,7 +5804,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
-                          "qwen3.7-flash"]},
+                          "qwen3.7-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # pi (earendil-works pi coding agent) is multi-family the same way hermes is: the CLI's
     # unified LLM layer runs either family natively and anything OpenAI/Anthropic-compatible
     # through a custom provider. The list grew the same way hermes's did — a model is added when
@@ -5816,7 +5832,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
-                       "mistral-medium-3.5", "step-3.7-flash"]},
+                       "mistral-medium-3.5", "step-3.7-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
     # Responses) client pointed at our relay, with the package chosen per turn from the model
     # family (see _opencode_config, which mirrors _pi_models_json). The serving paths are
@@ -5833,7 +5850,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
     # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
     # every row below passed on TokenRouter, Vercel and Azure OpenAI. gpt-5.3-codex is NOT here:
@@ -5848,7 +5866,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
     # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
@@ -5871,7 +5890,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -5879,7 +5899,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
     # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
     # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
@@ -5946,7 +5967,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
                          "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
                          "glm-5.3", "glm-5.3-flash",
-                         "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash"]},
+                         "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
 # Ids OpenAI serves on the Responses API only (refused on /v1/chat/completions, measured
