@@ -5907,30 +5907,26 @@ _MODEL_CATALOG: dict[str, dict] = {
     "omp": {"default": "gpt-5.4", "models": []},
     # goose reaches models the way cline and qwen do — one OpenAI chat/completions client pointed
     # at the loopback relay — so the serving PATHS here are the ones cline's rows already earned.
-    # The list deliberately starts small rather than inheriting cline's thirty-five: a serving path
-    # is not a completed turn, which is what the bar at the top of this table asks for.
     #
-    # All six completed a real first turn through the gateway on a Vercel AI Gateway connection
-    # (2026-09-12); gpt-5.4 also completed follow-up, a model switch to claude-sonnet-4.6 and back,
-    # an artifact turn whose produced file matched the rendered card, and a turn after a forced
-    # sandbox recycle that still recalled the first message.
-    #
-    # HALF the bar, and the missing half is named rather than papered over: these turns are NOT
-    # substitution-checked, because on this backend they cannot be. The served model would have to
-    # come from goose's own message metadata (metadata.inference.resolvedModel), and only the
-    # databricks provider format populates that — crates/goose-providers/src/openai.rs, the path
-    # every turn here takes, never sets it (v1.50.0). So served_model is always empty for goose and
-    # a silent substitution by the provider would not be visible the way gemini's is. Treat these
-    # rows as "the id completed a turn", not "the id served it", until the matrix column measures
-    # them against the provider's own reporting.
+    # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
+    # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
+    # the databricks provider format populates that — crates/goose-providers/src/openai.rs, the
+    # path every turn here takes, never sets it (v1.50.0). That left these rows unable to be
+    # substitution-checked, which is half the bar at the top of this table. It no longer does:
+    # every turn rides the loopback relay and the provider's own answer names `model`, so the
+    # relay reads it off the bytes as they pass and the runner stamps it on a result the CLI left
+    # unlabelled (_served_model_in / _relay_served_model, runner/server.py, pinned by
+    # runner/tests/test_relay_served_model.py). cline and qwen gain the same check for free.
+    # So these rows say "the id served it", not merely "the id completed a turn".
     "goose": {"default": "gpt-5.4",
-              # Every id a chat-shaped provider this harness is wired to can serve, measured by the
-              # goose column on 2026-09-12 (five scenarios per model on TokenRouter, Vercel,
-              # OpenRouter, OpenAI, Azure, Anthropic and the hosted door; the served model read by
-              # the relay, no substitution). One id left out: claude-opus-5 answers "The model
-              # returned an empty response" on every tool-using turn through goose's chat wire, on
-              # its own vendor as much as through every aggregator (0 of 8 artifact/recall checks).
-              # The Responses-only ids stay out: goose is chat-only.
+              # The 35 ids the goose column MEASURED on 2026-09-12 — five scenarios per model on
+              # TokenRouter, Vercel, OpenRouter, OpenAI, Azure, Anthropic and the hosted door, the
+              # served model read by the relay, zero substitutions — followed by five the column
+              # has not run yet (below, and offered so the matrix can measure them here, the same
+              # way pi's Gemini family was). One id measured and left OUT: claude-opus-5 answers
+              # "The model returned an empty response" on every tool-using turn through goose's
+              # chat wire, on its own vendor as much as through every aggregator (0 of 8
+              # artifact/recall checks). The Responses-only ids stay out: goose is chat-only.
               "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
@@ -5942,7 +5938,10 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
                          "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
                          "glm-5.3", "glm-5.3-flash",
-                         # the rest of what Vercel and OpenRouter serve through this shape
+                         # NOT YET MEASURED on goose — the rest of what Vercel and OpenRouter serve
+                         # through this shape, offered so the next column measures them. Until it
+                         # does, docs/support-matrix.md lists these five as "not run in this
+                         # column" rather than as passing rows.
                          "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry

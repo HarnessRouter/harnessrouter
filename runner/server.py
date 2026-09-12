@@ -2763,7 +2763,15 @@ def _served_model_in(data: bytes) -> str:
 def _relay_served_model(env: dict) -> str:
     """What the relay saw the provider serve on this turn's route, "" when the turn did not ride
     the relay or nothing answered yet. The route is found by the placeholder bearer the CLI was
-    handed, whichever variable the backend keeps it in."""
+    handed, whichever variable the backend keeps it in.
+
+    ONE relay token per env is the invariant this rests on — the first one found is taken as the
+    turn's chat route. It holds for every backend that reaches here: only _hermes_prepare_env
+    registers a second route (the auxiliary vision model, HR_VISION_API_KEY), and hermes runs on
+    _run_hermes_bg, which does not call this. A backend that ever hands its CLI two relay bearers
+    must distinguish them here first: reading the vision route would stamp the image model as the
+    turn's served model, which rule 2 of docs/harness-verification.md reads as a substitution —
+    a finding invented out of nothing."""
     for v in env.values():
         if isinstance(v, str) and v.startswith("hr-relay-"):
             route = _HERMES_RELAY["routes"].get(v)
@@ -2924,14 +2932,20 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             pending = b""
+            carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             while True:
                 chunk = resp.read(4096)
                 if not chunk:
                     break
                 if not flags.get("served_model"):
-                    sm = _served_model_in(chunk)
+                    sm = _served_model_in(carry + chunk)
                     if sm:
                         flags["served_model"] = sm
+                    else:
+                        # A read boundary can fall inside the field, and a miss here is silent:
+                        # served_model stays empty and the turn is simply not substitution-checked.
+                        # 256 bytes covers the longest id this can carry (the regex caps at 200).
+                        carry = chunk[-256:]
                 if sigs is not None:
                     pending += chunk
                     while b"\n" in pending:
