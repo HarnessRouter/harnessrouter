@@ -37,3 +37,19 @@ def test_the_turns_route_is_found_by_its_placeholder_bearer_and_answers_the_serv
         assert rs._relay_served_model({"OPENAI_API_KEY": tok}) == ""             # nothing answered yet
     finally:
         rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_a_content_filter_finish_seen_by_the_relay_fails_the_turn_with_the_providers_reason():
+    """Anthropic answered claude-opus-5 after a model switch with an empty stream and
+    finish_reason content_filter; goose rendered it as "The model returned an empty response" and
+    ended normally (2026-09-12). The relay saw the finish; the turn is a failure with that reason."""
+    assert rs._finish_reason_in(b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\ndata: [DONE]\n') == "content_filter"
+    assert rs._finish_reason_in(b'{"choices":[{"finish_reason":"stop"}]}') == "stop"
+    assert rs._finish_reason_in(b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":null}]}') == ""
+    tok = "hr-relay-" + "c" * 32
+    rs._HERMES_RELAY["routes"][tok] = ("https://api.example/v1", "real", {"last_finish": "content_filter"})
+    try:
+        assert rs._relay_last_finish({"OPENAI_API_KEY": tok}) == "content_filter"
+        assert rs._relay_last_finish({"OPENAI_API_KEY": "sk-direct"}) == ""
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
