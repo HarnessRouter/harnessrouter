@@ -18,3 +18,22 @@ def test_a_turn_on_several_models_is_an_alias_only_when_all_are_the_same_model()
     assert alias_of("gemini-3.8-flash", "google/gemini-3.8-flash, gemini-3.8-flash-001")
     assert not alias_of("gemini-3.8-flash", "gemini-3.8-flash, gemini-3-flash-preview")
     assert not alias_of("gemini-3.8-flash", "")
+
+
+def test_the_providers_own_name_for_the_model_is_its_alias():
+    """The vendor table is the mapping: a served id that is the table's own name for the model asked
+    for is the provider's alias, however it is spelled (tencent/hy3 for hunyuan-3)."""
+    assert same_model("hunyuan-3", "tencent/hy3")
+    assert same_model("nemotron-3-ultra", "nvidia/nemotron-3-ultra-550b-a55b")
+    assert same_model("hunyuan-4-preview", "tencent/hy4-preview")
+    assert not same_model("hunyuan-3", "tencent/hy4-preview")
+    assert not same_model("nemotron-3-ultra", "nvidia/nemotron-3.5-lightning")
+
+
+def test_the_models_own_served_name_is_its_alias_when_measured():
+    """DeepSeek answers "deepseek-flash" for v4.1-flash and "deepseek-v4-flash" for v4-flash, so the
+    bare name is v4.1-flash's alone (measured through TokenRouter, 2026-09-13)."""
+    assert same_model("deepseek-v4.1-flash", "deepseek-flash")
+    assert same_model("deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash")
+    assert not same_model("deepseek-v4-flash", "deepseek-flash")
+    assert not same_model("deepseek-v4.1-flash", "deepseek-v4-flash")

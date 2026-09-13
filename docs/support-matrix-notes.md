@@ -230,14 +230,85 @@ render is reproducible. The provider-wide `tokenrouter` and `vercel` columns of 
 their result files were lost with the scratchpad, and their sections in the table are carried from the
 render of that date until the columns are measured again.
 
-## goose columns (2026-09-12, candidate 0.17.0-rc.1, goose 1.50.0, codex 0.154)
+## goose columns (2026-09-12/13, candidate 0.17.0-rc.3, goose 1.50.0, codex 0.154)
 
 Seven columns for the goose harness (PR #164), five scenarios per model, two workers per column,
-the served model read by the relay (goose's CLI never reports one): TokenRouter 158/160, Vercel
-177/180, OpenRouter 178/180, OpenAI 35/35, Azure OpenAI e2 35/35, Anthropic 38/40, and the hosted
-HarnessRouter door 158/160 through the official key ($3.36 for its 160 checks). Zero substitutions.
-Every miss but two is claude-opus-5 answering "The model returned an empty response" on the
-artifact and recall turns, on every provider including Anthropic itself, while its plain turns pass:
-left off goose's list. gemini-3.5-flash-lite answered one recall with a tool call on Vercel only.
+the served model read by the relay (goose's CLI never reports one): TokenRouter 154/155, Vercel
+199/200, OpenRouter 200/200, OpenAI 35/35, Azure OpenAI e2 35/35, Anthropic 35/35, and the hosted
+HarnessRouter door 155/155 through the official key ($2.35 for its 155 checks). Zero substitutions.
+The two misses: gpt-5.6-luna's recall after recycle on TokenRouter (the codex column's class), and
+qwen3.7-max's artifact turn on Vercel, which now reads FAILED with Vercel's own "Upstream stream
+ended before terminal chunk" (a provider error goose renders as prose; the runner fails the turn). Five ids only Vercel and OpenRouter serve (hunyuan-3, ling-3.0-flash,
+minimax-m3, nemotron-3-ultra, qwen3.7-flash) were measured on those two after the first pass
+(all five scenarios each), so goose's list is 40. claude-opus-5 was measured on the first pass and left off goose's list: once a session holds a turn by
+another model (the switch scenario), Anthropic answers every further opus-5 request from goose with
+an empty stream and finish_reason content_filter (reproduced through the relay against Anthropic
+directly); the same session without the switch completes the tool task. The relay now records that
+finish and the turn fails with the provider's reason. gemini-3.5-flash-lite answered one recall with a tool call on Vercel only.
 The custom-harness dimension for goose needs `MCP_URL=https://mcp.context7.com/mcp` (deepwiki cannot
 handshake with goose, reproduced through goose's own extension flag); on Vercel all six claims pass.
+
+## The seven ids of the 2026-09 model sweep (2026-09-13, candidate 0.17.0-rc.5, hermes on Vercel re-run on rc.9)
+
+deepseek-v4.1-flash, qwen3.8-flash, qwen3.8-27b, qwen3.7-plus, hunyuan-4-preview, nemotron-3.5-lightning
+and nemotron-3-super, on every provider that serves them, across hermes, dsh, opencode, pi, omp, qwen,
+cline and goose (the harnesses whose catalogs carry them), five scenarios each. qwen3.8-27b has no
+TokenRouter channel and is not run there.
+
+- TokenRouter: 48 pairs, 240/240. Vercel: 56 pairs, 280/280. OpenRouter: 56 pairs, 280/280. Zero foreign
+  connections. Served names are the providers' own ids for the model (tencent/hy4-preview,
+  nvidia/nemotron-3-super-120b-a12b, nvidia/nemotron-3.5-lightning, qwen/qwen3.7-plus, qwen/qwen3.8-flash)
+  and DeepSeek's own name for v4.1-flash, "deepseek-flash", measured with one request per id through
+  TokenRouter (v4-flash answers "deepseek-v4-flash", v4-pro "deepseek-v4-pro"); the judge knows it.
+- hermes on Vercel failed the first turn for deepseek-v4.1-flash and nemotron-3-super on rc.5 ("has a
+  context window of 32,768 tokens, which is below the minimum 64,000 required by Hermes Agent"). Root
+  cause, read in the image: hermes treats the loopback relay as a local server and takes the window from
+  GET /v1/models/<id> as max_model_len, context_length or max_tokens; Vercel names the window
+  context_window, so hermes took the output cap. The relay now carries the window as context_length on
+  model listings (runner cf85581). Re-run on rc.9: both pairs 5/5, and the two catalog ids the same
+  misread had blocked on Vercel, kimi-k2.7-code and ling-3.0-flash, 5/5 each (their rows are in the
+  vercel column as the proof). One hermes qwen3.8-27b recycle missed the recall on rc.5 and passed on its
+  single re-run.
+- The 0.17.0 no-regression sample (two models per harness on TokenRouter, rc.3) is folded under the
+  tokenrouter and per-harness tokenrouter labels.
+
+## xAI and Meta (2026-09-13, candidates 0.17.0-rc.10 and rc.11)
+
+Thirteen ids went in after one tool-bearing chat request per id on each aggregator that lists it:
+grok-4.6, grok-4.5, grok-4.3, grok-4.20, grok-4.1-fast, grok-build-0.1, muse-spark-1.3, muse-spark-1.2,
+muse-spark-1.1, muse-glimmer-30b, llama-4-maverick, llama-4-scout, llama-3.3-70b. The list that ships is
+what measured across hermes, dsh, opencode, pi, omp, qwen, cline and goose, five scenarios each, every miss
+re-run once.
+
+- TokenRouter serves the five Grok ids (grok-4.1-fast is listed but answered by grok-4.3, a substitution,
+  so it is off that table; no Meta id is listed): 40 pairs, 199/200. The miss: qwen on grok-4.20 replies
+  DONE without writing the file, twice.
+- Vercel: 104 pairs. Grok 240/240 plus grok-4.1-fast 25/28 (qwen, omp and cline end the first turn with
+  "Stream error occurred", twice; the other five harnesses pass). Muse Spark 1.3, 1.2, 1.1 and Muse
+  Glimmer 30B 160/160. Llama 4 Maverick and Llama 3.3 70B 0/16: Vercel's Llama route refuses tools in
+  streaming mode (HTTP 405 "Tool calling is not supported for model: meta-llama/Llama-4-Maverick-17B-128E-
+  Instruct-FP8", HTTP 400 "This model doesn't support tool use in streaming mode") and caps output at
+  8192, so no harness can drive a turn there; both ids are off Vercel's table. Llama 4 Scout 28/40: seven
+  of eight harnesses failed the artifact or the recall scenario twice; it is not in the catalog.
+- OpenRouter serves the five Grok ids, Muse Glimmer 30B, Llama 4 Maverick and Llama 3.3 70B (grok-4.1-fast
+  is not listed; llama-4-scout has no endpoint; the three Muse Spark ids answer HTTP 403 until the
+  account confirms 18+ on openrouter.ai): 64 pairs, 315/320. Misses, each twice: llama-4-maverick under
+  qwen writes the tool call as prose; llama-3.3-70b fails the recall under goose, writes output.txt
+  instead of the asked file under pi, and under hermes failed the artifact and recall once and a switch
+  on the re-run.
+- A pair that failed twice on the one aggregator serving the id is not offered on that harness
+  (gateway _NOT_OFFERED): grok-4.1-fast on qwen, omp and cline; llama-4-maverick on qwen; llama-3.3-70b
+  on goose, hermes and pi. Zero foreign connections; every served name is the aggregator's own id for
+  the model (spacexai/ on Vercel, x-ai/grok-4.20-beta on TokenRouter).
+- Found on the way: Vercel's table was derived from OpenRouter's already-edited copy, so an id OpenRouter
+  lacks vanished from Vercel too (rc.11 derives every aggregator from the shared slugs).
+- Addendum (2026-09-13): grok-4.1-fast is not offered after all. xAI retired grok-4-1-fast-reasoning on
+  2026-05-15 and serves the slug with grok-4.3 at grok-4.3's price (docs.x.ai, May 15 retirement
+  notice); TokenRouter's answers named grok-4.3, Vercel's echoed the asked id. A retired id answered by
+  another model is a substitution whatever the aggregator reports, so its Vercel passes are not a
+  measurement of grok-4.1-fast. Eleven ids ship.
+- Addendum (2026-09-13, rc.14): Muse Spark on OpenRouter after the account's 18+ attestation
+  (settings/preferences; the gate is on the account, not the key): 24 pairs, 118/120 first pass. Two
+  recall misses on muse-spark-1.1; hermes passed its re-run, opencode missed twice. muse-spark-1.1 stays
+  on opencode because the same pair passes on Vercel; the miss is recorded. OpenRouter's no-channel set
+  is empty.
