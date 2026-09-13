@@ -4365,6 +4365,12 @@ def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     root.mkdir(parents=True, exist_ok=True)
     host, base_path = _goose_split_base(auth.base_url or "")
     env["GOOSE_PATH_ROOT"] = str(root)
+    # goose's platform-extension loader writes a temp file through std::env::temp_dir() at start
+    # (crates/goose/src/agents/platform_extensions/mod.rs, v1.50.0) and panics when it cannot:
+    # on a host whose sandbox refuses /tmp every turn exited 1 right after "goose is ready"
+    # (hosted, 2026-09-13). The workspace's own tmp, the same thing codex gets.
+    env["TMPDIR"] = str(pathlib.Path(cwd) / "tmp")
+    pathlib.Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_HOST"] = host
     env["OPENAI_BASE_PATH"] = base_path
@@ -4775,13 +4781,26 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     if rec["status"] in ("failed", "error", "timeout"):
         tail = "\n".join(errbuf[-30:]).strip()
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
-        # The provider's refusal is the line that explains a failure; the CLI's last lines are
-        # usually its retries ("Reconnecting... 1/5"). Say the refusal when there is one.
         refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
-        rec["error"] = (refusal or str(ev_err).strip() or tail or f"exit_code={rc}, no diagnostic output")[:2000]
+        rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
     rec["done"] = True
+
+
+_NO_DIAGNOSTIC_RE = re.compile(r"\w[\w-]* exited -?\d+ without reporting an error")
+
+
+def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
+    """The one line that explains a failed turn, in order of how much it says: the provider's
+    refusal, the result event's own message, the CLI's last lines, the exit code. A normaliser's
+    "<cli> exited N without reporting an error" says nothing the CLI's last lines do not, so those
+    lines win over it: goose's tokio panic ("Permission denied (os error 13) at path /tmp/...")
+    sat in the stderr behind that sentence and the record never showed it (2026-09-13)."""
+    ev_err = ev_err.strip()
+    if tail and _NO_DIAGNOSTIC_RE.fullmatch(ev_err):
+        ev_err = ""
+    return (refusal or ev_err or tail or f"exit_code={rc}, no diagnostic output")[:2000]
 
 
 # Codex app-server JSON-RPC driver — the ONLY codex mode that streams assistant text (via
