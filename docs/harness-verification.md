@@ -38,6 +38,16 @@ number or tier under any prefix (`google/gemini-3-flash-preview` for `gemini-3.8
 `gemini-2.5-flash-lite` for `gemini-2.5-flash`) is another model, and stays a finding.
 Enforced in `scripts/support-matrix/samemodel.py`, pinned by `test_samemodel.py`.
 
+Where the served model comes from is the CLI's choice, and some report none: goose reports one only
+on a provider format it never uses, and cline and qwen report none either. That used to make this
+rule unenforceable for those three — half the bar, on three harnesses. It no longer is. Every turn
+on those backends rides the loopback relay and the provider's own answer names `model`, so the
+relay reads it off the bytes as they pass and the runner stamps it on a result the CLI left
+unlabelled (`_served_model_in` and `_relay_served_model` in `runner/server.py`, pinned by
+`runner/tests/test_relay_served_model.py`); a CLI that reports its own keeps it. So the question to
+ask of a new harness is not "does this CLI report a served model" but "does it ride the relay" — if
+it does, rule 2 applies whether the CLI cooperates or not.
+
 **3. What the reader sees is what was stored.** The artifact row requires the rendered file cards to
 BE the turn's stored files: same names, same count. Asking only whether some card carried the
 expected name let a file rendered twice pass as a produced artifact for months.
@@ -108,16 +118,67 @@ egress, and any other URL overrides the default.
 
 ## Adding a harness
 
-A new harness is registered in five places, and is not finished until it has a measured column:
+A new harness is registered in the places below, and is not finished until it has a measured
+column. Every one of them fails SILENTLY when missed — the harness still builds, still answers, and
+loses one capability without saying so. The single exception is the console's backend union type,
+which fails the type-check, and that is the only one a compiler will find for you.
 
-1. `runner/server.py`, `BACKENDS`: its providers, default model, and the normaliser that turns its
-   output into the shape the gateway stores.
-2. `gateway/app.py`, `_MODEL_CATALOG`: the ids it offers, honestly (see rule 4), and
-   `_INTEGRATION_WIRING`: which provider types can drive it.
-3. `ui/src/lib/harness.ts`, `OOB`: the built-in harness the console lists, with its mark and models.
-4. `docker/entrypoint.sh`, how the CLI is installed on first start, under its own licence, pinned.
-5. `docs/support-matrix.md`, a column per provider, produced by the suite, with its notes in
-   `docs/support-matrix-notes.md`.
+**The runner** — `runner/server.py`:
+
+1. `BACKENDS`: its providers, default model, and the normaliser that turns its output into the
+   shape the gateway stores.
+2. The `turn()` dispatch branch that builds its argv.
+3. `_write_skills`: where a skill bundle has to land for THAT CLI's loader to find it. Prefer a
+   path under `.harness/`: the workspace root is collected as produced files, so a skills folder
+   written there is handed back to the user as a deliverable on every turn.
+4. `_agent_doc_path`: `AGENTS.md` or `CLAUDE.md` — whichever the CLI actually reads. Getting it
+   wrong writes the file and the agent never sees it, so the workspace contract never arrives.
+5. `_resume_lost`: how a turn that could not continue the conversation says so, if this CLI can
+   lose one. Silence here reads as a completed turn that has forgotten everything.
+6. **How this CLI reports a provider failure — check, do not assume it has an error event.**
+   Several narrate it as ordinary assistant text and then end the run normally: claude injects
+   `API Error: …`, goose `Ran into this error: …`. Read as written, the turn completes with the
+   failure as its answer, the run counts as a pass, and the next turn in that session answers from
+   a history carrying the error prose. The normaliser must recognise the CLI's prefix, fail the
+   turn, and keep the sentence as the reason — `_CLAUDE_ERR_RE` and `_GOOSE_ERR_RE`. Pin the
+   prefix with a test, and take it from the pinned binary (`strings`), not from the docs.
+7. `CHECKPOINT_EXCLUDE` and `_git_ensure`'s ignore list: any file the CLI writes that can hold a
+   credential.
+
+**The gateway** — `gateway/app.py`:
+
+8. `_MODEL_CATALOG`: the ids it offers, honestly (see rule 4).
+9. `_BASE_CATALOG`: label, system prompt, the tool list **in the CLI's own tool names**, and
+   `tool_enforcement` — `hard` only where the runtime really can withhold a tool, per UHP §4.3,
+   which forbids both overstating and understating it. A tool id that matches nothing is dropped
+   on the way through and disables nothing while the console reports it as off.
+10. `_INTEGRATION_WIRING`: which provider types can drive it.
+11. `_CUSTOM_FORMAT_BACKENDS`: which custom endpoint formats it can actually speak.
+
+`_HID_PREFIX_RE`, `_backend_of_builtin` and `_backend_of_harness` are DERIVED from `_BASE_CATALOG`
+and need no edit — they were hand-written lists once, and each silently missed a base.
+
+**The console** — and note only the first of these is caught by the type-check:
+
+12. `ui/src/lib/harness.ts`: the `backend` union type, and `OOB`, the built-in harness the console
+    lists with its mark and models.
+13. `ui/src/components/HarnessLogo.tsx`: its brand mark, if there is one. A mapping to a file that
+    does not exist renders a broken image — worse than the generic glyph it falls back to.
+14. `ui/src/components/HarnessSettings.tsx`: the instruction-file label, which must agree with
+    `_agent_doc_path` or the settings page names a file the runner does not write.
+
+**Install and measurement:**
+
+15. `docker/entrypoint.sh`: `HR_BACKENDS`, `backend_bin`, an installer, and its call in
+    `install_backends` — the CLI installed on first start, under its own licence, pinned exactly
+    and VERIFIED. A pinned tag is not verification: a tag can be moved and a release asset
+    re-uploaded. Where upstream publishes checksums, fetch and compare them (`install_omp`); where
+    it does not, compute the digests yourself and pin them beside the version (`install_goose`).
+    An override that skips the check must say so in the log rather than skip it quietly.
+16. `scripts/support-matrix/custom-harness.mjs`, `BASES`: otherwise the custom-harness dimension
+    never measures this harness at all.
+17. `docs/support-matrix.md`, a column per provider, produced by the suite, with its notes in
+    `docs/support-matrix-notes.md`.
 
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.
