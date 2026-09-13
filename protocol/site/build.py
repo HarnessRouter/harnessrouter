@@ -70,6 +70,109 @@ def archived_pages():
             for v in VERSIONS[1:] for name, title in chapters_for(v)]
 
 
+REPORTS = ROOT / "conformance" / "reports"
+
+
+def listing_name(slug: str) -> str:
+    """The name on the examples card whose id is `slug`, for a report that carries no label
+    (the reports recorded before --label existed). The card is the listing's own statement of
+    its name, so the row and the card agree."""
+    m = re.search(rf'id="{re.escape(slug)}">.*?<b>(.*?)</b>', (ROOT / "IMPLEMENTATIONS.md").read_text(), re.S)
+    return html.unescape(re.sub(r"<[^>]+>", "", m.group(1))).strip() if m else ""
+
+
+def measured():
+    """One row per measured implementation: the newest report under conformance/reports/<slug>/.
+
+    A report is evidence the conformance-measure workflow produced and a pull request landed;
+    the slug is the directory name, the display name is the report's own target_label. Nothing
+    here is typed by hand, so a badge can never say more than a report does."""
+    rows = []
+    for d in sorted(p for p in REPORTS.iterdir() if p.is_dir()):
+        reports = []
+        for f in sorted(d.glob("*.json")):
+            r = json.loads(f.read_text())
+            reports.append((r.get("generated_at") or "", f, r))
+        if not reports:
+            continue
+        stamp, f, r = max(reports, key=lambda x: (x[0], x[1].name))
+        level = r.get("highest_class_passed") or ""
+        rows.append({
+            "slug": d.name, "file": f, "report": r,
+            "label": r.get("target_label") or listing_name(d.name)
+            or (r.get("implementation") or {}).get("name") or d.name,
+            "level": level if level in ("core", "extended", "full") else "",
+            "version": r.get("protocol_version") or "",
+            "date": (stamp or "")[:10], "suite": r.get("suite_version") or "",
+            "summary": r.get("summary") or {}, "skipped": r.get("skipped_not_verified") or [],
+        })
+    return rows
+
+
+def badge_svg(level: str, version: str, date: str) -> str:
+    """A flat badge, UHP on the left and the class plus version on the right. Same construction
+    as the README star badge, so an implementer's README shows the two as one family. Green
+    because it only exists for a class that fully passed; there is no red or amber badge, an
+    implementation that did not pass simply has none."""
+    msg = f"{level} {version}"
+    left, right = 40, len(msg) * 7 + 16
+    width = left + right
+    title = f"UHP conformance: {msg}, measured {date}"
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="20" viewBox="0 0 {width} 20" '
+            f'role="img" aria-label="{html.escape(title)}">\n'
+            f'  <title>{html.escape(title)}</title>\n'
+            f'  <rect width="{width}" height="20" rx="3" fill="#444c56"/>\n'
+            f'  <path fill="#16824B" d="M{left} 0h{right-3}a3 3 0 0 1 3 3v14a3 3 0 0 1-3 3H{left}Z"/>\n'
+            f'  <g font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" text-anchor="middle" fill="white">\n'
+            f'    <text x="{left/2:g}" y="14" font-weight="bold">UHP</text>\n'
+            f'    <text x="{left + right/2:g}" y="14">{html.escape(msg)}</text>\n'
+            f'  </g>\n</svg>\n')
+
+
+def measured_markdown() -> str:
+    """The table the conformance page shows under its Measured implementations heading, and the
+    badge snippet each implementer pastes. Generated, so the page and the reports agree."""
+    rows = measured()
+    if not rows:
+        return "_No implementation has been measured yet._\n"
+    out = ["| Implementation | Class | Version served | Measured | Report |", "|---|---|---|---|---|"]
+    for m in rows:
+        s = m["summary"]
+        counts = f"{s.get('pass', 0)}/{s.get('total', 0)} passed"
+        if m["skipped"]:
+            counts += f", {len(m['skipped'])} skipped"
+        level = f"**{m['level']}**" if m["level"] else "no class fully passed"
+        rel = m["file"].relative_to(REPORTS).as_posix()
+        out.append(f"| {m['label']} | {level} | `{m['version']}` | {m['date']} (suite {m['suite']}) "
+                   f"| [{counts}](reports/{rel}) |")
+    out.append("")
+    for m in rows:
+        if not m["level"]:
+            continue
+        out.append(f"**{m['label']}** badge, for a README or a site:")
+        out.append("")
+        out.append("```markdown")
+        out.append(f"[![UHP {m['level']} {m['version']}](https://{SITE}/badges/{m['slug']}.svg)]"
+                   f"(https://{SITE}/conformance#measured-implementations)")
+        out.append("```")
+        out.append("")
+    return "\n".join(out) + "\n"
+
+
+def inject_levels(examples_html: str) -> str:
+    """On the examples page, a card whose id is a measured slug gets its level. The level comes
+    from the report, never from the card's own text, so a listing cannot promote itself."""
+    for m in measured():
+        if not m["level"]:
+            continue
+        pat = (rf'(<div class="impl-card" id="{re.escape(m["slug"])}">.*?<p class="impl-meta">[^<]*</p>)')
+        badge = (f'\\1<p class="impl-level"><img src="/badges/{m["slug"]}.svg" width="{40 + len(m["level"] + " " + m["version"]) * 7 + 16}" height="20" '
+                 f'alt="UHP {m["level"]} {m["version"]}, measured {m["date"]}">'
+                 f'<a href="/conformance#measured-implementations">measured {m["date"]}</a></p>')
+        examples_html = re.sub(pat, badge, examples_html, count=1, flags=re.S)
+    return examples_html
+
+
 # ── information architecture ────────────────────────────────────────────────────────────
 # Mirrors the shape a protocol site is expected to have — an introduction, a versioned
 # specification, the machine-readable definitions, conformance, and the change process — so a
@@ -210,6 +313,9 @@ CSS = """
 .role-client{background:var(--subtle);color:var(--muted)}
 .impl-card p{margin:8px 0 0;color:var(--muted);font-size:14px;line-height:1.55}
 .impl-card .impl-meta{margin-top:8px;font:500 12px/1 var(--mono);color:var(--faint)}
+.impl-card .impl-level{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin-top:10px;font-size:12px;color:var(--muted)}
+.impl-card .impl-level a{white-space:nowrap}
+.impl-card .impl-level img{display:block;height:20px;width:auto}
 /* Drawer nav: primary links shown inside the mobile sidebar drawer only */
 .drawernav{display:none;margin-bottom:22px;padding-bottom:18px;border-bottom:1px solid var(--line)}
 .drawernav a{display:block;padding:8px 10px;border-radius:7px;color:var(--ink);
@@ -621,7 +727,9 @@ def rewrite_links(html_text: str, depth: int, version: str = VERSION) -> str:
         (r'href="(?:\.\./)*SERVING\.md"', f'href="{up}serving"'),
         (r'href="(?:\.\./)*CONNECTING\.md"', f'href="{up}connecting"'),
         (r'href="(?:\.\./)*IMPLEMENTATIONS\.md"', f'href="{up}examples"'),
+        (r'href="(?:\.\./)*conformance/README\.md#([^"]+)"', rf'href="{up}conformance#\1"'),
         (r'href="(?:\.\./)*conformance/README\.md"', f'href="{up}conformance"'),
+        (r'href="reports/([^"]+\.json)"', rf'href="{up}reports/\1"'),      # measured evidence files
         (r'href="(?:\.\./)*conformance/?"', f'href="{up}conformance"'),
         (r'href="(?:\.\./)*\.\./conformance/"', f'href="{up}conformance"'),
         # A same-directory chapter link, with or without a section anchor, stays in this version.
@@ -979,6 +1087,9 @@ def build() -> int:
         if path in ("connecting.html", "serving.html"):
             md_text += GUIDE_CTA
         if path == "conformance.html":
+            marker = "<!-- measured-implementations -->"
+            assert marker in md_text, "conformance/README.md lost its measured-implementations marker"
+            md_text = md_text.replace(marker, measured_markdown(), 1)
             md_text += (
                 "\n\n## Example implementations\n\n"
                 "The [examples](IMPLEMENTATIONS.md) page lists the servers and clients "
@@ -986,6 +1097,8 @@ def build() -> int:
                 "not a certification — this suite is the only thing that certifies.\n")
         rendered, toc = render_markdown(md_text)
         body = rewrite_links(rendered, depth)
+        if path == "examples.html":
+            body = inject_levels(body)
         # The home page leads with the hero; its markdown H1 would repeat it.
         hero, toc_markup = "", toc_html(toc)
         if path == "index.html":
@@ -1085,6 +1198,16 @@ def build() -> int:
     # The machine-readable definitions are part of the standard, so they are served with it.
     shutil.copytree(ROOT / "schema", DIST / "schema",
                     ignore=shutil.ignore_patterns("build.py", "__pycache__"))
+
+    # Conformance evidence: every report the repository holds, and a badge for each measured
+    # implementation that fully passed a class. Both are derived from the same files, so the
+    # badge an implementer embeds and the report a reader opens cannot disagree.
+    shutil.copytree(REPORTS, DIST / "reports", ignore=shutil.ignore_patterns("*.md"))
+    (DIST / "badges").mkdir()
+    for m in measured():
+        if m["level"]:
+            (DIST / "badges" / f"{m['slug']}.svg").write_text(
+                badge_svg(m["level"], m["version"], m["date"]))
 
     # Brand raster assets (the header logo marks and the favicons) ship with the site and are served
     # at root-absolute /assets/… so they resolve from every page depth. Copied before the link check

@@ -46,7 +46,7 @@ jobs:
           UHP_API_KEY: ${{ secrets.UHP_TARGET_KEY }}
         run: |
           uhp-conformance --base-url '${{ inputs.base_url }}' --class full --plain \
-            --json report.json | tee run.txt
+            --label '${{ inputs.server_label }}' --json report.json | tee run.txt
 
       - name: Splice the measured result into the README
         run: |

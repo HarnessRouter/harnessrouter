@@ -100,10 +100,17 @@ from ADR-0007 of an independent UHP implementation.
 
 ## Conformance claims
 
-"UHP 2026-08-11 conformant (class)" means the conformance suite passes at that class. Publishing the
-report alongside the claim is expected. There is no certification body, no fee, and no logo
-programme — the suite is the authority, it is in this repository, and anyone can run it against
-anyone's server.
+"UHP <version> conformant (class)" means the conformance suite passes at that class against a
+server serving that version. Publishing the report alongside the claim is expected. There is no
+certification body, no fee, and no logo programme — the suite is the authority, it is in this
+repository, and anyone can run it against anyone's server.
+
+The site does publish a badge, and it is not a programme: it is a rendering of a report. When the
+`conformance-measure` workflow has run against an implementation and its report has landed in
+`conformance/reports/`, the site generates a badge naming the highest class that fully passed and
+the version served, and the implementation's listing shows it. Nothing is applied for and nobody
+approves it; the report is the whole of the evidence, and a re-measure that fails at a class the
+badge names removes the badge at the next build.
 
 ## Naming and conformance
 
