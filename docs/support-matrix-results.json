@@ -110741,5 +110741,1832 @@
    "meta/llama-4-scout"
   ],
   "deleted": 200
+ },
+ "openrouter|opencode|muse-spark-1.3": {
+  "provider": "openrouter",
+  "harness": "opencode",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:20:44.409Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.25,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 OPENCODE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessdadaadf36c554c43a8add0bf95a200af",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.64,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 OPENCODE M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.42,
+   "tail": "Reply with exactly: M3-gpt-6-astra OPENCODE M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.63,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE Used a tool DONE txt hello-opencode.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 14.45,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENCODE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdadaadf36c554c43a8add0bf95a200af\",\"checkpoint_sha\":\"982a699baaf01a298ae096c3b1dde089b75bc34eb17a8aecb76a65d9c5482add\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.3",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.3"
+  ],
+  "deleted": 200
+ },
+ "openrouter|opencode|muse-spark-1.2": {
+  "provider": "openrouter",
+  "harness": "opencode",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:22:00.210Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.31,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 OPENCODE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess758007bd45b84bcfa41544b96beedf36",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.51,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 OPENCODE M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.3,
+   "tail": "Reply with exactly: M3-gpt-6-astra OPENCODE M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.39,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE Used a tool DONE txt hello-opencode.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 19.55,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENCODE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess758007bd45b84bcfa41544b96beedf36\",\"checkpoint_sha\":\"00418cb679e42d245787978fe91026f93cbcefefecd90059070205f16a2ea8de\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.2",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.2"
+  ],
+  "deleted": 200
+ },
+ "openrouter|opencode|muse-spark-1.1": {
+  "provider": "openrouter",
+  "harness": "opencode",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:35:37.115Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.07,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 OPENCODE M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess0ee5f46f258d4da5952501ba2dbb431d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.23,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 OPENCODE M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.23,
+   "tail": "Reply with exactly: M3-gpt-6-astra OPENCODE M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.19,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE Used a tool DONE txt hello-opencode.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": false,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.44,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENCODE M1-claude-sonnet-4.5",
+   "turn_files": [],
+   "why": "answered without M1-muse-spark-1.1: What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENCODE M1-claude-sonnet-4.5",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0ee5f46f258d4da5952501ba2dbb431d\",\"checkpoint_sha\":\"58378edc83e3dee95e041a0bb9d97120baa1b81e14f9677fe2ce7ac203d5911d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.1",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.1"
+  ],
+  "deleted": 200
+ },
+ "openrouter|qwen|muse-spark-1.3": {
+  "provider": "openrouter",
+  "harness": "qwen",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:24:41.629Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.54,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 QWEN CODE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess9bf7e77b44a9435c846cbbfcdcd04a4f",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.57,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 QWEN CODE M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.33,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol QWEN CODE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.26,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE Used 2 tools DONE txt hello-qwen.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.04,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. QWEN CODE Thought process M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess9bf7e77b44a9435c846cbbfcdcd04a4f\",\"checkpoint_sha\":\"c9e92e29d7c32a6e4dd8d92911374fcfd1aeac252e874039f6a90f1b764150b7\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.3",
+   "openai/gpt-5.6-sol"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.3"
+  ],
+  "deleted": 200
+ },
+ "openrouter|qwen|muse-spark-1.2": {
+  "provider": "openrouter",
+  "harness": "qwen",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:26:30.993Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.57,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 QWEN CODE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess7b8a5b4161fa4a3cbc394114d33561e4",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.85,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 QWEN CODE M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.44,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol QWEN CODE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.93,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE Used a tool DONE txt hello-qwen.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.85,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. QWEN CODE Thought process M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess7b8a5b4161fa4a3cbc394114d33561e4\",\"checkpoint_sha\":\"e3d88dd4870f9bd5cccd44a602de6d9c62775d353fe7f777a34e9d2efc641f5d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.2",
+   "openai/gpt-5.6-sol"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.2"
+  ],
+  "deleted": 200
+ },
+ "openrouter|qwen|muse-spark-1.1": {
+  "provider": "openrouter",
+  "harness": "qwen",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:28:11.125Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.28,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 QWEN CODE M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess9b77ff2aa5df41b296c5aa5d3fbee499",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.38,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 QWEN CODE M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.55,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol QWEN CODE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.48,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE Used a tool DONE txt hello-qwen.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.4,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. QWEN CODE M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess9b77ff2aa5df41b296c5aa5d3fbee499\",\"checkpoint_sha\":\"2f838dd1f10069e71595b8396ae9d5501d2c547c61907101b91d4e38c5d26a89\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.1",
+   "openai/gpt-5.6-sol"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.1"
+  ],
+  "deleted": 200
+ },
+ "goose-openrouter|goose|muse-spark-1.3": {
+  "provider": "goose-openrouter",
+  "harness": "goose",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:29:33.417Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.38,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 GOOSE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd29684d75dbe4ce58fcc36ccba81e4de",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.83,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 GOOSE Used a tool M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.37,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol GOOSE Used a tool M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.39,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE Used 3 tools DONE txt hello-goose.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.67,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GOOSE Used a tool M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd29684d75dbe4ce58fcc36ccba81e4de\",\"checkpoint_sha\":\"c01818aba6cd4d1900b53f1898a7e0f76eb025ccf9ef2baf070ee7bd78f65239\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.3",
+   "openai/gpt-5.6-sol"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.3"
+  ],
+  "deleted": 200
+ },
+ "goose-openrouter|goose|muse-spark-1.2": {
+  "provider": "goose-openrouter",
+  "harness": "goose",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:30:51.559Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.91,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 GOOSE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6420c4855d734e8db5046d9d93636b87",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.69,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 GOOSE M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.48,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol GOOSE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.48,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE Used 3 tools DONE txt hello-goose.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.24,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GOOSE Thought process M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6420c4855d734e8db5046d9d93636b87\",\"checkpoint_sha\":\"211f308d1d6b8c3c93a6845f68534f0856c26e4f61095eeab35c584895bbcb00\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.2",
+   "openai/gpt-5.6-sol"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.2"
+  ],
+  "deleted": 200
+ },
+ "goose-openrouter|goose|muse-spark-1.1": {
+  "provider": "goose-openrouter",
+  "harness": "goose",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:32:04.923Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.58,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 GOOSE M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessb0f215d564e143cdaddef5ad60a37001",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.78,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 GOOSE M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.22,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol GOOSE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.27,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE Used 4 tools DONE txt hello-goose.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GOOSE M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb0f215d564e143cdaddef5ad60a37001\",\"checkpoint_sha\":\"f7544c243d09a56f8d247a9fa0b30feb8ef1aea130734648f52c13ffd1b4bd13\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.1",
+   "openai/gpt-5.6-sol"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.1"
+  ],
+  "deleted": 200
+ },
+ "openrouter|pi|muse-spark-1.3": {
+  "provider": "openrouter",
+  "harness": "pi",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:20:51.156Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.99,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 PI M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess4f1e3c032a78401696f38b2ba75c285a",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.2,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 PI M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.39,
+   "tail": "Reply with exactly: M3-gpt-6-astra PI M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.27,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. PI Used a tool DONE txt hello-pi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.4,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. PI Thought process M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess4f1e3c032a78401696f38b2ba75c285a\",\"checkpoint_sha\":\"fce6707861edfb56eedebe0e75177949b1f9a3e0701dc54ef41395f9489c83d5\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.3",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.3"
+  ],
+  "deleted": 200
+ },
+ "openrouter|pi|muse-spark-1.2": {
+  "provider": "openrouter",
+  "harness": "pi",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:21:43.949Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.99,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 PI M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess0da5509ecb544797b2df13132cad7a3b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.35,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 PI M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.24,
+   "tail": "Reply with exactly: M3-gpt-6-astra PI M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.19,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. PI Used a tool DONE txt hello-pi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.34,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. PI M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0da5509ecb544797b2df13132cad7a3b\",\"checkpoint_sha\":\"81e3e46478a676c66f9a880c55d960658bb5e11631b1f578f4619bb9eee594e3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.2",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.2"
+  ],
+  "deleted": 200
+ },
+ "openrouter|pi|muse-spark-1.1": {
+  "provider": "openrouter",
+  "harness": "pi",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:22:36.725Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.23,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 PI M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess9fcca7a444c14705b8369d291d1f88a3",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.59,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 PI M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.21,
+   "tail": "Reply with exactly: M3-gpt-6-astra PI M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.35,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. PI Used a tool DONE txt hello-pi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.43,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. PI M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess9fcca7a444c14705b8369d291d1f88a3\",\"checkpoint_sha\":\"3c521f7e7753346ac9e25e9a6ad2a190f5062cd7dff383c65aa16294294ef6a7\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.1",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.1"
+  ],
+  "deleted": 200
+ },
+ "openrouter|cline|muse-spark-1.3": {
+  "provider": "openrouter",
+  "harness": "cline",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:23:32.575Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.33,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 CLINE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6c7d9f1c5e5a49188c387947e196e1a6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.75,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 CLINE M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.5,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol CLINE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.66,
+   "tail": "Create a file named hello-cline.txt containing exactly the word HELLO, then reply DONE. CLINE Used a tool DONE txt hello-cline.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.42,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLINE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6c7d9f1c5e5a49188c387947e196e1a6\",\"checkpoint_sha\":\"eb20c0051e9a6c69123bbbe8a1a93ce858581133d39c3174e3cf4d873b644573\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "openrouter|cline|muse-spark-1.2": {
+  "provider": "openrouter",
+  "harness": "cline",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:24:33.950Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.08,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 CLINE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessbcb769fdd7ba466e86facd0f79441b6a",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.34,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 CLINE M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.15,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol CLINE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.54,
+   "tail": "Create a file named hello-cline.txt containing exactly the word HELLO, then reply DONE. CLINE Used 3 tools DONE txt hello-cline.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.36,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLINE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessbcb769fdd7ba466e86facd0f79441b6a\",\"checkpoint_sha\":\"ac0cbe120e8f2cb1c07e230a45fa46e34585d3f2c7a2c664bf7dac5a973e629c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "openrouter|cline|muse-spark-1.1": {
+  "provider": "openrouter",
+  "harness": "cline",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:25:36.031Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.08,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 CLINE M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess93dfacbe5e3a4db3a5d4dc930102cfa3",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.32,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 CLINE M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.03,
+   "tail": "Reply with exactly: M3-gpt-5.6-sol CLINE M3-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.4,
+   "tail": "Create a file named hello-cline.txt containing exactly the word HELLO, then reply DONE. CLINE Used a tool DONE txt hello-cline.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.23,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLINE M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess93dfacbe5e3a4db3a5d4dc930102cfa3\",\"checkpoint_sha\":\"cbbdcbe2fe5ddb49f0aad5e81cc15c56457a80e9f78c441c9ac9fc994bef831a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "openrouter|hermes|muse-spark-1.3": {
+  "provider": "openrouter",
+  "harness": "hermes",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:20:59.283Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.15,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 HERMES M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd52e888aeee742c99974dfd6ee59c7f1",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.34,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 HERMES M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.23,
+   "tail": "Reply with exactly: M3-gpt-6-astra HERMES M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.67,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. HERMES Used a tool DONE txt hello-hermes.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 14.47,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. HERMES M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd52e888aeee742c99974dfd6ee59c7f1\",\"checkpoint_sha\":\"437b21751b313cc0785460fab0cce4aebf50554dda12dea5374eb353c3e8b389\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "openrouter|hermes|muse-spark-1.2": {
+  "provider": "openrouter",
+  "harness": "hermes",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:22:15.035Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.21,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 HERMES M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess3be8afef485f41038280ddae2dc9ad85",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.58,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 HERMES M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.87,
+   "tail": "Reply with exactly: M3-gpt-6-astra HERMES M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.25,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. HERMES Used a tool DONE txt hello-hermes.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 14.9,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. HERMES Thought process M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess3be8afef485f41038280ddae2dc9ad85\",\"checkpoint_sha\":\"1239c942e102a6684156d20d861352c68af949507e9273c9ca0d5919f7941722\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "openrouter|hermes|muse-spark-1.1": {
+  "provider": "openrouter",
+  "harness": "hermes",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:34:15.822Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.09,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 HERMES M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessdf2c7520cd964d10b7c37d86b1b064a7",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.13,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 HERMES M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.42,
+   "tail": "Reply with exactly: M3-gpt-6-astra HERMES M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.43,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. HERMES Used a tool DONE txt hello-hermes.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.64,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. HERMES M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdf2c7520cd964d10b7c37d86b1b064a7\",\"checkpoint_sha\":\"64e331fff38ae194b6ac33c16f3833d82b7368b8dc00b1bbba52828dc4818511\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "dsh-openrouter|dsh|muse-spark-1.3": {
+  "provider": "dsh-openrouter",
+  "harness": "dsh",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:24:52.879Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.6,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 DEEPSEEK HARNESS M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess357191cec1d74bdd9bd973dc19e3796a",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.28,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 DEEPSEEK HARNESS M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.61,
+   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.78,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess357191cec1d74bdd9bd973dc19e3796a\",\"checkpoint_sha\":\"206a1e46de757c35c4ffd4a7c4ad671aac2cc7980a2b9264bfcb00ede18b7a75\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "dsh-openrouter|dsh|muse-spark-1.2": {
+  "provider": "dsh-openrouter",
+  "harness": "dsh",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:25:50.614Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.63,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 DEEPSEEK HARNESS M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess51b2384260164ab7a9e529e07f7bd1da",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.23,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 DEEPSEEK HARNESS M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.17,
+   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.33,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess51b2384260164ab7a9e529e07f7bd1da\",\"checkpoint_sha\":\"a70a1e1c5adc72bb92357b2903dc8e848c83548ae06187ef0925bced132cbd7a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "dsh-openrouter|dsh|muse-spark-1.1": {
+  "provider": "dsh-openrouter",
+  "harness": "dsh",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:26:47.577Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.74,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 DEEPSEEK HARNESS M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess293eeca23d7549e382180db60be1aef5",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.11,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 DEEPSEEK HARNESS M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.8,
+   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.75,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.47,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess293eeca23d7549e382180db60be1aef5\",\"checkpoint_sha\":\"2e337d2b5fcc651fc424f674d12869890e42e99247e3b34bdc358f8c8c3dc1f5\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "deleted": 200
+ },
+ "omp-openrouter|omp|muse-spark-1.3": {
+  "provider": "omp-openrouter",
+  "harness": "omp",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-13T07:27:49.919Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 29.19,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 OH MY PI M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess2c194b6bb52c4a839fee3f85612581a6",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 8.12,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 OH MY PI M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 8.3,
+   "tail": "Reply with exactly: M3-gpt-6-astra OH MY PI M3-gpt-6-astraM3-gpt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.21,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. OH MY PI Used 2 tools DONEDONE txt hello-omp.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 11.3,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OH MY PI M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess2c194b6bb52c4a839fee3f85612581a6\",\"checkpoint_sha\":\"65e2bb04f4dfbadc9a88b7ed58c5448e4a57af5f2356d4ddd80d5fcd52b128e6\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.3",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.3"
+  ],
+  "deleted": 200
+ },
+ "omp-openrouter|omp|muse-spark-1.2": {
+  "provider": "omp-openrouter",
+  "harness": "omp",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-13T07:29:24.889Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 27.61,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 OH MY PI M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessff440b1c62c041f9bd6e794f7654d6f7",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 11.65,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 OH MY PI M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.44,
+   "tail": "Reply with exactly: M3-gpt-6-astra OH MY PI M3M3-gpt--gpt-6-astra6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.41,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. OH MY PI Used 2 tools DONEDONE txt hello-omp.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 11.31,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OH MY PI M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessff440b1c62c041f9bd6e794f7654d6f7\",\"checkpoint_sha\":\"9139e7c237547279b802882c3da5838f8aa8759c7fdb5708c186c3620d96ed73\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.2",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.2"
+  ],
+  "deleted": 200
+ },
+ "omp-openrouter|omp|muse-spark-1.1": {
+  "provider": "omp-openrouter",
+  "harness": "omp",
+  "model": "muse-spark-1.1",
+  "at": "2026-09-13T07:31:05.290Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 26.08,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 OH MY PI M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessfa6c4d7df2244ee8a55ef3bc08d91037",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 8.06,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 OH MY PI M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.63,
+   "tail": "Reply with exactly: M3-gpt-6-astra OH MY PI M3-gM3-gpt-6-astrapt-6-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.98,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. OH MY PI Used a tool DONEDONE txt hello-omp.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "running",
+   "s": 11.29,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OH MY PI M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessfa6c4d7df2244ee8a55ef3bc08d91037\",\"checkpoint_sha\":\"47f0af4f793973c5f791afe9f5ecf1ea5e0777a6e0549fdc033c8d67bdc39bed\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "meta/muse-spark-1.1",
+   "openai/gpt-6-astra"
+  ],
+  "substituted": [
+   "meta/muse-spark-1.1"
+  ],
+  "deleted": 200
  }
 }
