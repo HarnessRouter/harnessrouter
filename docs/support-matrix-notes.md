@@ -229,3 +229,15 @@ scripts/support-matrix/render.py docs/support-matrix-results.json`), committed b
 render is reproducible. The provider-wide `tokenrouter` and `vercel` columns of 2026-09-06 are not in it:
 their result files were lost with the scratchpad, and their sections in the table are carried from the
 render of that date until the columns are measured again.
+
+## goose columns (2026-09-12, candidate 0.17.0-rc.1, goose 1.50.0, codex 0.154)
+
+Seven columns for the goose harness (PR #164), five scenarios per model, two workers per column,
+the served model read by the relay (goose's CLI never reports one): TokenRouter 158/160, Vercel
+177/180, OpenRouter 178/180, OpenAI 35/35, Azure OpenAI e2 35/35, Anthropic 38/40, and the hosted
+HarnessRouter door 158/160 through the official key ($3.36 for its 160 checks). Zero substitutions.
+Every miss but two is claude-opus-5 answering "The model returned an empty response" on the
+artifact and recall turns, on every provider including Anthropic itself, while its plain turns pass:
+left off goose's list. gemini-3.5-flash-lite answered one recall with a tool call on Vercel only.
+The custom-harness dimension for goose needs `MCP_URL=https://mcp.context7.com/mcp` (deepwiki cannot
+handshake with goose, reproduced through goose's own extension flag); on Vercel all six claims pass.
