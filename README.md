@@ -17,15 +17,7 @@ The world's first unified interface for agent harnesses.
   <a href="#the-unified-harness-protocol"><img src="https://img.shields.io/badge/OpenAI%20Responses-Compatible-2247D5?style=flat&amp;labelColor=444c56" alt="OpenAI Responses: Compatible"></a>
 </p>
 
-**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that brings Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends through one API. It implements the Unified Harness Protocol (UHP) and provides an OpenAI Responses-compatible API, handling persistent sessions, streaming progress, files, artifacts, cancellation, and structured failures. Self-host Community Edition with your own provider keys, on infrastructure you control.
-
-<a id="what-it-is"></a>
-
-<a id="one-integration"></a>
-
-<img src="docs/images/2026-09-10-harnessrouter-integration-comparison-v4.gif" width="100%" alt="Animated illustration: compare four generic harnesses and 4 × 9 = 36 repeated responsibilities with one HarnessRouter product integration. Add a fifth harness in With while product integration stays one, then return to Without to see 5 × 9 = 45. With names Codex, Claude Code, Hermes, Pi, and DeepSeek Harness.">
-
-<a id="one-interface-the-freedom-to-choose"></a>
+**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that brings Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends through one API.
 
 <a href="https://github.com/HarnessRouter/harnessrouter#js-repo-pjax-container" title="Back to the top to star this repository">
   <picture>
@@ -33,6 +25,16 @@ The world's first unified interface for agent harnesses.
     <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
   </picture>
 </a>
+
+<a id="what-it-is"></a>
+
+<a id="one-integration"></a>
+
+<img src="docs/images/2026-09-10-harnessrouter-integration-comparison-v4.gif" width="100%" alt="Animated illustration: compare four generic harnesses and 4 × 9 = 36 repeated responsibilities with one HarnessRouter product integration. Add a fifth harness in With while product integration stays one, then return to Without to see 5 × 9 = 45. With names Codex, Claude Code, Hermes, Pi, and DeepSeek Harness.">
+
+HarnessRouter implements the [Unified Harness Protocol (UHP)](#the-unified-harness-protocol) and provides an OpenAI Responses-compatible API, handling persistent sessions, streaming progress, files, artifacts, cancellation, and structured failures.
+
+<a id="one-interface-the-freedom-to-choose"></a>
 
 ## Switch harnesses. Optimize cost and latency.
 
@@ -50,6 +52,8 @@ Each metric compares the best and worst of eight configurations on the same task
 <br>
 
 ## Quickstart
+
+Self-host Community Edition with your own provider keys, on infrastructure you control.
 
 Start with one Docker command, wait for the first launch, then connect a model provider and run your first task.
 
