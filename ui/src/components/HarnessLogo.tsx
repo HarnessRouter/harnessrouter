@@ -15,6 +15,7 @@ const LOGO: Record<string, string> = {
   cline: '/logos/cline.png',
   gemini: '/logos/gemini.png',
   omp: '/logos/omp.png',
+  goose: '/logos/goose.png',   // the flying goose from goose-docs.ai (logo_light.png, cropped to the mark)
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {
