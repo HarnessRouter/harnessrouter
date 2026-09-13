@@ -41,6 +41,10 @@ def _vendor_models() -> dict[str, dict[str, str]]:
     if v:
         vreslug = eval(v.group(1), {"__builtins__": {}}, {})  # noqa: S307
         tables["vercel"] = {c: vreslug.get(c, s) for c, s in shared.items()}
+        vn = re.search(r"_VERCEL_NO_CHANNEL = (\{.*?\})\n", src, re.S)
+        if vn:
+            vgone = eval(vn.group(1), {"__builtins__": {}}, {})  # noqa: S307
+            tables["vercel"] = {c: v for c, v in tables["vercel"].items() if c not in vgone}
     # OpenRouter's own renames are applied at import in app.py, after TokenRouter takes its copy
     # of the shared table; mirror that so this reads what OpenRouter is actually asked for.
     r = re.search(r"_OPENROUTER_RESLUG = (\{.*?\n\})\n", src, re.S)
