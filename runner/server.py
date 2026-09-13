@@ -2763,6 +2763,28 @@ def _served_model_in(data: bytes) -> str:
 _FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
 
 
+def _model_metadata_with_context_length(data: bytes) -> bytes:
+    """A model listing (GET /models or /models/<id>) with the window also under `context_length`.
+
+    Vercel's model bodies name the window `context_window`. hermes reads this loopback relay as
+    a local server and takes `max_model_len`, `context_length` or `max_tokens` from the
+    per-model body, in that order, so on Vercel it read the OUTPUT cap as the window (32,768 for
+    deepseek-v4.1-flash, below its 64K minimum, and the turn never started; measured 2026-09-13).
+    The window travels under the name every client reads; a body that already carries it, or
+    is not a model listing, goes back unchanged."""
+    try:
+        doc = json.loads(data)
+    except ValueError:
+        return data
+    entries = doc.get("data") if isinstance(doc, dict) and isinstance(doc.get("data"), list) else [doc]
+    changed = False
+    for e in entries:
+        if isinstance(e, dict) and "context_length" not in e and isinstance(e.get("context_window"), int):
+            e["context_length"] = e["context_window"]
+            changed = True
+    return json.dumps(doc).encode() if changed else data
+
+
 def _finish_reason_in(data: bytes) -> str:
     """The last finish_reason an OpenAI-shaped answer names in these bytes ("" when none)."""
     hits = _FINISH_RE.findall(data)
@@ -2991,6 +3013,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fr = _finish_reason_in(data[-65536:])
             if fr:
                 flags["last_finish"] = fr
+            if body is None and "/models" in tail.split("?", 1)[0]:
+                data = _model_metadata_with_context_length(data)
             if sigs is not None and b"thought_signature" in data:
                 try:
                     doc = json.loads(data)
