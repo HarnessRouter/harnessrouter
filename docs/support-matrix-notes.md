@@ -247,3 +247,27 @@ directly); the same session without the switch completes the tool task. The rela
 finish and the turn fails with the provider's reason. gemini-3.5-flash-lite answered one recall with a tool call on Vercel only.
 The custom-harness dimension for goose needs `MCP_URL=https://mcp.context7.com/mcp` (deepwiki cannot
 handshake with goose, reproduced through goose's own extension flag); on Vercel all six claims pass.
+
+## The seven ids of the 2026-09 model sweep (2026-09-13, candidate 0.17.0-rc.5, hermes on Vercel re-run on rc.9)
+
+deepseek-v4.1-flash, qwen3.8-flash, qwen3.8-27b, qwen3.7-plus, hunyuan-4-preview, nemotron-3.5-lightning
+and nemotron-3-super, on every provider that serves them, across hermes, dsh, opencode, pi, omp, qwen,
+cline and goose (the harnesses whose catalogs carry them), five scenarios each. qwen3.8-27b has no
+TokenRouter channel and is not run there.
+
+- TokenRouter: 48 pairs, 240/240. Vercel: 56 pairs, 280/280. OpenRouter: 56 pairs, 280/280. Zero foreign
+  connections. Served names are the providers' own ids for the model (tencent/hy4-preview,
+  nvidia/nemotron-3-super-120b-a12b, nvidia/nemotron-3.5-lightning, qwen/qwen3.7-plus, qwen/qwen3.8-flash)
+  and DeepSeek's own name for v4.1-flash, "deepseek-flash", measured with one request per id through
+  TokenRouter (v4-flash answers "deepseek-v4-flash", v4-pro "deepseek-v4-pro"); the judge knows it.
+- hermes on Vercel failed the first turn for deepseek-v4.1-flash and nemotron-3-super on rc.5 ("has a
+  context window of 32,768 tokens, which is below the minimum 64,000 required by Hermes Agent"). Root
+  cause, read in the image: hermes treats the loopback relay as a local server and takes the window from
+  GET /v1/models/<id> as max_model_len, context_length or max_tokens; Vercel names the window
+  context_window, so hermes took the output cap. The relay now carries the window as context_length on
+  model listings (runner cf85581). Re-run on rc.9: both pairs 5/5, and the two catalog ids the same
+  misread had blocked on Vercel, kimi-k2.7-code and ling-3.0-flash, 5/5 each (their rows are in the
+  vercel column as the proof). One hermes qwen3.8-27b recycle missed the recall on rc.5 and passed on its
+  single re-run.
+- The 0.17.0 no-regression sample (two models per harness on TokenRouter, rc.3) is folded under the
+  tokenrouter and per-harness tokenrouter labels.
