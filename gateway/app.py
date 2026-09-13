@@ -5455,6 +5455,21 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "hunyuan-4-preview":  "tencent/hy4-preview",
         "nemotron-3.5-lightning": "nvidia/nemotron-3.5-lightning",
         "nemotron-3-super":   "nvidia/nemotron-3-super-120b-a12b",
+        # xAI and Meta (2026-09-13): every id answered a tool-bearing chat request on each
+        # aggregator that lists it (the exceptions are in the two no-channel sets below).
+        "grok-4.6":           "x-ai/grok-4.6",
+        "grok-4.5":           "x-ai/grok-4.5",
+        "grok-4.3":           "x-ai/grok-4.3",
+        "grok-4.20":          "x-ai/grok-4.20-beta",   # TokenRouter's name; OpenRouter drops -beta
+        "grok-4.1-fast":      "x-ai/grok-4.1-fast",
+        "grok-build-0.1":     "x-ai/grok-build-0.1",
+        "muse-spark-1.3":     "meta/muse-spark-1.3",
+        "muse-spark-1.2":     "meta/muse-spark-1.2",
+        "muse-spark-1.1":     "meta/muse-spark-1.1",
+        "muse-glimmer-30b":   "meta/muse-glimmer-30b",
+        "llama-4-maverick":   "meta-llama/llama-4-maverick",
+        "llama-4-scout":      "meta-llama/llama-4-scout",
+        "llama-3.3-70b":      "meta-llama/llama-3.3-70b-instruct",
     },
     # LLMTR is a Turkey-hosted gateway: models running on its own infrastructure in Turkey
     # beside the global frontier catalogue, behind one base_url and one key. Ids are
@@ -5578,6 +5593,10 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
+    # TokenRouter lists x-ai/grok-4.1-fast but answers it with grok-4.3 (served model in the
+    # response, 2026-09-13): a substitution, not the model asked for. No Meta id is on its list.
+    "grok-4.1-fast", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
+    "llama-4-maverick", "llama-4-scout", "llama-3.3-70b",
     # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not these four.
     "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 }
@@ -5656,8 +5675,14 @@ _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].i
 # it answered "No available channel" (Hermes, 2026-09-05).
 _OPENROUTER_RESLUG = {
     "qwen3.8-max": "qwen/qwen3.8-max-0902",
+    "grok-4.20":   "x-ai/grok-4.20",
 }
-_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _VENDOR_MODELS["openrouter"].items()}
+# The same broken promise on OpenRouter's side (2026-09-13): grok-4.1-fast is not on its list,
+# llama-4-scout has no endpoint (HTTP 404), and the three Muse Spark ids answer HTTP 403 until the
+# account holder confirms 18+ on openrouter.ai; they come back here once that is done.
+_OPENROUTER_NO_CHANNEL = {"grok-4.1-fast", "llama-4-scout", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"}
+_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _VENDOR_MODELS["openrouter"].items()
+                                if c not in _OPENROUTER_NO_CHANNEL}
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -5680,6 +5705,18 @@ _VERCEL_RESLUG = {
     "glm-5.3-flash":      "zai/glm-5.3-flash",
     # Vercel lists the Gemini 3 Flash preview without the suffix (its /v1/models, 2026-09-06).
     "gemini-3-flash-preview": "google/gemini-3-flash",
+    # Vercel publishes xAI under `spacexai/` and splits 4.20 and 4.1-fast into reasoning and
+    # non-reasoning ids; the reasoning one is the model the other aggregators serve (2026-09-13).
+    "grok-4.6":       "spacexai/grok-4.6",
+    "grok-4.5":       "spacexai/grok-4.5",
+    "grok-4.3":       "spacexai/grok-4.3",
+    "grok-4.20":      "spacexai/grok-4.20-reasoning",
+    "grok-4.1-fast":  "spacexai/grok-4.1-fast-reasoning",
+    "grok-build-0.1": "spacexai/grok-build-0.1",
+    # Vercel publishes Llama under `meta/` without the -instruct suffix.
+    "llama-4-maverick": "meta/llama-4-maverick",
+    "llama-4-scout":    "meta/llama-4-scout",
+    "llama-3.3-70b":    "meta/llama-3.3-70b",
 }
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
                             for c, v in _VENDOR_MODELS["openrouter"].items()}
@@ -5706,6 +5743,11 @@ _MODEL_ORDER: tuple[str, ...] = (
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
     "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
     "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    # xAI
+    "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1",
+    # Meta
+    "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick",
+    "llama-4-scout", "llama-3.3-70b",
     # DeepSeek
     "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
     # Moonshot
@@ -5856,7 +5898,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-4-scout", "llama-3.3-70b"]},
     # pi (earendil-works pi coding agent) is multi-family the same way hermes is: the CLI's
     # unified LLM layer runs either family natively and anything OpenAI/Anthropic-compatible
     # through a custom provider. The list grew the same way hermes's did — a model is added when
@@ -5884,7 +5926,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-4-scout", "llama-3.3-70b"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
     # Responses) client pointed at our relay, with the package chosen per turn from the model
     # family (see _opencode_config, which mirrors _pi_models_json). The serving paths are
@@ -5902,7 +5944,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-4-scout", "llama-3.3-70b"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
     # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
     # every row below passed on TokenRouter, Vercel and Azure OpenAI. gpt-5.3-codex is NOT here:
@@ -5918,7 +5960,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-4-scout", "llama-3.3-70b"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
     # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
@@ -5942,7 +5984,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-4-scout", "llama-3.3-70b"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -5951,7 +5993,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-4-scout", "llama-3.3-70b"]},
     # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
     # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
     # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
@@ -6023,7 +6065,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
                          "glm-5.3", "glm-5.3-flash",
                          "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-4.1-fast", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-4-scout", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
 for _b, _e in _MODEL_CATALOG.items():

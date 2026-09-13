@@ -35,12 +35,23 @@ def _vendor_models() -> dict[str, dict[str, str]]:
     m = re.search(r"_VENDOR_MODELS: dict\[str, dict\[str, str\]\] = (\{.*?\n\})\n", src, re.S)
     assert m, "_VENDOR_MODELS not found in app.py"
     tables = eval(m.group(1), {"__builtins__": {}}, {})  # noqa: S307 — our own literal
+    shared = dict(tables["openrouter"])   # the slug TokenRouter serves; the others derive from it
+    # Vercel takes the shared table under its own vendor prefixes, as app.py does at import.
+    v = re.search(r"_VERCEL_RESLUG = (\{.*?\n\})\n", src, re.S)
+    if v:
+        vreslug = eval(v.group(1), {"__builtins__": {}}, {})  # noqa: S307
+        tables["vercel"] = {c: vreslug.get(c, s) for c, s in shared.items()}
     # OpenRouter's own renames are applied at import in app.py, after TokenRouter takes its copy
     # of the shared table; mirror that so this reads what OpenRouter is actually asked for.
     r = re.search(r"_OPENROUTER_RESLUG = (\{.*?\n\})\n", src, re.S)
     if r:
         reslug = eval(r.group(1), {"__builtins__": {}}, {})  # noqa: S307
         tables["openrouter"] = {c: reslug.get(c, v) for c, v in tables["openrouter"].items()}
+    # ... and the ids OpenRouter has no channel for come off its table at import, like TokenRouter's.
+    n = re.search(r"_OPENROUTER_NO_CHANNEL = (\{.*?\})\n", src, re.S)
+    if n:
+        gone = eval(n.group(1), {"__builtins__": {}}, {})  # noqa: S307
+        tables["openrouter"] = {c: v for c, v in tables["openrouter"].items() if c not in gone}
     return tables
 
 
