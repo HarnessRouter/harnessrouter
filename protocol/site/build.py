@@ -313,7 +313,8 @@ CSS = """
 .role-client{background:var(--subtle);color:var(--muted)}
 .impl-card p{margin:8px 0 0;color:var(--muted);font-size:14px;line-height:1.55}
 .impl-card .impl-meta{margin-top:8px;font:500 12px/1 var(--mono);color:var(--faint)}
-.impl-card .impl-level{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--muted)}
+.impl-card .impl-level{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin-top:10px;font-size:12px;color:var(--muted)}
+.impl-card .impl-level a{white-space:nowrap}
 .impl-card .impl-level img{display:block;height:20px;width:auto}
 /* Drawer nav: primary links shown inside the mobile sidebar drawer only */
 .drawernav{display:none;margin-bottom:22px;padding-bottom:18px;border-bottom:1px solid var(--line)}
