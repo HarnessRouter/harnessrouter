@@ -43,6 +43,13 @@ def _table_ids() -> dict[str, set[str]]:
 
 _TABLE_IDS: dict[str, set[str]] | None = None
 
+# The name a model's own API stamps on its answers when it is none of the table's ids for it,
+# measured with one request per id through the aggregator. TokenRouter's chat/completions answers
+# model "deepseek-flash" for deepseek/deepseek-v4.1-flash, while deepseek/deepseek-v4-flash answers
+# "deepseek-v4-flash" and deepseek/deepseek-v4-pro "deepseek-v4-pro" (2026-09-13); so the bare name
+# is DeepSeek's own name for v4.1-flash alone.
+_SERVED_NAMES: dict[str, frozenset[str]] = {"deepseek-v4.1-flash": frozenset({"deepseek-flash"})}
+
 
 def same_model(asked: str, served: str) -> bool:
     global _TABLE_IDS
@@ -57,6 +64,8 @@ def same_model(asked: str, served: str) -> bool:
     if _TABLE_IDS is None:
         _TABLE_IDS = _table_ids()
     sv = (served or "").strip().lower()
+    if sv.split("/")[-1] in _SERVED_NAMES.get((asked or "").strip().lower(), frozenset()):
+        return True
     if sv in _TABLE_IDS.get((asked or "").strip().lower(), set()) or sv.split("/")[-1] in {x.split("/")[-1] for x in _TABLE_IDS.get((asked or "").strip().lower(), set())}:
         return True
     long, short = (s, a) if len(s) > len(a) else (a, s)
