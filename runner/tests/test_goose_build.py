@@ -131,6 +131,14 @@ def test_everything_lives_under_the_harness_dir():
     assert ".harness" in root.parts
 
 
+def test_temp_files_go_to_the_workspace():
+    """goose's extension loader writes a temp file through std::env::temp_dir() at start and panics
+    when it cannot; a sandbox that refuses /tmp failed every turn (hosted, 2026-09-13)."""
+    _, d, env = _argv()
+    assert env["TMPDIR"] == str(pathlib.Path(d) / "tmp")
+    assert pathlib.Path(env["TMPDIR"]).is_dir()
+
+
 def test_config_names_the_provider_and_model():
     _, d, env = _argv()
     cfg = yaml.safe_load((pathlib.Path(env["GOOSE_PATH_ROOT"]) / "config" / "config.yaml").read_text())
