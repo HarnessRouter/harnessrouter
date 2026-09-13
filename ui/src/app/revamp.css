@@ -2014,7 +2014,7 @@ button.creq-srcstat.on b { color: var(--accent); }
    derived from it (tools, Skills, what it did not load) ─────────────────────────────────── */
 .section-actions-group{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .plugin-row .capability-copy{min-width:0}
-.plugin-version{margin-left:8px;font:500 11px/1 var(--mono,ui-monospace,monospace);color:var(--muted,#6f6f78);
+.plugin-version{display:inline-block;width:auto;margin-left:8px;font:500 11px/1 var(--mono,ui-monospace,monospace);color:var(--muted,#6f6f78);
   border:1px solid var(--line,#e7e7eb);border-radius:6px;padding:2px 6px;vertical-align:middle}
 .plugin-facts{display:block;font-size:12px;color:var(--faint,#9696a0)}
 .plugin-warn{font-style:normal;color:#b45309}
