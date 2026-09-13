@@ -3,16 +3,17 @@
 // IA review): General → Default model → Agent instructions → Tools → Skills → Runtime limits →
 // Request headers, one Save. Built-in harnesses render read-only with a Clone action.
 // Reuses the battle-tested SkillEditor + McpModal from the workbench.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { zipSync, strToU8 } from 'fflate';
 import { SkelPage } from '@/components/Skel';
 import { useRouter } from 'next/navigation';
 import {
-  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret,
-  type CustomHarness, type OobHarness,
+  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, exportPlugin,
+  type CustomHarness, type OobHarness, type HarnessPlugin,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
-import { SkillEditor, McpModal, type McpServer } from '@/components/HarnessEditors';
+import { SkillEditor, McpModal, readSkillUpload, type McpServer } from '@/components/HarnessEditors';
 import { fetchTraceWindow, statsFor, p95Of, avgCreditsOf, timeAgo, type TraceCard } from '@/lib/revamp-data';
 // Self-hosted only: publish a custom harness (instructions, model, skills, MCP wiring) to a
 // hosted workspace. Hidden and inert on hosted builds.
@@ -50,6 +51,57 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   }, [id]);
   // Draft of a NEW skill being created in the SkillEditor popup (name edited in the same popup).
   const [newSkill, setNewSkill] = useState<{ name: string } | null>(null);
+  // Plugins: which row is expanded, the folder picker, and the export in flight.
+  const [pluginOpen, setPluginOpen] = useState<number | null>(null);
+  const [pluginBusy, setPluginBusy] = useState(false);
+  const pluginDirRef = useRef<HTMLInputElement>(null);
+  // A folder picked as a plugin package: every file under it, paths relative to the folder itself,
+  // and the manifest read up front so the row can name what was picked before it is saved. The
+  // server does the real validation on save and answers with what it derived and what it skipped.
+  async function installPluginFolder(list: FileList | null) {
+    if (!list || !list.length || !draft) return;
+    setPluginBusy(true); setErr(null);
+    try {
+      const files: NonNullable<HarnessPlugin['files']> = [];
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i];
+        const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+        const path = rel.includes('/') ? rel.slice(rel.indexOf('/') + 1) : rel;   // drop the picked folder's own name
+        if (!path || path.split('/').some((seg) => seg === 'node_modules' || seg === '.git')) continue;
+        files.push(await readSkillUpload(f, path));
+      }
+      const manifestFile = files.find((f) => f.path === 'plugin.json');
+      if (!manifestFile || manifestFile.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a plugin package.');
+      let manifest: HarnessPlugin['manifest'] = {};
+      try { manifest = JSON.parse(manifestFile.content) as HarnessPlugin['manifest']; } catch { throw new Error('plugin.json is not valid JSON.'); }
+      const name = String(manifest?.name || '');
+      if (!name) throw new Error('plugin.json names no plugin.');
+      if ((draft.plugins || []).some((p) => p.name === name)) throw new Error(`A plugin named ${name} is already installed on this Harness.`);
+      upd({ plugins: [...(draft.plugins || []), { name, enabled: true, files, manifest }] });
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setPluginBusy(false); if (pluginDirRef.current) pluginDirRef.current.value = ''; }
+  }
+  // The Harness's own tools and Skills as a package, zipped in the browser and handed to the
+  // person as a file they can install anywhere that reads the Agent Plugins format.
+  async function downloadPluginPackage() {
+    if (!draft || pluginBusy) return;
+    setPluginBusy(true); setErr(null);
+    try {
+      const pkg = await exportPlugin(draft.id);
+      const entries: Record<string, Uint8Array> = {};
+      for (const f of pkg.files || []) {
+        entries[f.path] = f.content_b64 !== undefined
+          ? Uint8Array.from(atob(f.content_b64), (c) => c.charCodeAt(0))
+          : strToU8(f.content || '');
+      }
+      const blob = new Blob([zipSync(entries) as BlobPart], { type: 'application/zip' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = `${pkg.name || 'harness'}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setPluginBusy(false); }
+  }
   const [cards, setCards] = useState<TraceCard[]>([]);
 
   useEffect(() => {
@@ -295,6 +347,71 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                       <span>{srvBase && !srvBase.builtinSkillsEnumerable
                         ? `${base?.name} brings its own Skills and discovers them when it runs, so they can't be listed here. Add a Skill to give this Harness something of your own.`
                         : 'Add a Skill to give this Harness a workflow of your own.'}</span></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="form-section">
+            <div><h3>Plugins</h3><p>Install a package of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
+            <div className="field-stack">
+              <div className="section-actions"><strong>{(draft?.plugins || []).length} installed plugins</strong>
+                <span className="section-actions-group">
+                  {!readOnly && draft?.id && !oob && <button className="button quiet small" type="button" disabled={pluginBusy} onClick={() => void downloadPluginPackage()}>
+                    <iconify-icon icon="tabler:download"></iconify-icon>Download as plugin</button>}
+                  {!readOnly && <button className="button small" type="button" disabled={pluginBusy} onClick={() => pluginDirRef.current?.click()}>
+                    <iconify-icon icon="tabler:plus"></iconify-icon>Install from folder</button>}
+                </span>
+                <input ref={pluginDirRef} type="file" hidden onChange={(e) => void installPluginFolder(e.target.files)}
+                  {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} />
+              </div>
+              <div className="capability-list">
+                {(draft?.plugins || []).map((p, idx) => {
+                  const servers = p.mcpServers || [], skls = p.skills || [], skipped = p.skipped || [];
+                  const pending = Boolean(p.files && p.files.length && !p.blob);
+                  const m = p.manifest || {};
+                  const open = pluginOpen === idx;
+                  return (
+                    <div key={p.name} className={'capability-row plugin-row' + (open ? ' is-open' : '')}>
+                      <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
+                      <div className="capability-copy">
+                        <strong>{p.name}{m.version ? <span className="plugin-version">{m.version}</span> : null}</strong>
+                        <span>{m.description || 'Agent Plugins package'}</span>
+                        <span className="plugin-facts">
+                          {pending ? 'Saves with the Harness' : `${servers.length} ${servers.length === 1 ? 'tool' : 'tools'} · ${skls.length} ${skls.length === 1 ? 'Skill' : 'Skills'}`}
+                          {!pending && skipped.length > 0 && <em className="plugin-warn"> · {skipped.length} not loaded</em>}
+                        </span>
+                        {open && !pending && (
+                          <div className="plugin-details">
+                            {servers.length > 0 && <div><b>Tools</b>{servers.map((s) => <div key={s.name}><code>{s.name}</code> {s.transport === 'stdio' ? `runs ${s.command}` : s.url}</div>)}</div>}
+                            {skls.length > 0 && <div><b>Skills</b>{skls.map((s) => <div key={s.name}><code>{s.name}</code> {s.description}</div>)}</div>}
+                            {skipped.length > 0 && <div><b>Not loaded</b>{skipped.map((s) => <div key={s.path}><code>{s.path}</code> {s.reason}</div>)}</div>}
+                            {(m.author?.name || m.homepage || m.repository || m.license) && (
+                              <div><b>About</b><div>
+                                {m.author?.name ? `By ${m.author.name}. ` : ''}{m.license ? `${m.license}. ` : ''}
+                                {m.homepage && <a href={m.homepage} target="_blank" rel="noreferrer">Homepage</a>}{m.homepage && m.repository ? ' · ' : ''}
+                                {m.repository && <a href={m.repository} target="_blank" rel="noreferrer">Source</a>}
+                              </div></div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="capability-actions">
+                        {!pending && <button className="button quiet small" type="button" onClick={() => setPluginOpen(open ? null : idx)}>{open ? 'Hide' : 'Details'}</button>}
+                        {!readOnly && <button className="button quiet small" type="button" onClick={() => upd({ plugins: (draft?.plugins || []).filter((_, k) => k !== idx) })}>Remove</button>}
+                        <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={p.enabled !== false}
+                          onClick={() => upd({ plugins: (draft?.plugins || []).map((x, k) => (k === idx ? { ...x, enabled: !(x.enabled !== false) } : x)) })}>
+                          {p.enabled !== false ? 'Enabled' : 'Disabled'}</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {(draft?.plugins || []).length === 0 && (
+                  <div className="capability-row">
+                    <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
+                    <div className="capability-copy"><strong>No plugins installed</strong>
+                      <span>A plugin is a folder with a plugin.json at its root, tools in mcp.json and Skills under skills. Install one to add all of it at once.</span></div>
                   </div>
                 )}
               </div>

@@ -43,6 +43,7 @@
     "echarts": "^5.6.0",
     "echarts-for-react": "^3.0.6",
     "emoji-mart": "^5.6.0",
+    "fflate": "^0.8.3",
     "framer-motion": "^12.23.16",
     "highlight.js": "^11.11.1",
     "iconify-icon": "^3.0.2",
