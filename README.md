@@ -1,7 +1,3 @@
-<p align="center">
-  <strong>The world’s first unified interface for agent harnesses.</strong>
-</p>
-
 <h1 align="center">
   <a href="https://harnessrouter.ai/open-source">
     <picture>
@@ -9,44 +5,19 @@
       <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
     </picture>
   </a>
-  <br>
-  Build agent products without handling harness&nbsp;engineering.
+<br>
+The world's first unified interface for agent harnesses.
 </h1>
-
-<p align="center">
-  Plug Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends.<br>
-  <strong>One API for them all.</strong>
-</p>
 
 <p align="center">
 <a href="https://github.com/HarnessRouter/harnessrouter#js-repo-pjax-container" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-285AFF?logo=apache&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="License: Apache 2.0"></a>
   <a href="https://hub.docker.com/r/harnessrouter/harnessrouter"><img src="https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?style=flat&amp;logo=docker&amp;logoColor=white&amp;label=Docker+pulls&amp;labelColor=444c56&amp;color=285aff" alt="Docker pulls"></a>
   <a href="protocol/conformance"><img src="https://img.shields.io/badge/UHP-Full-16824B?style=flat&amp;labelColor=444c56" alt="UHP conformance: Full"></a>
+  <a href="#the-unified-harness-protocol"><img src="https://img.shields.io/badge/OpenAI%20Responses-Compatible-2247D5?style=flat&amp;labelColor=444c56" alt="OpenAI Responses: Compatible"></a>
 </p>
 
-<p align="center">
-  <a href="#quickstart">Quickstart</a> · <a href="#use-the-api-directly">API</a> · <a href="#starter-kits">Starter kits</a> · <a href="#local-to-cloud">Cloud</a>
-</p>
-
-<a id="what-it-is"></a>
-
-<a id="one-integration"></a>
-
-## N × M harness integrations → 1 unified interface.
-
-<img src="docs/images/2026-09-10-harnessrouter-integration-comparison-v4.gif" width="100%" alt="Animated illustration: compare four generic harnesses and 4 × 9 = 36 repeated responsibilities with one HarnessRouter product integration. Add a fifth harness in With while product integration stays one, then return to Without to see 5 × 9 = 45. With names Codex, Claude Code, Hermes, Pi, and DeepSeek Harness.">
-
-<a id="one-interface-the-freedom-to-choose"></a>
-
-## Compare and switch harnesses. Optimize cost and latency.
-
-<a href="https://harnessrouter.ai/benchmarks" title="Open the methodology. The cost and latency figures compare separate extremes; results vary by task.">
-  <picture>
-    <source media="(max-width: 600px)" srcset="docs/images/benchmark-summary-mobile.svg">
-    <img src="docs/images/benchmark-summary.svg" width="100%" alt="One recorded task, eight Harness × Model configurations. Save 99.8%, lowest vs. highest cost: 0.47–223 credits. 3.2× faster, fastest vs. slowest run: 1m 25s–4m 36s end to end. These are separate comparisons; results vary by task. Open the methodology.">
-  </picture>
-</a>
+**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that brings Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends through one API.
 
 <a href="https://github.com/HarnessRouter/harnessrouter#js-repo-pjax-container" title="Back to the top to star this repository">
   <picture>
@@ -55,7 +26,24 @@
   </picture>
 </a>
 
-**HarnessRouter is the unified interface for agent harnesses.** Community Edition lets you self-host it under Apache 2.0, with the Console, Gateway, and Runner in one Docker deployment. It implements the [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) on infrastructure you control.
+<a id="what-it-is"></a>
+
+<a id="one-integration"></a>
+
+<img src="docs/images/2026-09-10-harnessrouter-integration-comparison-v4.gif" width="100%" alt="Animated illustration: compare four generic harnesses and 4 × 9 = 36 repeated responsibilities with one HarnessRouter product integration. Add a fifth harness in With while product integration stays one, then return to Without to see 5 × 9 = 45. With names Codex, Claude Code, Hermes, Pi, and DeepSeek Harness.">
+
+HarnessRouter implements the [Unified Harness Protocol (UHP)](#the-unified-harness-protocol) and provides an OpenAI Responses-compatible API, handling persistent sessions, streaming progress, files, artifacts, cancellation, and structured failures.
+
+<a id="one-interface-the-freedom-to-choose"></a>
+
+## Switch harnesses. Optimize cost and latency.
+
+<picture>
+  <source media="(max-width: 600px)" srcset="docs/images/benchmark-summary-mobile.svg">
+  <img src="docs/images/benchmark-summary.svg" width="100%" alt="Cost: 99.8% lower, from 223 to 0.47 credits. End-to-end latency: 3.2 times faster, from 4m 36s to 1m 25s. Each metric compares its own best and worst configurations on the same task.">
+</picture>
+
+Each metric compares the best and worst of eight configurations on the same task. [Methodology](https://harnessrouter.ai/benchmarks)
 
 [Run locally →](#quickstart) · [Prefer managed agent harnesses? Explore HarnessRouter Cloud →](https://harnessrouter.ai)
 
@@ -64,6 +52,8 @@
 <br>
 
 ## Quickstart
+
+Self-host Community Edition with your own provider keys, on infrastructure you control.
 
 Start with one Docker command, wait for the first launch, then connect a model provider and run your first task.
 
@@ -174,7 +164,7 @@ You can change the default model later in Settings, but the base harness cannot 
 <details>
 <summary>Watch the configuration walkthrough · 48 seconds</summary>
 
-[![Start a custom harness from the New harness button](docs/images/2026-09-10-harnessrouter-custom-harness-feedback-configuration-v5-poster.png)](docs/images/2026-09-10-harnessrouter-custom-harness-feedback-configuration-v5.mp4?raw=true)
+![Animated walkthrough of creating and configuring a custom harness, including instructions, tools, and skills.](docs/images/2026-09-10-harnessrouter-custom-harness-feedback-configuration-v5.gif)
 
 <sub>Configure DeepSeek Harness for customer-feedback analysis.</sub>
 
