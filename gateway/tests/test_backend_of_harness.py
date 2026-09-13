@@ -36,6 +36,9 @@ def test_unknown_base_stays_empty_for_the_caller_to_infer():
 
 
 def test_omp_reaches_what_pi_reaches():
-    assert A._MODEL_CATALOG["omp"]["models"] == A._MODEL_CATALOG["pi"]["models"]
+    """omp takes pi's list as written; each then loses only its own measured exceptions (_NOT_OFFERED)."""
+    omp, pi = A._MODEL_CATALOG["omp"]["models"], A._MODEL_CATALOG["pi"]["models"]
+    assert set(omp) == (set(pi) | A._NOT_OFFERED.get("pi", frozenset())) - A._NOT_OFFERED.get("omp", frozenset())
+    assert omp == A._ordered_models(omp)
     assert A._INTEGRATION_WIRING[("google", "omp")] == "openai-api"
     assert "claude-fable-5-1" in A._MODEL_CATALOG["omp"]["models"]
