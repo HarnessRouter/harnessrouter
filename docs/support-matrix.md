@@ -758,16 +758,15 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| goose | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| goose | claude-fable-5-1 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| goose | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-haiku-4-5-20251001 (the provider's alias of the same model) |
-| goose | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-opus-4-7 (the provider's alias of the same model) |
-| goose | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-opus-4-8 (the provider's alias of the same model) |
-| goose | claude-opus-5 | pass | pass | pass (claude-fable-5) | FAIL | FAIL | Anthropic | artifact: no file card (files: none); le named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE The model returned an empty r ; recycle: answered without M1-claude-opus-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that w |
-| goose | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic | served as claude-sonnet-4-6 (the provider's alias of the same model) |
-| goose | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| goose | claude-fable-5 | pass | pass | pass (claude-fable-5-1) | pass | pass | Anthropic |  |
+| goose | claude-fable-5-1 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic |  |
+| goose | claude-haiku-4.5 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic | served as claude-haiku-4-5-20251001 (the provider's alias of the same model) |
+| goose | claude-opus-4.7 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic | served as claude-opus-4-7 (the provider's alias of the same model) |
+| goose | claude-opus-4.8 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic | served as claude-opus-4-8 (the provider's alias of the same model) |
+| goose | claude-sonnet-4.6 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic | served as claude-sonnet-4-6 (the provider's alias of the same model) |
+| goose | claude-sonnet-5 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic |  |
 
-8 pairs, 38 of 40 scenario runs passed.
+7 pairs, 35 of 35 scenario runs passed.
 
 ## Provider: goose-azure-e2
 
@@ -792,7 +791,6 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | claude-haiku-4.5 | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 | served as claude-haiku-4-5-20251001 (the provider's alias of the same model) |
 | goose | claude-opus-4.7 | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 | served as claude-opus-4-7 (the provider's alias of the same model) |
 | goose | claude-opus-4.8 | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 | served as claude-opus-4-8 (the provider's alias of the same model) |
-| goose | claude-opus-5 | pass | pass | pass (gpt-5.4) | FAIL | FAIL | HarnessRouter API  test 1 | artifact: no file card (files: none); le named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE The model returned an empty r ; recycle: answered without M1-claude-opus-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that w |
 | goose | claude-sonnet-4.6 | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 | served as claude-sonnet-4-6 (the provider's alias of the same model) |
 | goose | claude-sonnet-5 | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 |  |
 | goose | deepseek-v4-flash | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 |  |
@@ -820,7 +818,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 |  |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | HarnessRouter API  test 1 | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-32 pairs, 158 of 160 scenario runs passed.
+31 pairs, 155 of 155 scenario runs passed.
 
 ## Provider: goose-openai
 
@@ -845,7 +843,6 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | claude-haiku-4.5 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as anthropic/claude-haiku-4.5 (the provider's alias of the same model) |
 | goose | claude-opus-4.7 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as anthropic/claude-opus-4.7 (the provider's alias of the same model) |
 | goose | claude-opus-4.8 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as anthropic/claude-opus-4.8 (the provider's alias of the same model) |
-| goose | claude-opus-5 | pass | pass | pass (gpt-5.4) | FAIL | FAIL | OpenRouter | served as anthropic/claude-opus-5 (the provider's alias of the same model) ; artifact: no file card (files: none); le named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE The model returned an empty r ; recycle: answered without M1-claude-opus-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that w |
 | goose | claude-sonnet-4.6 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as anthropic/claude-sonnet-4.6 (the provider's alias of the same model) |
 | goose | claude-sonnet-5 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as anthropic/claude-sonnet-5 (the provider's alias of the same model) |
 | goose | deepseek-v4-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
@@ -870,14 +867,24 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as openai/gpt-5.6-luna (the provider's alias of the same model) |
 | goose | gpt-5.6-sol | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as openai/gpt-5.6-sol (the provider's alias of the same model) |
 | goose | gpt-5.6-terra | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as openai/gpt-5.6-terra (the provider's alias of the same model) |
+| goose | hunyuan-3 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as tencent/hy3 (finding below) |
 | goose | kimi-k2.7-code | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as moonshotai/kimi-k2.7-code (the provider's alias of the same model) |
 | goose | kimi-k3 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as moonshotai/kimi-k3 (the provider's alias of the same model) |
+| goose | ling-3.0-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as inclusionai/ling-3.0-flash (the provider's alias of the same model) |
+| goose | minimax-m3 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as minimax/minimax-m3 (the provider's alias of the same model) |
 | goose | mistral-medium-3.5 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as mistralai/mistral-medium-3-5 (the provider's alias of the same model) |
+| goose | nemotron-3-ultra | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as nvidia/nemotron-3-ultra-550b-a55b (finding below) |
+| goose | qwen3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as qwen/qwen3.7-flash (the provider's alias of the same model) |
 | goose | qwen3.7-max | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as qwen/qwen3.7-max (the provider's alias of the same model) |
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as qwen/qwen3.8-max-0902 (the provider's alias of the same model) |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-36 pairs, 178 of 180 scenario runs passed.
+40 pairs, 190 of 190 scenario runs passed; 2 pairs served by another connection or as another model are findings, not counted.
+
+Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
+
+- goose x hunyuan-3: served as tencent/hy3 (the CLI reports the model it ran)
+- goose x nemotron-3-ultra: served as nvidia/nemotron-3-ultra-550b-a55b (the CLI reports the model it ran)
 
 ## Provider: goose-tokenrouter
 
@@ -888,7 +895,6 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | claude-haiku-4.5 | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter | served as claude-haiku-4-5-20251001 (the provider's alias of the same model) |
 | goose | claude-opus-4.7 | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter | served as claude-opus-4-7 (the provider's alias of the same model) |
 | goose | claude-opus-4.8 | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter | served as claude-opus-4-8 (the provider's alias of the same model) |
-| goose | claude-opus-5 | pass | pass | pass (gpt-5.4) | FAIL | FAIL | My TokenRouter | artifact: no file card (files: none); le named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE The model returned an empty r ; recycle: answered without M1-claude-opus-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that w |
 | goose | claude-sonnet-4.6 | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter | served as claude-sonnet-4-6 (the provider's alias of the same model) |
 | goose | claude-sonnet-5 | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter |  |
 | goose | deepseek-v4-flash | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter |  |
@@ -906,7 +912,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter |  |
 | goose | gpt-5.4-mini | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter | served as gpt-5.4-mini-2026-03-17 (the provider's alias of the same model) |
 | goose | gpt-5.5 | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter | served as gpt-5.5-2026-04-23 (the provider's alias of the same model) |
-| goose | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter |  |
+| goose | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | pass | FAIL | My TokenRouter | recycle: answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in my very first message of this task? Reply with just that wo |
 | goose | gpt-5.6-sol | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter |  |
 | goose | gpt-5.6-terra | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter |  |
 | goose | kimi-k2.7-code | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter |  |
@@ -916,7 +922,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter |  |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | My TokenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-32 pairs, 158 of 160 scenario runs passed.
+31 pairs, 154 of 155 scenario runs passed.
 
 ## Provider: goose-vercel
 
@@ -927,7 +933,6 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | claude-haiku-4.5 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-4.5 (the provider's alias of the same model) |
 | goose | claude-opus-4.7 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as anthropic/claude-opus-4.7 (the provider's alias of the same model) |
 | goose | claude-opus-4.8 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as anthropic/claude-opus-4.8 (the provider's alias of the same model) |
-| goose | claude-opus-5 | pass | pass | pass (gpt-5.4) | FAIL | FAIL | Vercel AI Gateway | served as anthropic/claude-opus-5 (the provider's alias of the same model) ; artifact: no file card (files: none); le named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE The model returned an empty r ; recycle: answered without M1-claude-opus-5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that w |
 | goose | claude-sonnet-4.6 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as anthropic/claude-sonnet-4.6 (the provider's alias of the same model) |
 | goose | claude-sonnet-5 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as anthropic/claude-sonnet-5 (the provider's alias of the same model) |
 | goose | deepseek-v4-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
@@ -939,7 +944,7 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | gemini-3.1-flash-lite | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) |
 | goose | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
 | goose | gemini-3.5-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.5-flash (the provider's alias of the same model) |
-| goose | gemini-3.5-flash-lite | pass | pass | pass (gpt-5.4) | pass | FAIL | Vercel AI Gateway | served as google/gemini-3.5-flash-lite (the provider's alias of the same model) ; recycle: answered without M1-gemini-3.5-flash-lite: What exact word did I ask you to reply with in my very first message of this task? Reply with jus |
+| goose | gemini-3.5-flash-lite | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.5-flash-lite (the provider's alias of the same model) |
 | goose | gemini-3.6-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.6-flash (the provider's alias of the same model) |
 | goose | gemini-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.7-flash (the provider's alias of the same model) |
 | goose | gemini-3.8-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.8-flash (the provider's alias of the same model) |
@@ -952,14 +957,26 @@ Scenarios: first turn, follow-up in the same session, switch model mid-session, 
 | goose | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-luna (the provider's alias of the same model) |
 | goose | gpt-5.6-sol | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-sol (the provider's alias of the same model) |
 | goose | gpt-5.6-terra | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-terra (the provider's alias of the same model) |
+| goose | hunyuan-3 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as tencent/hy3 (finding below) |
 | goose | kimi-k2.7-code | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as moonshotai/kimi-k2.7-code (the provider's alias of the same model) |
 | goose | kimi-k3 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as moonshotai/kimi-k3 (the provider's alias of the same model) |
+| goose | ling-3.0-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as inclusionai/ling-3.0-flash (the provider's alias of the same model) |
+| goose | minimax-m3 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as minimax/minimax-m3 (the provider's alias of the same model) |
 | goose | mistral-medium-3.5 | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as mistral/mistral-medium-3.5 (the provider's alias of the same model) |
-| goose | qwen3.7-max | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-max (the provider's alias of the same model) |
+| goose | nemotron-3-ultra | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as nvidia/nemotron-3-ultra-550b-a55b (finding below) |
+| goose | qwen3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-flash (the provider's alias of the same model) |
+| goose | qwen3.7-max | pass | pass | pass (gpt-5.4) | FAIL | pass | Vercel AI Gateway | served as alibaba/qwen3.7-max (the provider's alias of the same model) ; artifact: The turn failed: Ran into this error: Server error: Upstream stream ended before terminal chunk.
+
+Please retry if you think this is a transi |
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-max (the provider's alias of the same model) |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-36 pairs, 177 of 180 scenario runs passed.
+40 pairs, 189 of 190 scenario runs passed; 2 pairs served by another connection or as another model are findings, not counted.
+
+Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
+
+- goose x hunyuan-3: served as tencent/hy3 (the CLI reports the model it ran)
+- goose x nemotron-3-ultra: served as nvidia/nemotron-3-ultra-550b-a55b (the CLI reports the model it ran)
 
 ## Provider: hermes-azure-e2
 
