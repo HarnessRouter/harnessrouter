@@ -2009,3 +2009,20 @@ button.creq-srcstat.on b { color: var(--accent); }
    when the record actually knows the cause. The badge above it deliberately no longer names a
    cause, because it used to name the wrong one for interrupted turns. */
 .wbx-incomplete-why { font-size: 12.5px; color: var(--faint, #6e6760); margin: 4px 0 0 2px; }
+
+/* ── Plugins on the Harness page: one row per installed package, expandable to what the server
+   derived from it (tools, Skills, what it did not load) ─────────────────────────────────── */
+.section-actions-group{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.plugin-row .capability-copy{min-width:0}
+.plugin-version{margin-left:8px;font:500 11px/1 var(--mono,ui-monospace,monospace);color:var(--muted,#6f6f78);
+  border:1px solid var(--line,#e7e7eb);border-radius:6px;padding:2px 6px;vertical-align:middle}
+.plugin-facts{display:block;font-size:12px;color:var(--faint,#9696a0)}
+.plugin-warn{font-style:normal;color:#b45309}
+.plugin-details{margin-top:10px;display:grid;gap:10px;font-size:12.5px;color:var(--muted,#6f6f78)}
+.plugin-details b{display:block;margin-bottom:4px;font-size:11px;font-weight:660;letter-spacing:.04em;text-transform:uppercase;color:var(--faint,#9696a0)}
+.plugin-details code{font:500 12px/1.4 var(--mono,ui-monospace,monospace);color:var(--ink,#111317);word-break:break-all}
+.plugin-details div{overflow-wrap:anywhere}
+@media (max-width:768px){
+  .plugin-row{flex-wrap:wrap}
+  .plugin-row .capability-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}
+}
