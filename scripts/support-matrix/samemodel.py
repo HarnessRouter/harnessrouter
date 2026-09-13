@@ -16,11 +16,20 @@ def _table_ids() -> dict[str, set[str]]:
     that IS the table's own name for the model asked for is the provider's alias by definition:
     tencent/hy3 for hunyuan-3, nvidia/nemotron-3-ultra-550b-a55b for nemotron-3-ultra."""
     import os, re
-    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gateway", "app.py")
+    here = os.path.dirname(os.path.abspath(__file__))
+    # The OSS tree keeps the gateway at gateway/app.py, the hosted tree at backend/harness_gateway/app.py;
+    # the first that exists is the tree this copy lives in.
+    candidates = (os.path.join(here, "..", "..", "gateway", "app.py"),
+                  os.path.join(here, "..", "..", "..", "backend", "harness_gateway", "app.py"))
     out: dict[str, set[str]] = {}
-    try:
-        src = open(src_path).read()
-    except OSError:
+    src = ""
+    for src_path in candidates:
+        try:
+            src = open(src_path).read()
+            break
+        except OSError:
+            continue
+    if not src:
         return out
     m = re.search(r"_VENDOR_MODELS: dict\[str, dict\[str, str\]\] = (\{.*?\n\})\n", src, re.S)
     if not m:
