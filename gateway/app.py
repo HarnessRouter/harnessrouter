@@ -5665,8 +5665,8 @@ async def _hosted_models_refresh(api_key: str = "", force: bool = False, models_
 
 _VENDOR_MODELS["harnessrouter"] = {}     # filled by _hosted_models_refresh
 
-_VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
-                                 if c not in _TOKENROUTER_NO_CHANNEL}
+_SHARED_SLUGS = dict(_VENDOR_MODELS["openrouter"])   # the shared table before any aggregator's own edits
+_VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _SHARED_SLUGS.items() if c not in _TOKENROUTER_NO_CHANNEL}
 
 # OpenRouter dates a slug when a model gets a new snapshot while TokenRouter keeps serving the
 # plain name. The shared table holds the name TokenRouter serves (it is where the platform's
@@ -5681,7 +5681,7 @@ _OPENROUTER_RESLUG = {
 # llama-4-scout has no endpoint (HTTP 404), and the three Muse Spark ids answer HTTP 403 until the
 # account holder confirms 18+ on openrouter.ai; they come back here once that is done.
 _OPENROUTER_NO_CHANNEL = {"grok-4.1-fast", "llama-4-scout", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"}
-_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _VENDOR_MODELS["openrouter"].items()
+_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                                 if c not in _OPENROUTER_NO_CHANNEL}
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
@@ -5718,8 +5718,13 @@ _VERCEL_RESLUG = {
     "llama-4-scout":    "meta/llama-4-scout",
     "llama-3.3-70b":    "meta/llama-3.3-70b",
 }
-_VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
-                            for c, v in _VENDOR_MODELS["openrouter"].items()}
+# Vercel's Llama route refuses tools in streaming mode ("Tool calling is not supported for model:
+# meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", HTTP 405; "This model doesn't support tool
+# use in streaming mode", HTTP 400 on llama-3.3-70b) and caps output at 8192, so no harness can
+# drive a turn on it there; the same ids answer on OpenRouter (2026-09-13, every harness x 5).
+_VERCEL_NO_CHANNEL = {"llama-4-maverick", "llama-3.3-70b"}
+_VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
+                            if c not in _VERCEL_NO_CHANNEL}
 # Google AI Studio serves the catalog's Gemini models by their own ids.
 # Google AI Studio serves the whole family under the plain id (its /v1beta/models, 2026-09-06, on
 # the sponsored project; 40 generateContent-capable models, of which these eleven are chat models).
