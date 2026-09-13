@@ -1,7 +1,7 @@
 # Examples
 
 Example implementations of the Unified Harness Protocol, grouped by the
-[role](versions/2026-08-11/architecture.md#1-roles) each fills. Listings are
+[role](versions/2026-09-12/architecture.md#1-roles) each fills. Listings are
 community-maintained by pull request and **do not imply endorsement or
 certification** — the only conformance claim that means anything is
 [passing the conformance suite](conformance/README.md).

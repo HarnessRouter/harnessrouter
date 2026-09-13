@@ -51,11 +51,12 @@ def main(argv=None) -> int:
     if not a.plain:
         print("\r", end="")
 
-    print(render(results, a.base_url, a.cls, plain=a.plain))
+    discovery = ctx.state.get("discovery")
+    print(render(results, a.base_url, a.cls, plain=a.plain, discovery=discovery))
 
     if a.json_out:
         with open(a.json_out, "w") as f:
-            f.write(to_json(results, a.base_url, a.cls) + "\n")
+            f.write(to_json(results, a.base_url, a.cls, discovery=discovery) + "\n")
         print(f"  JSON report: {a.json_out}\n")
 
     bad = sum(1 for r in results if r.outcome in (Outcome.FAIL, Outcome.ERROR))
