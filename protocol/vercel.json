@@ -6,7 +6,7 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "redirects": [
-    { "source": "/spec", "destination": "/spec/2026-08-11", "permanent": false }
+    { "source": "/spec", "destination": "/spec/2026-09-12", "permanent": false }
   ],
   "headers": [
     {
