@@ -6874,7 +6874,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                          # event's message); its `result` is the answer so far, which a failed turn
                                          # may still carry. Reason first: a Gemini CLI turn that failed as a
                                          # substitution showed its finished answer as the error (2026-09-07).
-                                         "error": (s.get("error") or s.get("result") or "")[:200]})
+                                         # 2000, not 200: a CLI panic names its file after the first 200
+                                         # characters and 200 cut goose's tmp-dir panic at its path (2026-09-13).
+                                         "error": (s.get("error") or s.get("result") or "")[:2000]})
                 break
         _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
         if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name
