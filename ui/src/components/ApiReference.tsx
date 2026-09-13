@@ -321,6 +321,21 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
           <code> id</code> or <code>name</code>; returns <code>{`{ id, name, files: [{path, content|content_b64}] }`}</code>.</p>
       </Endpoint>
 
+      <Endpoint method="GET" path="/v1/harnesses/{id}/plugins/{name}/files">
+        <p className="hr-meta">The complete package of one installed plugin, byte for byte. A plugin is a
+          folder in the Agent Plugins format (<code>plugin.json</code> at its root, tools in
+          <code> mcp.json</code>, Skills under <code>skills/</code>), sent on create or update as
+          <code>{`plugins: [{ files: [{path, content|content_b64}] }]`}</code>. The record you read back carries
+          what the server derived from it: <code>manifest</code>, <code>mcpServers</code>, <code>skills</code>
+          and <code>skipped</code>, plus a <code>blob</code> handle that round-trips on PUT.</p>
+      </Endpoint>
+
+      <Endpoint method="GET" path="/v1/harnesses/{id}/plugin">
+        <p className="hr-meta">This agent&apos;s own tools and Skills as an Agent Plugins package, ready to
+          send to another agent&apos;s <code>plugins</code> or to write to disk for any client that reads the
+          format. Credentials are never included; each omission is listed in <code>skipped</code>.</p>
+      </Endpoint>
+
       <Endpoint method="GET" path="/v1/models">
         <p className="hr-meta">The current model catalog per engine, each with its default. Build model
           pickers from this, don&apos;t hardcode model names. The map is keyed by <b>backend</b>, not

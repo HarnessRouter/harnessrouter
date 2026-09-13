@@ -718,6 +718,35 @@ It is created in this self-hosted instance and authenticates requests to that CE
 neither a Cloud key, your Console password, nor the model-provider key configured
 in **Integrations**. Never put it in browser-side code or commit it to Git.
 
+### Install a plugin on a harness
+
+A plugin is a folder in the [Agent Plugins](https://agent-plugins.org) format: `plugin.json` at its
+root, tools in `mcp.json`, Skills under `skills/`. Installing one gives a harness all of it at once,
+and the harness records it as a named, versioned package it can export again. The starter kits ship
+their Skills this way, so a launched kit's harness shows the kit as an installed plugin.
+
+In the Console, open the harness, find **Plugins**, and choose **Install from folder**. Over the API,
+send the folder's files on create or update:
+
+```bash
+curl -s -X PUT "$HARNESSROUTER_BASE_URL/v1/harnesses/$HARNESS_ID" \
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"Contract Review Agent","base":"claude-code",
+       "plugins":[{"files":[
+         {"path":"plugin.json","content":"{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"contract-review\"}"},
+         {"path":"skills/risk-checklist/SKILL.md","content":"---\nname: risk-checklist\ndescription: Turn an agreement into a risk checklist.\n---\n..."}
+       ]}]}'
+```
+
+The record you read back carries what the server derived from the package (`manifest`,
+`mcpServers`, `skills`, and `skipped` for anything it could not load) and a `blob` handle that
+round-trips on the next PUT. The harness's own `mcpServers` and `skills` stay exactly what you wrote
+there; a plugin's components are listed on the plugin. Names must not collide across the harness and
+its enabled plugins, and a package that declares a process (a `stdio` server) is refused on a base
+that cannot run one. `GET /v1/harnesses/{id}/plugin` exports the harness's own tools and Skills as a
+package, credentials omitted. The full contract is the
+[Plugins chapter](https://unifiedharnessprotocol.org/spec/2026-09-12/plugins) of the protocol.
+
 ### Run a task
 
 This example assumes `HARNESSROUTER_API_KEY` is already set. Choose an installed harness and a
