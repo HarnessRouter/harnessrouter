@@ -5678,12 +5678,13 @@ _OPENROUTER_RESLUG = {
     "qwen3.8-max": "qwen/qwen3.8-max-0902",
     "grok-4.20":   "x-ai/grok-4.20",
 }
-# The same broken promise on OpenRouter's side (2026-09-13): the three Muse Spark ids answer HTTP
-# 403 until the account holder confirms 18+ on openrouter.ai; they come back here once that is
-# done. (llama-4-scout is not in the catalog at all: OpenRouter has no endpoint for it and on
-# Vercel seven of eight harnesses failed its artifact or recall scenario twice; llama-4-maverick
-# and llama-3.3-70b stay, on OpenRouter.)
-_OPENROUTER_NO_CHANNEL = {"muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"}
+# The same broken promise on OpenRouter's side, for the day an id has no endpoint there. Empty on
+# 2026-09-13: the three Muse Spark ids answered HTTP 403 ("18+ age confirmation", an attestation
+# on the OpenRouter account at /settings/preferences, not on the key) until the account holder
+# confirmed it, and answer since. A user whose own OpenRouter account has not confirmed sees the
+# same 403 on send. (llama-4-scout is not in the catalog at all: OpenRouter has no endpoint for it
+# and on Vercel seven of eight harnesses failed its artifact or recall scenario twice.)
+_OPENROUTER_NO_CHANNEL: set[str] = set()
 _VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                                 if c not in _OPENROUTER_NO_CHANNEL}
 
