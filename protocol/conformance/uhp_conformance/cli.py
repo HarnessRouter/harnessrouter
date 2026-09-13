@@ -30,9 +30,23 @@ def main(argv=None) -> int:
     p.add_argument("--json", dest="json_out", default="", help="Write a JSON report to this path")
     p.add_argument("--only", default="", help="Comma-separated check ids to run")
     p.add_argument("--plain", action="store_true", help="No ANSI colour")
+    p.add_argument("--header", action="append", default=[], metavar="NAME: VALUE",
+                   help="Extra header sent on every request, repeatable. For a target that "
+                        "needs something a stock client never sends, e.g. a bring-your-own-key "
+                        "host wanting the caller's model key. Never echoed into the report.")
+    p.add_argument("--label", default="",
+                   help="How the report names the implementation measured, e.g. 'SuperQode 2.3.1'")
     a = p.parse_args(argv)
 
-    ctx = Context(client=Client(a.base_url, a.api_key), harness_id=a.harness_id,
+    extra = {}
+    for item in a.header:
+        name, sep, value = item.partition(":")
+        if not sep or not name.strip():
+            print(f"--header expects 'NAME: VALUE', got {item!r}", file=sys.stderr)
+            return 2
+        extra[name.strip()] = value.strip()
+
+    ctx = Context(client=Client(a.base_url, a.api_key, headers=extra), harness_id=a.harness_id,
                   model=a.model, task_timeout=a.task_timeout)
 
     selected = checks_for(a.cls)
@@ -56,7 +70,7 @@ def main(argv=None) -> int:
 
     if a.json_out:
         with open(a.json_out, "w") as f:
-            f.write(to_json(results, a.base_url, a.cls, discovery=discovery) + "\n")
+            f.write(to_json(results, a.base_url, a.cls, discovery=discovery, label=a.label) + "\n")
         print(f"  JSON report: {a.json_out}\n")
 
     bad = sum(1 for r in results if r.outcome in (Outcome.FAIL, Outcome.ERROR))

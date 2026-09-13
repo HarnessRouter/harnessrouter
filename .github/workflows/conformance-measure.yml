@@ -1,0 +1,165 @@
+# Measure ANY implementation against the conformance suite and record the evidence.
+#
+# The examples page lists implementations by pull request, and the listing criteria say a
+# conformance level appears only once UHP publishes reproducible test evidence. This workflow is
+# how that evidence is produced: it runs the suite against the target named in its inputs, then
+# opens a pull request that adds the JSON report under protocol/conformance/reports/<slug>/. The
+# site build turns the newest report per slug into the level on the listing card and a badge at
+# /badges/<slug>.svg, so a badge can never say more than a report a reader can open.
+#
+# Two ways to reach a target:
+#   - a reachable server root (`base_url`), with its bearer in a repository secret;
+#   - commands that install and start the server here (`setup`, `start`), for an implementation
+#     with no public host, or whose public host is bring-your-own-key. The started server can be
+#     handed one secret in its environment (a model key), named by `server_env`.
+# A host that wants a header a stock client never sends (a caller's model key) gets it through
+# `header`, whose value is a secret; the suite never writes header values into the report.
+#
+# The report is recorded whatever the verdict, because a measured failure is evidence too and
+# the badge is derived from the highest class that fully passed. What stops the PR is a run that
+# measured nothing: an ERROR outcome (a suite bug) or discovery not answering.
+name: conformance-measure
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Directory under protocol/conformance/reports (lowercase, hyphens), e.g. superqode'
+        required: true
+      label:
+        description: 'How the report names what was measured, e.g. "SuperQode 2.3.1 serve uhp"'
+        required: true
+      class:
+        description: 'Conformance class to run'
+        type: choice
+        options: [core, extended, full]
+        default: core
+      base_url:
+        description: 'Server root to measure. Leave empty to start the server here with `start`.'
+        default: ''
+      bearer_secret:
+        description: 'Name of the repository secret holding the bearer token (also exported to `start` as UHP_MEASURE_BEARER)'
+        default: 'UHP_TARGET_KEY'
+      header:
+        description: 'Optional extra header NAME sent on every request (e.g. X-Provider-Api-Key)'
+        default: ''
+      header_secret:
+        description: 'Name of the repository secret holding that header value'
+        default: 'UHP_MEASURE_HEADER_VALUE'
+      setup:
+        description: 'Optional shell that installs the implementation (runs before `start`)'
+        default: ''
+      start:
+        description: 'Optional shell that starts the server in the background on http://127.0.0.1:8787 and exits'
+        default: ''
+      server_env:
+        description: 'Optional env var NAME the started server needs (e.g. GEMINI_API_KEY)'
+        default: ''
+      server_env_secret:
+        description: 'Name of the repository secret holding that value'
+        default: 'UHP_MEASURE_SERVER_SECRET'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    env:
+      OPEN_PR_APP_ID: ${{ secrets.OPEN_PR_APP_ID }}
+      SLUG: ${{ inputs.slug }}
+      LABEL: ${{ inputs.label }}
+      CLASS: ${{ inputs.class }}
+      BASE_URL: ${{ inputs.base_url || 'http://127.0.0.1:8787' }}
+      UHP_API_KEY: ${{ secrets[inputs.bearer_secret] }}
+      UHP_MEASURE_BEARER: ${{ secrets[inputs.bearer_secret] }}
+      HEADER_NAME: ${{ inputs.header }}
+      # A secret that does not exist reads as empty, so a name that was never set is harmless.
+      HEADER_VALUE: ${{ secrets[inputs.header_secret] }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e protocol/conformance
+
+      - name: Validate the slug
+        run: |
+          [[ "$SLUG" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "slug must be lowercase letters, digits and hyphens"; exit 2; }
+
+      - name: Install the implementation
+        if: ${{ inputs.setup != '' }}
+        run: ${{ inputs.setup }}
+
+      - name: Start the server here
+        if: ${{ inputs.start != '' }}
+        env:
+          # The one secret a started server may need, under the name the implementer asked for.
+          SERVER_ENV_NAME: ${{ inputs.server_env }}
+          SERVER_ENV_VALUE: ${{ secrets[inputs.server_env_secret] }}
+        run: |
+          if [ -n "$SERVER_ENV_NAME" ]; then export "$SERVER_ENV_NAME=$SERVER_ENV_VALUE"; fi
+          ${{ inputs.start }}
+
+      - name: Wait for discovery
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf -m 3 "$BASE_URL/v1/uhp" >/dev/null && exit 0
+            sleep 2
+          done
+          echo "no discovery document at $BASE_URL/v1/uhp after two minutes"; exit 1
+
+      - name: Run the suite
+        # The CLI exits 1 on any FAIL, which is a verdict, not an accident: it is recorded.
+        continue-on-error: true
+        run: |
+          args=(--base-url "$BASE_URL" --class "$CLASS" --task-timeout 300 --plain --label "$LABEL" --json report.json)
+          if [ -n "$HEADER_NAME" ]; then args+=(--header "$HEADER_NAME: $HEADER_VALUE"); fi
+          uhp-conformance "${args[@]}" | tee run.txt
+
+      - name: Refuse to record a run that measured nothing
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          r = json.load(open("report.json"))
+          checks = {c["id"]: c["outcome"] for c in r["checks"]}
+          errors = [i for i, o in checks.items() if o == "error"]
+          if errors:
+              sys.exit(f"ERROR outcomes are suite bugs, not evidence: {errors}")
+          if checks.get("D-01") != "pass":
+              sys.exit("discovery did not pass; nothing about this target was measured")
+          print("verdict:", "conformant" if r["conformant"] else "conformant with skips" if r["conformant_with_skips"] else "not conformant at the requested class",
+                "| highest class fully passed:", r["highest_class_passed"])
+          PY
+
+      - id: app
+        if: ${{ env.OPEN_PR_APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OPEN_PR_APP_ID }}
+          private-key: ${{ secrets.OPEN_PR_APP_PRIVATE_KEY }}
+
+      - name: Record the report by pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          DAY=$(date -u +%Y-%m-%d)
+          DEST="protocol/conformance/reports/$SLUG/$DAY-$CLASS.json"
+          mkdir -p "$(dirname "$DEST")"
+          cp report.json "$DEST"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="conformance/measure-$SLUG-$(date -u +%Y%m%d-%H%M)"
+          git checkout -b "$BRANCH"
+          git add "$DEST"
+          git commit -m "conformance: measure $LABEL at class $CLASS
+
+          Recorded by the conformance-measure workflow against $BASE_URL. The site
+          derives the listing level and the badge for $SLUG from the newest report
+          in this directory."
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "conformance: measure $LABEL ($CLASS)" \
+            --body "$(printf 'Measured by the `conformance-measure` workflow against `%s`, class %s. The report lands at `%s`; the site derives the level on the examples listing and the badge at `/badges/%s.svg` from it.\n\n```\n%s\n```' "$BASE_URL" "$CLASS" "$DEST" "$SLUG" "$(sed -n '/^  Summary/,$p' run.txt)")"
