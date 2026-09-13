@@ -230,15 +230,20 @@ render is reproducible. The provider-wide `tokenrouter` and `vercel` columns of 
 their result files were lost with the scratchpad, and their sections in the table are carried from the
 render of that date until the columns are measured again.
 
-## goose columns (2026-09-12, candidate 0.17.0-rc.1, goose 1.50.0, codex 0.154)
+## goose columns (2026-09-12/13, candidate 0.17.0-rc.3, goose 1.50.0, codex 0.154)
 
 Seven columns for the goose harness (PR #164), five scenarios per model, two workers per column,
-the served model read by the relay (goose's CLI never reports one): TokenRouter 158/160, Vercel
-177/180, OpenRouter 178/180, OpenAI 35/35, Azure OpenAI e2 35/35, Anthropic 38/40, and the hosted
-HarnessRouter door 158/160 through the official key ($3.36 for its 160 checks). Zero substitutions. Five ids only Vercel and OpenRouter serve (hunyuan-3, ling-3.0-flash,
+the served model read by the relay (goose's CLI never reports one): TokenRouter 154/155, Vercel
+199/200, OpenRouter 200/200, OpenAI 35/35, Azure OpenAI e2 35/35, Anthropic 35/35, and the hosted
+HarnessRouter door 155/155 through the official key ($2.35 for its 155 checks). Zero substitutions.
+The two misses: gpt-5.6-luna's recall after recycle on TokenRouter (the codex column's class), and
+qwen3.7-max's artifact turn on Vercel, which now reads FAILED with Vercel's own "Upstream stream
+ended before terminal chunk" (a provider error goose renders as prose; the runner fails the turn). Five ids only Vercel and OpenRouter serve (hunyuan-3, ling-3.0-flash,
 minimax-m3, nemotron-3-ultra, qwen3.7-flash) were measured on those two after the first pass
-(all five scenarios each), so goose's list is 40. Every miss but two is claude-opus-5 answering "The model returned an empty response" on the
-artifact and recall turns, on every provider including Anthropic itself, while its plain turns pass:
-left off goose's list. gemini-3.5-flash-lite answered one recall with a tool call on Vercel only.
+(all five scenarios each), so goose's list is 40. claude-opus-5 was measured on the first pass and left off goose's list: once a session holds a turn by
+another model (the switch scenario), Anthropic answers every further opus-5 request from goose with
+an empty stream and finish_reason content_filter (reproduced through the relay against Anthropic
+directly); the same session without the switch completes the tool task. The relay now records that
+finish and the turn fails with the provider's reason. gemini-3.5-flash-lite answered one recall with a tool call on Vercel only.
 The custom-harness dimension for goose needs `MCP_URL=https://mcp.context7.com/mcp` (deepwiki cannot
 handshake with goose, reproduced through goose's own extension flag); on Vercel all six claims pass.
