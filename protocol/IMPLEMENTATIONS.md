@@ -17,7 +17,7 @@ A server runs one or more harnesses behind the contract. Guide: [Implement a ser
 
 <div class="impl-list">
 
-<div class="impl-card">
+<div class="impl-card" id="harnessrouter-ce">
 <div class="impl-head"><a href="https://github.com/HarnessRouter/harnessrouter"><b>HarnessRouter Community Edition</b></a><span class="role role-server">Server</span></div>
 <p>Open-source runner that puts existing harnesses — Codex, Claude Code, Hermes — behind the UHP contract. HarnessRouter · Apache-2.0.</p>
 <p class="impl-meta">UHP 2026-08-11</p>
@@ -37,7 +37,7 @@ A client drives a UHP server. Guide: [Implement a client](CONNECTING.md).
 
 <div class="impl-list">
 
-<div class="impl-card">
+<div class="impl-card" id="superqode-client">
 <div class="impl-head"><a href="https://github.com/SuperagenticAI/superqode"><b>SuperQode</b></a><span class="role role-client">Client</span></div>
 <p>Harness-engineering framework that connects to a UHP server via <code>superqode connect uhp</code>. SuperagenticAI · Apache-2.0.</p>
 <p class="impl-meta">UHP 2026-09-12</p>
@@ -60,7 +60,11 @@ adding one card. To merge, an entry needs:
 
 A conformance level appears on a listing only once UHP publishes reproducible
 test evidence for that implementation; until then, absence of a level is
-expected, not a mark against the entry.
+expected, not a mark against the entry. The evidence is a report produced by
+the `conformance-measure` workflow and landed under `conformance/reports/<slug>/`;
+give your card `id="<slug>"` and the site shows the measured level and badge on
+it, generated from the report. How to get measured, and the badge to embed, are
+on the [conformance page](conformance/README.md#measured-implementations).
 
 Building an implementation? Start with [Implement a server](SERVING.md) or
 [Implement a client](CONNECTING.md).

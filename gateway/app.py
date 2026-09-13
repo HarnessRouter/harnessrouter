@@ -1073,6 +1073,16 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "cline"): "openai-api",
     ("tokenrouter", "cline"): "tokenrouter",   ("vercel", "cline"): "tokenrouter",
     ("llmtr", "cline"): "tokenrouter",
+    # goose (aaif-goose/goose) is a pure OpenAI chat/completions client through the loopback
+    # relay — its provider takes the endpoint as OPENAI_HOST + OPENAI_BASE_PATH, and the runner
+    # splits the relay's base into that pair — so it is wired like cline, for cline's reasons.
+    # No ("google", "goose") row: unprobed is unlisted, and Gemini through this surface is a
+    # request-shape question the matrix has to answer first (see cline's own gemini caveat).
+    ("anthropic", "goose"): "anthropic",       ("openai", "goose"): "openai",
+    ("azure-foundry", "goose"): "azure",
+    ("openrouter", "goose"): "openai-api",
+    ("tokenrouter", "goose"): "tokenrouter",   ("vercel", "goose"): "tokenrouter",
+    ("llmtr", "goose"): "tokenrouter",
     # custom: user-supplied endpoint + model + key. Maps to runner providers that can actually
     # drive a bring-your-own OpenAI/Anthropic endpoint — NOT codex, whose current releases speak
     # only the OpenAI Responses API and so cannot reach a custom chat/completions endpoint.
@@ -1082,6 +1092,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("custom", "omp"): "tokenrouter",
     ("custom", "qwen"): "openai-api",
     ("custom", "cline"): "openai-api",
+    ("custom", "goose"): "openai-api",
     # A custom endpoint that speaks the OpenAI Responses API drives codex (issue #149: a proxy
     # naming its models its own way). The runner's "tokenrouter" provider is exactly that shape:
     # OpenAI-compatible, base on the connection, wire_api responses.
@@ -1112,6 +1123,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
+    ("harnessrouter", "goose"): "tokenrouter",
 }
 
 
@@ -4520,7 +4532,11 @@ def _provider_backends(provider: str) -> list[str]:
 _CUSTOM_FORMAT_BACKENDS = {
     # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp"},
+    # goose speaks OpenAI chat/completions only on the path the runner builds (OPENAI_HOST +
+    # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
+    # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
+    # until it is — the picker greys out what the router cannot actually run.
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
@@ -5428,6 +5444,34 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "hunyuan-3":          "tencent/hy3",
         "ling-3.0-flash":     "inclusionai/ling-3.0-flash",
         "qwen3.7-flash":      "qwen/qwen3.7-flash",
+        # Added 2026-09-12 from the aggregators' own lists (OpenRouter and Vercel serve all seven,
+        # TokenRouter all but qwen3.8-27b): DeepSeek V4.1 Flash (Sept), Qwen 3.8 Flash (Aug 26) and the
+        # open-weight Qwen 3.8 27B, Qwen 3.7 Plus, Tencent Hy4 preview (Aug 28), NVIDIA Nemotron 3.5
+        # Lightning (Aug 11) and Nemotron 3 Super. Measured by the matrix before they are offered.
+        "deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+        "qwen3.8-flash":      "qwen/qwen3.8-flash",
+        "qwen3.8-27b":        "qwen/qwen3.8-27b",
+        "qwen3.7-plus":       "qwen/qwen3.7-plus",
+        "hunyuan-4-preview":  "tencent/hy4-preview",
+        "nemotron-3.5-lightning": "nvidia/nemotron-3.5-lightning",
+        "nemotron-3-super":   "nvidia/nemotron-3-super-120b-a12b",
+        # xAI and Meta (2026-09-13): every id answered a tool-bearing chat request on each
+        # aggregator that lists it (the exceptions are in the two no-channel sets below).
+        "grok-4.6":           "x-ai/grok-4.6",
+        "grok-4.5":           "x-ai/grok-4.5",
+        "grok-4.3":           "x-ai/grok-4.3",
+        "grok-4.20":          "x-ai/grok-4.20-beta",   # TokenRouter's name; OpenRouter drops -beta
+        # grok-4.1-fast is NOT listed: xAI retired grok-4-1-fast-reasoning on 2026-05-15 and serves
+        # the slug with grok-4.3 at grok-4.3's price (docs.x.ai/developers/migration/may-15-retirement);
+        # TokenRouter's answers name grok-4.3, Vercel's echo the asked id. A retired id served by
+        # another model is a substitution whatever the aggregator reports.
+        "grok-build-0.1":     "x-ai/grok-build-0.1",
+        "muse-spark-1.3":     "meta/muse-spark-1.3",
+        "muse-spark-1.2":     "meta/muse-spark-1.2",
+        "muse-spark-1.1":     "meta/muse-spark-1.1",
+        "muse-glimmer-30b":   "meta/muse-glimmer-30b",
+        "llama-4-maverick":   "meta-llama/llama-4-maverick",
+        "llama-3.3-70b":      "meta-llama/llama-3.3-70b-instruct",
     },
     # LLMTR is a Turkey-hosted gateway: models running on its own infrastructure in Turkey
     # beside the global frontier catalogue, behind one base_url and one key. Ids are
@@ -5550,6 +5594,10 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 # Re-test with a newer hermes before adding it back.
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
+    "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
+    # No Meta id is on TokenRouter's list (2026-09-13).
+    "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
+    "llama-4-maverick", "llama-3.3-70b",
     # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not these four.
     "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 }
@@ -5618,8 +5666,8 @@ async def _hosted_models_refresh(api_key: str = "", force: bool = False, models_
 
 _VENDOR_MODELS["harnessrouter"] = {}     # filled by _hosted_models_refresh
 
-_VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].items()
-                                 if c not in _TOKENROUTER_NO_CHANNEL}
+_SHARED_SLUGS = dict(_VENDOR_MODELS["openrouter"])   # the shared table before any aggregator's own edits
+_VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _SHARED_SLUGS.items() if c not in _TOKENROUTER_NO_CHANNEL}
 
 # OpenRouter dates a slug when a model gets a new snapshot while TokenRouter keeps serving the
 # plain name. The shared table holds the name TokenRouter serves (it is where the platform's
@@ -5628,8 +5676,17 @@ _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _VENDOR_MODELS["openrouter"].i
 # it answered "No available channel" (Hermes, 2026-09-05).
 _OPENROUTER_RESLUG = {
     "qwen3.8-max": "qwen/qwen3.8-max-0902",
+    "grok-4.20":   "x-ai/grok-4.20",
 }
-_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _VENDOR_MODELS["openrouter"].items()}
+# The same broken promise on OpenRouter's side, for the day an id has no endpoint there. Empty on
+# 2026-09-13: the three Muse Spark ids answered HTTP 403 ("18+ age confirmation", an attestation
+# on the OpenRouter account at /settings/preferences, not on the key) until the account holder
+# confirmed it, and answer since. A user whose own OpenRouter account has not confirmed sees the
+# same 403 on send. (llama-4-scout is not in the catalog at all: OpenRouter has no endpoint for it
+# and on Vercel seven of eight harnesses failed its artifact or recall scenario twice.)
+_OPENROUTER_NO_CHANNEL: set[str] = set()
+_VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
+                                if c not in _OPENROUTER_NO_CHANNEL}
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -5643,19 +5700,93 @@ _VERCEL_RESLUG = {
     "qwen3.7-max":        "alibaba/qwen3.7-max",
     "qwen3.8-max":        "alibaba/qwen3.8-max",
     "qwen3.7-flash":      "alibaba/qwen3.7-flash",
+    "qwen3.8-flash":      "alibaba/qwen3.8-flash",
+    "qwen3.8-27b":        "alibaba/qwen3.8-27b",
+    "qwen3.7-plus":       "alibaba/qwen3.7-plus",
     "mistral-medium-3.5": "mistral/mistral-medium-3.5",
     # Vercel publishes the z-ai models under `zai/`, not the `z-ai/` the other aggregators use.
     "glm-5.3":            "zai/glm-5.3",
     "glm-5.3-flash":      "zai/glm-5.3-flash",
     # Vercel lists the Gemini 3 Flash preview without the suffix (its /v1/models, 2026-09-06).
     "gemini-3-flash-preview": "google/gemini-3-flash",
+    # Vercel publishes xAI under `spacexai/` and splits 4.20 into reasoning and non-reasoning ids;
+    # the reasoning one is the model the other aggregators serve (2026-09-13).
+    "grok-4.6":       "spacexai/grok-4.6",
+    "grok-4.5":       "spacexai/grok-4.5",
+    "grok-4.3":       "spacexai/grok-4.3",
+    "grok-4.20":      "spacexai/grok-4.20-reasoning",
+    "grok-build-0.1": "spacexai/grok-build-0.1",
+    # Vercel publishes Llama under `meta/` without the -instruct suffix.
+    "llama-4-maverick": "meta/llama-4-maverick",
+    "llama-3.3-70b":    "meta/llama-3.3-70b",
 }
-_VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
-                            for c, v in _VENDOR_MODELS["openrouter"].items()}
+# Vercel's Llama route refuses tools in streaming mode ("Tool calling is not supported for model:
+# meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", HTTP 405; "This model doesn't support tool
+# use in streaming mode", HTTP 400 on llama-3.3-70b) and caps output at 8192, so no harness can
+# drive a turn on it there; the same ids answer on OpenRouter (2026-09-13, every harness x 5).
+_VERCEL_NO_CHANNEL = {"llama-4-maverick", "llama-3.3-70b"}
+_VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
+                            if c not in _VERCEL_NO_CHANNEL}
 # Google AI Studio serves the catalog's Gemini models by their own ids.
 # Google AI Studio serves the whole family under the plain id (its /v1beta/models, 2026-09-06, on
 # the sponsored project; 40 generateContent-capable models, of which these eleven are chat models).
 _VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")}
+
+
+# ── one order for every model list ────────────────────────────────────────────────────────────
+# Grouped by the vendor that made the model, newest first within the family, so a family's
+# generations sit together in every picker and table (deepseek-v4-pro, v4-flash and v4.1-flash
+# side by side, not split by other vendors' models). Applied to every backend catalog and every
+# provider table at import; an id this list does not know goes after the known ones, in the
+# order it was written. Add a new model to its family here, not at the end of a catalog.
+_MODEL_ORDER: tuple[str, ...] = (
+    # OpenAI
+    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+    "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
+    # Anthropic
+    "claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8",
+    "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+    # Google
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    # xAI
+    "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
+    # Meta
+    "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick",
+    "llama-3.3-70b",
+    # DeepSeek
+    "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
+    # Moonshot
+    "kimi-k3", "kimi-k2.7-code",
+    # Alibaba
+    "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
+    # Zhipu
+    "glm-5.3", "glm-5.3-flash",
+    # Mistral
+    "mistral-medium-3.5",
+    # StepFun
+    "step-3.7-flash",
+    # Tencent
+    "hunyuan-4-preview", "hunyuan-3",
+    # MiniMax
+    "minimax-m3",
+    # NVIDIA
+    "nemotron-3.5-lightning", "nemotron-3-ultra", "nemotron-3-super",
+    # inclusionAI
+    "ling-3.0-flash",
+)
+_MODEL_RANK = {m: i for i, m in enumerate(_MODEL_ORDER)}
+
+
+def _ordered_models(ids) -> list[str]:
+    """`ids` in the one model order: known ids by family and generation, unknown ones after, as given."""
+    seq = list(ids)
+    return sorted(seq, key=lambda m: (_MODEL_RANK.get(m, len(_MODEL_ORDER)), seq.index(m)))
+
+
+for _p, _t in list(_VENDOR_MODELS.items()):
+    _VENDOR_MODELS[_p] = {m: _t[m] for m in _ordered_models(_t)}
 
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
@@ -5773,7 +5904,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
-                          "qwen3.7-flash"]},
+                          "qwen3.7-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # pi (earendil-works pi coding agent) is multi-family the same way hermes is: the CLI's
     # unified LLM layer runs either family natively and anything OpenAI/Anthropic-compatible
     # through a custom provider. The list grew the same way hermes's did — a model is added when
@@ -5800,7 +5932,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
-                       "mistral-medium-3.5", "step-3.7-flash"]},
+                       "mistral-medium-3.5", "step-3.7-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
     # Responses) client pointed at our relay, with the package chosen per turn from the model
     # family (see _opencode_config, which mirrors _pi_models_json). The serving paths are
@@ -5817,7 +5950,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
     # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
     # every row below passed on TokenRouter, Vercel and Azure OpenAI. gpt-5.3-codex is NOT here:
@@ -5832,7 +5966,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+                        "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
     # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
@@ -5855,7 +5990,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]},
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
@@ -5863,7 +5999,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
-                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash"]},
+                      "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
     # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
     # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
@@ -5889,8 +6026,72 @@ _MODEL_CATALOG: dict[str, dict] = {
     # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
     # measures each provider column with the served-model rule as judge (2026-09-07).
     "omp": {"default": "gpt-5.4", "models": []},
+    # goose reaches models the way cline and qwen do — one OpenAI chat/completions client pointed
+    # at the loopback relay — so the serving PATHS here are the ones cline's rows already earned.
+    #
+    # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
+    # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
+    # the databricks provider format populates that — crates/goose-providers/src/openai.rs, the
+    # path every turn here takes, never sets it (v1.50.0). That left these rows unable to be
+    # substitution-checked, which is half the bar at the top of this table. It no longer does:
+    # every turn rides the loopback relay and the provider's own answer names `model`, so the
+    # relay reads it off the bytes as they pass and the runner stamps it on a result the CLI left
+    # unlabelled (_served_model_in / _relay_served_model, runner/server.py, pinned by
+    # runner/tests/test_relay_served_model.py). cline and qwen gain the same check for free.
+    # So these rows say "the id served it", not merely "the id completed a turn".
+    "goose": {"default": "gpt-5.4",
+              # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
+              # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
+              # the databricks provider format populates that — crates/goose-providers/src/openai.rs, the
+              # path every turn here takes, never sets it (v1.50.0). Every turn rides the loopback relay
+              # and the provider's own answer names `model`, so the relay reads it off the bytes as they
+              # pass and the runner stamps it on a result the CLI left unlabelled (_served_model_in /
+              # _relay_served_model, runner/server.py, pinned by runner/tests/test_relay_served_model.py).
+              # So these rows say "the id served it", not merely "the id completed a turn".
+              #
+              # The 40 ids the goose column MEASURED on 2026-09-12: five scenarios per model on
+              # TokenRouter, Vercel, OpenRouter, OpenAI, Azure, Anthropic and the hosted door, the served
+              # model read by the relay, zero substitutions (the last five, Vercel's and OpenRouter's own
+              # additions, on those two). One id measured and left OUT: claude-opus-5. Once a session holds a
+              # turn by another model (the matrix's switch scenario), Anthropic answers every further
+              # opus-5 request from goose with an empty stream and finish_reason "content_filter", which
+              # goose renders as "The model returned an empty response"; the same session without the
+              # switch completes the tool task. Reproduced through the relay against Anthropic directly on
+              # 2026-09-12; the aggregators forward that answer unchanged, so every column showed it (0 of 8
+              # artifact/recall checks). The other Claude ids continue such a history. The Responses-only
+              # ids stay out: goose is chat-only.
+              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                         "gpt-5.4-mini", "gpt-5.2",
+                         "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
+                         "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
+                         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                         "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash",
+                         "gemini-2.5-flash-lite",
+                         "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
+                         "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
+                         "glm-5.3", "glm-5.3-flash",
+                         "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash",
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
+# harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
+# tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
+# pi (it writes output.txt) and a switch under hermes.
+_NOT_OFFERED: dict[str, frozenset[str]] = {
+    "qwen": frozenset({"llama-4-maverick"}), "goose": frozenset({"llama-3.3-70b"}),
+    "hermes": frozenset({"llama-3.3-70b"}), "pi": frozenset({"llama-3.3-70b"}),
+}
+for _b, _e in _MODEL_CATALOG.items():
+    _gone = _NOT_OFFERED.get(_b, frozenset())
+    _e["models"] = _ordered_models(m for m in (_e.get("models") or []) if m not in _gone)   # one order everywhere, see _MODEL_ORDER
+# Ids OpenAI serves on the Responses API only (refused on /v1/chat/completions, measured
+# 2026-09-05/07), and the harnesses that speak chat/completions and nothing else. A limitation, not
+# an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
+# test forbids listing such an id for such a harness.
+RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -12891,6 +13092,29 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("subagent", "Subagent"), ("subagent_fork", "Subagent (fork)"),
                   ("workflow", "Workflow")],
         "tool_enforcement": "instruction",
+    },
+    "goose": {
+        "label": "goose", "backend": "goose", "status": "ready",
+        "system_prompt": ("You are goose, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The `developer` platform extension's tools, verbatim from DeveloperClient::get_tools()
+        # (v1.50.0). FIVE, and there is no file-read tool: reading is `shell` (cat), `tree` lists a
+        # directory. Labels are goose's own ToolAnnotations display names. A name that matches no
+        # tool would be dropped from the runner's available_tools allowlist and disable nothing
+        # while this table says otherwise — the silent no-op the opencode/qwen entries warn about,
+        # which is why this list is copied from the source rather than from the docs.
+        "tools": [("shell", "Shell"), ("write", "File Write"), ("edit", "Edit"),
+                  ("tree", "Tree"), ("read_image", "Read Image")],
+        # HARD, and it survives headless auto-approval — the two mechanisms are independent.
+        # GOOSE_MODE=auto makes the permission inspector return Allow before it ever reads the
+        # permission table (permission_inspector.rs), so permission.yaml's NeverAllow is NOT the
+        # lever here. available_tools is: extension_manager's fetch_all_tools gates on
+        # config.is_tool_available while BUILDING the model's tool list, so a tool left out never
+        # reaches the model and never reaches the inspector either. UHP §4.3 requires a hard block
+        # wherever the runtime supports per-tool restriction, so reporting this as "instruction"
+        # would understate what is actually enforced.
+        "tool_enforcement": "hard",
     },
     "opencode": {
         "label": "OpenCode", "backend": "opencode", "status": "ready",

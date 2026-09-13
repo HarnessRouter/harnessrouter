@@ -10,7 +10,7 @@ The world's first unified interface for agent harnesses.
 </h1>
 
 <p align="center">
-<a href="https://github.com/HarnessRouter/harnessrouter#js-repo-pjax-container" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
+<a href="https://github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-285AFF?logo=apache&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="License: Apache 2.0"></a>
   <a href="https://hub.docker.com/r/harnessrouter/harnessrouter"><img src="https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?style=flat&amp;logo=docker&amp;logoColor=white&amp;label=Docker+pulls&amp;labelColor=444c56&amp;color=285aff" alt="Docker pulls"></a>
   <a href="protocol/conformance"><img src="https://img.shields.io/badge/UHP-Full-16824B?style=flat&amp;labelColor=444c56" alt="UHP conformance: Full"></a>
@@ -19,7 +19,7 @@ The world's first unified interface for agent harnesses.
 
 **Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that brings Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends through one API.
 
-<a href="https://github.com/HarnessRouter/harnessrouter#js-repo-pjax-container" title="Back to the top to star this repository">
+<a href="https://github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository">
   <picture>
     <source media="(max-width: 600px)" srcset="docs/images/github-readme-star-cta-mobile.svg">
     <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
@@ -30,7 +30,7 @@ The world's first unified interface for agent harnesses.
 
 <a id="one-integration"></a>
 
-<img src="docs/images/2026-09-10-harnessrouter-integration-comparison-v4.gif" width="100%" alt="Animated illustration: compare four generic harnesses and 4 × 9 = 36 repeated responsibilities with one HarnessRouter product integration. Add a fifth harness in With while product integration stays one, then return to Without to see 5 × 9 = 45. With names Codex, Claude Code, Hermes, Pi, and DeepSeek Harness.">
+<img src="docs/images/2026-09-13-harnessrouter-integration-comparison-cropped-v5.gif" width="100%" alt="Animated diagram comparing separate harness integrations with one HarnessRouter API. Without HarnessRouter, four harnesses require 36 integration responsibilities, increasing to 45 with a fifth. With HarnessRouter, the product keeps one integration as harnesses are added.">
 
 HarnessRouter implements the [Unified Harness Protocol (UHP)](#the-unified-harness-protocol) and provides an OpenAI Responses-compatible API, handling persistent sessions, streaming progress, files, artifacts, cancellation, and structured failures.
 
@@ -40,12 +40,13 @@ HarnessRouter implements the [Unified Harness Protocol (UHP)](#the-unified-harne
 
 <picture>
   <source media="(max-width: 600px)" srcset="docs/images/benchmark-summary-mobile.svg">
-  <img src="docs/images/benchmark-summary.svg" width="100%" alt="Cost: 99.8% lower, from 223 to 0.47 credits. End-to-end latency: 3.2 times faster, from 4m 36s to 1m 25s. Each metric compares its own best and worst configurations on the same task.">
+  <img src="docs/images/benchmark-summary.svg" width="100%" alt="Cost: 99.8% lower, from 223 to 0.47 credits. End-to-end latency: 3.2 times faster, from 4m 36s to 1m 25s. Eight harness and model configurations on the same task. Each metric compares its best and worst results. The lowest-cost and fastest configurations vary by task.">
 </picture>
 
-Each metric compares the best and worst of eight configurations on the same task. [Methodology](https://harnessrouter.ai/benchmarks)
+Eight harness × model configurations on the same task. Each metric compares its best and worst results. The lowest-cost and fastest configurations vary by task. [Methodology](https://harnessrouter.ai/benchmarks)
 
-[Run locally →](#quickstart) · [Prefer managed agent harnesses? Explore HarnessRouter Cloud →](https://harnessrouter.ai)
+> [!TIP]
+> **Get started:** [Run locally](#quickstart) · [Integrate into your product](#use-the-api-directly) · [Starter kits](#starter-kits) · [Use managed Cloud](https://harnessrouter.ai)
 
 <a id="install"></a>
 
@@ -226,52 +227,49 @@ The default URL works when your backend and CE run on the same computer. From an
 
 <br>
 
-## See where agent harnesses fit in your product
+## Agent harnesses as pluggable backends for your product
 
-Build beyond coding: explore harness-powered presentations, spreadsheets, dashboards, and videos.
+Power agentic features in your product with agent harnesses, including knowledge-work tasks such as creating content and analyzing data. Explore these ready-to-use kits to see harnesses in action as pluggable backends.
 
 <table>
   <tr>
     <td width="50%" valign="top">
       <img src="docs/images/kit-slides.png" width="100%" alt="HarnessRouter Slides Starter Kit">
       <h3>Slides</h3>
-      <p>An agent harness creates slides from your brief; you edit the text, layout, and style on the canvas.</p>
+      <p>An agent harness turns your brief into slide content and layouts for an editable deck.</p>
     </td>
     <td width="50%" valign="top">
       <img src="docs/images/kit-sheets.png" width="100%" alt="HarnessRouter Sheets Starter Kit">
       <h3>Sheets</h3>
-      <p>An agent column runs a harness-backed agent for each row, using preceding columns as input and filling cells with results.</p>
-      <p>Requires another agent for the agent column.</p>
+      <p>An agent harness uses each row’s data to execute a task and writes the result back into the sheet.</p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <img src="docs/images/kit-dashboard.png" width="100%" alt="HarnessRouter Dashboards Starter Kit">
       <h3>Dashboards</h3>
-      <p>An agent harness reads your database schema and writes SQL for charts; the dashboard refreshes queries when opened.</p>
-      <p>Requires a database connection.</p>
+      <p>An agent harness reads your database schema and writes SQL queries to power dashboard charts.</p>
     </td>
     <td width="50%" valign="top">
       <img src="docs/images/kit-video.png" width="100%" alt="HarnessRouter Videos Starter Kit">
       <h3>Videos</h3>
-      <p>An agent harness plans shots and uses video tools to generate clips; you edit them on a timeline and export the film.</p>
-      <p>Video generation has additional per-clip costs.</p>
+      <p>An agent harness turns your brief into a shot plan and calls video tools to generate clips for the timeline.</p>
     </td>
   </tr>
 </table>
 
-[Explore the Starter Kits repository →](https://github.com/HarnessRouter/starter-kit)
-
-Starter Kits have [separate licensing terms](https://github.com/HarnessRouter/starter-kit#licensing) from Community Edition.
+[**Explore the Starter Kits →**](https://github.com/HarnessRouter/starter-kit)
 
 <details>
-<summary>Before launching a kit</summary>
+<summary>Setup notes &amp; licensing</summary>
 
-Open **Starter Kits** in the Console. Select a harness and model supported by your connected providers.
+**Start:** Open **Starter Kits** in the Console and select a harness and model supported by your connected providers.
 
 **Dashboards:** use a reachable database and a read-only database account. Set `HR_SECRET_KEY` to encrypt stored connections, and review the sample-row setting before connecting.
 
-[Read the kit setup guide →](docs/self-hosting-guide.md#starter-kits)
+**Licensing:** Starter Kits use [different terms](https://github.com/HarnessRouter/starter-kit#licensing) from Community Edition.
+
+[Setup guide →](docs/self-hosting-guide.md#starter-kits)
 
 </details>
 
@@ -358,18 +356,18 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
 | **Build** | [Cloud & integration docs](https://harnessrouter.ai/docs) · [API guide](#use-the-api-directly) · [Starter kits](https://github.com/HarnessRouter/starter-kit) |
 | **Deploy** | [Setup & operations](docs/self-hosting-guide.md) · [Local → Cloud](#local-to-cloud) · [HarnessRouter Cloud](https://harnessrouter.ai) |
 | **Protocol** | [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) |
-| **Community** | [Discord](https://discord.gg/nPcbwqVPb2) · [LinkedIn](https://linkedin.com/company/harnessrouter/) · [X](https://x.com/HARNESSROUTER) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) |
+| **Community** | [Join the community (Discord)](https://discord.gg/nPcbwqVPb2) · [Contribute](CONTRIBUTING.md) · [LinkedIn](https://linkedin.com/company/harnessrouter/) · [X](https://x.com/HARNESSROUTER) · [Security](SECURITY.md) |
 
 <br>
 
 ## Star History
 
 <p align="center">
-  <a href="https://github.com/HarnessRouter/harnessrouter#js-repo-pjax-container" title="Back to the top to star this repository">
+  <a href="https://www.star-history.com/#HarnessRouter/harnessrouter&amp;Date" title="Explore the full star history">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;theme=dark&amp;legend=top-left">
       <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left">
-      <img alt="HarnessRouter GitHub star history. Back to the top to star this repository." src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
+      <img alt="HarnessRouter GitHub star history. Open the full interactive chart." src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
     </picture>
   </a>
 </p>
