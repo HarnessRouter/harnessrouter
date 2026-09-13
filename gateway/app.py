@@ -5688,6 +5688,57 @@ _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v)
 # the sponsored project; 40 generateContent-capable models, of which these eleven are chat models).
 _VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")}
 
+
+# ── one order for every model list ────────────────────────────────────────────────────────────
+# Grouped by the vendor that made the model, newest first within the family, so a family's
+# generations sit together in every picker and table (deepseek-v4-pro, v4-flash and v4.1-flash
+# side by side, not split by other vendors' models). Applied to every backend catalog and every
+# provider table at import; an id this list does not know goes after the known ones, in the
+# order it was written. Add a new model to its family here, not at the end of a catalog.
+_MODEL_ORDER: tuple[str, ...] = (
+    # OpenAI
+    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+    "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
+    # Anthropic
+    "claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8",
+    "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+    # Google
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    # DeepSeek
+    "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
+    # Moonshot
+    "kimi-k3", "kimi-k2.7-code",
+    # Alibaba
+    "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
+    # Zhipu
+    "glm-5.3", "glm-5.3-flash",
+    # Mistral
+    "mistral-medium-3.5",
+    # StepFun
+    "step-3.7-flash",
+    # Tencent
+    "hunyuan-4-preview", "hunyuan-3",
+    # MiniMax
+    "minimax-m3",
+    # NVIDIA
+    "nemotron-3.5-lightning", "nemotron-3-ultra", "nemotron-3-super",
+    # inclusionAI
+    "ling-3.0-flash",
+)
+_MODEL_RANK = {m: i for i, m in enumerate(_MODEL_ORDER)}
+
+
+def _ordered_models(ids) -> list[str]:
+    """`ids` in the one model order: known ids by family and generation, unknown ones after, as given."""
+    seq = list(ids)
+    return sorted(seq, key=lambda m: (_MODEL_RANK.get(m, len(_MODEL_ORDER)), seq.index(m)))
+
+
+for _p, _t in list(_VENDOR_MODELS.items()):
+    _VENDOR_MODELS[_p] = {m: _t[m] for m in _ordered_models(_t)}
+
 # The chain path (_map_model) maps aggregator ids from the same table.
 _AGGREGATOR_SLUGS = _VENDOR_MODELS["openrouter"]
 
@@ -5975,6 +6026,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+for _b, _e in _MODEL_CATALOG.items():
+    _e["models"] = _ordered_models(_e.get("models") or [])   # one order everywhere, see _MODEL_ORDER
 # Ids OpenAI serves on the Responses API only (refused on /v1/chat/completions, measured
 # 2026-09-05/07), and the harnesses that speak chat/completions and nothing else. A limitation, not
 # an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
