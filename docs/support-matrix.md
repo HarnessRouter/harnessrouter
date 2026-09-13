@@ -264,7 +264,7 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 
 9 pairs, 43 of 44 scenario runs passed.
 
-Not run in this column, 49 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 52 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -305,6 +305,9 @@ Not run in this column, 49 pairs the provider serves that the harness did not ru
 - codex x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x muse-spark-1.2: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x muse-spark-1.3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -387,7 +390,7 @@ Not run in this column, 36 pairs the provider serves that the harness did not ru
 
 9 pairs, 43 of 44 scenario runs passed.
 
-Not run in this column, 51 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 50 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -413,7 +416,6 @@ Not run in this column, 51 pairs the provider serves that the harness did not ru
 - codex x gemini-3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x glm-5.3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x glm-5.3-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x grok-4.1-fast: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x grok-4.3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -555,6 +557,9 @@ Not run in this column, 51 pairs the provider serves that the harness did not ru
 | dsh | llama-4-maverick | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | muse-glimmer-30b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
+| dsh | muse-spark-1.1 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
+| dsh | muse-spark-1.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
+| dsh | muse-spark-1.3 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | dsh | nemotron-3-super | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | nemotron-3.5-lightning | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
@@ -564,7 +569,7 @@ Not run in this column, 51 pairs the provider serves that the harness did not ru
 | dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 
-53 pairs, 264 of 264 scenario runs passed.
+56 pairs, 279 of 279 scenario runs passed.
 
 Not run in this column, 5 pairs the provider serves that the harness did not run, with the reason:
 
@@ -865,7 +870,7 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 
 65 pairs, 324 of 325 scenario runs passed.
 
-Not run in this column, 283 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 301 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -905,6 +910,9 @@ Not run in this column, 283 pairs the provider serves that the harness did not r
 - cline x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x mistral-medium-3.5: not run, not run in this column
 - cline x muse-glimmer-30b: not run, not run in this column
+- cline x muse-spark-1.1: not run, not run in this column
+- cline x muse-spark-1.2: not run, not run in this column
+- cline x muse-spark-1.3: not run, not run in this column
 - cline x nemotron-3-super: not run, not run in this column
 - cline x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x nemotron-3.5-lightning: not run, not run in this column
@@ -952,6 +960,9 @@ Not run in this column, 283 pairs the provider serves that the harness did not r
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x mistral-medium-3.5: not run, not run in this column
 - dsh x muse-glimmer-30b: not run, not run in this column
+- dsh x muse-spark-1.1: not run, not run in this column
+- dsh x muse-spark-1.2: not run, not run in this column
+- dsh x muse-spark-1.3: not run, not run in this column
 - dsh x nemotron-3-super: not run, not run in this column
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x nemotron-3.5-lightning: not run, not run in this column
@@ -999,6 +1010,9 @@ Not run in this column, 283 pairs the provider serves that the harness did not r
 - hermes x minimax-m3: not run, not run in this column
 - hermes x mistral-medium-3.5: not run, not run in this column
 - hermes x muse-glimmer-30b: not run, not run in this column
+- hermes x muse-spark-1.1: not run, not run in this column
+- hermes x muse-spark-1.2: not run, not run in this column
+- hermes x muse-spark-1.3: not run, not run in this column
 - hermes x nemotron-3-super: not run, not run in this column
 - hermes x nemotron-3-ultra: not run, not run in this column
 - hermes x nemotron-3.5-lightning: not run, not run in this column
@@ -1046,6 +1060,9 @@ Not run in this column, 283 pairs the provider serves that the harness did not r
 - opencode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x mistral-medium-3.5: not run, not run in this column
 - opencode x muse-glimmer-30b: not run, not run in this column
+- opencode x muse-spark-1.1: not run, not run in this column
+- opencode x muse-spark-1.2: not run, not run in this column
+- opencode x muse-spark-1.3: not run, not run in this column
 - opencode x nemotron-3-super: not run, not run in this column
 - opencode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x nemotron-3.5-lightning: not run, not run in this column
@@ -1093,6 +1110,9 @@ Not run in this column, 283 pairs the provider serves that the harness did not r
 - pi x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x mistral-medium-3.5: not run, not run in this column
 - pi x muse-glimmer-30b: not run, not run in this column
+- pi x muse-spark-1.1: not run, not run in this column
+- pi x muse-spark-1.2: not run, not run in this column
+- pi x muse-spark-1.3: not run, not run in this column
 - pi x nemotron-3-super: not run, not run in this column
 - pi x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x nemotron-3.5-lightning: not run, not run in this column
@@ -1140,6 +1160,9 @@ Not run in this column, 283 pairs the provider serves that the harness did not r
 - qwen x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x mistral-medium-3.5: not run, not run in this column
 - qwen x muse-glimmer-30b: not run, not run in this column
+- qwen x muse-spark-1.1: not run, not run in this column
+- qwen x muse-spark-1.2: not run, not run in this column
+- qwen x muse-spark-1.3: not run, not run in this column
 - qwen x nemotron-3-super: not run, not run in this column
 - qwen x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x nemotron-3.5-lightning: not run, not run in this column
@@ -1503,7 +1526,7 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 
 65 pairs, 323 of 325 scenario runs passed.
 
-Not run in this column, 295 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 289 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -1528,7 +1551,6 @@ Not run in this column, 295 pairs the provider serves that the harness did not r
 - cline x gpt-5.6-sol: not run, not run in this column
 - cline x gpt-5.6-terra: not run, not run in this column
 - cline x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
-- cline x grok-4.1-fast: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x grok-4.20: not run, not run in this column
 - cline x grok-4.3: not run, not run in this column
 - cline x grok-4.5: not run, not run in this column
@@ -1577,7 +1599,6 @@ Not run in this column, 295 pairs the provider serves that the harness did not r
 - dsh x gpt-5.6-sol: not run, not run in this column
 - dsh x gpt-5.6-terra: not run, not run in this column
 - dsh x gpt-6-astra: not run, not run in this column
-- dsh x grok-4.1-fast: not run, not run in this column
 - dsh x grok-4.20: not run, not run in this column
 - dsh x grok-4.3: not run, not run in this column
 - dsh x grok-4.5: not run, not run in this column
@@ -1626,7 +1647,6 @@ Not run in this column, 295 pairs the provider serves that the harness did not r
 - hermes x gpt-5.6-sol: not run, not run in this column
 - hermes x gpt-5.6-terra: not run, not run in this column
 - hermes x gpt-6-astra: not run, not run in this column
-- hermes x grok-4.1-fast: not run, not run in this column
 - hermes x grok-4.20: not run, not run in this column
 - hermes x grok-4.3: not run, not run in this column
 - hermes x grok-4.5: not run, not run in this column
@@ -1675,7 +1695,6 @@ Not run in this column, 295 pairs the provider serves that the harness did not r
 - opencode x gpt-5.6-sol: not run, not run in this column
 - opencode x gpt-5.6-terra: not run, not run in this column
 - opencode x gpt-6-astra: not run, not run in this column
-- opencode x grok-4.1-fast: not run, not run in this column
 - opencode x grok-4.20: not run, not run in this column
 - opencode x grok-4.3: not run, not run in this column
 - opencode x grok-4.5: not run, not run in this column
@@ -1724,7 +1743,6 @@ Not run in this column, 295 pairs the provider serves that the harness did not r
 - pi x gpt-5.6-sol: not run, not run in this column
 - pi x gpt-5.6-terra: not run, not run in this column
 - pi x gpt-6-astra: not run, not run in this column
-- pi x grok-4.1-fast: not run, not run in this column
 - pi x grok-4.20: not run, not run in this column
 - pi x grok-4.3: not run, not run in this column
 - pi x grok-4.5: not run, not run in this column
@@ -1773,7 +1791,6 @@ Not run in this column, 295 pairs the provider serves that the harness did not r
 - qwen x gpt-5.6-sol: not run, not run in this column
 - qwen x gpt-5.6-terra: not run, not run in this column
 - qwen x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
-- qwen x grok-4.1-fast: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x grok-4.20: not run, not run in this column
 - qwen x grok-4.3: not run, not run in this column
 - qwen x grok-4.5: not run, not run in this column
@@ -2027,6 +2044,9 @@ Not run in this column, 2 pairs the provider serves that the harness did not run
 | goose | minimax-m3 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as minimax/minimax-m3 (the provider's alias of the same model) |
 | goose | mistral-medium-3.5 | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as mistralai/mistral-medium-3-5 (the provider's alias of the same model) |
 | goose | muse-glimmer-30b | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-glimmer-30b (the provider's alias of the same model) |
+| goose | muse-spark-1.1 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-spark-1.1 (the provider's alias of the same model) |
+| goose | muse-spark-1.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-spark-1.2 (the provider's alias of the same model) |
+| goose | muse-spark-1.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-spark-1.3 (the provider's alias of the same model) |
 | goose | nemotron-3-super | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as nvidia/nemotron-3-super-120b-a12b (the provider's alias of the same model) |
 | goose | nemotron-3-ultra | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as nvidia/nemotron-3-ultra-550b-a55b (the provider's alias of the same model) |
 | goose | nemotron-3.5-lightning | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
@@ -2038,7 +2058,7 @@ Not run in this column, 2 pairs the provider serves that the harness did not run
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as qwen/qwen3.8-max-0902 (the provider's alias of the same model) |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-55 pairs, 274 of 275 scenario runs passed.
+58 pairs, 289 of 290 scenario runs passed.
 
 Not run in this column, 3 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2135,7 +2155,7 @@ Not run in this column, 3 pairs the provider serves that the harness did not run
 | goose | gpt-5.6-luna | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-luna (the provider's alias of the same model) |
 | goose | gpt-5.6-sol | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-sol (the provider's alias of the same model) |
 | goose | gpt-5.6-terra | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-terra (the provider's alias of the same model) |
-| goose | grok-4.1-fast | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (the provider's alias of the same model) |
+| goose | grok-4.1-fast | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) |
 | goose | grok-4.20 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.20-reasoning (the provider's alias of the same model) |
 | goose | grok-4.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.3 (the provider's alias of the same model) |
 | goose | grok-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.5 (the provider's alias of the same model) |
@@ -2168,7 +2188,11 @@ Please retry if you think this is a transi |
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-max (the provider's alias of the same model) |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-60 pairs, 288 of 292 scenario runs passed.
+60 pairs, 283 of 287 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
+
+Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
+
+- goose x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
 Not run in this column, 3 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2314,6 +2338,9 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | omp | llama-4-maverick | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta-llama/llama-4-maverick (the provider's alias of the same model) |
 | omp | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as mistralai/mistral-medium-3-5 (the provider's alias of the same model) |
 | omp | muse-glimmer-30b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-glimmer-30b (the provider's alias of the same model) |
+| omp | muse-spark-1.1 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.1 (the provider's alias of the same model) |
+| omp | muse-spark-1.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.2 (the provider's alias of the same model) |
+| omp | muse-spark-1.3 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.3 (the provider's alias of the same model) |
 | omp | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as nvidia/nemotron-3-super-120b-a12b (the provider's alias of the same model) |
 | omp | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
 | omp | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as qwen/qwen3.7-max (the provider's alias of the same model) |
@@ -2323,7 +2350,7 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | omp | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as qwen/qwen3.8-max-0902 (the provider's alias of the same model) |
 | omp | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-52 pairs, 259 of 259 scenario runs passed.
+55 pairs, 274 of 274 scenario runs passed.
 
 Not run in this column, 6 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2425,7 +2452,7 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | omp | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-luna (the provider's alias of the same model) |
 | omp | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-sol (the provider's alias of the same model) |
 | omp | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-5.6-terra (the provider's alias of the same model) |
-| omp | grok-4.1-fast | FAIL | n/a | n/a | n/a | n/a | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (the provider's alias of the same model) ; first: The turn failed: Stream error occurred |
+| omp | grok-4.1-fast | FAIL | n/a | n/a | n/a | n/a | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) ; first: The turn failed: Stream error occurred |
 | omp | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.20-reasoning (the provider's alias of the same model) |
 | omp | grok-4.3 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.3 (the provider's alias of the same model) |
 | omp | grok-4.5 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.5 (the provider's alias of the same model) |
@@ -2452,7 +2479,11 @@ Tool calling is not supporte |
 | omp | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-max (the provider's alias of the same model) |
 | omp | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-57 pairs, 267 of 272 scenario runs passed.
+57 pairs, 267 of 271 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
+
+Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
+
+- omp x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
 Not run in this column, 6 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2550,6 +2581,9 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 | cline | llama-3.3-70b | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | cline | llama-4-maverick | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | cline | muse-glimmer-30b | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
+| cline | muse-spark-1.1 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
+| cline | muse-spark-1.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
+| cline | muse-spark-1.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | cline | nemotron-3-super | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter |  |
 | cline | nemotron-3.5-lightning | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter |  |
 | cline | qwen3.7-plus | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter |  |
@@ -2619,6 +2653,9 @@ session_id: 20260913_060549_70cbeb |
 | hermes | minimax-m3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | muse-glimmer-30b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
+| hermes | muse-spark-1.1 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
+| hermes | muse-spark-1.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
+| hermes | muse-spark-1.3 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | nemotron-3-ultra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
@@ -2662,6 +2699,9 @@ session_id: 20260913_060549_70cbeb |
 | opencode | llama-4-maverick | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta-llama/llama-4-maverick (the provider's alias of the same model) |
 | opencode | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | opencode | muse-glimmer-30b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-glimmer-30b (the provider's alias of the same model) |
+| opencode | muse-spark-1.1 | pass | pass | pass (gpt-6-astra) | pass | FAIL | OpenRouter | served as meta/muse-spark-1.1 (the provider's alias of the same model) ; recycle: answered without M1-muse-spark-1.1: What exact word did I ask you to reply with in my very first message of this task? Reply with just that  |
+| opencode | muse-spark-1.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.2 (the provider's alias of the same model) |
+| opencode | muse-spark-1.3 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.3 (the provider's alias of the same model) |
 | opencode | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as nvidia/nemotron-3-super-120b-a12b (the provider's alias of the same model) |
 | opencode | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
 | opencode | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
@@ -2703,6 +2743,9 @@ session_id: 20260913_060549_70cbeb |
 | pi | llama-4-maverick | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta-llama/llama-4-maverick (the provider's alias of the same model) |
 | pi | mistral-medium-3.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | retested once; first try:  |
 | pi | muse-glimmer-30b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-glimmer-30b (the provider's alias of the same model) |
+| pi | muse-spark-1.1 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.1 (the provider's alias of the same model) |
+| pi | muse-spark-1.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.2 (the provider's alias of the same model) |
+| pi | muse-spark-1.3 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as meta/muse-spark-1.3 (the provider's alias of the same model) |
 | pi | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as nvidia/nemotron-3-super-120b-a12b (the provider's alias of the same model) |
 | pi | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
 | pi | qwen3.7-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | retested once; first try:  |
@@ -2743,6 +2786,9 @@ session_id: 20260913_060549_70cbeb |
 | qwen | llama-4-maverick | pass | pass | pass (gpt-5.6-sol) | FAIL | pass | OpenRouter | served as meta-llama/llama-4-maverick (the provider's alias of the same model) ; artifact: no file card (files: none); create 'hello-qwen.txt'. [tool_call: write_file for file_path '/data/workspaces/hsess77f149599a1d465fb237581431a |
 | qwen | mistral-medium-3.5 | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | qwen | muse-glimmer-30b | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-glimmer-30b (the provider's alias of the same model) |
+| qwen | muse-spark-1.1 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-spark-1.1 (the provider's alias of the same model) |
+| qwen | muse-spark-1.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-spark-1.2 (the provider's alias of the same model) |
+| qwen | muse-spark-1.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as meta/muse-spark-1.3 (the provider's alias of the same model) |
 | qwen | nemotron-3-super | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter | served as nvidia/nemotron-3-super-120b-a12b (the provider's alias of the same model) |
 | qwen | nemotron-3.5-lightning | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
 | qwen | qwen3.7-max | pass | pass | pass (qwen3.8-max) | pass | pass | OpenRouter |  |
@@ -2752,9 +2798,9 @@ session_id: 20260913_060549_70cbeb |
 | qwen | qwen3.8-max | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | qwen | step-3.7-flash | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 
-209 pairs, 1041 of 1045 scenario runs passed.
+224 pairs, 1115 of 1120 scenario runs passed.
 
-Not run in this column, 139 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 142 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -2824,6 +2870,9 @@ Not run in this column, 139 pairs the provider serves that the harness did not r
 - dsh x llama-4-maverick: not run, not run in this column
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x muse-glimmer-30b: not run, not run in this column
+- dsh x muse-spark-1.1: not run, not run in this column
+- dsh x muse-spark-1.2: not run, not run in this column
+- dsh x muse-spark-1.3: not run, not run in this column
 - dsh x nemotron-3-super: not run, not run in this column
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x nemotron-3.5-lightning: not run, not run in this column
@@ -3223,7 +3272,7 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | hermes | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | opencode | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| opencode | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (the provider's alias of the same model) |
+| opencode | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) |
 | opencode | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.20-reasoning (the provider's alias of the same model) |
 | opencode | grok-4.3 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.3 (the provider's alias of the same model) |
 | opencode | grok-4.5 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.5 (the provider's alias of the same model) |
@@ -3243,7 +3292,7 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | opencode | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
 | opencode | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
 | pi | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| pi | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (the provider's alias of the same model) |
+| pi | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) |
 | pi | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.20-reasoning (the provider's alias of the same model) |
 | pi | grok-4.3 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.3 (the provider's alias of the same model) |
 | pi | grok-4.5 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.5 (the provider's alias of the same model) |
@@ -3263,7 +3312,7 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | pi | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
 | pi | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
 | qwen | deepseek-v4.1-flash | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| qwen | grok-4.1-fast | FAIL | n/a | n/a | n/a | n/a | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (the provider's alias of the same model) ; first: The turn failed: API Error: Stream error occurred |
+| qwen | grok-4.1-fast | FAIL | n/a | n/a | n/a | n/a | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) ; first: The turn failed: API Error: Stream error occurred |
 | qwen | grok-4.20 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.20-reasoning (the provider's alias of the same model) |
 | qwen | grok-4.3 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.3 (the provider's alias of the same model) |
 | qwen | grok-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.5 (the provider's alias of the same model) |
@@ -3283,7 +3332,13 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | qwen | qwen3.8-27b | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
 | qwen | qwen3.8-flash | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
 
-102 pairs, 443 of 462 scenario runs passed.
+102 pairs, 433 of 451 scenario runs passed; 3 pairs served by another connection or as another model are findings, not counted.
+
+Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
+
+- opencode x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
+- pi x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
+- qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
 Not run in this column, 213 pairs the provider serves that the harness did not run, with the reason:
 

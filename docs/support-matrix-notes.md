@@ -307,3 +307,8 @@ re-run once.
   notice); TokenRouter's answers named grok-4.3, Vercel's echoed the asked id. A retired id answered by
   another model is a substitution whatever the aggregator reports, so its Vercel passes are not a
   measurement of grok-4.1-fast. Eleven ids ship.
+- Addendum (2026-09-13, rc.14): Muse Spark on OpenRouter after the account's 18+ attestation
+  (settings/preferences; the gate is on the account, not the key): 24 pairs, 118/120 first pass. Two
+  recall misses on muse-spark-1.1; hermes passed its re-run, opencode missed twice. muse-spark-1.1 stays
+  on opencode because the same pair passes on Vercel; the miss is recorded. OpenRouter's no-channel set
+  is empty.
