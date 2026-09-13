@@ -302,3 +302,8 @@ re-run once.
   the model (spacexai/ on Vercel, x-ai/grok-4.20-beta on TokenRouter).
 - Found on the way: Vercel's table was derived from OpenRouter's already-edited copy, so an id OpenRouter
   lacks vanished from Vercel too (rc.11 derives every aggregator from the shared slugs).
+- Addendum (2026-09-13): grok-4.1-fast is not offered after all. xAI retired grok-4-1-fast-reasoning on
+  2026-05-15 and serves the slug with grok-4.3 at grok-4.3's price (docs.x.ai, May 15 retirement
+  notice); TokenRouter's answers named grok-4.3, Vercel's echoed the asked id. A retired id answered by
+  another model is a substitution whatever the aggregator reports, so its Vercel passes are not a
+  measurement of grok-4.1-fast. Eleven ids ship.
