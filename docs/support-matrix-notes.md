@@ -271,3 +271,34 @@ TokenRouter channel and is not run there.
   single re-run.
 - The 0.17.0 no-regression sample (two models per harness on TokenRouter, rc.3) is folded under the
   tokenrouter and per-harness tokenrouter labels.
+
+## xAI and Meta (2026-09-13, candidates 0.17.0-rc.10 and rc.11)
+
+Thirteen ids went in after one tool-bearing chat request per id on each aggregator that lists it:
+grok-4.6, grok-4.5, grok-4.3, grok-4.20, grok-4.1-fast, grok-build-0.1, muse-spark-1.3, muse-spark-1.2,
+muse-spark-1.1, muse-glimmer-30b, llama-4-maverick, llama-4-scout, llama-3.3-70b. The list that ships is
+what measured across hermes, dsh, opencode, pi, omp, qwen, cline and goose, five scenarios each, every miss
+re-run once.
+
+- TokenRouter serves the five Grok ids (grok-4.1-fast is listed but answered by grok-4.3, a substitution,
+  so it is off that table; no Meta id is listed): 40 pairs, 199/200. The miss: qwen on grok-4.20 replies
+  DONE without writing the file, twice.
+- Vercel: 104 pairs. Grok 240/240 plus grok-4.1-fast 25/28 (qwen, omp and cline end the first turn with
+  "Stream error occurred", twice; the other five harnesses pass). Muse Spark 1.3, 1.2, 1.1 and Muse
+  Glimmer 30B 160/160. Llama 4 Maverick and Llama 3.3 70B 0/16: Vercel's Llama route refuses tools in
+  streaming mode (HTTP 405 "Tool calling is not supported for model: meta-llama/Llama-4-Maverick-17B-128E-
+  Instruct-FP8", HTTP 400 "This model doesn't support tool use in streaming mode") and caps output at
+  8192, so no harness can drive a turn there; both ids are off Vercel's table. Llama 4 Scout 28/40: seven
+  of eight harnesses failed the artifact or the recall scenario twice; it is not in the catalog.
+- OpenRouter serves the five Grok ids, Muse Glimmer 30B, Llama 4 Maverick and Llama 3.3 70B (grok-4.1-fast
+  is not listed; llama-4-scout has no endpoint; the three Muse Spark ids answer HTTP 403 until the
+  account confirms 18+ on openrouter.ai): 64 pairs, 315/320. Misses, each twice: llama-4-maverick under
+  qwen writes the tool call as prose; llama-3.3-70b fails the recall under goose, writes output.txt
+  instead of the asked file under pi, and under hermes failed the artifact and recall once and a switch
+  on the re-run.
+- A pair that failed twice on the one aggregator serving the id is not offered on that harness
+  (gateway _NOT_OFFERED): grok-4.1-fast on qwen, omp and cline; llama-4-maverick on qwen; llama-3.3-70b
+  on goose, hermes and pi. Zero foreign connections; every served name is the aggregator's own id for
+  the model (spacexai/ on Vercel, x-ai/grok-4.20-beta on TokenRouter).
+- Found on the way: Vercel's table was derived from OpenRouter's already-edited copy, so an id OpenRouter
+  lacks vanished from Vercel too (rc.11 derives every aggregator from the shared slugs).
