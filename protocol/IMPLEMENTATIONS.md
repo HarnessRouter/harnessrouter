@@ -23,7 +23,7 @@ A server runs one or more harnesses behind the contract. Guide: [Implement a ser
 <p class="impl-meta">UHP 2026-08-11</p>
 </div>
 
-<div class="impl-card">
+<div class="impl-card" id="superqode">
 <div class="impl-head"><a href="https://github.com/SuperagenticAI/superqode"><b>SuperQode</b></a><span class="role role-server">Server</span></div>
 <p>Harness-engineering framework whose own harness speaks UHP natively through <code>superqode serve uhp</code>, binding one configured HarnessSpec. SuperagenticAI · Apache-2.0.</p>
 <p class="impl-meta">UHP 2026-09-12</p>
