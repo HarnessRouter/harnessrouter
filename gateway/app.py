@@ -12857,9 +12857,33 @@ def _kits() -> dict:
     return out
 
 
+def _kit_plugin(kit: dict) -> dict | None:
+    """The kit's plugin package, read whole from `<kit>/<harness.plugin>/` (an Agent Plugins
+    package: plugin.json at its root, the kit's skills under skills/). A launched Harness installs
+    it as a named, versioned plugin it can export, and the skills derive from the package; there
+    is no second list of them to keep in step. None when the kit ships no package."""
+    sub = str((kit.get("harness") or {}).get("plugin") or "")
+    root = pathlib.Path(_KITS_DIR) / str(kit.get("id") or "") / sub
+    if not sub or not (root / "plugin.json").is_file():
+        return None
+    files: list[dict] = []
+    for f in sorted(root.rglob("*")):
+        if not f.is_file() or f.stat().st_size > _SKILL_FILE_MAX:
+            continue
+        raw = f.read_bytes()
+        rel = f.relative_to(root).as_posix()
+        try:
+            files.append({"path": rel, "content": raw.decode()})
+        except UnicodeDecodeError:
+            files.append({"path": rel, "content_b64": base64.b64encode(raw).decode()})
+    return {"files": files, "enabled": True}
+
+
 def _kit_skills(kit: dict) -> list[dict]:
-    """A kit's own skills, read from its folder. Self-contained by design: a kit carries the
-    skills its Harness needs rather than depending on what the image happens to bundle."""
+    """A kit's own skills, read from its folder, for a kit built before kits shipped a plugin
+    package (harness.skills names them). Self-contained by design: a kit carries the skills its
+    Harness needs rather than depending on what the image happens to bundle. Retire this with
+    the last image whose kits bake predates the package layout."""
     root = pathlib.Path(_KITS_DIR) / str(kit.get("id") or "")
     out: list[dict] = []
     for name in (kit.get("harness") or {}).get("skills") or []:
@@ -14242,11 +14266,15 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         base, model = want_base, want_model
     else:
         base, model = await _kit_base(org, kit)
+    kit_plugin = _kit_plugin(kit)
     body = HarnessBody(name=spec.get("name") or kit.get("title") or kit_id,
                        base=base,
                        default_model=model,
                        system_prompt=spec.get("system_prompt") or "",
-                       skills=_kit_skills(kit),
+                       # A kit that ships a package installs it; its skills derive from the
+                       # package. A kit from before that layout still carries them directly.
+                       skills=[] if kit_plugin else _kit_skills(kit),
+                       plugins=[kit_plugin] if kit_plugin else [],
                        mcp_servers=spec.get("mcp_servers") or [],
                        disabled_tools=spec.get("disabled_tools") or [])
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)

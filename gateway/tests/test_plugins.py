@@ -226,3 +226,30 @@ def test_export_name_derivation():
     assert app._plugin_export_name({"name": "Contract Review Agent", "id": "chrn_x"}) == "contract-review-agent"
     assert app._plugin_export_name({"name": "acme..Tools  v2", "id": "chrn_x"}) == "acme.tools-v2"
     assert app._plugin_export_name({"name": "!!!", "id": "chrn_08da"}) == "chrn-08da"
+
+
+def test_a_kit_that_ships_a_package_launches_as_an_installed_plugin(api, tmp_path, monkeypatch):
+    """The starter kits carry their skills as an Agent Plugins package; launch installs it, and
+    the Harness records the kit as a named, versioned plugin rather than as loose skills."""
+    kid = "demo-kit"
+    plug = tmp_path / kid / "plugin"
+    (plug / "skills" / "demo-skill").mkdir(parents=True)
+    (plug / "plugin.json").write_text(json.dumps({"$schema": MANIFEST_SCHEMA, "name": "harnessrouter-demo",
+                                                   "version": "1.2.0", "description": "A kit."}))
+    (plug / "skills" / "demo-skill" / "SKILL.md").write_text("---\nname: demo-skill\ndescription: fixture\n---\n")
+    (plug / "skills" / "demo-skill" / "helper.py").write_text("print('hi')\n")
+    monkeypatch.setattr(app, "_KITS_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "_kits", lambda: {kid: {
+        "id": kid, "title": "Demo", "app": {"route": "/kits/demo"},
+        "harness": {"name": "Demo", "plugin": "plugin", "recommended": [{"base": "claude-code", "model": "claude-opus-5"}]}}})
+    r = api.post(f"/v1/kits/{kid}/launch", json={})
+    assert r.status_code == 200, r.text
+    h = r.json()["harness"]
+    assert h["skills"] == [], "the kit's skills come from the package, not the direct list"
+    (pl,) = h["plugins"]
+    assert pl["name"] == "harnessrouter-demo" and pl["manifest"]["version"] == "1.2.0"
+    assert [s["name"] for s in pl["skills"]] == ["demo-skill"] and pl["skipped"] == []
+    files = api.get(f"/v1/harnesses/{h['id']}/plugins/harnessrouter-demo/files").json()["files"]
+    assert sorted(f["path"] for f in files) == ["plugin.json", "skills/demo-skill/SKILL.md", "skills/demo-skill/helper.py"]
+    again = api.post(f"/v1/kits/{kid}/launch", json={})
+    assert again.status_code == 200 and again.json()["created"] is False and again.json()["harnessId"] == h["id"]
