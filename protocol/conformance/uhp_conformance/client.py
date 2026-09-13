@@ -41,6 +41,10 @@ class Client:
     api_key: str = ""
     timeout: float = 300.0
     calls: list = field(default_factory=list)
+    # Sent on every request, before the per-call headers. For targets that need something a
+    # stock UHP client never sends, such as a bring-your-own-key host that wants the caller's
+    # model key in a header of its own: the suite measures the protocol, the header pays for it.
+    headers: dict = field(default_factory=dict)
 
     def _url(self, path: str) -> str:
         return f"{self.base_url.rstrip('/')}{path}"
@@ -56,6 +60,7 @@ class Client:
             h["content-type"] = "application/json"
         if content_type:
             h["content-type"] = content_type
+        h.update({k.lower(): v for k, v in self.headers.items()})
         h.update({k.lower(): v for k, v in (headers or {}).items()})
 
         req = urllib.request.Request(url, data=raw, method=method, headers=h)
@@ -95,6 +100,7 @@ class Client:
         h = {"accept": "text/event-stream", "content-type": "application/json"}
         if self.api_key:
             h["authorization"] = f"Bearer {self.api_key}"
+        h.update({k.lower(): v for k, v in self.headers.items()})
         h.update({k.lower(): v for k, v in (headers or {}).items()})
         req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers=h)
 

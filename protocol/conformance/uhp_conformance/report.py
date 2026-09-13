@@ -111,7 +111,7 @@ def _wrap(text: str, width: int):
     return out or [""]
 
 
-def to_json(results, target: str, cls: str, discovery: dict | None = None) -> str:
+def to_json(results, target: str, cls: str, discovery: dict | None = None, label: str = "") -> str:
     n = {o.value: sum(1 for r in results if r.outcome is o) for o in Outcome}
     return json.dumps({
         "protocol": "uhp",
@@ -127,6 +127,10 @@ def to_json(results, target: str, cls: str, discovery: dict | None = None) -> st
         "suite_version": __version__,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "target": target,
+        # What was measured, as a name a reader recognises; the site shows this on the measured
+        # implementations list. The implementation block is what the server said about itself.
+        "target_label": label,
+        "implementation": (discovery or {}).get("implementation") or {},
         "requested_class": cls,
         # A skip is never a pass (README), and the consumer of this file is frequently not the
         # person who ran the suite — so the verdict field itself goes strict: a run in which
