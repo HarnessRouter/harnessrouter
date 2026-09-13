@@ -145,8 +145,10 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
         run: |
           set -euo pipefail
-          DAY=$(date -u +%Y-%m-%d)
-          DEST="protocol/conformance/reports/$SLUG/$DAY-$CLASS.json"
+          # Minute-stamped, so two runs on one day (a local bind in the morning, the public host
+          # in the afternoon) both stay on record; the site shows the newest by generated_at.
+          STAMP=$(date -u +%Y-%m-%dT%H%MZ)
+          DEST="protocol/conformance/reports/$SLUG/$STAMP-$CLASS.json"
           mkdir -p "$(dirname "$DEST")"
           cp report.json "$DEST"
           git config user.name "github-actions[bot]"
