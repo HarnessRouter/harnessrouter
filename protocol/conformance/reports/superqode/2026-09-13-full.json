@@ -3,13 +3,13 @@
   "protocol_version": "2026-09-12",
   "suite_protocol_version": "2026-09-12",
   "suite_version": "2026.9.12",
-  "generated_at": "2026-09-13T20:17:26Z",
-  "target": "http://127.0.0.1:8787",
-  "target_label": "SuperQode 2.3.1 serve uhp, local bind",
+  "generated_at": "2026-09-13T21:32:46Z",
+  "target": "https://uhp.superqode.dev",
+  "target_label": "SuperQode 2.3.1 uhp.superqode.dev",
   "implementation": {
     "name": "superqode",
     "version": "2.3.1",
-    "harness": "chrn_core"
+    "harness": "chrn_superqode_core"
   },
   "requested_class": "full",
   "conformant": false,
@@ -41,8 +41,8 @@
   ],
   "highest_class_passed": "core",
   "summary": {
-    "pass": 46,
-    "fail": 5,
+    "pass": 42,
+    "fail": 9,
     "skip": 23,
     "error": 0,
     "total": 74
@@ -198,7 +198,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-09-12/tasks.md#3-the-response-object",
       "outcome": "pass",
-      "detail": "status=completed in 1.7s"
+      "detail": "status=completed in 1.1s"
     },
     {
       "id": "T-02",
@@ -214,7 +214,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-09-12/tasks.md#13-model-selection-and-substitution",
       "outcome": "pass",
-      "detail": "model=gpt-5.4-mini"
+      "detail": "model=gemini-flash-latest"
     },
     {
       "id": "T-04",
@@ -222,7 +222,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-09-12/lifecycle.md#4-session-lifecycle",
       "outcome": "pass",
-      "detail": "session_id=hsess7c27ea24f4f7428e"
+      "detail": "session_id=hsess6bbb623ca4394a3a"
     },
     {
       "id": "T-05",
@@ -318,7 +318,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-09-12/streaming.md#1-opening-a-stream",
       "outcome": "pass",
-      "detail": "events spread over 0.8s"
+      "detail": "events spread over 1.1s"
     },
     {
       "id": "C-01",
@@ -326,7 +326,7 @@
       "class": "core",
       "spec": "protocol/versions/2026-09-12/sessions.md#1-continuing-a-session",
       "outcome": "pass",
-      "detail": "session hsess7c27ea24f4f7428e extended"
+      "detail": "session hsess6bbb623ca4394a3a extended"
     },
     {
       "id": "C-02",
@@ -342,39 +342,39 @@
       "class": "core",
       "spec": "protocol/versions/2026-09-12/sessions.md#4-cancelling",
       "outcome": "pass",
-      "detail": "final status=completed"
+      "detail": "final status=cancelled"
     },
     {
       "id": "X-01",
       "title": "Sessions can be listed",
       "class": "extended",
       "spec": "protocol/versions/2026-09-12/sessions.md#2-listing-sessions",
-      "outcome": "pass",
-      "detail": "4 session(s)"
+      "outcome": "fail",
+      "detail": "GET /v1/sessions returned HTTP 404"
     },
     {
       "id": "X-02",
       "title": "Session listing reports the end of pagination explicitly",
       "class": "extended",
       "spec": "protocol/versions/2026-09-12/sessions.md#2-listing-sessions",
-      "outcome": "pass",
-      "detail": ""
+      "outcome": "fail",
+      "detail": "the listing has no pagination marker, so a client must guess the end from a short page \u2014 a heuristic that is wrong whenever a page is exactly full"
     },
     {
       "id": "X-03",
       "title": "A session can be inspected",
       "class": "extended",
       "spec": "protocol/versions/2026-09-12/sessions.md#3-inspecting-a-session",
-      "outcome": "pass",
-      "detail": ""
+      "outcome": "fail",
+      "detail": "GET /v1/sessions/{id} returned HTTP 404"
     },
     {
       "id": "X-04",
       "title": "A session's turn history is available, in the specified shape",
       "class": "extended",
       "spec": "protocol/versions/2026-09-12/sessions.md#3-inspecting-a-session",
-      "outcome": "pass",
-      "detail": ""
+      "outcome": "fail",
+      "detail": "GET /v1/sessions/{id}/turns returned HTTP 404"
     },
     {
       "id": "X-05",
