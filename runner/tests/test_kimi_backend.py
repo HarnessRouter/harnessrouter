@@ -20,7 +20,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import (Auth, BACKENDS, _KIMI_TOOL_PATHS, _agent_doc_path,  # noqa: E402
+from server import (Auth, BACKENDS, _KIMI_SESSION_NAME, _KIMI_TOOL_PATHS,  # noqa: E402
+                    _agent_doc_path,
                     _build_kimi, _kimi_eof, _kimi_to_claude, _normalize_openai_chat_body,
                     _resume_lost)
 
@@ -41,11 +42,17 @@ def _norm(lines):
     return out, state
 
 
+def _body(lines):
+    """The turn's events with the system/init one dropped — it is asserted on its own below."""
+    out, state = _norm(lines)
+    return [e for e in out if e.get("subtype") != "init"], state
+
+
 # ── the stream's four line shapes ────────────────────────────────────────────────
 def test_assistant_text_is_a_plain_string_not_a_part_list():
     """Captured live: a text-only message carries `content` as a STRING. A normalizer that assumes
     claude's list-of-blocks (the flag name is the same, `stream-json`) renders nothing at all."""
-    out, state = _norm([{"role": "assistant", "content": "Created hello.txt. DONE"}])
+    out, state = _body([{"role": "assistant", "content": "Created hello.txt. DONE"}])
     assert out == [{"type": "assistant",
                     "message": {"content": [{"type": "text", "text": "Created hello.txt. DONE"}]}}]
     assert state["final"] == "Created hello.txt. DONE"
@@ -55,7 +62,7 @@ def test_tool_call_message_carries_a_list_content_and_does_not_overwrite_the_ans
     """Captured live: the tool-carrying message has `content: []` and the answer arrives after it.
     Taking `final` from the last assistant LINE rather than the last assistant TEXT would leave the
     turn's result empty."""
-    out, state = _norm([
+    out, state = _body([
         {"role": "assistant", "content": [],
          "tool_calls": [{"type": "function", "id": "call_1",
                          "function": {"name": "WriteFile",
@@ -75,7 +82,7 @@ def test_tool_call_message_carries_a_list_content_and_does_not_overwrite_the_ans
 
 
 def test_unparseable_tool_arguments_keep_the_raw_text_instead_of_dropping_the_call():
-    out, _ = _norm([{"role": "assistant", "content": [],
+    out, _ = _body([{"role": "assistant", "content": [],
                      "tool_calls": [{"id": "c9", "function": {"name": "Shell",
                                                               "arguments": "{not json"}}]}])
     assert out[0]["message"]["content"][0]["input"] == {"arguments": "{not json"}
@@ -83,8 +90,9 @@ def test_unparseable_tool_arguments_keep_the_raw_text_instead_of_dropping_the_ca
 
 def test_unknown_line_shapes_are_dropped_not_crashed():
     """Notifications and plan displays share the stream and carry no role we render."""
-    assert _kimi_to_claude({"id": "n1", "category": "task", "title": "done"}, {}) == []
-    assert _kimi_to_claude({"content": "a plan", "file_path": "/tmp/p.md"}, {}) == []
+    seen = {"_kimi_init": True}      # the init event is emitted once, before these
+    assert _kimi_to_claude({"id": "n1", "category": "task", "title": "done"}, seen) == []
+    assert _kimi_to_claude({"content": "a plan", "file_path": "/tmp/p.md"}, seen) == []
 
 
 # ── the turn's end: exit code is the status, and the reason comes from stdout ─────
@@ -242,3 +250,31 @@ def test_a_real_reasoning_effort_is_left_alone():
         body = json.dumps({"reasoning_effort": value,
                            "messages": [{"role": "user", "content": "hi"}]}).encode()
         assert json.loads(_normalize_openai_chat_body(body))["reasoning_effort"] == value
+
+
+# ── conversation continuity: the bug the support matrix found ────────────────────
+def test_the_first_turn_names_the_session_so_the_second_can_continue_it():
+    """MEASURED FAILURE this pins: with --session added only on a resume, the first turn wrote its
+    history under an id nobody could name again, so every follow-up silently started a new
+    conversation in the same workspace. The support matrix's recycle scenario failed on every kimi
+    row while first/follow-up/switch passed — those three never ask the agent to remember
+    anything, so nothing else noticed."""
+    cmd, _, _ = _argv()                     # a FIRST turn: no resume id
+    assert "--session" in cmd
+    assert cmd[cmd.index("--session") + 1] == _KIMI_SESSION_NAME
+
+
+def test_the_normalizer_reports_the_session_id_or_nothing_can_resume():
+    """_run_turn_bg records the conversation id ONLY from a system/init event, and that recorded id
+    is what the next turn resumes with. kimi's own stream carries no session id anywhere, so the
+    runner mints one and announces it here."""
+    out, _ = _norm([{"role": "assistant", "content": "hi"}])
+    init = out[0]
+    assert init["type"] == "system" and init["subtype"] == "init"
+    assert init["session_id"] == _KIMI_SESSION_NAME
+
+
+def test_the_init_event_is_emitted_once_per_turn():
+    out, _ = _norm([{"role": "assistant", "content": "one"},
+                    {"role": "assistant", "content": "two"}])
+    assert len([e for e in out if e.get("subtype") == "init"]) == 1
