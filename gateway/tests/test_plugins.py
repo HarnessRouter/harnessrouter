@@ -285,6 +285,12 @@ def test_a_kit_harness_from_before_the_package_gets_it_on_the_next_launch(api, t
                                                    "version": "1.1.0", "description": "A kit."}))
     newer = api.post(f"/v1/kits/{kid}/launch", json={}).json()["harness"]["plugins"]
     assert [p["manifest"]["version"] for p in newer] == ["1.1.0"]
+    # the same version with different bytes is a changed package too (the 2026-09-14 Skill fix)
+    (plug / "skills" / "demo-skill" / "SKILL.md").write_text("---\nname: demo-skill\ndescription: fixture, revised\n---\n")
+    revised = api.post(f"/v1/kits/{kid}/launch", json={}).json()["harness"]["plugins"][0]
+    assert revised.get("blob") != newer[0].get("blob"), "changed files under the same version are installed"
+    files = api.get(f"/v1/harnesses/{hid}/plugins/harnessrouter-demo/files").json()["files"]
+    assert any("revised" in (f.get("content") or "") for f in files)
 
 
 def test_an_update_cannot_change_the_base(api):
