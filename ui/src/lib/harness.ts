@@ -49,8 +49,23 @@ export interface CustomHarness {
   maxStep?: number | null;        // default agent step budget per turn (blank = 40)
   timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = server default)
   additionalHeaders?: string[]; // declared header NAMES callers pass per request (app-level auth)
+  // Installed plugins (UHP Plugins chapter). The server derives manifest, mcpServers, skills and
+  // skipped from the package on every save; a saved plugin round-trips as {name, enabled, blob}
+  // plus those derived fields, and a freshly picked one carries its `files` until it is saved.
+  plugins?: HarnessPlugin[];
   createdAt: number;
 }
+
+export type HarnessPlugin = {
+  name: string; enabled?: boolean; blob?: string;
+  files?: { path: string; content?: string; content_b64?: string }[];
+  manifest?: { name?: string; version?: string; description?: string; license?: string;
+               homepage?: string; repository?: string; keywords?: string[];
+               author?: { name?: string; email?: string; url?: string } };
+  mcpServers?: { name: string; transport?: string; url?: string; command?: string; args?: string[] }[];
+  skills?: { name: string; description?: string }[];
+  skipped?: { path: string; reason: string }[];
+};
 
 export const OOB: OobHarness[] = [
   { id: 'codex', name: 'Codex', version: 'v1.0.1', backend: 'codex', status: 'ready',
@@ -330,6 +345,7 @@ function harnessBody(input: Partial<CustomHarness> & { name: string; base: strin
     mcp_servers: input.mcpServers || [],
     skills: input.skills || [],
     disabled_tools: input.disabledTools || [],
+    plugins: input.plugins || [],
     max_step: input.maxStep || null,
     timeout_seconds: input.timeoutSeconds || null,
     additional_headers: input.additionalHeaders || [],
@@ -373,6 +389,32 @@ export async function deleteCustom(id: string): Promise<void> {
 
 /** Full files of one skill on a harness, resolving the server-side blob offload, used to
  *  hydrate a folder skill for editing when the record only carries {name, enabled, blob}. */
+let _pluginSchemas: Promise<string[]> | null = null;
+/** The Agent Plugins manifest schemas this server installs, from its discovery document; empty
+ *  when the server reports no plugin support (the Console then leaves the check to Save). */
+export function pluginSchemas(): Promise<string[]> {
+  if (!_pluginSchemas) {
+    _pluginSchemas = gw<{ capabilities?: Record<string, boolean>; plugin_schemas?: string[] }>('GET', '/v1/uhp')
+      .then((d) => (d.capabilities?.plugins ? (d.plugin_schemas || []) : []))
+      .catch(() => []);
+  }
+  return _pluginSchemas;
+}
+
+/** The complete package of one installed plugin, byte for byte (UHP Plugins §3.1). */
+export async function getPluginFiles(harnessId: string, name: string):
+  Promise<{ path: string; content?: string; content_b64?: string }[]> {
+  const r = await gw<{ files: { path: string; content?: string; content_b64?: string }[] }>(
+    'GET', `/v1/harnesses/${encodeURIComponent(harnessId)}/plugins/${encodeURIComponent(name)}/files`);
+  return r.files || [];
+}
+
+/** This Harness's own tools and Skills as an Agent Plugins package (UHP Plugins §5). Credentials
+ *  are never in it; each omission is listed in `skipped`. */
+export async function exportPlugin(harnessId: string): Promise<HarnessPlugin> {
+  return gw<HarnessPlugin>('GET', `/v1/harnesses/${encodeURIComponent(harnessId)}/plugin`);
+}
+
 export async function getSkillFiles(harnessId: string, skillId: string):
   Promise<{ path: string; content?: string; content_b64?: string }[]> {
   const r = await gw<{ files: { path: string; content?: string; content_b64?: string }[] }>(

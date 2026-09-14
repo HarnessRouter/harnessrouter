@@ -2009,3 +2009,45 @@ button.creq-srcstat.on b { color: var(--accent); }
    when the record actually knows the cause. The badge above it deliberately no longer names a
    cause, because it used to name the wrong one for interrupted turns. */
 .wbx-incomplete-why { font-size: 12.5px; color: var(--faint, #6e6760); margin: 4px 0 0 2px; }
+
+/* ── Plugins on the Harness page: one row per installed package, the same row grammar as the
+   Tools and Skills sections, expandable to what the server derived from it ─────────────── */
+.plugin-head{flex-wrap:wrap}
+.plugin-row .capability-copy{min-width:0}
+.plugin-row .capability-copy strong,.plugin-row .capability-copy span{overflow-wrap:anywhere}
+.plugin-row.is-off .capability-copy{opacity:.62}
+/* The four actions sit two per row beside the copy so the description keeps its width. The row
+   follows the width of the list it is in, not the viewport: the settings panel is narrow on a
+   1024 screen too. Under 680px the actions drop below the copy, two per row; under 340px (a phone) one per row. */
+.plugin-list{container-type:inline-size}
+.plugin-row .capability-actions{display:grid;grid-template-columns:repeat(2,minmax(104px,max-content));gap:6px 8px;justify-content:end;align-self:start;margin-top:2px}
+.plugin-row .capability-actions .button,.plugin-row .capability-actions .toggle-button{width:100%;min-width:0;justify-content:center}
+@container (max-width:680px){
+  .plugin-row{grid-template-columns:30px minmax(0,1fr)}
+  .plugin-row .capability-actions{grid-column:2;justify-content:start;margin-top:8px}
+  .plugin-details{grid-column:1 / -1}
+}
+@container (max-width:340px){
+  .plugin-row .capability-actions{grid-template-columns:1fr;width:100%}
+  .plugin-group li{grid-template-columns:1fr}
+}
+.plugin-row .capability-copy .plugin-title{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}   /* outranks the row's block strong, so the gap applies */
+.plugin-row .capability-copy .plugin-version{display:inline-flex;align-items:center;width:auto;margin:0;padding:1px 7px;border-radius:999px;
+  border:1px solid var(--line,#e7e7eb);background:rgba(255,255,255,.72);font:500 10.5px/1.6 var(--mono,ui-monospace,monospace);color:var(--muted,#6f6f78);white-space:nowrap}
+.plugin-row .capability-copy .plugin-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--muted,#6f6f78);font-size:12px;line-height:1.45}
+.plugin-row .capability-copy .plugin-facts{display:block;margin-top:4px;font-size:11.5px;color:var(--faint,#9696a0)}
+.plugin-warn{font-style:normal;color:#b45309}
+.plugin-details{grid-column:2 / -1;margin:6px 0 2px;padding:10px 12px;display:grid;gap:12px;border-radius:9px;background:rgba(255,255,255,.72);border:1px solid var(--line,#e7e7eb);font-size:12.5px;color:var(--muted,#6f6f78)}
+.plugin-group b{display:block;margin-bottom:6px;font-size:10.5px;font-weight:660;letter-spacing:.06em;text-transform:uppercase;color:var(--faint,#9696a0)}
+.plugin-group ul{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.plugin-group li{display:grid;grid-template-columns:minmax(120px,max-content) minmax(0,1fr);gap:10px;align-items:baseline}
+.plugin-group li code{font:500 12px/1.45 var(--mono,ui-monospace,monospace);color:var(--ink,#111317);word-break:break-all}
+.plugin-group li span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
+.plugin-group.is-warn code{color:#b45309}
+.plugin-note{margin:8px 0 0;padding:9px 12px;border-radius:8px;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.plugin-note.is-info{background:var(--subtle,#f7f7f9);color:var(--muted,#6f6f78)}
+.plugin-note.is-error{background:#fef2f2;color:#991b1b}
+@media (max-width:480px){
+  .plugin-head{display:grid;grid-template-columns:1fr;gap:8px}
+  .plugin-head .button{width:100%;justify-content:center}
+}

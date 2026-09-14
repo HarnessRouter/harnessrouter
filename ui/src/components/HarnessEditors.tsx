@@ -31,7 +31,7 @@ export type SkillFile = { path: string; content?: string; content_b64?: string }
 // anything else (binaries like .exe/.png, or text with embedded NULs) is base64-encoded into
 // `content_b64`. This keeps binary bytes intact AND keeps NUL out of any JSON string, a literal
 //  in skill content otherwise aborts the harness PUT at the Postgres layer.
-async function readSkillUpload(file: File, path: string): Promise<SkillFile> {
+export async function readSkillUpload(file: File, path: string): Promise<SkillFile> {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     try {
