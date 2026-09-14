@@ -50,6 +50,7 @@ import mimetypes
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -3694,44 +3695,66 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
 AIDER_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 AIDER_PYTHON = os.environ.get("HR_AIDER_PYTHON", "/data/agent-tools/aider-venv/bin/python")
 AIDER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aider_driver.py")
-# The MCP bridge binary (f/mcptools, MIT). aider ships no MCP client of any kind — zero source hits
-# across the whole 0.86.2 tree — so rather than record the capability as missing, the harness brings
-# one and lets the model reach it through the ONE tool surface aider has: a shell command it
-# proposes. The maintainer's 2026-09-13 decision: bridge the capability, then measure the claim for
-# real; "unsupported" is the fallback only where no bridge is possible.
-MCPTOOLS_BIN = os.environ.get("HR_MCPTOOLS_BIN", "/data/agent-tools/bin/mcptools")
+# aider's MCP client, runner/aider_mcp_bridge.py, run by the aider venv's own interpreter. aider
+# ships none of its own — zero source hits across the whole 0.86.2 tree — so rather than record the
+# capability as missing, the harness brings one and lets the model reach it through the ONE tool
+# surface aider has: a shell command it proposes. The maintainer's 2026-09-13 decision: bridge the
+# capability, then measure the claim for real.
+AIDER_MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aider_mcp_bridge.py")
 
 
-def _aider_mcp_block(mcp_servers: list[dict] | None) -> str:
-    """The bridge, written into the context aider reads, in the CLI's own call form.
-
-    Listing the servers is all the runner can do from here: their tool NAMES are only knowable by
-    asking the server, which needs a live connection at turn time. `mcptools tools <url>` is
-    therefore part of the instruction, so the model discovers the tools the same way a person would,
-    and `mcptools call` is the form runner/aider_driver.py's gate recognises — a call made this way
-    is recorded under the MCP tool's own name, so the support matrix measures `mcp_called` from a
-    command that actually ran rather than from a capability we claimed."""
-    rows = []
+def _aider_mcp_servers(mcp_servers: list[dict] | None) -> dict:
+    """The declared servers, keyed by the NAME the model will use. Named rather than URL'd so the
+    model cannot invent an endpoint: it says `hr-mcp call <name> …` and the mapping is ours."""
+    out: dict = {}
     for i, sv in enumerate(mcp_servers or []):
         if not isinstance(sv, dict):
             continue
         name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
         url = (sv.get("url") or "").strip()
         if url:
-            rows.append(f"- `{name}` — streamable HTTP at {url}")
+            entry: dict = {"url": url}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
         elif sv.get("command"):
             cmd = sv["command"]
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
-            rows.append(f"- `{name}` — stdio: `{' '.join(str(x) for x in argv)}`")
-    if not rows:
+            entry = {"command": argv[0],
+                     "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        out[name] = entry
+    return out
+
+
+def _aider_mcp_block(servers: dict) -> str:
+    """The bridge, in the context aider reads, in the exact form the driver's gate recognises.
+
+    Listing the servers is all the runner can do from here: their tool NAMES are only knowable by
+    asking the server, which needs a live connection at turn time. So `hr-mcp tools <server>` is
+    part of the instruction — the model discovers the tools the way a person would — and
+    `hr-mcp call` is what the gate matches, so a call made this way is recorded under the MCP
+    tool's own name and the support matrix measures `mcp_called` from a command that actually ran
+    rather than from a capability we claimed."""
+    if not servers:
         return ""
+    rows = []
+    for name, entry in servers.items():
+        if entry.get("url"):
+            rows.append(f"- `{name}` — streamable HTTP")
+        else:
+            rows.append(f"- `{name}` — stdio")
     return ("\n## MCP servers\n\n"
-            "These MCP servers are available to you through the `mcptools` command. They are real "
+            "These MCP servers are available to you through the `hr-mcp` command. They are real "
             "tools: use them when the task calls for one.\n\n"
             + "\n".join(rows) + "\n\n"
-            "List a server's tools with `mcptools tools <url-or-command>`, and call one with\n\n"
+            "List a server's tools with `hr-mcp tools <server>`, and call one with\n\n"
             "```bash\n"
-            "mcptools call <server> <tool> --params '{\"key\": \"value\"}'\n"
+            "hr-mcp call <server> <tool> --params '{\"key\": \"value\"}'\n"
             "```\n\n"
             "Propose the command in a ```bash block as you would any other shell command.\n")
 
@@ -3754,7 +3777,28 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["HOME"] = str(pathlib.Path(cwd) / ".harness" / "home")
     pathlib.Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
-    env["PATH"] = os.path.dirname(MCPTOOLS_BIN) + os.pathsep + env.get("PATH", os.environ.get("PATH", ""))
+    # The MCP bridge, and the only reason aider can reach an MCP server at all. The shim is written
+    # per turn rather than installed once because it has to name the aider venv's interpreter and
+    # the bridge beside this file, both of which are known here and nowhere else.
+    servers = _aider_mcp_servers(mcp_servers)
+    bindir = pathlib.Path(cwd) / ".harness" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    cfg = pathlib.Path(cwd) / ".harness" / "aider-mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": servers}, indent=2))
+    shim = bindir / "hr-mcp"
+    shim.write_text("#!/bin/sh\nexec %s %s --config %s \"$@\"\n"
+                    % (shlex.quote(AIDER_PYTHON), shlex.quote(AIDER_MCP_BRIDGE), shlex.quote(str(cfg))))
+    shim.chmod(0o755)
+    env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", os.environ.get("PATH", ""))
+    # The block is APPENDED to the agent doc the turn already wrote, which aider reads through
+    # --read. Without this the bridge exists and the model is never told it does — the defect this
+    # call site is here to prevent, caught because the block was generated and never used.
+    if servers:
+        doc = _agent_doc_path(cwd, "aider")
+        try:
+            doc.write_text((doc.read_text() if doc.exists() else "") + _aider_mcp_block(servers))
+        except OSError:
+            pass
     # aider resolves a BARE id against its own MODEL_ALIASES table, which rewrites 21 of them —
     # `gemini-2.5-pro` among them, an id this product's catalog also serves. An `openai/` prefix
     # routes through litellm's openai provider verbatim and skips that table entirely, so the id the

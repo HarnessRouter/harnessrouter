@@ -402,10 +402,30 @@ command is refused and the file it would have written does not appear; with it e
 runs and its output is reported.
 
 **MCP reaches aider through a bridge, because aider has no MCP client at all** — zero source hits
-for MCP across the whole tree. `mcptools` (f/mcptools, MIT) is installed beside aider, the declared
-servers are listed in the context aider reads with the `mcptools call <server> <tool>` form, and the
-gate recognises that form and records the call under the MCP tool's own name. So `mcp_called` is
-measured from a command that actually ran.
+for MCP across the whole tree. The bridge (`runner/aider_mcp_bridge.py`) is built on the official MCP
+Python SDK (`mcp`, MIT), installed into aider's own venv, and exposed to the model as `hr-mcp`: the
+declared servers are listed by NAME in the context aider reads — so the model cannot invent an
+endpoint — and the gate recognises `hr-mcp call <server> <tool>` and records it under the MCP tool's
+own name. `mcp_called` is therefore measured from a command that actually ran.
+
+f/mcptools was the first choice and is not usable here: it is a Go program that publishes **no
+binaries on any release** (checked every release through v0.7.1 — all have zero assets), so it would
+have meant adding a Go toolchain to a `python:3.12-slim` image for one command. The official SDK is
+also the more defensible component — the protocol's own reference implementation rather than a third
+party's wrapper around it.
+
+Measured live against public servers, at no cost: `hr-mcp tools context7` lists both of its tools
+with their schemas (exit 0); a correct `call` returns the server's content (exit 0); a call with the
+wrong parameters relays the server's own validation error and **exits 1**, so the agent sees a failed
+command rather than an answer-shaped one; an unknown server name exits 2 and names the ones that
+exist. **deepwiki works through this bridge** — worth recording because goose cannot handshake with
+it, so aider's custom-harness row needs no `MCP_URL` override.
+
+Two field-name traps were found by running it rather than reading about it: the 2.2.0 SDK is
+snake_case (`input_schema`, `structured_content`, `is_error`), not the camelCase of older releases,
+and a wrong name raised inside anyio's TaskGroup and surfaced as the useless sentence "unhandled
+errors in a TaskGroup (1 sub-exception)". The bridge unwraps ExceptionGroups so an MCP failure
+reaches the agent as a real message.
 
 **The edit format is pinned to `diff`, and it is load-bearing.** Shell commands are extracted in
 `editblock_coder.get_edits()`; `wholefile`, `udiff` and `patch` never populate `shell_commands`, so
@@ -422,6 +442,10 @@ itself. One hazard found and fixed while measuring it: `init_before_message()` e
 `shell_commands` once per TURN, not per reflection, so the first version re-ran every executed
 command on each pass — one command ran four times, four round trips instead of two, side effects
 repeated. The driver now clears the list after running it, pinned by a test.
+
+The cost ceiling is aider's own: `Coder.max_reflections` is 3, so a model that keeps proposing the
+same command after seeing its output costs at most three extra round trips and three executions,
+not an unbounded loop. Observed with a stub that answers identically every time.
 
 **Model ids are sent with an `openai/` prefix.** A bare id is resolved against aider's own
 `MODEL_ALIASES` (`models.py:87-111`), which rewrites 21 of them including `gemini-2.5-pro`, an id
@@ -444,7 +468,10 @@ checkpoint repo's, and `--no-gitignore` stops it appending to the `.gitignore` t
 aider is not in the default `HR_BACKENDS` per the 300 MB line. Note the Python floor: 0.86.2
 declares `Requires-Python <3.13,>=3.10`, and on an interpreter outside that range pip does not fail
 — it silently offers an older aider (0.82.3 on 3.9) with none of the behaviour above. The installer
-asserts the imported version to turn that into a hard failure.
+asserts the imported version to turn that into a hard failure. Installing the MCP SDK into the same
+venv bumps `idna` past aider's own `idna==3.11` pin; aider was re-verified running end to end
+afterwards, so that pin is advisory here — but it is why the SDK goes in aider's venv and not the
+runner's, where the same class of bump breaks FastAPI outright.
 
 **Known limitation: no tool loop, so the custom-harness dimension's disabled tool is not aider's.**
 The request body's keys are exactly `['messages','model','temperature']` — no `tools`, no

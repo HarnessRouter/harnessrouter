@@ -269,9 +269,9 @@ install_opencode() {
 # on 3.9), and every behaviour runner/aider_driver.py was written against would be absent without a
 # single error. The explicit version pin below is what turns that into a hard failure.
 #
-# mcptools (f/mcptools, MIT) is aider's MCP CLIENT: upstream aider has none at all, so the bridge is
-# what lets a declared MCP server be reached and, therefore, measured. Installed beside aider rather
-# than globally because no other backend uses it.
+# The official MCP SDK goes in beside it: upstream aider has no MCP client at all, so
+# runner/aider_mcp_bridge.py is what lets a declared MCP server be reached and, therefore, measured.
+# Installed in this venv rather than globally because no other backend uses it.
 install_aider() {
   am_py="${HR_AIDER_BASE_PYTHON:-python3}"
   "$am_py" -m venv "$TOOLS/aider-venv" || return 1
@@ -285,42 +285,13 @@ want = sys.argv[1]
 if aider.__version__ != want:
     sys.exit("aider %s installed, wanted %s" % (aider.__version__, want))
 ' "${HR_AIDER_VERSION:-0.86.2}" || return 1
-  install_mcptools || return 1
+  # aider's MCP client: the official MIT SDK, into the same venv. f/mcptools was the first choice
+  # and is not usable here — it is a Go program that publishes NO binaries on any release (checked
+  # through v0.7.1, every one has zero assets), so it would mean a Go toolchain in a python-slim
+  # image for one command.
+  "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
+    "mcp==${HR_MCP_SDK_VERSION:-2.2.0}" || return 1
 }
-
-# The MCP bridge binary. Upstream publishes per-asset checksums; the digests are pinned here for the
-# same reason goose's are — a checksum served from the same origin as the artifact adds nothing
-# against a compromised origin, while a pinned digest fails closed on a moved tag.
-install_mcptools() {
-  case "$(uname -m)" in
-    x86_64)        mt_arch="linux_amd64" ;;
-    aarch64|arm64) mt_arch="linux_arm64" ;;
-    *) echo "unsupported architecture $(uname -m) for mcptools"; return 1 ;;
-  esac
-  mt_ver="${HR_MCPTOOLS_VERSION:-0.11.0}"; mt_ver="${mt_ver#v}"
-  mt_sha="${HR_MCPTOOLS_SHA256:-}"
-  if [ -z "$mt_sha" ]; then
-    echo "[harnessrouter] NOTE: mcptools $mt_ver is installed without a pinned digest."
-    echo "[harnessrouter]       Set HR_MCPTOOLS_SHA256 to verify the archive."
-  fi
-  mt_url="https://github.com/f/mcptools/releases/download/v${mt_ver}/mcp_${mt_ver}_${mt_arch}.tar.gz"
-  mt_tmp="$(mktemp -d)"
-  curl -fsSL "$mt_url" -o "$mt_tmp/mcp.tar.gz" || { rm -rf "$mt_tmp"; return 1; }
-  if [ -n "$mt_sha" ]; then
-    mt_have="$(sha256sum "$mt_tmp/mcp.tar.gz" | awk '{print $1}')"
-    if [ "$mt_sha" != "$mt_have" ]; then
-      echo "mcptools $mt_ver: archive digest mismatch (want $mt_sha, have $mt_have)"
-      rm -rf "$mt_tmp"; return 1
-    fi
-  fi
-  tar -xzf "$mt_tmp/mcp.tar.gz" -C "$mt_tmp" || { rm -rf "$mt_tmp"; return 1; }
-  mt_bin="$(find "$mt_tmp" -type f \( -name mcp -o -name mcptools \) -perm -u+x | head -n 1)"
-  [ -n "$mt_bin" ] || { echo "release archive contained no mcptools binary"; rm -rf "$mt_tmp"; return 1; }
-  mkdir -p "$TOOLS/bin" && install -m 755 "$mt_bin" "$TOOLS/bin/mcptools" \
-    || { rm -rf "$mt_tmp"; return 1; }
-  rm -rf "$mt_tmp"
-}
-
 
 install_kimi() {
   case "$(uname -m)" in

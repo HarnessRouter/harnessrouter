@@ -55,7 +55,7 @@ class _Gate:
     US choosing it, and is deliberately not used anywhere in this backend.)
 
     Two kinds of name are matched against the policy:
-      * `mcptools call <server> <tool>` — the MCP bridge's call form, so a disabled MCP tool is
+      * `hr-mcp call <server> <tool>` — the MCP bridge's call form, so a disabled MCP tool is
         refused by the tool's own name;
       * the command's argv[0], so a disabled `Shell` withholds shell execution outright.
     """
@@ -65,14 +65,16 @@ class _Gate:
         self.calls: list[dict] = []
 
     def mcp_tool_of(self, command: str) -> tuple[str, str]:
-        """('server', 'tool') when this command is an mcptools call, ('', '') otherwise."""
+        """('server', 'tool') when this command is an hr-mcp call, ('', '') otherwise."""
         try:
             parts = shlex.split(command)
         except ValueError:
             return "", ""
-        # mcptools call <server> <tool> [--params …]  — the exact form the runner documents to the
+        # hr-mcp call <server> <tool> [--params …] — the exact form the runner documents to the
         # model in the bridge block, so recognising it here is reading our own contract back.
-        if len(parts) >= 4 and os.path.basename(parts[0]) == "mcptools" and parts[1] == "call":
+        # `hr-mcp tools <server>` is discovery, not a tool call, and is deliberately NOT matched:
+        # recording it as one would invent an MCP call in the turn record.
+        if len(parts) >= 4 and os.path.basename(parts[0]) == "hr-mcp" and parts[1] == "call":
             return parts[2], parts[3]
         return "", ""
 
