@@ -3674,12 +3674,12 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
            # --print already implies auto-approval (cli/__init__.py:626 runtime_afk = ui == "print");
            # --yolo is passed anyway for one deterministic path, qwen's rationale unchanged.
            "--yolo"]
-    if resume_session_id:
-        # ALWAYS on argv, including when the session is gone: kimi mints a session with whatever id
-        # it is given (cli/__init__.py:558-565 — find -> None -> create), so keeping the id here
-        # preserves id stability for the caller, and _resume_lost reports the loss by asking the
-        # store. The id itself is minted by the runner because kimi emits no session id to scrape.
-        cmd += ["--session", resume_session_id]
+    # ALWAYS named, on every turn, first or not: kimi mints a session with whatever id it is given
+    # (cli/__init__.py:558-565 — find -> None -> create), so naming it on the first turn is what
+    # makes the SECOND turn able to continue it. Passing it only on a resume is what broke the
+    # recycle scenario on every row — the first turn wrote its history under a random id nobody
+    # could name again. _resume_lost reports a genuinely lost conversation by asking the store.
+    cmd += ["--session", resume_session_id or _KIMI_SESSION_NAME]
     if skills_dir:
         cmd += ["--skills-dir", skills_dir]
     agent_file = _kimi_agent_file(ws, tools_disabled)
@@ -5003,6 +5003,18 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
+# The conversation id the runner MINTS for kimi. kimi emits no session id of its own — nothing in
+# its stream carries one — so without minting one here every follow-up would silently start a new
+# conversation, which is exactly what the first version of this backend did: the support matrix's
+# recycle scenario failed on every kimi row while first/follow-up/switch passed, because those three
+# never ask the agent to remember anything.
+#
+# A constant name rather than a uuid, for goose's reason: it has to be reproducible from the
+# workspace alone after a sandbox recycle, and kimi accepts any id — `Session.find` misses and
+# `Session.create(work_dir, session_id)` makes it (cli/__init__.py:558-565).
+_KIMI_SESSION_NAME = "harness"
+
+
 # aider has NO conversation id of ANY kind — its continuation is the chat-history FILE — so the
 # runner announces a synthetic one. Without it the gateway never records a conversation id, never
 # treats a later turn as a follow-up, and every turn is a fresh thread: measured as the support
@@ -5123,8 +5135,17 @@ _aider_to_claude.eof = _aider_eof   # type: ignore[attr-defined]
 #   * no terminal / result event      -> this normaliser carries an `eof`, the opencode precedent
 def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
     role = obj.get("role")
+    pre: list[dict] = []
+    if not state.get("_kimi_init"):
+        # The turn's FIRST event carries the conversation id. _run_turn_bg records it only from a
+        # system/init event, and that recorded id is what the next turn resumes with — without it
+        # every follow-up starts a new conversation in the same workspace, and only a scenario that
+        # asks the agent to remember something notices.
+        state["_kimi_init"] = True
+        pre = [{"type": "system", "subtype": "init", "session_id": _KIMI_SESSION_NAME,
+                "model": state.get("model")}]
     if role == "assistant":
-        out: list[dict] = []
+        out: list[dict] = list(pre)
         content = obj.get("content")
         if isinstance(content, str):
             txt = content
@@ -5160,6 +5181,7 @@ def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
         return out
     if role == "tool":
         body = obj.get("content")
+        _ = pre
         text = body if isinstance(body, str) else json.dumps(body, default=str)
         # is_error is NOT knowable from this line. kimi wraps both outcomes in <system>…</system>
         # ("File successfully overwritten", and errors alike); the boolean lives on
@@ -5167,10 +5189,10 @@ def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
         # every result a success would be a lie only when it failed, and inventing a heuristic over
         # the <system> prose is the guesswork this repo refuses — so the flag stays False and the
         # text itself carries the outcome to the reader.
-        return [{"type": "user", "message": {"content": [
+        return pre + [{"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": str(obj.get("tool_call_id") or "tool"),
              "is_error": False, "content": text}]}}]
-    return []
+    return pre
 
 
 def _kimi_eof(state: dict, rc: int) -> list[dict]:
