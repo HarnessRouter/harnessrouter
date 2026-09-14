@@ -326,6 +326,21 @@ check passed, and the container reported `backends available: kimi` with
 `/data/agent-tools/bin/kimi --version` answering `kimi, version 1.50.0`. The two pinned digests were
 also compared against upstream's own published `.sha256` files and match character for character.
 
+**One real turn was run end to end in that image**, against Vercel, with the argv and the
+`config.toml` the runner generates — not a hand-written approximation. It is an A/B that settles the
+`reasoning_effort` question: the same command sent straight to Vercel answers
+`Error code: 400 - {… 'param': 'reasoning_effort' …}`, on ONE stdout line (so the `COLUMNS=400`
+mitigation for rich's 80-column wrapping works); sent through `_normalize_openai_chat_body`, the turn
+completes and prints `{"role":"assistant","content":"PROBE-OK"}` with exit 0. That line is also the
+shape `_kimi_to_claude` expects — `content` a plain STRING, not a list of blocks.
+
+Two more things that turn settled, from the state it left behind rather than from the notes:
+
+- `Connection error.` really does exit **75**, observed when the relay was not yet listening.
+- The `_resume_lost` probe matches kimi's own store: `md5("/tmp/ws")` is `59fa73ff…`, which is
+  exactly the directory kimi created, and `context.jsonl` is in it — so the probe reports the
+  session PRESENT for the id that ran and LOST for one that never existed.
+
 **A failed turn reads as failed, by exit code rather than by prose.** kimi classifies provider
 failures itself (`Print._classify_provider_error`): 75 (EX_TEMPFAIL) for connection, timeout and
 empty-response errors and for HTTP 429/500/502/503/504; 1 for every other status error and for the
