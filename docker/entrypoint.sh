@@ -197,6 +197,7 @@ backend_bin() {
     omp)    echo "$TOOLS/bin/omp" ;;
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
+    aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
   esac
 }
 
@@ -257,6 +258,70 @@ install_opencode() {
 # Everything runner/server.py's kimi code was written against — the stream-json line shapes, the
 # openai_legacy env override, exclude_tools matching PATHS, the sessions/<md5(cwd)>/<id> layout,
 # and the 75/1 provider-failure exit codes — was read out of THIS version.
+# Aider, Apache-2.0 (Aider-AI/aider), pinned to 0.86.2, plus the MCP bridge it needs.
+#
+# Its own venv, the dsh/hermes precedent: aider pins litellm and a large scientific stack, and must
+# not share the runner's interpreter. The wheel digests are pinned because PyPI serves them by
+# digest anyway and a pinned one fails closed if the release is ever re-uploaded.
+#
+# NOTE the Python floor: aider 0.86.2 declares Requires-Python <3.13,>=3.10. On an interpreter
+# outside that range pip does not fail — it silently offers an OLDER aider (0.82.3 was the highest
+# on 3.9), and every behaviour runner/aider_driver.py was written against would be absent without a
+# single error. The explicit version pin below is what turns that into a hard failure.
+#
+# mcptools (f/mcptools, MIT) is aider's MCP CLIENT: upstream aider has none at all, so the bridge is
+# what lets a declared MCP server be reached and, therefore, measured. Installed beside aider rather
+# than globally because no other backend uses it.
+install_aider() {
+  am_py="${HR_AIDER_BASE_PYTHON:-python3}"
+  "$am_py" -m venv "$TOOLS/aider-venv" || return 1
+  "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
+    "aider-chat==${HR_AIDER_VERSION:-0.86.2}" || return 1
+  # The driver imports aider in process; prove the pinned version is importable before declaring the
+  # install good, so a resolver that quietly picked another one fails HERE and not on a live turn.
+  "$TOOLS/aider-venv/bin/python" -c '
+import sys, aider
+want = sys.argv[1]
+if aider.__version__ != want:
+    sys.exit("aider %s installed, wanted %s" % (aider.__version__, want))
+' "${HR_AIDER_VERSION:-0.86.2}" || return 1
+  install_mcptools || return 1
+}
+
+# The MCP bridge binary. Upstream publishes per-asset checksums; the digests are pinned here for the
+# same reason goose's are — a checksum served from the same origin as the artifact adds nothing
+# against a compromised origin, while a pinned digest fails closed on a moved tag.
+install_mcptools() {
+  case "$(uname -m)" in
+    x86_64)        mt_arch="linux_amd64" ;;
+    aarch64|arm64) mt_arch="linux_arm64" ;;
+    *) echo "unsupported architecture $(uname -m) for mcptools"; return 1 ;;
+  esac
+  mt_ver="${HR_MCPTOOLS_VERSION:-0.11.0}"; mt_ver="${mt_ver#v}"
+  mt_sha="${HR_MCPTOOLS_SHA256:-}"
+  if [ -z "$mt_sha" ]; then
+    echo "[harnessrouter] NOTE: mcptools $mt_ver is installed without a pinned digest."
+    echo "[harnessrouter]       Set HR_MCPTOOLS_SHA256 to verify the archive."
+  fi
+  mt_url="https://github.com/f/mcptools/releases/download/v${mt_ver}/mcp_${mt_ver}_${mt_arch}.tar.gz"
+  mt_tmp="$(mktemp -d)"
+  curl -fsSL "$mt_url" -o "$mt_tmp/mcp.tar.gz" || { rm -rf "$mt_tmp"; return 1; }
+  if [ -n "$mt_sha" ]; then
+    mt_have="$(sha256sum "$mt_tmp/mcp.tar.gz" | awk '{print $1}')"
+    if [ "$mt_sha" != "$mt_have" ]; then
+      echo "mcptools $mt_ver: archive digest mismatch (want $mt_sha, have $mt_have)"
+      rm -rf "$mt_tmp"; return 1
+    fi
+  fi
+  tar -xzf "$mt_tmp/mcp.tar.gz" -C "$mt_tmp" || { rm -rf "$mt_tmp"; return 1; }
+  mt_bin="$(find "$mt_tmp" -type f \( -name mcp -o -name mcptools \) -perm -u+x | head -n 1)"
+  [ -n "$mt_bin" ] || { echo "release archive contained no mcptools binary"; rm -rf "$mt_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$mt_bin" "$TOOLS/bin/mcptools" \
+    || { rm -rf "$mt_tmp"; return 1; }
+  rm -rf "$mt_tmp"
+}
+
+
 install_kimi() {
   case "$(uname -m)" in
     x86_64)        km_arch="x86_64";  km_sha="10ccaa26ee7f5bb43f7c05baf808c11cd0160710b07ac422382d1d1923f3dab6" ;;
@@ -444,6 +509,14 @@ install_backends() {
   if wanted kimi && [ ! -x "$(backend_bin kimi)" ]; then
     echo "[harnessrouter] installing Kimi CLI (Apache-2.0)…"
     try_install "Kimi CLI" install_kimi || true
+  fi
+
+  # OPT-IN, not in HR_BACKENDS by default: 735 MB and ~90 s of install (tree-sitter-language-pack
+  # 351 MB, scipy 100, numpy 57), which every fresh volume would otherwise pay for a backend most
+  # operators will not pick. Above the 300 MB line agreed 2026-09-13.
+  if wanted aider && [ ! -x "$(backend_bin aider)" ]; then
+    echo "[harnessrouter] installing Aider (Apache-2.0) — ~735 MB, this takes a minute…"
+    try_install "Aider" install_aider || true
   fi
 
   # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that

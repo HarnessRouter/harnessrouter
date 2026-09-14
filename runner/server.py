@@ -256,6 +256,26 @@ def _kimi_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     return (_kimi_session_dir(share, cwd, session_id) / "context.jsonl").exists()
 
 
+def _aider_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """aider has no session id at all: its continuation is a chat-history FILE, and a missing one
+    resumes silently with no output difference whatsoever (measured on 0.86.2). So the question
+    "is the conversation there?" is "does the history hold at least one message?", asked with
+    aider's own parser rather than by eyeballing the markdown.
+
+    The driver relocates that file under .harness/ so it is neither a produced file nor a name the
+    user sees; the runner mints the session id, as it does for kimi."""
+    hist = pathlib.Path(cwd) / ".harness" / "aider" / "chat.history.md"
+    if not hist.is_file():
+        return False
+    try:
+        text = hist.read_text(errors="replace")
+    except OSError:
+        return False
+    # aider's own marker for a recorded exchange: split_chat_history_markdown keys on the "####"
+    # user-message heading. Matching it here is reading aider's format, not guessing at prose.
+    return any(line.startswith("####") for line in text.splitlines())
+
+
 def _argv_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     """The builder looked the session up and said so in argv: claude's --resume and opencode's
     --session carry the id only when it was found in this workspace."""
@@ -283,6 +303,7 @@ def _goose_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
 # A backend absent from this table cannot lose a session, or has not been measured — either way it
 # never reports one lost. Adding a backend here is registration point 5.
 _SESSION_PRESENT = {
+    "aider": _aider_session_present,
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
@@ -441,6 +462,7 @@ DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
+AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -778,7 +800,11 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
     else:
-        # dsh has no skill loader; the AGENTS.md block below is the only door
+        # dsh has no skill loader; the AGENTS.md block below is the only door.
+        # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
+        # instruction-file discovery, so its turn builder passes every file under this directory to
+        # --read explicitly. Under .harness/ the bundle is excluded from produced files, so a skill
+        # is never handed back to the user as a deliverable of their own task.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
     # cline lands in the else on purpose, with the evidence written down so nobody "fixes" it:
@@ -911,8 +937,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # 1.50.0 package), merging from the project root down to the work dir, and injects the
         # content VERBATIM into the system prompt: verified live, inside a
         # "<!-- From: .../AGENTS.md -->" fence, with a behavioural instruction in it obeyed.
+        # aider has no instruction-file convention of its own (no AGENTS.md discovery, no
+        # CLAUDE.md): the file is written here and reaches it through --read as user-role context,
+        # which the base catalog entry says plainly rather than implying a system prompt.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi")
+                                   "goose", "kimi", "aider")
         else "CLAUDE.md")
 
 
@@ -3662,6 +3691,81 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     return cmd
 
 
+AIDER_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+AIDER_PYTHON = os.environ.get("HR_AIDER_PYTHON", "/data/agent-tools/aider-venv/bin/python")
+AIDER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aider_driver.py")
+# The MCP bridge binary (f/mcptools, MIT). aider ships no MCP client of any kind — zero source hits
+# across the whole 0.86.2 tree — so rather than record the capability as missing, the harness brings
+# one and lets the model reach it through the ONE tool surface aider has: a shell command it
+# proposes. The maintainer's 2026-09-13 decision: bridge the capability, then measure the claim for
+# real; "unsupported" is the fallback only where no bridge is possible.
+MCPTOOLS_BIN = os.environ.get("HR_MCPTOOLS_BIN", "/data/agent-tools/bin/mcptools")
+
+
+def _aider_mcp_block(mcp_servers: list[dict] | None) -> str:
+    """The bridge, written into the context aider reads, in the CLI's own call form.
+
+    Listing the servers is all the runner can do from here: their tool NAMES are only knowable by
+    asking the server, which needs a live connection at turn time. `mcptools tools <url>` is
+    therefore part of the instruction, so the model discovers the tools the same way a person would,
+    and `mcptools call` is the form runner/aider_driver.py's gate recognises — a call made this way
+    is recorded under the MCP tool's own name, so the support matrix measures `mcp_called` from a
+    command that actually ran rather than from a capability we claimed."""
+    rows = []
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            rows.append(f"- `{name}` — streamable HTTP at {url}")
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            rows.append(f"- `{name}` — stdio: `{' '.join(str(x) for x in argv)}`")
+    if not rows:
+        return ""
+    return ("\n## MCP servers\n\n"
+            "These MCP servers are available to you through the `mcptools` command. They are real "
+            "tools: use them when the task calls for one.\n\n"
+            + "\n".join(rows) + "\n\n"
+            "List a server's tools with `mcptools tools <url-or-command>`, and call one with\n\n"
+            "```bash\n"
+            "mcptools call <server> <tool> --params '{\"key\": \"value\"}'\n"
+            "```\n\n"
+            "Propose the command in a ```bash block as you would any other shell command.\n")
+
+
+def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 mcp_servers: list[dict] | None = None, tools_disabled: list[str] | None = None,
+                 skills_read: list[str] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in AIDER_PROVIDERS:
+        raise HTTPException(400, f"unknown aider provider '{pr}' (one of {sorted(AIDER_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "aider needs a base_url (none configured)")
+    if auth.api_key:
+        # Every aider turn rides the loopback relay, the qwen rationale unchanged. It matters twice
+        # over here: aider takes its credential only from the environment, and aider reports no
+        # served model of its own, so _relay_served_model is what makes matrix rule 2 enforceable.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env["OPENAI_API_BASE"] = auth.base_url
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["HOME"] = str(pathlib.Path(cwd) / ".harness" / "home")
+    pathlib.Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
+    env["PATH"] = os.path.dirname(MCPTOOLS_BIN) + os.pathsep + env.get("PATH", os.environ.get("PATH", ""))
+    # aider resolves a BARE id against its own MODEL_ALIASES table, which rewrites 21 of them —
+    # `gemini-2.5-pro` among them, an id this product's catalog also serves. An `openai/` prefix
+    # routes through litellm's openai provider verbatim and skips that table entirely, so the id the
+    # picker offered is the id the provider is asked for.
+    job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
+           "tools_disabled": list(tools_disabled or []),
+           "read_files": list(skills_read or []),
+           "detect_urls": False}
+    return [AIDER_PYTHON, AIDER_DRIVER, json.dumps(job)]
+
+
 # Path A only (Gemini API Key / Google AI Studio). Unlike qwen, upstream gemini-cli speaks NO
 # OpenAI-compatible mode at all (that is a qwen-fork-only addition — see QWEN_PROVIDERS above),
 # so there is no loopback-relay trick that lets any generic OpenAI/Anthropic-shaped integration
@@ -4855,6 +4959,85 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
+# ── aider ────────────────────────────────────────────────────────────────────────
+# The turn process is runner/aider_driver.py inside the pinned aider venv: aider is driven IN
+# PROCESS through its own `main(..., return_coder=True)` entry point, and the driver re-emits what
+# it observes as NDJSON — the dsh_driver shape ({"m": method, "p": payload}).
+#
+# THIS IS NOT A STYLE CHOICE. aider has no machine-readable output mode, and its stdout is one
+# channel carrying the model's prose and aider's own diagnostics together. Measured on 0.86.2: a
+# stub returning model prose whose second line began `litellm.AuthenticationError:` was
+# BYTE-IDENTICAL on stdout to a real 401 on the same stream, same exit code 0, no colour under
+# --no-pretty. A text-parsing normaliser would therefore report real answers as provider failures,
+# which is worse than reporting nothing. In process the channels are separate at the source:
+# io.tool_error carries failures, io.assistant_output carries prose, and `coder.usage_report` is
+# None exactly when no completion came back.
+def _aider_to_claude(obj: dict, state: dict) -> list[dict]:
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if not txt.strip():
+            return []
+        state["final"] = txt
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if m == "error":
+        # Reached io.tool_error, which the model's prose cannot reach. Recorded, NOT rendered: it is
+        # the turn's failure reason, not part of its answer.
+        state["_aider_error"] = str(p.get("text") or "")
+        return []
+    if m == "warning":
+        state.setdefault("_aider_warnings", []).append(str(p.get("text") or ""))
+        return []
+    if m == "shell_decision":
+        # A command the model proposed. An approved one renders as a call whose result arrives on
+        # the following shell_result; a REFUSED one is a complete pair here and now, because the
+        # policy is the whole of its result and nothing ran.
+        tuid = f"sh{len(state.setdefault('_aider_calls', []))}"
+        state["_aider_calls"].append(tuid)
+        call = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": str(p.get("tool") or "Shell"),
+             "input": {"command": str(p.get("command") or "")}}]}}
+        if p.get("approved"):
+            state["_aider_last_call"] = tuid
+            return [call]
+        return [call, {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid, "is_error": True,
+             "content": str(p.get("reason") or "refused by the harness tool policy")}]}}]
+    if m == "shell_result":
+        tuid = state.get("_aider_last_call") or "sh0"
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid, "is_error": False,
+             "content": str(p.get("output") or "")}]}}]
+    if m == "result":
+        err = state.get("_aider_error") or ""
+        ok = bool(p.get("ok")) and not err
+        final = str(p.get("final") or state.get("final") or "")
+        if ok:
+            state["final"] = final
+        # usage is {} deliberately: per the 2026-09-13 decision no harness PR builds its own usage
+        # pipeline. aider's own numbers would be the wrong ones anyway — with streaming it fills the
+        # real field names with a tiktoken ESTIMATE (587 against a true 595, measured), and it reads
+        # cache under names an OpenAI-shaped response never carries. _relay_usage stamps these rows.
+        return [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                 "result": final if ok else (err or p.get("reason") or ""), "usage": {}}]
+    return []
+
+
+def _aider_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result event, so this fires only when the process died before
+    reaching it — a crash, a kill, an import failure. The reason then comes from io.tool_error if
+    anything got that far, and otherwise from the errbuf tail _failure_reason prefers."""
+    err = state.get("_aider_error") or ""
+    if rc == 0 and not err:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": err, "usage": {}}]
+
+
+_aider_to_claude.eof = _aider_eof   # type: ignore[attr-defined]
+
+
 # ── kimi ─────────────────────────────────────────────────────────────────────────
 # Kimi CLI's `--output-format stream-json` is NOT claude's, despite the shared flag name: it is one
 # kosong `Message` per line and NOTHING else. Measured against the pinned 1.50.0 by reading its only
@@ -5002,6 +5185,10 @@ BACKENDS = {
     # rather than the passthrough qwen's genuinely-claude-shaped stream can use.
     "kimi": {"providers": sorted(KIMI_PROVIDERS), "default_model": KIMI_DEFAULT_MODEL,
              "normalize": _kimi_to_claude},
+    # aider is driven in process by runner/aider_driver.py, which emits the NDJSON this normalises;
+    # the CLI itself has no machine-readable output at all. See _aider_to_claude's docstring.
+    "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
+              "normalize": _aider_to_claude},
 }
 
 
@@ -6161,6 +6348,24 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_kimi(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=kimi_skills, tools_disabled=req.tools_disabled)
+    elif backend == "aider":
+        model = model or AIDER_DEFAULT_MODEL
+        # aider has no skill loader and no instruction-file convention: --read is the ONLY door, and
+        # it puts the content in as user-role context rather than a system prompt (stated in the
+        # base entry, which must not imply otherwise). Every file of every skill bundle is read, not
+        # just SKILL.md, because a bundle's script is where its content actually lives — reading the
+        # script is what lets the agent report what it contains, and running it is a separate claim
+        # the shell gate decides.
+        aider_read: list[str] = []
+        doc = _agent_doc_path(cwd, backend)
+        if doc.exists():
+            aider_read.append(str(doc))
+        skdir = pathlib.Path(cwd) / ".harness" / "skills"
+        if installed_skills and skdir.is_dir():
+            aider_read += [str(f) for f in sorted(skdir.rglob("*")) if f.is_file()]
+        cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
+                           mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
+                           skills_read=aider_read)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,

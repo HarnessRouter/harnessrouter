@@ -1062,6 +1062,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "opencode"): "tokenrouter",
     # kimi reaches every provider the same way qwen does — one OpenAI-compatible surface through
     # the loopback relay — so these rows are qwen's, verbatim, with the backend renamed.
+    ("anthropic", "aider"): "anthropic",       ("openai", "aider"): "openai",
+    ("azure-foundry", "aider"): "azure",
+    ("openrouter", "aider"): "openai-api",
+    ("tokenrouter", "aider"): "tokenrouter",   ("vercel", "aider"): "tokenrouter",
+    ("llmtr", "aider"): "tokenrouter",
+    ("custom", "aider"): "openai-api",
+    ("google", "aider"): "openai-api",
     ("anthropic", "kimi"): "anthropic",        ("openai", "kimi"): "openai",
     ("azure-foundry", "kimi"): "azure",
     ("openrouter", "kimi"): "openai-api",
@@ -1132,6 +1139,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
     ("harnessrouter", "kimi"): "tokenrouter",
+    ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
 }
@@ -4546,7 +4554,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
     # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
     # until it is — the picker greys out what the router cannot actually run.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi"},
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
@@ -5978,6 +5986,19 @@ _MODEL_CATALOG: dict[str, dict] = {
     # is given: the value reaches the provider verbatim (captured at a stub and against a live
     # gateway), and its only alias machinery raises KeyError on a miss rather than substituting —
     # so the gemini resolveModel class of silent substitution is absent here.
+    # aider: same relay reach as the others (litellm's openai provider through the loopback relay).
+    # NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS BACKEND YET — no column has run; they are
+    # offered so the matrix can measure them here (the `pi` precedent). Ids are sent with an
+    # `openai/` prefix by the runner, which is load-bearing rather than cosmetic: a BARE id is
+    # resolved against aider's own MODEL_ALIASES table, which rewrites 21 of them — `gemini-2.5-pro`
+    # among them, an id this catalog also serves — and the prefix skips that table entirely.
+    "aider": {"default": "gpt-5.4",
+              "models": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.5",
+                         "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
+                         "claude-sonnet-5", "claude-sonnet-4.6", "claude-haiku-4.5",
+                         "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
+                         "deepseek-v4-pro", "deepseek-v4-flash",
+                         "kimi-k3", "qwen3.7-max", "glm-5.3", "grok-4.6"]},
     "kimi": {"default": "kimi-k3",
              "models": ["kimi-k3", "kimi-k2.7-code",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -6124,7 +6145,9 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # kimi speaks chat/completions only: its provider type is openai_legacy (openai_responses
 # exists in the CLI but is not the type the runner writes), so a Responses-API-only id would be
 # a picker row that fails on send.
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi")
+# aider speaks chat/completions through litellm's openai provider, so a Responses-API-only id
+# would be a picker row that fails on send.
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -13165,6 +13188,29 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
         # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
+        "tool_enforcement": "hard",
+    },
+    "aider": {
+        "label": "Aider", "backend": "aider", "status": "ready",
+        # NOT delivered as a system prompt, and the console must not imply it is: aider composes its
+        # own system message from the edit format and accepts no override, so these instructions
+        # reach the model through --read, as USER-role context, alongside the harness's AGENTS.md.
+        "system_prompt": ("You are Aider, an autonomous coding agent. You work on a real git "
+                          "workspace, editing files and proposing shell commands to complete the "
+                          "task end to end."),
+        # aider has no tool loop: the request body's keys are exactly
+        # ['messages','model','temperature'] — no `tools`, no `functions`. Its tool SURFACE is the
+        # shell command the model proposes in a fenced block, which the driver's gate decides, plus
+        # the URL scrape it asks permission for. Those two are withholdable and are listed. "Edit"
+        # is aider's edit engine: it is what aider IS, it cannot be withheld, and it is therefore
+        # NOT listed — offering a switch that does nothing is the overstatement UHP §4.3 forbids.
+        # MCP tools reach the model through the mcptools bridge and are gated by tool NAME in the
+        # same place; they are per-harness rather than catalog entries, so they are not listed here.
+        "tools": [("Shell", "Shell"), ("WebFetch", "Web Fetch")],
+        # "hard", and measured rather than asserted: with Shell disabled the model's proposed
+        # command is refused at the gate and the file it would have written does not appear; with an
+        # MCP tool name disabled the mcptools call is refused by that tool's own name. Pinned by
+        # runner/tests/test_aider_driver.py.
         "tool_enforcement": "hard",
     },
     "kimi": {

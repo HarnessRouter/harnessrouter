@@ -1,0 +1,280 @@
+"""One Aider turn, as a runner subprocess.
+
+Spawned per turn by server.py (the same one-process-per-turn contract as every other backend: the
+runner reads NDJSON off stdout, cancel is a process-group kill). Inside, aider is DRIVEN IN PROCESS
+through its own supported entry point — `aider.main.main(..., return_coder=True)` hands back the
+constructed Coder without running the interactive loop — rather than launched as a CLI whose printed
+text we would parse.
+
+WHY THIS EXISTS AT ALL, measured on the pinned 0.86.2. Aider has no machine-readable output mode,
+and its stdout is ONE channel carrying both the model's prose and aider's own diagnostics. A stub
+was made to return model prose whose second line began `litellm.AuthenticationError:`; on stdout it
+was BYTE-IDENTICAL to a real 401 on the same stream, same exit code 0, no colour under --no-pretty.
+So no anchored regex can separate "the provider failed" from "the agent wrote about an error", and a
+text-parsing normaliser for this backend would invent failures on ordinary answers. In process the
+two are never mixed: a real failure reaches io.tool_error/io.tool_warning and leaves
+`coder.usage_report` None, while prose reaches io.assistant_output only.
+
+WHAT ELSE ONLY WORKS IN PROCESS:
+  * The shell intercept (see _Gate). Upstream's --yes-always deliberately auto-DECLINES every shell
+    command the model proposes, and in driver mode aider forces yes_always on itself
+    (main.py:546-547), so wrapping io.confirm_ask is the only way to let a skill's script run — and
+    the only place a per-harness tool policy can be applied to a command before it executes.
+  * Relocating the repo-map tags cache out of the workspace root (see main), which has no CLI flag
+    and would otherwise hand the user a `.aider.tags.cache.v4/` directory as a deliverable.
+
+The event protocol is dsh_driver's: one {"m": method, "p": payload} JSON object per line on stdout,
+normalised by _aider_to_claude in server.py.
+"""
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import shlex
+import sys
+import time
+
+_T0 = time.time()
+
+
+def _emit(method: str, payload) -> None:
+    sys.stdout.write(json.dumps({"m": method, "p": payload}, default=str) + "\n")
+    sys.stdout.flush()
+
+
+class _Gate:
+    """The policy gate on every shell command the model proposes.
+
+    It is NOT a blanket yes. It receives the exact command aider is about to run, checks it against
+    the harness's disabled-tool list, and refuses with the policy as the reason — which is what
+    makes `tool_enforcement` on this backend a gate that exists rather than a claim that passes
+    because the harness has no tools at all.
+
+    The model chooses the command; the harness never injects one. (`--message "/run <cmd>"` would be
+    US choosing it, and is deliberately not used anywhere in this backend.)
+
+    Two kinds of name are matched against the policy:
+      * `mcptools call <server> <tool>` — the MCP bridge's call form, so a disabled MCP tool is
+        refused by the tool's own name;
+      * the command's argv[0], so a disabled `Shell` withholds shell execution outright.
+    """
+
+    def __init__(self, disabled: list[str]) -> None:
+        self.disabled = {d.strip().lower() for d in (disabled or []) if d and d.strip()}
+        self.calls: list[dict] = []
+
+    def mcp_tool_of(self, command: str) -> tuple[str, str]:
+        """('server', 'tool') when this command is an mcptools call, ('', '') otherwise."""
+        try:
+            parts = shlex.split(command)
+        except ValueError:
+            return "", ""
+        # mcptools call <server> <tool> [--params …]  — the exact form the runner documents to the
+        # model in the bridge block, so recognising it here is reading our own contract back.
+        if len(parts) >= 4 and os.path.basename(parts[0]) == "mcptools" and parts[1] == "call":
+            return parts[2], parts[3]
+        return "", ""
+
+    def decide(self, command: str) -> tuple[bool, str, str]:
+        """(approved, tool_name, reason). tool_name is what the turn record will call this."""
+        server, tool = self.mcp_tool_of(command)
+        if tool:
+            name = f"{server}.{tool}"
+            for d in (tool.lower(), name.lower()):
+                if d in self.disabled:
+                    return False, name, f"the harness disabled the tool '{tool}'"
+            return True, name, ""
+        if "shell" in self.disabled or "bash" in self.disabled:
+            return False, "Shell", "the harness disabled shell commands"
+        return True, "Shell", ""
+
+
+def _install(coder, gate: _Gate, web_disabled: bool) -> None:
+    """Replace the Coder's IO with one that reports on separate channels and gates confirmations."""
+    io = coder.io
+    orig_confirm = io.confirm_ask
+    orig_assistant = io.assistant_output
+    orig_error = io.tool_error
+    orig_warning = io.tool_warning
+
+    def assistant_output(message, pretty=None):
+        _emit("text", {"text": str(message)})
+        return orig_assistant(message, pretty)
+
+    def tool_error(message="", strip=True):
+        # A REAL failure lands here and nowhere else. This is the whole reason the driver exists:
+        # on stdout this text and the model's own prose are the same bytes.
+        _emit("error", {"text": str(message)})
+        return orig_error(message, strip)
+
+    def tool_warning(message="", strip=True):
+        _emit("warning", {"text": str(message)})
+        return orig_warning(message, strip)
+
+    def confirm_ask(question, default="y", subject=None, explicit_yes_required=False,
+                    group=None, allow_never=False):
+        # explicit_yes_required is set by exactly ONE call site in the whole 0.86.2 tree —
+        # handle_shell_commands (coders/base_coder.py) — so this branch is the shell gate and
+        # nothing else. Every other confirmation keeps aider's own --yes-always behaviour by
+        # falling through to the original.
+        if explicit_yes_required:
+            command = str(subject or question)
+            approved, name, reason = gate.decide(command)
+            gate.calls.append({"command": command, "tool": name, "approved": approved,
+                               "reason": reason})
+            _emit("shell_decision", {"command": command, "tool": name,
+                                     "approved": approved, "reason": reason})
+            return approved
+        # The URL-scrape confirmation (io.py's _check_for_urls path) is aider's web capability, and
+        # it IS withholdable: refusing here means the page is never fetched into the chat.
+        if web_disabled and subject and str(subject).startswith(("http://", "https://")):
+            _emit("shell_decision", {"command": str(subject), "tool": "WebFetch",
+                                     "approved": False,
+                                     "reason": "the harness disabled the tool 'WebFetch'"})
+            return False
+        return orig_confirm(question, default=default, subject=subject,
+                            explicit_yes_required=explicit_yes_required, group=group,
+                            allow_never=allow_never)
+
+    io.assistant_output = assistant_output
+    io.tool_error = tool_error
+    io.tool_warning = tool_warning
+    io.confirm_ask = confirm_ask
+
+
+def _run_shell_commands_reporting(coder, gate: _Gate, reflect: bool = True):
+    """Wrap Coder.run_shell_commands so each approved command's OUTPUT is reported too.
+
+    aider runs the command itself and appends the output to the next message's context; it exposes
+    no per-command result hook, so the pairing here is: the gate records the call as aider asks, and
+    this wrapper reports what the whole batch produced. Without it the turn record would show a
+    tool_use with no tool_result."""
+    orig = coder.run_shell_commands
+
+    def wrapped():
+        before = len(gate.calls)
+        out = orig()
+        for call in gate.calls[before:]:
+            if call["approved"]:
+                _emit("shell_result", {"tool": call["tool"], "command": call["command"],
+                                       "output": str(out or "")})
+        # MUST clear, and this is not tidiness: init_before_message() empties shell_commands ONCE
+        # per turn, not once per reflection, and run_shell_commands iterates whatever is in it. With
+        # a reflection set below, the next pass would RE-RUN every command already executed —
+        # measured: one proposed command ran four times and the turn made four provider round trips
+        # instead of two, with the side effects repeated each time.
+        coder.shell_commands = []
+        if reflect and out:
+            # MEASURED, and the reason this is not the default everywhere: aider stashes shell
+            # output in cur_messages for the NEXT user message and sets no reflection of its own
+            # (base_coder.py:1609-1614), unlike lint and test results which DO set
+            # reflected_message. So within one turn the model never sees what its command printed —
+            # it cannot report a token the script produced, and every other backend here can.
+            # Setting the reflection gives aider the same in-turn loop, using aider's own mechanism
+            # and its own max_reflections bound rather than a loop of ours.
+            coder.reflected_message = str(out)
+        return out
+
+    coder.run_shell_commands = wrapped
+
+
+def _run_turn(coder, prompt: str) -> None:
+    """aider's own reflection loop (Coder.run_one), driven directly.
+
+    run_stream is run_one without the loop: it sends ONE message and stops. Reproducing the loop
+    here is what lets a reflection — aider's mechanism for "there is more to do before this turn
+    ends", used by its lint and test paths — carry a shell command's output back to the model in the
+    SAME turn. The bound is aider's own max_reflections, not one invented here."""
+    coder.io.user_input(prompt)
+    coder.init_before_message()
+    message = prompt
+    reflections = 0
+    while message:
+        coder.reflected_message = None
+        list(coder.send_message(message))
+        if not coder.reflected_message:
+            break
+        if reflections >= coder.max_reflections:
+            _emit("warning", {"text": f"stopped after {coder.max_reflections} reflections"})
+            break
+        reflections += 1
+        message = coder.reflected_message
+
+
+def main() -> int:
+    job = json.loads(sys.argv[1])
+    cwd = job.get("cwd") or os.getcwd()
+    os.chdir(cwd)
+
+    # The repo-map tags cache is `Path(root) / RepoMap.TAGS_CACHE_DIR` with no CLI flag, so the
+    # stock value drops a `.aider.tags.cache.v4/` directory in the workspace ROOT — which this
+    # product collects and hands back to the user as a produced file on every turn. Under .harness/
+    # it is excluded by _PRODUCED_EXCLUDE_PREFIX and still checkpointed. Set BEFORE any Coder is
+    # constructed, because RepoMap reads it in __init__.
+    from aider.repomap import RepoMap
+    RepoMap.TAGS_CACHE_DIR = ".harness/aider/tags.cache.v4"
+    pathlib.Path(cwd, ".harness", "aider").mkdir(parents=True, exist_ok=True)
+
+    from aider.main import main as aider_main
+
+    hist = pathlib.Path(cwd, ".harness", "aider")
+    argv = [
+        "--model", job["model"],
+        # The edit format decides whether a skill's script can run AT ALL: shell commands are
+        # extracted in editblock_coder.get_edits(), and wholefile/udiff/patch never populate
+        # shell_commands, so a ```bash block is inert on those formats. Pinned, not left to the
+        # per-model default.
+        "--edit-format", "diff",
+        "--yes-always",
+        "--no-pretty", "--no-fancy-input", "--no-stream",
+        "--no-check-update", "--no-show-release-notes", "--no-show-model-warnings",
+        "--no-analytics",
+        # The workspace is this product's checkpoint repo. aider committing into it would interleave
+        # its commits with the harness's own, so aider keeps the repo map and leaves committing to
+        # the harness. --no-gitignore stops it appending .aider* patterns to the .gitignore the
+        # runner writes and owns.
+        "--no-auto-commits", "--no-dirty-commits", "--no-gitignore",
+        "--chat-history-file", str(hist / "chat.history.md"),
+        "--input-history-file", str(hist / "input.history"),
+    ]
+    if not job.get("detect_urls"):
+        argv += ["--no-detect-urls"]
+    for path in job.get("read_files") or []:
+        argv += ["--read", path]
+
+    coder = aider_main(argv, input=None, output=None, return_coder=True)
+    if not hasattr(coder, "run_stream"):
+        _emit("error", {"text": f"aider did not return a coder (exit {coder!r})"})
+        return 1
+
+    disabled = job.get("tools_disabled") or []
+    gate = _Gate(disabled)
+    _install(coder, gate, web_disabled=any(d.lower() in ("webfetch", "web_fetch", "websearch")
+                                           for d in disabled))
+    _run_shell_commands_reporting(coder, gate, reflect=bool(job.get("reflect_shell_output", True)))
+
+    _emit("init", {"model": coder.main_model.name, "edit_format": coder.edit_format})
+    try:
+        _run_turn(coder, job["prompt"])
+    except Exception as exc:  # noqa: BLE001 — the turn's failure is the product here, not a crash
+        _emit("error", {"text": f"{type(exc).__name__}: {exc}"})
+        _emit("result", {"final": "", "ok": False, "edited": [], "reason": str(exc)[:500]})
+        return 1
+
+    # usage_report is None when no completion came back — the in-process failure signal that
+    # stdout cannot give. num_error_outputs counts what reached io.tool_error this turn.
+    failed = coder.usage_report is None or int(getattr(coder.io, "num_error_outputs", 0) or 0) > 0
+    _emit("result", {
+        "final": coder.partial_response_content or "",
+        "ok": not failed,
+        "edited": sorted(coder.aider_edited_files or []),
+        "shell_calls": gate.calls,
+        "usage_report": coder.usage_report,
+        "seconds": round(time.time() - _T0, 2),
+    })
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

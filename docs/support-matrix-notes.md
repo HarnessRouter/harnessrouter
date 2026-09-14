@@ -373,3 +373,84 @@ against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds
 ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN the agent compacts,
 never whether it answers: too large lets a thread overflow the real window (the provider then
 errors), too small compacts early and wastes tokens.
+
+## The aider backend (Aider 0.86.2) — behaviour measured, columns NOT yet run
+
+No column has run for this harness. Everything below was measured against the pinned 0.86.2 — its
+source, and a stub that answers as a provider would, at no API cost. `docs/support-matrix.md` is
+rendered from the results file and is untouched.
+
+**aider is driven IN PROCESS, and that is a correctness requirement rather than a preference.** It
+has no machine-readable output mode, and its stdout carries the model's prose and aider's own
+diagnostics on one channel. A stub was made to return model prose whose second line began
+`litellm.AuthenticationError:`; on stdout it was byte-identical to a real 401 on the same stream,
+same exit code 0, no colour under `--no-pretty`. No anchored regex separates those, so a
+text-parsing normaliser would report ordinary answers as provider failures. In process they are
+never mixed: failures reach `io.tool_error`, prose reaches `io.assistant_output`, and
+`coder.usage_report` is None exactly when no completion came back. `runner/aider_driver.py` uses
+aider's own supported entry point, `main(..., return_coder=True)`.
+
+**Upstream refuses shell commands under `--yes-always` by design, and HarnessRouter approves them
+through a policy gate.** State this plainly to anyone who knows aider, because they will assume the
+opposite. `confirm_ask` returns `"n"` for the one call site that sets `explicit_yes_required`
+(`handle_shell_commands`) — so out of the box a skill's bundled script can be read but never run.
+The driver wraps that single gate: it receives the exact command the model proposed, refuses it if
+the harness disabled the matching tool (with the policy as the reason, which is what the reader
+sees), and otherwise approves it to run in the workspace under the session's uid. The model chooses
+the command; the harness never injects one. Measured both ways: with `Shell` disabled the proposed
+command is refused and the file it would have written does not appear; with it enabled the script
+runs and its output is reported.
+
+**MCP reaches aider through a bridge, because aider has no MCP client at all** — zero source hits
+for MCP across the whole tree. `mcptools` (f/mcptools, MIT) is installed beside aider, the declared
+servers are listed in the context aider reads with the `mcptools call <server> <tool>` form, and the
+gate recognises that form and records the call under the MCP tool's own name. So `mcp_called` is
+measured from a command that actually ran.
+
+**The edit format is pinned to `diff`, and it is load-bearing.** Shell commands are extracted in
+`editblock_coder.get_edits()`; `wholefile`, `udiff` and `patch` never populate `shell_commands`, so
+a ```bash block is inert on those formats and a skill's script could not run at all.
+
+**Shell output is fed back through aider's own reflection path, and this is the measured
+experiment the backend was asked to run.** Stock aider stashes the output in `cur_messages` for the
+NEXT user message and sets no reflection (`base_coder.py:1609-1614`), unlike its lint and test
+paths — so within one turn the model never sees what its command printed, and cannot report a token
+the script produced. Setting `reflected_message` gives aider the same in-turn loop every other
+backend has. Measured against the stub: reflection on, two provider round trips and the answer
+carries the script's output; reflection off, one round trip and the answer is the ```bash block
+itself. One hazard found and fixed while measuring it: `init_before_message()` empties
+`shell_commands` once per TURN, not per reflection, so the first version re-ran every executed
+command on each pass — one command ran four times, four round trips instead of two, side effects
+repeated. The driver now clears the list after running it, pinned by a test.
+
+**Model ids are sent with an `openai/` prefix.** A bare id is resolved against aider's own
+`MODEL_ALIASES` (`models.py:87-111`), which rewrites 21 of them including `gemini-2.5-pro`, an id
+this catalog also serves. The prefix skips that table, so the id the picker offered is the id the
+provider is asked for. The same class of silent substitution that pruned the gemini catalog.
+
+**Streaming is off (`--no-stream`), and that is about billing honesty.** With streaming, aider
+reports `usage_present: false` and substitutes a **tiktoken estimate** through the same field names
+(587 against a true 595, measured live) because it never sends `stream_options`. Its own numbers are
+not used either way: result events carry `usage: {}` and `_relay_usage` will supply them.
+
+**Nothing of aider's lands in the workspace root.** Its chat and input histories are relocated under
+`.harness/aider/`, and the repo-map tags cache — `Path(root)/".aider.tags.cache.v4"`, with no CLI
+flag — is moved there by setting `RepoMap.TAGS_CACHE_DIR` in the driver, which only an in-process
+driver can do. Verified after a full turn: the workspace root held `.git`, `.harness` and the task's
+own files, nothing else. Auto-commits are off so aider never interleaves commits with the
+checkpoint repo's, and `--no-gitignore` stops it appending to the `.gitignore` the runner owns.
+
+**Install is opt-in.** 735 MB and ~90 s (tree-sitter-language-pack 351 MB, scipy 100, numpy 57), so
+aider is not in the default `HR_BACKENDS` per the 300 MB line. Note the Python floor: 0.86.2
+declares `Requires-Python <3.13,>=3.10`, and on an interpreter outside that range pip does not fail
+— it silently offers an older aider (0.82.3 on 3.9) with none of the behaviour above. The installer
+asserts the imported version to turn that into a hard failure.
+
+**Known limitation: no tool loop, so the custom-harness dimension's disabled tool is not aider's.**
+The request body's keys are exactly `['messages','model','temperature']` — no `tools`, no
+`functions`. aider's withholdable surface is the shell command and the URL scrape, which the gate
+really does refuse; but `custom-harness.mjs` disables the fixed id `WebSearch`, which matches
+nothing on this harness — so `disabled_tool_unused` would pass VACUOUSLY, as it already does for
+qwen, gemini and cline, whose catalogs carry no `WebSearch` either. The enforcement here is real and
+demonstrable; what is missing is a dimension that disables a tool the base under test actually
+lists.
