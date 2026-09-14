@@ -415,7 +415,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                   {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} />
               </div>
               {pluginNote && <div className={'plugin-note is-' + pluginNote.kind} role={pluginNote.kind === 'error' ? 'alert' : 'status'}>{pluginNote.text}</div>}
-              <div className="capability-list">
+              <div className="capability-list plugin-list">
                 {(draft?.plugins || []).map((p, idx) => {
                   const servers = p.mcpServers || [], skls = p.skills || [], skipped = p.skipped || [];
                   const pending = Boolean(p.files && p.files.length && !p.blob);
