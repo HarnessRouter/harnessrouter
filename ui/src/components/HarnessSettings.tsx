@@ -9,7 +9,7 @@ import { SkelPage } from '@/components/Skel';
 import { useRouter } from 'next/navigation';
 import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, exportPlugin, pluginSchemas,
-  type CustomHarness, type OobHarness, type HarnessPlugin,
+  type CustomHarness, type OobHarness, type HarnessPlugin, getPluginFiles,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
@@ -121,6 +121,28 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
       setPluginNote({ kind: 'info', text: left.length
         ? `Downloaded ${pkg.name}.zip. Not included, to re-enter where you install it: ${left.map((s) => s.path.replace(/^mcp\.json#\/mcpServers\//, '')).join(', ')}.`
         : `Downloaded ${pkg.name}.zip.` });
+    } catch (e) { setPluginNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) }); }
+    finally { setPluginBusy(false); }
+  }
+  // One installed plugin, byte for byte as the server holds it, zipped in the browser.
+  async function downloadInstalledPlugin(p: HarnessPlugin) {
+    if (!draft?.id || pluginBusy) return;
+    setPluginBusy(true); setPluginNote(null);
+    try {
+      const files = await getPluginFiles(draft.id, p.name);
+      const entries: Record<string, Uint8Array> = {};
+      for (const f of files) {
+        entries[f.path] = f.content_b64 !== undefined
+          ? Uint8Array.from(atob(f.content_b64), (c) => c.charCodeAt(0))
+          : strToU8(f.content || '');
+      }
+      const fname = `${p.name}${p.manifest?.version ? '-' + p.manifest.version : ''}.zip`;
+      const blob = new Blob([zipSync(entries) as BlobPart], { type: 'application/zip' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      setPluginNote({ kind: 'info', text: `Downloaded ${fname}: ${files.length} ${files.length === 1 ? 'file' : 'files'}, the package as installed.` });
     } catch (e) { setPluginNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) }); }
     finally { setPluginBusy(false); }
   }
@@ -384,17 +406,11 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           </section>
 
           <section className="form-section">
-            <div><h3>Plugins</h3><p>Install a package of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
+            <div><h3>Plugins</h3><p>A plugin is a package of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{(draft?.plugins || []).length} installed {(draft?.plugins || []).length === 1 ? 'plugin' : 'plugins'}</strong>
-                <span className="section-actions-group">
-                  {!readOnly && draft?.id && !oob && <button className="button quiet small" type="button" disabled={pluginBusy || dirty}
-                    title={dirty ? 'Save the Harness first; the package is built from what is saved.' : 'This Harness\'s own tools and Skills as a package'}
-                    onClick={() => void downloadPluginPackage()}>
-                    <iconify-icon icon="tabler:download"></iconify-icon>Download as plugin</button>}
-                  {!readOnly && <button className="button small" type="button" disabled={pluginBusy} onClick={() => pluginDirRef.current?.click()}>
-                    <iconify-icon icon="tabler:plus"></iconify-icon>Install from folder</button>}
-                </span>
+              <div className="section-actions plugin-head"><strong>{(draft?.plugins || []).length} installed {(draft?.plugins || []).length === 1 ? 'plugin' : 'plugins'}</strong>
+                {!readOnly && <button className="button small" type="button" disabled={pluginBusy} onClick={() => pluginDirRef.current?.click()}>
+                  <iconify-icon icon="tabler:plus"></iconify-icon>Install from folder</button>}
                 <input ref={pluginDirRef} type="file" hidden onChange={(e) => void installPluginFolder(e.target.files)}
                   {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} />
               </div>
@@ -405,38 +421,45 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                   const pending = Boolean(p.files && p.files.length && !p.blob);
                   const m = p.manifest || {};
                   const open = pluginOpen === p.name;
+                  const facts = pending
+                    ? ['Installs when you save the Harness']
+                    : [`${skls.length} ${skls.length === 1 ? 'Skill' : 'Skills'}`, `${servers.length} ${servers.length === 1 ? 'tool' : 'tools'}`,
+                       ...(m.author?.name ? [`by ${m.author.name}`] : []), ...(m.license ? [m.license] : [])];
                   return (
-                    <div key={p.name} className={'capability-row plugin-row' + (open ? ' is-open' : '')}>
+                    <div key={p.name} className={'capability-row plugin-row' + (open ? ' is-open' : '') + (p.enabled === false ? ' is-off' : '')}>
                       <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
                       <div className="capability-copy">
-                        <strong>{p.name}{m.version ? <span className="plugin-version">{m.version}</span> : null}</strong>
-                        <span>{m.description || 'Agent Plugins package'}</span>
-                        <span className="plugin-facts">
-                          {pending ? 'Saves with the Harness' : `${servers.length} ${servers.length === 1 ? 'tool' : 'tools'} · ${skls.length} ${skls.length === 1 ? 'Skill' : 'Skills'}`}
-                          {!pending && skipped.length > 0 && <em className="plugin-warn"> · {skipped.length} not loaded</em>}
-                        </span>
-                        {open && !pending && (
-                          <div className="plugin-details">
-                            {servers.length > 0 && <div><b>Tools</b>{servers.map((s) => <div key={s.name}><code>{s.name}</code> {s.transport === 'stdio' ? `runs ${s.command}` : s.url}</div>)}</div>}
-                            {skls.length > 0 && <div><b>Skills</b>{skls.map((s) => <div key={s.name}><code>{s.name}</code> {s.description}</div>)}</div>}
-                            {skipped.length > 0 && <div><b>Not loaded</b>{skipped.map((s) => <div key={s.path}><code>{s.path}</code> {s.reason}</div>)}</div>}
-                            {(m.author?.name || m.homepage || m.repository || m.license) && (
-                              <div><b>About</b><div>
-                                {m.author?.name ? `By ${m.author.name}. ` : ''}{m.license ? `${m.license}. ` : ''}
-                                {m.homepage && <a href={m.homepage} target="_blank" rel="noreferrer">Homepage</a>}{m.homepage && m.repository ? ' · ' : ''}
-                                {m.repository && <a href={m.repository} target="_blank" rel="noreferrer">Source</a>}
-                              </div></div>
-                            )}
-                          </div>
-                        )}
+                        <strong className="plugin-title">{p.name}{m.version ? <span className="plugin-version">v{m.version}</span> : null}</strong>
+                        <span className="plugin-desc" title={m.description || undefined}>{m.description || 'Agent Plugins package'}</span>
+                        <span className="plugin-facts">{facts.join(' \u00b7 ')}
+                          {!pending && skipped.length > 0 && <em className="plugin-warn">{' \u00b7 '}{skipped.length} not loaded</em>}</span>
                       </div>
                       <div className="capability-actions">
-                        {!pending && <button className="button quiet small" type="button" onClick={() => setPluginOpen(open ? null : p.name)}>{open ? 'Hide' : 'Details'}</button>}
+                        {!pending && <button className="button quiet small" type="button" aria-expanded={open} onClick={() => setPluginOpen(open ? null : p.name)}>
+                          <iconify-icon icon={open ? 'tabler:chevron-up' : 'tabler:chevron-down'}></iconify-icon>{open ? 'Hide' : 'Details'}</button>}
+                        {!pending && draft?.id && <button className="button quiet small" type="button" disabled={pluginBusy} title="This package, as installed, as a zip"
+                          onClick={() => void downloadInstalledPlugin(p)}><iconify-icon icon="tabler:download"></iconify-icon>Download</button>}
                         {!readOnly && <button className="button quiet small" type="button" onClick={() => upd({ plugins: (draft?.plugins || []).filter((_, k) => k !== idx) })}>Remove</button>}
                         <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={p.enabled !== false}
                           onClick={() => upd({ plugins: (draft?.plugins || []).map((x, k) => (k === idx ? { ...x, enabled: !(x.enabled !== false) } : x)) })}>
                           {p.enabled !== false ? 'Enabled' : 'Disabled'}</button>
                       </div>
+                      {open && !pending && (
+                        <div className="plugin-details">
+                          {skls.length > 0 && <div className="plugin-group"><b>Skills</b>
+                            <ul>{skls.map((s) => <li key={s.name}><code>{s.name}</code>{s.description ? <span title={s.description}>{s.description}</span> : null}</li>)}</ul></div>}
+                          {servers.length > 0 && <div className="plugin-group"><b>Tools</b>
+                            <ul>{servers.map((s) => <li key={s.name}><code>{s.name}</code><span>{s.transport === 'stdio' ? `runs ${s.command}${(s.args || []).length ? ' ' + (s.args || []).join(' ') : ''}` : s.url}</span></li>)}</ul></div>}
+                          {skipped.length > 0 && <div className="plugin-group is-warn"><b>Not loaded</b>
+                            <ul>{skipped.map((s) => <li key={s.path}><code>{s.path}</code><span>{s.reason}</span></li>)}</ul></div>}
+                          {(m.homepage || m.repository || (m.keywords || []).length > 0) && (
+                            <div className="plugin-group"><b>About</b>
+                              <ul>{m.homepage && <li><a href={m.homepage} target="_blank" rel="noreferrer">Homepage</a></li>}
+                                {m.repository && <li><a href={m.repository} target="_blank" rel="noreferrer">Source</a></li>}
+                                {(m.keywords || []).length > 0 && <li><span>{(m.keywords || []).join(', ')}</span></li>}</ul></div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -450,6 +473,14 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                   </div>
                 )}
               </div>
+              {!readOnly && draft?.id && !oob && (ownSkills.length + (draft?.mcpServers || []).length) > 0 && (
+                <div className="plugin-export">
+                  <span>This Harness's own {ownSkills.length} {ownSkills.length === 1 ? 'Skill' : 'Skills'} and {(draft?.mcpServers || []).length} {(draft?.mcpServers || []).length === 1 ? 'tool' : 'tools'} can travel as a package too. Installed plugins are downloaded from their own rows.</span>
+                  <button className="button quiet small" type="button" disabled={pluginBusy || dirty}
+                    title={dirty ? 'Save the Harness first; the package is built from what is saved.' : 'This Harness\'s own tools and Skills as an Agent Plugins package'}
+                    onClick={() => void downloadPluginPackage()}><iconify-icon icon="tabler:package-export"></iconify-icon>Export as plugin</button>
+                </div>
+              )}
             </div>
           </section>
 
