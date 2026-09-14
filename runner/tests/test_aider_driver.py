@@ -20,7 +20,8 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import aider_driver  # noqa: E402
-from server import (Auth, BACKENDS, _aider_eof, _aider_mcp_block,  # noqa: E402
+from server import (Auth, BACKENDS, _AIDER_SESSION_NAME, _aider_eof,  # noqa: E402
+                    _aider_mcp_block,
                     _aider_to_claude, _agent_doc_path, _build_aider, _resume_lost)
 
 
@@ -75,7 +76,7 @@ def _norm(events):
     out = []
     for e in events:
         out += _aider_to_claude(e, state)
-    return out, state
+    return [e for e in out if e.get("subtype") != "init"], state
 
 
 def test_a_failure_on_the_error_channel_is_not_rendered_as_the_answer():
@@ -323,3 +324,30 @@ def test_bad_params_json_is_rejected_before_any_connection():
     rc = aider_mcp_bridge.main(["--config", "/nonexistent", "call", "s", "t",
                                "--params", "{not json"])
     assert rc == 2
+
+
+# ── conversation continuity: the bug the support matrix found ────────────────────
+def test_the_turn_announces_a_session_id_even_though_aider_has_none():
+    """MEASURED FAILURE this pins: aider has no conversation id of any kind, so the gateway never
+    recorded one, never treated a later turn as a follow-up, and every turn was a fresh thread. The
+    support matrix's recycle scenario failed on every aider row while first/follow-up/switch
+    passed — those three only check that a turn answers, never that it remembers."""
+    state: dict = {}
+    out = _aider_to_claude({"m": "text", "p": {"text": "hi"}}, state)
+    assert out[0]["type"] == "system" and out[0]["subtype"] == "init"
+    assert out[0]["session_id"] == _AIDER_SESSION_NAME
+    # once per turn, not once per event
+    again = _aider_to_claude({"m": "text", "p": {"text": "more"}}, state)
+    assert not [e for e in again if e.get("subtype") == "init"]
+
+
+def test_the_chat_history_is_restored_on_every_turn():
+    """aider's only continuation mechanism. It travels in the checkpoint under .harness/, which is
+    what lets a follow-up after a sandbox recycle still know what was said; on a first turn the file
+    does not exist and aider starts fresh."""
+    import json as _json
+    _, _, _, job = _build()
+    # the driver owns the argv; assert the flag it builds
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert '"--restore-chat-history"' in src
+    assert '"--chat-history-file", str(hist / "chat.history.md")' in src

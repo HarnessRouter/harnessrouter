@@ -239,6 +239,11 @@ def main() -> int:
         "--no-auto-commits", "--no-dirty-commits", "--no-gitignore",
         "--chat-history-file", str(hist / "chat.history.md"),
         "--input-history-file", str(hist / "input.history"),
+        # aider's ONLY continuation mechanism: it replays that file into the context. Passed on
+        # EVERY turn, not just a resume — on a first turn the file does not exist and aider starts
+        # fresh — and the file travels in the checkpoint, which is what lets a follow-up after a
+        # sandbox recycle still know what was said. Without it every aider turn is a new thread.
+        "--restore-chat-history",
     ]
     if not job.get("detect_urls"):
         argv += ["--no-detect-urls"]

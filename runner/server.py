@@ -5003,6 +5003,14 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
+# aider has NO conversation id of ANY kind — its continuation is the chat-history FILE — so the
+# runner announces a synthetic one. Without it the gateway never records a conversation id, never
+# treats a later turn as a follow-up, and every turn is a fresh thread: measured as the support
+# matrix's recycle scenario failing on every aider row while first/follow-up/switch passed, because
+# those three never ask the agent to remember anything.
+_AIDER_SESSION_NAME = "harness"
+
+
 # ── aider ────────────────────────────────────────────────────────────────────────
 # The turn process is runner/aider_driver.py inside the pinned aider venv: aider is driven IN
 # PROCESS through its own `main(..., return_coder=True)` entry point, and the driver re-emits what
@@ -5019,6 +5027,17 @@ _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 def _aider_to_claude(obj: dict, state: dict) -> list[dict]:
     m = obj.get("m")
     p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if not state.get("_aider_init"):
+        # _run_turn_bg records the conversation id ONLY from a system/init event, and that recorded
+        # id is what makes the next turn a follow-up rather than a new thread.
+        state["_aider_init"] = True
+        return ([{"type": "system", "subtype": "init", "session_id": _AIDER_SESSION_NAME,
+                  "model": state.get("model")}]
+                + _aider_event(obj, state, m, p))
+    return _aider_event(obj, state, m, p)
+
+
+def _aider_event(obj: dict, state: dict, m, p) -> list[dict]:
     if m == "text":
         txt = str(p.get("text") or "")
         if not txt.strip():
