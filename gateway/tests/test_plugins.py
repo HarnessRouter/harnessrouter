@@ -293,6 +293,37 @@ def test_a_kit_harness_from_before_the_package_gets_it_on_the_next_launch(api, t
     assert any("revised" in (f.get("content") or "") for f in files)
 
 
+def test_a_kit_can_move_to_a_harness_you_already_have(api, tmp_path, monkeypatch):
+    """A package migrated to another Harness takes the kit with it: launch with `harness` binds the
+    kit to that Harness, installs the kit's package there, and the previous kit Harness keeps its
+    sessions and package but is no longer the one the app finds."""
+    kid = "demo-kit-moves"
+    plug = tmp_path / kid / "plugin"
+    (plug / "skills" / "demo-skill").mkdir(parents=True)
+    (plug / "plugin.json").write_text(json.dumps({"$schema": MANIFEST_SCHEMA, "name": "harnessrouter-moves", "version": "1.0.0", "description": "A kit."}))
+    (plug / "skills" / "demo-skill" / "SKILL.md").write_text("---\nname: demo-skill\ndescription: fixture\n---\n")
+    monkeypatch.setattr(app, "_KITS_DIR", str(tmp_path))
+    kits = {kid: {"id": kid, "title": "Moves", "app": {"route": "/kits/moves"},
+                  "harness": {"name": "Moves", "plugin": "plugin", "recommended": [{"base": "claude-code", "model": "claude-opus-5"}]}},
+            "other-kit": {"id": "other-kit", "title": "Other", "app": {"route": "/kits/other"},
+                          "harness": {"name": "Other", "recommended": [{"base": "claude-code", "model": "claude-opus-5"}]}}}
+    monkeypatch.setattr(app, "_kits", lambda: kits)
+    first = api.post(f"/v1/kits/{kid}/launch", json={}).json(); a = first["harnessId"]
+    mine = _create(api, name="Mine")
+    moved = api.post(f"/v1/kits/{kid}/launch", json={"harness": mine["id"]})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["harnessId"] == mine["id"] and moved.json()["created"] is False
+    h = moved.json()["harness"]
+    assert h["kit"] == kid and [p["name"] for p in h["plugins"]] == ["harnessrouter-moves"]
+    assert api.get(f"/v1/harnesses/{a}").json().get("kit") in (None, "")
+    again = api.post(f"/v1/kits/{kid}/launch", json={}).json()
+    assert again["harnessId"] == mine["id"], "the kit now finds the Harness it moved to"
+    other = api.post("/v1/kits/other-kit/launch", json={"harness": mine["id"]})
+    assert other.status_code == 409 and other.json()["error"]["code"] == "kit_conflict"
+    r = api.post(f"/v1/kits/{kid}/launch", json={"harness": "chrn_nothere"})
+    assert r.status_code == 404
+
+
 def test_an_update_cannot_change_the_base(api):
     """Harnesses §5.2: id, base and createdAt are immutable on update."""
     h = _create(api)
