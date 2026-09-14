@@ -722,14 +722,16 @@ in **Integrations**. Never put it in browser-side code or commit it to Git.
 
 A plugin is a folder in the [Agent Plugins](https://agent-plugins.org) format: `plugin.json` at its
 root, tools in `mcp.json`, Skills under `skills/`. Installing one gives a harness all of it at once,
-and the harness records it as a named, versioned package it can export again. The starter kits ship
-their Skills this way, so a launched kit's harness shows the kit as an installed plugin.
+and the harness records it as a named, versioned package it can export again. Starter kits built from
+the kit release that carries plugin packages ship their Skills this way, so a kit launched from such
+an image shows the kit as an installed plugin; a kit launched earlier keeps its Skills as its own.
 
 In the Console, open the harness, find **Plugins**, and choose **Install from folder**. Over the API,
-send the folder's files on create or update:
+`plugins` is a field of the harness record. The simplest case is a new harness created with the
+package in it:
 
 ```bash
-curl -s -X PUT "$HARNESSROUTER_BASE_URL/v1/harnesses/$HARNESS_ID" \
+curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses" \
   -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \
   -d '{"name":"Contract Review Agent","base":"claude-code",
        "plugins":[{"files":[
@@ -737,6 +739,14 @@ curl -s -X PUT "$HARNESSROUTER_BASE_URL/v1/harnesses/$HARNESS_ID" \
          {"path":"skills/risk-checklist/SKILL.md","content":"---\nname: risk-checklist\ndescription: Turn an agreement into a risk checklist.\n---\n..."}
        ]}]}'
 ```
+
+To add a plugin to a harness that already exists, remember that `PUT /v1/harnesses/{id}` replaces
+the whole mutable configuration: any field you leave out is cleared, and an omitted `mcp_servers`
+also removes the hosted tools behind it. Read the harness first, then send back its current
+`system_prompt`, `default_model`, `mcp_servers`, `skills`, `disabled_tools`, `additional_headers`,
+`max_step` and `timeout_seconds` (the write body uses these snake_case names; the record you read
+uses camelCase) with the new package appended to `plugins`. Installed plugins round-trip as
+`{name, enabled, blob}`, so send those back unchanged and add the new one beside them.
 
 The record you read back carries what the server derived from the package (`manifest`,
 `mcpServers`, `skills`, and `skipped` for anything it could not load) and a `blob` handle that

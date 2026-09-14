@@ -389,6 +389,18 @@ export async function deleteCustom(id: string): Promise<void> {
 
 /** Full files of one skill on a harness, resolving the server-side blob offload, used to
  *  hydrate a folder skill for editing when the record only carries {name, enabled, blob}. */
+let _pluginSchemas: Promise<string[]> | null = null;
+/** The Agent Plugins manifest schemas this server installs, from its discovery document; empty
+ *  when the server reports no plugin support (the Console then leaves the check to Save). */
+export function pluginSchemas(): Promise<string[]> {
+  if (!_pluginSchemas) {
+    _pluginSchemas = gw<{ capabilities?: Record<string, boolean>; plugin_schemas?: string[] }>('GET', '/v1/uhp')
+      .then((d) => (d.capabilities?.plugins ? (d.plugin_schemas || []) : []))
+      .catch(() => []);
+  }
+  return _pluginSchemas;
+}
+
 /** The complete package of one installed plugin, byte for byte (UHP Plugins §3.1). */
 export async function getPluginFiles(harnessId: string, name: string):
   Promise<{ path: string; content?: string; content_b64?: string }[]> {

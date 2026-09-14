@@ -253,3 +253,13 @@ def test_a_kit_that_ships_a_package_launches_as_an_installed_plugin(api, tmp_pat
     assert sorted(f["path"] for f in files) == ["plugin.json", "skills/demo-skill/SKILL.md", "skills/demo-skill/helper.py"]
     again = api.post(f"/v1/kits/{kid}/launch", json={})
     assert again.status_code == 200 and again.json()["created"] is False and again.json()["harnessId"] == h["id"]
+
+
+def test_an_update_cannot_change_the_base(api):
+    """Harnesses §5.2: id, base and createdAt are immutable on update."""
+    h = _create(api)
+    r = api.put(f"/v1/harnesses/{h['id']}", json={"name": "Moved", "base": "codex"})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "harness_mismatch"
+    assert api.get(f"/v1/harnesses/{h['id']}").json()["base"] == "claude-code"
+    r = api.put(f"/v1/harnesses/{h['id']}", json={"name": "Renamed", "base": "claude-code"})
+    assert r.status_code == 200 and r.json()["name"] == "Renamed"
