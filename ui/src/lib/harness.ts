@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -116,6 +116,14 @@ export const OOB: OobHarness[] = [
     // see the gateway's _MODEL_CATALOG["goose"], which says which are which.
     models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'hunyuan-3', 'minimax-m3', 'nemotron-3.5-lightning', 'nemotron-3-ultra', 'nemotron-3-super', 'ling-3.0-flash'], defaultModel: 'gpt-5.4', moreModels: 0,
     systemPrompt: 'You are goose, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
+  { id: 'kimi', name: 'Kimi CLI', version: 'v1.50.0', backend: 'kimi', status: 'ready',
+    // Placeholder only, like every list above: the gateway's catalog wins once fetched. NOT ONE of
+    // these has been measured on this backend yet — no column has run — and the gateway's
+    // _MODEL_CATALOG["kimi"] carries the same warning at the ids themselves. kimi family first,
+    // since it is the backend's home family.
+    models: ['kimi-k3', 'kimi-k2.7-code', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5', 'claude-fable-5', 'claude-fable-5-1', 'claude-opus-4.8', 'claude-sonnet-5', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.5-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4.1-flash', 'qwen3.8-max', 'qwen3.7-max', 'mistral-medium-3.5', 'step-3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'grok-4.6', 'grok-4.5'], defaultModel: 'kimi-k3', moreModels: 0,
+    systemPrompt: 'You are Kimi CLI, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
 ];
 

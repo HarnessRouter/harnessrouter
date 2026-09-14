@@ -312,3 +312,64 @@ re-run once.
   recall misses on muse-spark-1.1; hermes passed its re-run, opencode missed twice. muse-spark-1.1 stays
   on opencode because the same pair passes on Vercel; the miss is recorded. OpenRouter's no-channel set
   is empty.
+
+## The kimi backend (Kimi CLI 1.50.0) — behaviour measured, columns NOT yet run
+
+No column has run for this harness. Everything below was measured against the pinned 1.50.0
+artifact — its source, its bytes on the wire, and two live turns through Vercel — and none of it is
+a substitute for a column. `docs/support-matrix.md` is rendered from
+`docs/support-matrix-results.json` and is deliberately untouched by this change.
+
+**A failed turn reads as failed, by exit code rather than by prose.** kimi classifies provider
+failures itself (`Print._classify_provider_error`): 75 (EX_TEMPFAIL) for connection, timeout and
+empty-response errors and for HTTP 429/500/502/503/504; 1 for every other status error and for the
+catch-all. The reason arrives as a bare non-JSON line on stdout (`Error code: 401 - {…}`,
+`Connection error.`), which the runner already collects and `_failure_reason` already prefers. This
+is the first backend here that needs no error-prose regex at all — contrast claude's `API Error: …`
+and goose's `Ran into this error: …`, both of which are narrated as assistant text.
+
+**The CLI reports no served model anywhere**, so every kimi row is substitution-checked from the
+relay (`_relay_served_model`), the same path goose, cline and qwen use. Measured: a live turn's
+upstream SSE carried `"model":"openai/gpt-5.4-nano"`, which `_served_model_in` matches. Separately,
+kimi does not rewrite the id it is given — the value reaches the provider verbatim, and its only
+alias machinery raises `KeyError` on a miss rather than substituting, so the gemini `resolveModel`
+class of silent substitution is absent.
+
+**`reasoning_effort: null` is on every kimi request and Vercel's AI Gateway answers it with HTTP
+400** ("Invalid option: expected one of \"none\"|\"minimal\"|…", reproduced twice in one live turn).
+Without the relay dropping that key, every kimi turn on Vercel fails before it begins. The drop is
+in `_normalize_openai_chat_body`, so it applies to any backend that sends the same shape.
+
+**An unreachable MCP server KILLS the turn on this backend** — `Unknown error: Failed to connect
+MCP servers: {…}` and exit 1, verified live against a dead server — it does not degrade. That is
+the opposite of goose (warns on stderr, continues) and of hermes (disables HTTP MCP with a log
+line), and it means the visibility UHP §4.1 asks for is satisfied loudly here, at the cost of a
+flaky third-party server taking every turn with it. The matrix probes the server once before a run
+and skips the MCP half when it is unreachable, so the custom-harness dimension is unaffected; a
+user-configured server that dies mid-session is the real exposure.
+
+**A resumed session that is gone is silent.** `--session <unknown-id>` does not error: kimi mints a
+session with that id and answers from an empty history, with no stdout line and no change of exit
+code. `_resume_lost`'s kimi arm therefore asks the store — `sessions/<md5(work_dir)>/<id>/context.jsonl`,
+kimi's own predicate — rather than reading argv, where the id is present either way.
+
+**Tool policy is real but path-keyed.** `exclude_tools` matches tool PATHS
+(`kimi_cli.tools.shell:Shell`), not the names the model sees; a bare name is a silent no-op.
+Measured in one probe: excluding `kimi_cli.tools.web:FetchURL` removed it from the tools array,
+while excluding `Shell` did not. `tool_enforcement: "hard"` is honest only because
+`runner/server.py`'s `_KIMI_TOOL_PATHS` translates, and a gateway test pins the catalog's ids equal
+to that table's keys.
+
+**`SearchWeb` and `ReadMediaFile` are not offered.** Both ship in kimi's default agent and both
+raise `SkipThisTool` unless a Moonshot search key / a vision-capable model is configured, so
+neither is ever constructed on this deployment.
+
+**Token usage is absent from the stream**, not merely named differently: `JsonPrinter` drops every
+`StatusUpdate`. kimi's result events carry `usage: {}` until `_relay_usage` lands, which is the
+agreed division of work — no harness PR builds its own usage pipeline.
+
+**Known open question: `max_context_size`.** kimi requires one per model and plans compaction
+against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds one value for all
+ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN the agent compacts,
+never whether it answers: too large lets a thread overflow the real window (the provider then
+errors), too small compacts early and wastes tokens.

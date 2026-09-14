@@ -1060,6 +1060,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "opencode"): "openai-api",
     ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
     ("llmtr", "opencode"): "tokenrouter",
+    # kimi reaches every provider the same way qwen does — one OpenAI-compatible surface through
+    # the loopback relay — so these rows are qwen's, verbatim, with the backend renamed.
+    ("anthropic", "kimi"): "anthropic",        ("openai", "kimi"): "openai",
+    ("azure-foundry", "kimi"): "azure",
+    ("openrouter", "kimi"): "openai-api",
+    ("tokenrouter", "kimi"): "tokenrouter",    ("vercel", "kimi"): "tokenrouter",
+    ("llmtr", "kimi"): "tokenrouter",
+    ("custom", "kimi"): "openai-api",
+    ("google", "kimi"): "openai-api",
     ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
     ("azure-foundry", "qwen"): "azure",
     ("openrouter", "qwen"): "openai-api",
@@ -1122,6 +1131,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "hermes"): "openai-api",  ("harnessrouter", "pi"): "tokenrouter",
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
+    ("harnessrouter", "kimi"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
 }
@@ -4536,7 +4546,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
     # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
     # until it is — the picker greys out what the router cannot actually run.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose"},
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
@@ -5959,6 +5969,26 @@ _MODEL_CATALOG: dict[str, dict] = {
     # its text turns answer but its first tool turn is refused on every channel (TokenRouter
     # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
     # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
+    # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
+    # relay), so the candidate list starts from qwen's, reordered to put the kimi family first as
+    # its home family. NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS BACKEND YET — the column has
+    # not run. They are offered so the matrix can measure them here (the `pi` precedent), and this
+    # comment must be replaced by the measured result, with the ids that failed removed, before
+    # this backend is called done. What IS already measured is that kimi does not rewrite the id it
+    # is given: the value reaches the provider verbatim (captured at a stub and against a live
+    # gateway), and its only alias machinery raises KeyError on a miss rather than substituting —
+    # so the gemini resolveModel class of silent substitution is absent here.
+    "kimi": {"default": "kimi-k3",
+             "models": ["kimi-k3", "kimi-k2.7-code",
+                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
+                        "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
+                        "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                        "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+                        "gemini-3.5-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash",
+                        "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash",
+                        "qwen3.8-max", "qwen3.7-max", "mistral-medium-3.5", "step-3.7-flash",
+                        "glm-5.3", "glm-5.3-flash", "grok-4.6", "grok-4.5"]},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -6091,7 +6121,10 @@ for _b, _e in _MODEL_CATALOG.items():
 # an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
 # test forbids listing such an id for such a harness.
 RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose")
+# kimi speaks chat/completions only: its provider type is openai_legacy (openai_responses
+# exists in the CLI but is not the type the runner writes), so a Responses-API-only id would be
+# a picker row that fails on send.
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -13132,6 +13165,32 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
         # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
+        "tool_enforcement": "hard",
+    },
+    "kimi": {
+        "label": "Kimi CLI", "backend": "kimi", "status": "ready",
+        "system_prompt": ("You are Kimi CLI, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # Measured from the `tools` array a live run SENT ITS PROVIDER, captured at a local stub —
+        # these are the names the model actually sees, not doc-sourced ones.
+        #
+        # SearchWeb and ReadMediaFile are in the shipped default agent and are deliberately NOT
+        # listed: each raises SkipThisTool unless a Moonshot search key / a vision-capable model is
+        # configured, so neither is ever constructed here, and listing one would be the "tool id
+        # that matches nothing" this catalog's own rules forbid.
+        "tools": [("Shell", "Shell"), ("ReadFile", "File Read"), ("WriteFile", "File Write"),
+                  ("StrReplaceFile", "Edit"), ("Grep", "Search"), ("Glob", "Glob"),
+                  ("FetchURL", "Web Fetch"), ("SetTodoList", "Todo"), ("Agent", "Subagent"),
+                  ("AskUserQuestion", "Question"), ("TaskList", "Background Tasks"),
+                  ("TaskOutput", "Task Output"), ("TaskStop", "Task Stop"),
+                  ("EnterPlanMode", "Enter Plan"), ("ExitPlanMode", "Exit Plan")],
+        # "hard", and earned: a --agent-file with `extend: default` + `exclude_tools` means the tool
+        # is never constructed and never declared to the model. Verified live — an excluded tool was
+        # absent from the captured tools array. The enforcement depends entirely on
+        # runner/server.py's _KIMI_TOOL_PATHS, because kimi matches tool PATHS and a bare NAME is a
+        # silent no-op; test_catalog_kimi_tool_paths.py pins these ids equal to that table's keys so
+        # this claim cannot drift into an overstatement.
         "tool_enforcement": "hard",
     },
     "qwen": {

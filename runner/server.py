@@ -241,22 +241,69 @@ def _own_tree(root: str, uid: int, from_uids: set[int]) -> None:
                 continue
 
 
-def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None) -> str | None:
-    """The session id the caller asked to continue when the built command does not carry it: the
-    builder looked for the session in the workspace, did not find it, and started fresh (claude's
-    --resume, opencode's --session). hermes says so itself; codex carries its own note. Four
-    hosted opencode sessions answered three recalls each with "there is no earlier message" as
+def _kimi_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask kimi's store whether this session exists, with kimi's own predicate.
+
+    `Session.find` treats a session as existing iff sessions/<md5(work_dir)>/<id>/context.jsonl is
+    on disk, so this makes the identical check. It CANNOT be inferred from argv: --session is on the
+    command line whether or not the session exists, because kimi mints a session with whatever id it
+    is handed (cli/__init__.py:558-565, find -> None -> "not found, creating new session" ->
+    Session.create). Measured on 1.50.0: resuming an id that never existed printed nothing, changed
+    no exit code, and left a brand-new session directory behind — with a working provider it would
+    have answered from an empty history as a completed turn, which is the exact failure this whole
+    mechanism exists to stop."""
+    share = pathlib.Path(cwd) / ".harness" / "home" / ".kimi"
+    return (_kimi_session_dir(share, cwd, session_id) / "context.jsonl").exists()
+
+
+def _argv_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """The builder looked the session up and said so in argv: claude's --resume and opencode's
+    --session carry the id only when it was found in this workspace."""
+    return session_id in cmd
+
+
+def _goose_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """goose carries the id as `-n <name>` on EVERY turn — it names a fresh session as well as
+    selecting an existing one — so the id being present in cmd says nothing. `-r` is the flag that
+    means "continue", and _build_goose adds it only once the session was found in this workspace's
+    database."""
+    return "-r" in cmd
+
+
+# How each backend answers "is the conversation the caller asked to continue actually there?".
+#
+# ASK THE STORE, DO NOT SEARCH IT. goose's first version searched the sessions database for the
+# session NAME; the name was `harness`, which also occurs in the workspace path that tool output
+# carries, so a database holding one message and no session matched — a false positive that added
+# -r and failed the turn with "No session found", the very failure the check existed to prevent.
+# A backend whose builder already performs the lookup can answer from argv (that IS the builder's
+# conclusion, not a guess about it); a backend that cannot must query its store the way the CLI
+# queries it.
+#
+# A backend absent from this table cannot lose a session, or has not been measured — either way it
+# never reports one lost. Adding a backend here is registration point 5.
+_SESSION_PRESENT = {
+    "claude": _argv_session_present,
+    "opencode": _argv_session_present,
+    "goose": _goose_session_present,
+    "kimi": _kimi_session_present,
+}
+
+
+def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None,
+                 cwd: str = "") -> str | None:
+    """The session id the caller asked to continue when that conversation is not there: the turn
+    will run, and it will answer from an empty history unless someone says so.
+
+    Four hosted opencode sessions answered three recalls each with "there is no earlier message" as
     completed turns (2026-09-08): the history was lost to the 2026-09-06 restore burst, and nothing
-    told the person. The gateway renders the event as a note at the top of the reply."""
-    if backend not in ("opencode", "claude", "goose") or not resume_session_id:
+    told the person. The gateway renders the event this produces as a note at the top of the reply.
+
+    hermes says so itself and codex carries its own note, so neither is in the table."""
+    probe = _SESSION_PRESENT.get(backend)
+    if probe is None or not resume_session_id:
         return None
-    if backend == "goose":
-        # goose carries the id as `-n <name>` on EVERY turn — it names a fresh session as well as
-        # selecting an existing one — so the id being present in cmd says nothing. `-r` is the
-        # flag that means "continue", and _build_goose adds it only once the session was found in
-        # this workspace's database.
-        return None if "-r" in cmd else resume_session_id
-    return None if resume_session_id in cmd else resume_session_id
+    return None if probe(cwd, cmd, resume_session_id) else resume_session_id
 
 
 def _isolate_session(ws: str) -> None:
@@ -393,10 +440,19 @@ CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
+KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "272000")
+# kimi REQUIRES a per-model max_context_size in its config (no default), and plans compaction
+# against it: loop_control.compaction_trigger_ratio 0.85 over reserved_context_size 50000. The
+# same problem codex has above, solved the same way and for the same reason — a number that is
+# too LARGE compacts late and lets the thread overflow the real window (the provider then 400s);
+# too small compacts early and wastes tokens on a turn that would have fit. One value across the
+# catalog is a known approximation: it is honest only because being wrong changes WHEN the agent
+# compacts, never whether it answers. A per-id window belongs in the catalog, not here.
+KIMI_CONTEXT_WINDOW = os.environ.get("KIMI_CONTEXT_WINDOW", "272000")
 # Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 AZURE_OPENAI_BASE_URL = os.environ.get("AZURE_OPENAI_BASE_URL", "")
@@ -705,6 +761,15 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # frontmatter does not match its directory name.
         rootrels = [".harness/goose/config/skills"]
         entryroot = ".harness/goose/config/skills"
+    elif backend == "kimi":
+        # --skills-dir "Overrides default discovery" (repeatable), so like opencode the loader
+        # adapts to us and there is no per-CLI home directory to guess. Verified on 1.50.0: a skill
+        # written here appeared in the system prompt under an "### Extra" scope heading with its
+        # path and its frontmatter description. Default discovery would otherwise sweep
+        # .kimi/skills, .claude/skills, .codex/skills and .agents/skills — including trees another
+        # backend wrote — which is a second reason to name the directory explicitly.
+        rootrels = [".harness/skills"]
+        entryroot = ".harness/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -842,8 +907,12 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     return pathlib.Path(cwd) / (
         # goose reads AGENTS.md natively and first: its default context-file list is
         # ["AGENTS.md", ".goosehints"], overridable only via CONTEXT_FILE_NAMES.
+        # kimi reads AGENTS.md and nothing else (no KIMI.md, no CLAUDE.md - grepped the whole
+        # 1.50.0 package), merging from the project root down to the work dir, and injects the
+        # content VERBATIM into the system prompt: verified live, inside a
+        # "<!-- From: .../AGENTS.md -->" fence, with a behavioural instruction in it obeyed.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose")
+                                   "goose", "kimi")
         else "CLAUDE.md")
 
 
@@ -2350,13 +2419,26 @@ def _normalize_openai_chat_body(body: bytes) -> bytes:
     verbatim, and LLMTR's validator requires it non-empty when present ('String must contain at
     least 1 character(s)', measured live on deepseek-v4-pro 2026-08-27 — the turn died right
     after its tool call). A non-empty one is meaningful interleaved thinking and passes through.
+    A top-level `reasoning_effort: null` is deleted: kimi sends the key with a null value on every
+    request, and Vercel's AI Gateway answers that with HTTP 400 ("Invalid option: expected one of
+    \"none\"|\"minimal\"|…", measured twice in one live turn on 1.50.0), so on that gateway every
+    kimi turn would fail before it began. Null is not one of the enum's options, and a client that
+    sends it means "unset" — deleting it says the same thing in a shape every endpoint accepts.
+    Only null is touched; a real effort value is the caller's choice and passes through, as does
+    the `reasoning_effort: "none"` that _set_reasoning_effort_none sets deliberately.
+
     Anything else — other roles, non-empty text, unparseable bodies — passes through
     byte-identical."""
     try:
         obj = json.loads(body)
-        if not isinstance(obj, dict) or not isinstance(obj.get("messages"), list):
+        if not isinstance(obj, dict):
             return body
         changed = False
+        if "reasoning_effort" in obj and obj["reasoning_effort"] is None:
+            del obj["reasoning_effort"]
+            changed = True
+        if not isinstance(obj.get("messages"), list):
+            return json.dumps(obj, separators=(",", ":")).encode() if changed else body
         for m in obj["messages"]:
             if not isinstance(m, dict):
                 continue
@@ -3373,6 +3455,210 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
            "--yolo"]
     if resume_session_id:
         cmd += ["-r", resume_session_id]
+    return cmd
+
+
+KIMI_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+# Every kimi tool, mapped from the name the model sees to the MODULE PATH its agent spec needs.
+#
+# THE TRAP THIS TABLE EXISTS FOR, measured on 1.50.0: `exclude_tools` matches tool PATHS, not tool
+# names. In one probe both "Shell" (bare name) and "kimi_cli.tools.web:FetchURL" (path) were
+# excluded — FetchURL disappeared from the tools array the model received and Shell did NOT. A bare
+# name is a SILENT no-op: the console would report the tool as off while the model still has it,
+# which is exactly the failure registration point 9 warns about, and it is why this backend can
+# claim tool_enforcement "hard" only through this table. _BASE_CATALOG["kimi"]'s tool ids are
+# pinned equal to these keys by test_catalog_kimi_tool_paths.py, so the console can never offer a
+# name that has no path here.
+#
+# SearchWeb and ReadMediaFile are deliberately absent: both are in the shipped default agent but
+# raise SkipThisTool unless a Moonshot search key / a vision-capable model is configured
+# (kimi_cli/tools/web/search.py:47, kimi_cli/tools/file/read_media.py:54), so neither is ever
+# constructed here and listing either would be offering a tool that does not exist.
+_KIMI_TOOL_PATHS = {
+    "Agent": "kimi_cli.tools.agent:Agent",
+    "AskUserQuestion": "kimi_cli.tools.ask_user:AskUserQuestion",
+    "SetTodoList": "kimi_cli.tools.todo:SetTodoList",
+    "Shell": "kimi_cli.tools.shell:Shell",
+    "TaskList": "kimi_cli.tools.background:TaskList",
+    "TaskOutput": "kimi_cli.tools.background:TaskOutput",
+    "TaskStop": "kimi_cli.tools.background:TaskStop",
+    "ReadFile": "kimi_cli.tools.file:ReadFile",
+    "Glob": "kimi_cli.tools.file:Glob",
+    "Grep": "kimi_cli.tools.file:Grep",
+    "WriteFile": "kimi_cli.tools.file:WriteFile",
+    "StrReplaceFile": "kimi_cli.tools.file:StrReplaceFile",
+    "FetchURL": "kimi_cli.tools.web:FetchURL",
+    "EnterPlanMode": "kimi_cli.tools.plan.enter:EnterPlanMode",
+    "ExitPlanMode": "kimi_cli.tools.plan:ExitPlanMode",
+}
+
+
+def _kimi_session_dir(share: pathlib.Path, cwd: str, session_id: str) -> pathlib.Path:
+    """Where kimi keeps one session, asked the way kimi itself asks it.
+
+    `Session.find` (kimi_cli/session.py) treats a session as existing iff
+    sessions/<md5(work_dir)>/<id>/context.jsonl is on disk, and metadata.py:36 hashes the work dir
+    with plain md5. Reproducing that predicate is the whole of _resume_lost's kimi arm — the goose
+    lesson (a byte search for the session NAME matched the workspace path and reported a session
+    that was not there) is why this asks the store instead of searching it."""
+    key = hashlib.md5(cwd.encode("utf-8")).hexdigest()   # noqa: S324 - kimi's own key, not a digest
+    return share / "sessions" / key / session_id
+
+
+def _kimi_config(ws: pathlib.Path, model: str) -> pathlib.Path:
+    """kimi's config file. Required, not optional, for three separate reasons measured on 1.50.0:
+
+    1. OPENAI_BASE_URL / OPENAI_API_KEY only OVERRIDE an existing provider entry (llm.py:305-311,
+       `case "openai_legacy" | "openai_responses":`), so a provider block must exist to be
+       overridden. Env alone configures nothing.
+    2. `-m` names an ALIAS in config.models, not a model id; the id that reaches the provider is
+       models.<alias>.model. So the real id is written HERE and `-m hr` is a constant.
+    3. telemetry defaults to TRUE and posts to telemetry-logs.kimi.com (telemetry/transport.py:22).
+       There is no env kill switch — it is a config key only.
+
+    No credential is written: the placeholders below exist so the provider block parses, and the
+    environment wins over both. --config (the inline-string form) is deliberately not used: it
+    would put the provider block on argv, where /proc exposes it."""
+    path = ws / ".harness" / "kimi-config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    esc = model.replace("\\", "\\\\").replace('"', '\\"')
+    path.write_text(
+        "default_model = \"hr\"\n"
+        "telemetry = false\n"
+        "\n"
+        "[providers.hr]\n"
+        "type = \"openai_legacy\"\n"
+        "base_url = \"http://127.0.0.1:1/v1\"\n"
+        "api_key = \"set-from-environment\"\n"
+        "\n"
+        "[models.hr]\n"
+        "provider = \"hr\"\n"
+        f"model = \"{esc}\"\n"
+        f"max_context_size = {KIMI_CONTEXT_WINDOW}\n")
+    return path
+
+
+def _kimi_agent_file(ws: pathlib.Path, tools_disabled: list[str] | None) -> pathlib.Path | None:
+    """A per-turn agent spec that withholds tools, or None when nothing is disabled.
+
+    `extend: default` resolves to the shipped agent.yaml, and an excluded tool is never constructed
+    and never declared to the model (kimi_cli/soul/agent.py:447-450) — this is what makes kimi's
+    tool_enforcement "hard" rather than "instruction". Names are translated through
+    _KIMI_TOOL_PATHS because kimi matches paths, not names; see that table's comment."""
+    paths = [_KIMI_TOOL_PATHS[t] for t in (tools_disabled or []) if t in _KIMI_TOOL_PATHS]
+    if not paths:
+        return None
+    path = ws / ".harness" / "kimi-agent.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(   # YAML is a superset of JSON, and json.dumps quotes safely
+        {"version": 1, "agent": {"extend": "default", "name": "harness", "exclude_tools": paths}},
+        indent=2))
+    return path
+
+
+def _kimi_mcp_config(ws: pathlib.Path, mcp_servers: list[dict] | None) -> pathlib.Path | None:
+    """The standard `mcpServers` object, parsed by fastmcp's MCPConfig (kimi_cli/soul/toolset.py).
+    The same shape _qwen_settings writes, with ONE field difference: streamable HTTP is `url` here,
+    where gemini-cli's schema (which qwen inherited) calls it `httpUrl`.
+
+    A server that cannot start is FATAL on this CLI — `Unknown error: Failed to connect MCP
+    servers: {…}` on stdout and exit 1, verified live — rather than a degraded turn. That is the
+    opposite of hermes (which disables HTTP MCP with only a log line) and of goose (which warns on
+    stderr and continues); it satisfies UHP's visibility SHOULD loudly, at the cost of a flaky
+    third-party server taking the whole turn with it. Recorded in docs/support-matrix-notes.md."""
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"url": url}
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": argv[0],
+                     "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        servers[name] = entry
+    if not servers:
+        return None
+    path = ws / ".harness" / "kimi-mcp.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mcpServers": servers}, indent=2))
+    return path
+
+
+def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in KIMI_PROVIDERS:
+        raise HTTPException(400, f"unknown kimi provider '{pr}' (one of {sorted(KIMI_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "kimi needs a base_url (none configured)")
+    if auth.api_key:
+        # EVERY kimi turn rides the loopback relay, the qwen rationale unchanged: the real key never
+        # enters the CLI's environment, and request shapes strict endpoints refuse are repaired in
+        # flight. kimi needs one repair of its own — it sends `reasoning_effort: null`, which
+        # Vercel's AI Gateway answers with HTTP 400 ("Invalid option: expected one of
+        # \"none\"|\"minimal\"|…", measured twice in one live turn) — handled for every backend in
+        # _set_reasoning_effort_none rather than here.
+        #
+        # Riding the relay is also what makes matrix rule 2 enforceable on this backend: kimi itself
+        # reports no served model anywhere in its stream, but the provider's own "model" passes the
+        # relay in the bytes and _relay_served_model stamps it onto the synthesised result.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    ws = pathlib.Path(cwd)
+    share = ws / ".harness" / "home" / ".kimi"
+    share.mkdir(parents=True, exist_ok=True)
+    # KIMI_SHARE_DIR is a DEDICATED variable for config + sessions + logs, so unlike qwen (and every
+    # other backend that redirects HOME) this one never touches HOME at all. Verified after a full
+    # two-turn session: a fresh HOME stayed empty. It sits under .harness/ so sessions/ is
+    # checkpointed — resume has to survive a sandbox recycle (matrix scenario 5) — and is excluded
+    # from produced files.
+    env["KIMI_SHARE_DIR"] = str(share)
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["OPENAI_BASE_URL"] = auth.base_url
+    # kimi prints its error lines through `rich.print` (ui/print/__init__.py:27), which hard-wraps at
+    # the terminal width — 80 in a non-tty — and a wrapped `Error code: 400 - {…}` reaches errbuf as
+    # three unrelated-looking fragments. Measured: the same probe at COLUMNS=400 came back as one
+    # unbroken line, which is what _failure_reason needs to match a provider refusal in it.
+    env["COLUMNS"] = "400"
+    cfg = _kimi_config(ws, model)
+    cmd = ["kimi", "--config-file", str(cfg), "-w", cwd,
+           "--print", "--output-format", "stream-json",
+           # -m names the alias written into the config above, never a model id: kimi resolves it
+           # against config.models and raises KeyError on a miss rather than substituting, which is
+           # why checklist 2 is clean on this backend (no gemini-style resolveModel rewrite).
+           "-m", "hr",
+           # --print already implies auto-approval (cli/__init__.py:626 runtime_afk = ui == "print");
+           # --yolo is passed anyway for one deterministic path, qwen's rationale unchanged.
+           "--yolo"]
+    if resume_session_id:
+        # ALWAYS on argv, including when the session is gone: kimi mints a session with whatever id
+        # it is given (cli/__init__.py:558-565 — find -> None -> create), so keeping the id here
+        # preserves id stability for the caller, and _resume_lost reports the loss by asking the
+        # store. The id itself is minted by the runner because kimi emits no session id to scrape.
+        cmd += ["--session", resume_session_id]
+    if skills_dir:
+        cmd += ["--skills-dir", skills_dir]
+    agent_file = _kimi_agent_file(ws, tools_disabled)
+    if agent_file is not None:
+        cmd += ["--agent-file", str(agent_file)]
+    mcp_cfg = _kimi_mcp_config(ws, mcp_servers)
+    if mcp_cfg is not None:
+        cmd += ["--mcp-config-file", str(mcp_cfg)]
+    cmd += ["-p", prompt]
     return cmd
 
 
@@ -4569,6 +4855,112 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
+# ── kimi ─────────────────────────────────────────────────────────────────────────
+# Kimi CLI's `--output-format stream-json` is NOT claude's, despite the shared flag name: it is one
+# kosong `Message` per line and NOTHING else. Measured against the pinned 1.50.0 by reading its only
+# emitter, kimi_cli/ui/print/visualize.py::JsonPrinter.feed, which matches StatusUpdate / StepBegin /
+# StepRetry / TurnBegin / TurnEnd and then falls through to `case _:  # ignore other messages`:
+#
+#   assistant text    {"role":"assistant","content":"…"}
+#   assistant call    {"role":"assistant","content":[…parts…],"tool_calls":[{"id",…,"function":{"name","arguments"}}]}
+#   tool result       {"role":"tool","content":"…","tool_call_id":"…"}
+#   notification      the Notification model — background-task notices
+#   plan display      {"content":…,"file_path":…} — plan mode only
+#
+# `content` is a PLAIN STRING on a text-only message and a LIST OF PARTS when the message carries
+# tool calls (both captured live), so both shapes are handled.
+#
+# Three absences drive every design choice below, and each was verified in the emitter AND in a live
+# capture rather than inferred:
+#   * no usage of any kind            -> the result event's usage is {} (see _kimi_eof)
+#   * no session id                   -> the runner MINTS the id instead of scraping one (_build_kimi)
+#   * no terminal / result event      -> this normaliser carries an `eof`, the opencode precedent
+def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
+    role = obj.get("role")
+    if role == "assistant":
+        out: list[dict] = []
+        content = obj.get("content")
+        if isinstance(content, str):
+            txt = content
+        elif isinstance(content, list):
+            txt = "".join(str(part.get("text") or "") for part in content
+                          if isinstance(part, dict) and part.get("type") == "text")
+        else:
+            txt = ""
+        if txt.strip():
+            # The LAST assistant text is the turn's answer: kimi emits no terminal event, so there
+            # is nothing else to take it from, and a tool-carrying message has content [] (captured)
+            # and therefore never overwrites a real answer here.
+            state["final"] = txt
+            out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}})
+        for call in obj.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+            tuid = str(call.get("id") or "tool")
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                # kimi sends arguments as a JSON STRING (OpenAI's shape), not an object. A model can
+                # emit one that does not parse; keep the raw text rather than dropping the call, so
+                # the trace still shows what was attempted.
+                try:
+                    args = json.loads(args)
+                except Exception:  # noqa: BLE001
+                    args = {"arguments": args}
+            if not isinstance(args, dict):
+                args = {}
+            out.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tuid, "name": str(fn.get("name") or "tool"), "input": args}]}})
+        return out
+    if role == "tool":
+        body = obj.get("content")
+        text = body if isinstance(body, str) else json.dumps(body, default=str)
+        # is_error is NOT knowable from this line. kimi wraps both outcomes in <system>…</system>
+        # ("File successfully overwritten", and errors alike); the boolean lives on
+        # ToolResult.return_value.is_error in wire.jsonl, which this stream does not carry. Marking
+        # every result a success would be a lie only when it failed, and inventing a heuristic over
+        # the <system> prose is the guesswork this repo refuses — so the flag stays False and the
+        # text itself carries the outcome to the reader.
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(obj.get("tool_call_id") or "tool"),
+             "is_error": False, "content": text}]}}]
+    return []
+
+
+def _kimi_eof(state: dict, rc: int) -> list[dict]:
+    """Synthesize the turn's result at end of stream: kimi emits no terminal event, so the process
+    exiting IS the end of the turn.
+
+    THE EXIT CODE IS THE STATUS, and on this CLI that is stronger than any prose test. 1.50.0
+    classifies provider failures itself (`Print._classify_provider_error`,
+    kimi_cli/ui/print/__init__.py): 75 (EX_TEMPFAIL) for APIConnectionError / APITimeoutError /
+    APIEmptyResponseError and for status 429/500/502/503/504; 1 for every other APIStatusError and
+    for the catch-all. So unlike claude (`API Error: …`) and goose (`Ran into this error: …`) there
+    is no failure NARRATED AS ASSISTANT TEXT to recognise, and this backend needs no error regex —
+    registration point 6 is satisfied by the exit code instead. Pinned by
+    test_kimi_normalizer.py::test_failure_exit_codes_are_the_signal.
+
+    The failure SENTENCE is a bare non-JSON line on stdout (`Error code: 401 - {…}`,
+    `Connection error.`, `Unknown error: Failed to connect MCP servers: {…}`), which _run_turn_bg
+    has already collected into errbuf. Returning an EMPTY result here is deliberate and load-bearing:
+    _run_turn_bg fills an empty result event from that tail, and _failure_reason then prefers the
+    provider refusal it matches inside it. Putting a placeholder sentence here instead would shadow
+    the real reason, and putting the partial assistant text here would report a 401 as if the model
+    had answered. rec["result"] keeps that partial text either way, from state["final"].
+
+    usage is {} deliberately, not as an oversight: kimi's stream carries no token counts at all, and
+    per the 2026-09-13 decision no harness PR builds its own usage pipeline — `_relay_usage` stamps
+    these rows when it lands. goose's eof already emits {} for the same reason."""
+    final = state.get("final", "")
+    if rc == 0:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": final, "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+
+
+_kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -4605,6 +4997,11 @@ BACKENDS = {
     # carries its own normaliser rather than sharing one — see _goose_to_claude's docstring.
     "goose": {"providers": sorted(GOOSE_PROVIDERS), "default_model": GOOSE_DEFAULT_MODEL,
               "normalize": _goose_to_claude},
+    # kimi's stream-json shares claude's FLAG NAME and nothing else: one kosong Message per line,
+    # no usage, no session id and no terminal event — so it carries its own normaliser and an eof,
+    # rather than the passthrough qwen's genuinely-claude-shaped stream can use.
+    "kimi": {"providers": sorted(KIMI_PROVIDERS), "default_model": KIMI_DEFAULT_MODEL,
+             "normalize": _kimi_to_claude},
 }
 
 
@@ -5755,6 +6152,15 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or QWEN_DEFAULT_MODEL
         cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+    elif backend == "kimi":
+        model = model or KIMI_DEFAULT_MODEL
+        # _write_skills has already run, so the directory is on disk and can simply be named:
+        # --skills-dir "Overrides default discovery", the opencode shape, so there is no per-CLI
+        # home directory to guess here.
+        kimi_skills = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+        cmd = _build_kimi(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          skills_dir=kimi_skills, tools_disabled=req.tools_disabled)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
@@ -5784,7 +6190,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                             resume_session_id=req.resume_session_id, mcp_config=mcp_config,
                             disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages),
                             plugin_dirs=plugin_dirs)
-    resume_lost = _resume_lost(backend, cmd, req.resume_session_id)
+    resume_lost = _resume_lost(backend, cmd, req.resume_session_id, cwd)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex
     _evict_turns()
