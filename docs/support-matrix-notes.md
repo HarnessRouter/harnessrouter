@@ -320,6 +320,12 @@ artifact — its source, its bytes on the wire, and two live turns through Verce
 a substitute for a column. `docs/support-matrix.md` is rendered from
 `docs/support-matrix-results.json` and is deliberately untouched by this change.
 
+**Verified by running the real image, not only by reading the CLI.** `docker build` of this tree,
+then a container with `HR_BACKENDS=kimi`: `install_kimi` downloaded the pinned archive, the digest
+check passed, and the container reported `backends available: kimi` with
+`/data/agent-tools/bin/kimi --version` answering `kimi, version 1.50.0`. The two pinned digests were
+also compared against upstream's own published `.sha256` files and match character for character.
+
 **A failed turn reads as failed, by exit code rather than by prose.** kimi classifies provider
 failures itself (`Print._classify_provider_error`): 75 (EX_TEMPFAIL) for connection, timeout and
 empty-response errors and for HTTP 429/500/502/503/504; 1 for every other status error and for the
