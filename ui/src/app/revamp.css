@@ -2018,7 +2018,7 @@ button.creq-srcstat.on b { color: var(--accent); }
 .plugin-row.is-off .capability-copy{opacity:.62}
 /* The four actions sit two per row beside the copy so the description keeps its width. The row
    follows the width of the list it is in, not the viewport: the settings panel is narrow on a
-   1024 screen too. Under 680px the actions drop below the copy, two per row; under 420px one per row. */
+   1024 screen too. Under 680px the actions drop below the copy, two per row; under 340px (a phone) one per row. */
 .plugin-list{container-type:inline-size}
 .plugin-row .capability-actions{display:grid;grid-template-columns:repeat(2,minmax(104px,max-content));gap:6px 8px;justify-content:end;align-self:start;margin-top:2px}
 .plugin-row .capability-actions .button,.plugin-row .capability-actions .toggle-button{width:100%;min-width:0;justify-content:center}
@@ -2027,7 +2027,7 @@ button.creq-srcstat.on b { color: var(--accent); }
   .plugin-row .capability-actions{grid-column:2;justify-content:start;margin-top:8px}
   .plugin-details{grid-column:1 / -1}
 }
-@container (max-width:420px){
+@container (max-width:340px){
   .plugin-row .capability-actions{grid-template-columns:1fr;width:100%}
   .plugin-group li{grid-template-columns:1fr}
   .plugin-export{flex-direction:column;align-items:flex-start}
