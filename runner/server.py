@@ -4365,12 +4365,6 @@ def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     root.mkdir(parents=True, exist_ok=True)
     host, base_path = _goose_split_base(auth.base_url or "")
     env["GOOSE_PATH_ROOT"] = str(root)
-    # goose's platform-extension loader writes a temp file through std::env::temp_dir() at start
-    # (crates/goose/src/agents/platform_extensions/mod.rs, v1.50.0) and panics when it cannot:
-    # on a host whose sandbox refuses /tmp every turn exited 1 right after "goose is ready"
-    # (hosted, 2026-09-13). The workspace's own tmp, the same thing codex gets.
-    env["TMPDIR"] = str(pathlib.Path(cwd) / "tmp")
-    pathlib.Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_HOST"] = host
     env["OPENAI_BASE_PATH"] = base_path
