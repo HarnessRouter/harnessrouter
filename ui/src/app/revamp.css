@@ -2016,6 +2016,9 @@ button.creq-srcstat.on b { color: var(--accent); }
 .plugin-row .capability-copy{min-width:0}
 .plugin-row .capability-copy strong,.plugin-row .capability-copy span{overflow-wrap:anywhere}
 .plugin-row.is-off .capability-copy{opacity:.62}
+/* The four actions sit two per row so the description keeps the width; one per row when narrow. */
+.plugin-row .capability-actions{display:grid;grid-template-columns:repeat(2,minmax(104px,max-content));gap:6px 8px;justify-content:end;align-self:start;margin-top:2px}
+.plugin-row .capability-actions .button,.plugin-row .capability-actions .toggle-button{width:100%;min-width:0;justify-content:center}
 .plugin-title{display:flex;align-items:center;gap:8px;min-width:0}
 .plugin-row .capability-copy .plugin-version{display:inline-flex;align-items:center;width:auto;margin:0;padding:1px 7px;border-radius:999px;
   border:1px solid var(--line,#e7e7eb);background:rgba(255,255,255,.72);font:500 10.5px/1.6 var(--mono,ui-monospace,monospace);color:var(--muted,#6f6f78);white-space:nowrap}
@@ -2035,12 +2038,13 @@ button.creq-srcstat.on b { color: var(--accent); }
 .plugin-export{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;padding:10px 12px;border-radius:9px;border:1px dashed var(--line,#e7e7eb);font-size:12px;line-height:1.45;color:var(--muted,#6f6f78)}
 .plugin-export span{min-width:0}
 @media (max-width:768px){
-  .plugin-row .capability-actions{grid-column:2;justify-content:flex-start;flex-wrap:wrap}
+  .plugin-row .capability-actions{grid-column:2;grid-template-columns:1fr;justify-content:stretch;width:100%;max-width:240px;margin-top:6px}
   .plugin-details{grid-column:1 / -1}
   .plugin-group li{grid-template-columns:1fr}
   .plugin-export{flex-direction:column;align-items:flex-start}
 }
 @media (max-width:480px){
+  .plugin-row .capability-actions{max-width:none}
   .plugin-head{display:grid;grid-template-columns:1fr;gap:8px}
   .plugin-head .button{width:100%;justify-content:center}
 }
