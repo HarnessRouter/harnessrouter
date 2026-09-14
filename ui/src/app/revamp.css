@@ -2031,7 +2031,7 @@ button.creq-srcstat.on b { color: var(--accent); }
   .plugin-row .capability-actions{grid-template-columns:1fr;width:100%}
   .plugin-group li{grid-template-columns:1fr}
 }
-.plugin-title{display:flex;align-items:center;gap:8px;min-width:0}
+.plugin-row .capability-copy .plugin-title{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}   /* outranks the row's block strong, so the gap applies */
 .plugin-row .capability-copy .plugin-version{display:inline-flex;align-items:center;width:auto;margin:0;padding:1px 7px;border-radius:999px;
   border:1px solid var(--line,#e7e7eb);background:rgba(255,255,255,.72);font:500 10.5px/1.6 var(--mono,ui-monospace,monospace);color:var(--muted,#6f6f78);white-space:nowrap}
 .plugin-row .capability-copy .plugin-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--muted,#6f6f78);font-size:12px;line-height:1.45}
