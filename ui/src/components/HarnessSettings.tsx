@@ -8,7 +8,7 @@ import { zipSync, strToU8 } from 'fflate';
 import { SkelPage } from '@/components/Skel';
 import { useRouter } from 'next/navigation';
 import {
-  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, exportPlugin, pluginSchemas,
+  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, pluginSchemas,
   type CustomHarness, type OobHarness, type HarnessPlugin, getPluginFiles,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
@@ -99,31 +99,6 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
     finally { setPluginBusy(false); if (pluginDirRef.current) pluginDirRef.current.value = ''; }
   }
   const fmtMb = (n: number) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
-  // The Harness's own tools and Skills as a package, zipped in the browser and handed to the
-  // person as a file they can install anywhere that reads the Agent Plugins format.
-  async function downloadPluginPackage() {
-    if (!draft || pluginBusy) return;
-    setPluginBusy(true); setPluginNote(null);
-    try {
-      const pkg = await exportPlugin(draft.id);
-      const entries: Record<string, Uint8Array> = {};
-      for (const f of pkg.files || []) {
-        entries[f.path] = f.content_b64 !== undefined
-          ? Uint8Array.from(atob(f.content_b64), (c) => c.charCodeAt(0))
-          : strToU8(f.content || '');
-      }
-      const blob = new Blob([zipSync(entries) as BlobPart], { type: 'application/zip' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = `${pkg.name || 'harness'}.zip`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-      const left = pkg.skipped || [];
-      setPluginNote({ kind: 'info', text: left.length
-        ? `Downloaded ${pkg.name}.zip. Not included, to re-enter where you install it: ${left.map((s) => s.path.replace(/^mcp\.json#\/mcpServers\//, '')).join(', ')}.`
-        : `Downloaded ${pkg.name}.zip.` });
-    } catch (e) { setPluginNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) }); }
-    finally { setPluginBusy(false); }
-  }
   // One installed plugin, byte for byte as the server holds it, zipped in the browser.
   async function downloadInstalledPlugin(p: HarnessPlugin) {
     if (!draft?.id || pluginBusy) return;
@@ -473,14 +448,6 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                   </div>
                 )}
               </div>
-              {!readOnly && draft?.id && !oob && (ownSkills.length + (draft?.mcpServers || []).length) > 0 && (
-                <div className="plugin-export">
-                  <span>This Harness's own {ownSkills.length} {ownSkills.length === 1 ? 'Skill' : 'Skills'} and {(draft?.mcpServers || []).length} {(draft?.mcpServers || []).length === 1 ? 'tool' : 'tools'} can travel as a package too. Installed plugins are downloaded from their own rows.</span>
-                  <button className="button quiet small" type="button" disabled={pluginBusy || dirty}
-                    title={dirty ? 'Save the Harness first; the package is built from what is saved.' : 'This Harness\'s own tools and Skills as an Agent Plugins package'}
-                    onClick={() => void downloadPluginPackage()}><iconify-icon icon="tabler:package-export"></iconify-icon>Export as plugin</button>
-                </div>
-              )}
             </div>
           </section>
 
