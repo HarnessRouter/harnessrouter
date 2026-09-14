@@ -14345,6 +14345,10 @@ class KitLaunchBody(BaseModel):
     base: str = ""
     model: str = ""
     database: KitDatabaseBody | None = None
+    # An existing Harness of yours to run the kit on, instead of the one launch made or would
+    # make: the kit's app then talks to that Harness, which receives the kit's package and its
+    # launch entries. How a package migrated to another Harness takes the kit with it.
+    harness: str = ""
 
 
 def _plugin_files_key(files: list) -> list[tuple]:
@@ -14413,6 +14417,23 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     existing = next((r for r in await _vg_list_by_org("Harness", org)
                      if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"),
                     None)
+    want_h = (body_in.harness if body_in else "").strip()
+    if want_h and want_h != str((existing or {}).get("id") or ""):
+        # Run the kit on a Harness the person already has. One kit, one Harness: the previous kit
+        # Harness keeps its sessions and its package but is no longer the one the app talks to,
+        # and a Harness already running another kit is not taken over.
+        target = await _vertex_get(want_h)
+        if not target or str(target.get("org") or "") != org or str(target.get("deleted") or "0") == "1":
+            raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness")
+        other = str(target.get("kit") or "")
+        if other and other != kit_id:
+            raise uhp_error(409, "kit_conflict", f"That Harness runs the '{other}' kit.", "harness", {"kit": other})
+        now0 = str(int(time.time() * 1000))
+        if existing:
+            await _vg_upsert("Harness", str(existing["id"]), {"kit": "", "updated_at": now0})
+        await _vg_upsert("Harness", want_h, {"kit": kit_id, "updated_at": now0})
+        existing = await _vertex_get(want_h) or {**target, "kit": kit_id}
+        print(f"[kits] {kit_id} now runs on {want_h}", flush=True)
     if decl and not db_in and not existing:
         # Declaring launch.database is what makes it required: every panel this kit builds would
         # have nothing to read, so a launch without a connection is not a partial success.
