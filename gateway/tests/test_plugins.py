@@ -255,6 +255,38 @@ def test_a_kit_that_ships_a_package_launches_as_an_installed_plugin(api, tmp_pat
     assert again.status_code == 200 and again.json()["created"] is False and again.json()["harnessId"] == h["id"]
 
 
+def test_a_kit_harness_from_before_the_package_gets_it_on_the_next_launch(api, tmp_path, monkeypatch):
+    """Three kit Harnesses launched before their kits shipped packages stayed without one through a
+    relaunch (hr-oss-test, 2026-09-14). Launch on an existing Harness installs the kit's current
+    package, replaces an older version, and leaves a matching one alone."""
+    kid = "demo-kit-before-packages"   # its own kit id: the org keeps the previous test's kit Harness
+    plug = tmp_path / kid / "plugin"
+    (plug / "skills" / "demo-skill").mkdir(parents=True)
+    (plug / "skills" / "demo-skill" / "SKILL.md").write_text("---\nname: demo-skill\ndescription: fixture\n---\n")
+    monkeypatch.setattr(app, "_KITS_DIR", str(tmp_path))
+    kit = {"id": kid, "title": "Demo", "app": {"route": "/kits/demo"},
+           "harness": {"name": "Demo", "recommended": [{"base": "claude-code", "model": "claude-opus-5"}]}}
+    monkeypatch.setattr(app, "_kits", lambda: {kid: kit})
+    first = api.post(f"/v1/kits/{kid}/launch", json={}).json()          # the kit ships no package yet
+    assert first["created"] is True and first["harness"]["plugins"] == []
+    hid = first["harnessId"]
+    (plug / "plugin.json").write_text(json.dumps({"$schema": MANIFEST_SCHEMA, "name": "harnessrouter-demo",
+                                                   "version": "1.0.0", "description": "A kit."}))
+    kit["harness"]["plugin"] = "plugin"                                  # the kit now ships one
+    again = api.post(f"/v1/kits/{kid}/launch", json={}).json()
+    assert again["created"] is False and again["harnessId"] == hid
+    (pl,) = again["harness"]["plugins"]
+    assert pl["name"] == "harnessrouter-demo" and pl["manifest"]["version"] == "1.0.0"
+    assert [s["name"] for s in pl["skills"]] == ["demo-skill"] and again["harness"]["skills"] == []
+    blob = pl.get("blob")
+    same = api.post(f"/v1/kits/{kid}/launch", json={}).json()["harness"]["plugins"][0]
+    assert same.get("blob") == blob, "a matching version is left alone, not re-stored"
+    (plug / "plugin.json").write_text(json.dumps({"$schema": MANIFEST_SCHEMA, "name": "harnessrouter-demo",
+                                                   "version": "1.1.0", "description": "A kit."}))
+    newer = api.post(f"/v1/kits/{kid}/launch", json={}).json()["harness"]["plugins"]
+    assert [p["manifest"]["version"] for p in newer] == ["1.1.0"]
+
+
 def test_an_update_cannot_change_the_base(api):
     """Harnesses §5.2: id, base and createdAt are immutable on update."""
     h = _create(api)
