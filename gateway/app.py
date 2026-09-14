@@ -14347,6 +14347,17 @@ class KitLaunchBody(BaseModel):
     database: KitDatabaseBody | None = None
 
 
+def _plugin_files_key(files: list) -> list[tuple]:
+    """A package's files as a comparable value: path, bytes and the executable bit, in path order."""
+    out = []
+    for f in files or []:
+        if not isinstance(f, dict):
+            continue
+        body = f.get("content_b64") if f.get("content_b64") is not None else f.get("content")
+        out.append((str(f.get("path") or ""), str(body or ""), bool(f.get("executable"))))
+    return sorted(out)
+
+
 async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
                              reserved_mcp: tuple[str, ...] = ()) -> dict | None:
     """The kit's current package on an existing kit Harness. Installed when the Harness holds no
@@ -14358,7 +14369,12 @@ async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
     have = _plugins_of(v)
     same = next((e for e in have if e["name"] == want["name"]), None)
     if same and (same.get("manifest") or {}).get("version") == (want.get("manifest") or {}).get("version"):
-        return None
+        # The version matching is not the whole story: a kit whose files changed under the same
+        # version (the Skill fix of 2026-09-14 shipped as 1.0.0 twice) would otherwise never reach
+        # a launched Harness. Launch reflects the package on disk, byte for byte.
+        stored = await _plugin_files_of({"blob": same["blob"]}, org) if same.get("blob") else []
+        if _plugin_files_key(stored) == _plugin_files_key(kit_plugin["files"]):
+            return None
     body = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""),
                        plugins=[e for e in have if e["name"] != want["name"]] + [kit_plugin])
     body.plugins = await _plugins_prepare(body, org, previous=have, reserved_mcp=reserved_mcp)
