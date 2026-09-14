@@ -609,7 +609,10 @@ def _codex_mcp_toml(servers: list[dict]) -> str:
         if not url and (s or {}).get("command"):
             # A stdio server (a plugin's, through its launcher): Codex's native shape.
             def _tq(x: str) -> str:
-                return '"' + str(x).replace("\\", "\\\\").replace('"', '\\"') + '"'
+                s2 = str(x).replace("\\", "\\\\").replace('"', '\\"')
+                s2 = s2.replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
+                s2 = "".join(c if ord(c) >= 32 and c != "\x7f" else f"\\u{ord(c):04X}" for c in s2)
+                return '"' + s2 + '"'
             blocks.append("\n".join([f"[mcp_servers.{name}]", f"command = {_tq(s['command'])}",
                                      "args = [" + ", ".join(_tq(a) for a in (s.get("args") or [])) + "]"]))
             continue
@@ -765,6 +768,29 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         if wrote:
             installed.append({"name": name, "desc": _skill_desc(files),
                               "entry": f"{entryroot}/{name}/SKILL.md"})
+    # Skills this runner wrote on an earlier turn of the session that this turn does not name
+    # (disabled, removed, or a plugin's that is now off) are removed, so the CLI cannot keep
+    # offering them. Only what this runner wrote is touched: the record of that is its own.
+    now_names = {s["name"] for s in installed}
+    ledger = _safe_join(cwd, ".harness/skills-written.json")
+    if ledger is not None:
+        before: list[str] = []
+        try:
+            before = [str(n) for n in json.loads(ledger.read_text())] if ledger.is_file() else []
+        except Exception:  # noqa: BLE001
+            before = []
+        for old in before:
+            if old in now_names or not old:
+                continue
+            for rootrel in rootrels:
+                d = _safe_join(str(pathlib.Path(cwd) / rootrel), old)
+                if d is not None and d.is_dir() and not d.is_symlink():
+                    shutil.rmtree(d, ignore_errors=True)
+        try:
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            ledger.write_text(json.dumps(sorted(now_names)))
+        except Exception:  # noqa: BLE001
+            pass
     return installed
 
 
@@ -798,6 +824,7 @@ def _write_plugins(cwd: str, plugins: list[dict]) -> list[str]:
     besides, and the claude branch hands that root to `--plugin-dir`: one root, never a second
     copy under .claude/, which would risk Claude Code loading the same plugin twice."""
     installed: list[str] = []
+    wanted: set[str] = set()
     for pg in plugins or []:
         pg = pg or {}
         name = _mcp_name(pg.get("name") or pg.get("id") or "")
@@ -808,6 +835,21 @@ def _write_plugins(cwd: str, plugins: list[dict]) -> list[str]:
         data = _safe_join(cwd, f".harness/plugin-data/{name}")
         if root is None or data is None:
             continue
+        wanted.add(name)
+        # The runner writes as itself and the agent ran as the session's uid last turn: a root
+        # or data directory it replaced with a symlink would redirect these writes, so the link
+        # itself (the unresolved path) is removed before anything is written through it, and the
+        # root is rebuilt from the package every turn so nothing from an older version lingers.
+        for raw in (pathlib.Path(cwd) / ".harness" / "plugins" / name,
+                    pathlib.Path(cwd) / ".harness" / "plugin-data" / name):
+            if raw.is_symlink():
+                raw.unlink()
+        root = _safe_join(cwd, f".harness/plugins/{name}")
+        data = _safe_join(cwd, f".harness/plugin-data/{name}")
+        if root is None or data is None:
+            continue
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
         data.mkdir(parents=True, exist_ok=True)
         wrote = False
         for f in files:
@@ -822,17 +864,30 @@ def _write_plugins(cwd: str, plugins: list[dict]) -> list[str]:
                 continue
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
+                # Written beside and renamed over: a binary a still-running server has open
+                # cannot be truncated in place (ETXTBSY), and a rename replaces it regardless.
+                tmp = dest.with_name(dest.name + ".hr-tmp")
                 if content_b64 is not None:
-                    dest.write_bytes(base64.b64decode(content_b64))
+                    tmp.write_bytes(base64.b64decode(content_b64))
                 else:
-                    dest.write_text(content)
+                    tmp.write_text(content)
                 if _plugin_file_is_executable(rel, f.get("executable")):
-                    dest.chmod(dest.stat().st_mode | 0o111)
+                    tmp.chmod(tmp.stat().st_mode | 0o111)
+                os.replace(tmp, dest)
                 wrote = True
             except Exception:  # noqa: BLE001
                 continue
         if wrote:
             installed.append(str(root))
+    # A plugin removed or disabled since the last turn leaves nothing runnable behind.
+    plugroot = _safe_join(cwd, ".harness/plugins")
+    if plugroot is not None and plugroot.is_dir():
+        for d in plugroot.iterdir():
+            if d.name not in wanted:
+                if d.is_symlink():
+                    d.unlink()
+                else:
+                    shutil.rmtree(d, ignore_errors=True)
     return installed
 
 
@@ -858,6 +913,9 @@ def _plugin_launchers(cwd: str, servers: list[dict] | None) -> list[dict]:
             out.append(s)
             continue
         dname = _mcp_name(str(pname))
+        raw_data = pathlib.Path(cwd) / ".harness" / "plugin-data" / dname
+        if raw_data.is_symlink():          # never write the launcher through a planted link
+            raw_data.unlink()
         root = _safe_join(cwd, f".harness/plugins/{dname}")
         data = _safe_join(cwd, f".harness/plugin-data/{dname}")
         if root is None or data is None or not root.is_dir():
@@ -875,6 +933,13 @@ def _plugin_launchers(cwd: str, servers: list[dict] | None) -> list[dict]:
             if target is None:
                 print(f"[plugins] '{s.get('name')}': command escapes the plugin root — skipped", flush=True)
                 continue
+            # A package's own script is what the entry says to run; JSON has no file mode, so
+            # the bit is set here rather than left to a naming convention.
+            try:
+                if target.is_file() and not target.is_symlink():
+                    target.chmod(target.stat().st_mode | 0o111)
+            except Exception:  # noqa: BLE001
+                pass
             command = str(target)
         else:
             command = cmd                            # a bare name, resolved on PATH at exec
@@ -906,7 +971,13 @@ def _plugin_launchers(cwd: str, servers: list[dict] | None) -> list[dict]:
                   f"export PLUGIN_DATA={shlex.quote(str(data))}",
                   f"mkdir -p {shlex.quote(str(wd))} && cd {shlex.quote(str(wd))} || exit 1",
                   f'exec {shlex.quote(command)} "$@"', ""]
-        launcher.write_text("\n".join(lines))
+        # Never through a link the session may have planted where the launcher goes: the data
+        # directory is the agent's to write, and the runner writes here as itself.
+        if launcher.is_symlink() or (launcher.exists() and not launcher.is_file()):
+            launcher.unlink()
+        fd = os.open(str(launcher), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o755)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(lines))
         launcher.chmod(0o755)
         out.append({"name": s.get("name"), "command": str(launcher), "args": args, "plugin": pname})
     return out
@@ -5757,13 +5828,19 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
     # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
     _skip = set(req.skills_suppressed or [])
-    installed_skills = _write_skills(
-        cwd, [s for s in (req.skills or []) if (s.get("name") or s.get("id")) not in _skip], backend,
-    )   # materialize enabled skills for this backend (minus suppressed built-ins)
     # Installed plugin packages, whole, at their roots; then every stdio server a plugin declares
     # becomes a launcher every backend writer below already knows how to hand to its CLI.
     plugin_roots = _write_plugins(cwd, req.plugins)
     req.mcp_servers = _plugin_launchers(cwd, req.mcp_servers)
+    # A package that is also a Claude Code plugin reaches the claude CLI whole through
+    # --plugin-dir, which loads its skills/ itself; folding those skills into the skills
+    # directory too would offer each one twice.
+    claude_native = {pathlib.Path(d).name for d in plugin_roots
+                     if (pathlib.Path(d) / ".claude-plugin" / "plugin.json").is_file()} if backend == "claude" else set()
+    installed_skills = _write_skills(
+        cwd, [s for s in (req.skills or []) if (s.get("name") or s.get("id")) not in _skip
+              and _mcp_name(str(s.get("plugin") or "")) not in claude_native], backend,
+    )   # materialize enabled skills for this backend (minus suppressed built-ins)
     # Seed the agent's instruction file (AGENTS.md/CLAUDE.md) from the harness doc + installed skills.
     # The model's system prompt stays the CLI default; persistent instructions live in this file.
     #

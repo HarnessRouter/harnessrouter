@@ -68,7 +68,8 @@ def test_the_reserved_names_cannot_be_overridden_from_env(tmp_path):
     rn._write_plugins(str(tmp_path), [PKG])
     (out,) = rn._plugin_launchers(str(tmp_path), [_server(env={"PLUGIN_ROOT": "/tmp/evil", "plugin_data": "/x", "MODE": "ok"})])
     text = pathlib.Path(out["command"]).read_text()
-    assert "/tmp/evil" not in text and "'/x'" not in text and "export MODE=ok" in text
+    assert "/tmp/evil" not in text and "plugin_data" not in text and "export MODE=ok" in text
+    assert text.count("export PLUGIN_ROOT=") == 1 and text.count("export PLUGIN_DATA=") == 1
 
 
 def test_servers_that_are_not_a_plugins_pass_through(tmp_path):
@@ -98,3 +99,36 @@ def test_every_url_only_writer_now_carries_a_stdio_entry(tmp_path):
     omp = json.loads((agent / "mcp.json").read_text())["mcpServers"]
     assert omp["probe"] == {"type": "stdio", "command": "/ws/.harness/plugin-data/demo/.launch-probe.sh", "args": ["--x", "1"]}
     assert omp["vault"]["type"] == "http"
+
+
+def test_a_dot_command_is_made_runnable_and_control_chars_are_escaped_for_codex(tmp_path):
+    pkg = {"name": "demo-plugin", "files": [{"path": "plugin.json", "content": "{}"},
+                                             {"path": "server.sh", "content": "#!/bin/sh\necho started\n"}]}
+    rn._write_plugins(str(tmp_path), [pkg])
+    (out,) = rn._plugin_launchers(str(tmp_path), [_server(command="./server.sh", args=["a\nb"])])
+    assert subprocess.run([out["command"]], capture_output=True, text=True, timeout=10).stdout.strip() == "started"
+    toml = rn._codex_mcp_toml([out])
+    assert "\\n" in toml and "\n\n" not in toml.split("args = ")[1].split("]")[0]
+
+
+def test_stale_plugin_roots_and_skills_are_removed_on_the_next_turn(tmp_path):
+    rn._write_plugins(str(tmp_path), [PKG, {"name": "other", "files": [{"path": "plugin.json", "content": "{}"}]}])
+    assert (tmp_path / ".harness/plugins/other").is_dir()
+    rn._write_plugins(str(tmp_path), [PKG])
+    assert not (tmp_path / ".harness/plugins/other").exists() and (tmp_path / ".harness/plugins/demo_plugin").is_dir()
+    skill = {"name": "risk", "files": [{"path": "SKILL.md", "content": "---\nname: risk\ndescription: x\n---\n"}]}
+    rn._write_skills(str(tmp_path), [skill], "claude")
+    assert (tmp_path / ".harness/home/.claude/skills/risk/SKILL.md").is_file()
+    rn._write_skills(str(tmp_path), [], "claude")
+    assert not (tmp_path / ".harness/home/.claude/skills/risk").exists()
+
+
+def test_a_symlinked_data_directory_is_not_followed(tmp_path):
+    rn._write_plugins(str(tmp_path), [PKG])
+    outside = tmp_path / "outside"; outside.mkdir()
+    data = tmp_path / ".harness/plugin-data/demo_plugin"
+    import shutil as _sh; _sh.rmtree(data); data.symlink_to(outside)
+    (out,) = rn._plugin_launchers(str(tmp_path), [_server()])
+    assert not data.is_symlink() and data.is_dir(), "the planted link is replaced by a real directory"
+    assert pathlib.Path(out["command"]).parent.resolve() == data.resolve()
+    assert not list(outside.iterdir()), "nothing was written through the link"

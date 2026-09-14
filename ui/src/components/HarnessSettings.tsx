@@ -8,7 +8,7 @@ import { zipSync, strToU8 } from 'fflate';
 import { SkelPage } from '@/components/Skel';
 import { useRouter } from 'next/navigation';
 import {
-  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, exportPlugin,
+  OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, exportPlugin, pluginSchemas,
   type CustomHarness, type OobHarness, type HarnessPlugin,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
@@ -51,17 +51,25 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   }, [id]);
   // Draft of a NEW skill being created in the SkillEditor popup (name edited in the same popup).
   const [newSkill, setNewSkill] = useState<{ name: string } | null>(null);
-  // Plugins: which row is expanded, the folder picker, and the export in flight.
-  const [pluginOpen, setPluginOpen] = useState<number | null>(null);
+  // Plugins: which row is expanded (by name, so removing another row cannot move it), the folder
+  // picker, the export in flight, and a notice that belongs to this section rather than to Save.
+  const [pluginOpen, setPluginOpen] = useState<string | null>(null);
   const [pluginBusy, setPluginBusy] = useState(false);
+  const [pluginNote, setPluginNote] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const pluginDirRef = useRef<HTMLInputElement>(null);
+  // The gateway refuses a package over this size (its _PLUGIN_PACKAGE_MAX); refusing here first
+  // spares reading a 30 MB folder into the draft only to be told no on Save.
+  const PLUGIN_PACKAGE_MAX = 16 * 1024 * 1024;
   // A folder picked as a plugin package: every file under it, paths relative to the folder itself,
   // and the manifest read up front so the row can name what was picked before it is saved. The
   // server does the real validation on save and answers with what it derived and what it skipped.
   async function installPluginFolder(list: FileList | null) {
     if (!list || !list.length || !draft) return;
-    setPluginBusy(true); setErr(null);
+    setPluginBusy(true); setPluginNote(null);
     try {
+      let total = 0;
+      for (let i = 0; i < list.length; i++) total += list[i].size;
+      if (total > PLUGIN_PACKAGE_MAX) throw new Error(`That folder is ${fmtMb(total)}; a plugin package can be at most ${fmtMb(PLUGIN_PACKAGE_MAX)}.`);
       const files: NonNullable<HarnessPlugin['files']> = [];
       for (let i = 0; i < list.length; i++) {
         const f = list[i];
@@ -72,20 +80,30 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
       }
       const manifestFile = files.find((f) => f.path === 'plugin.json');
       if (!manifestFile || manifestFile.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a plugin package.');
-      let manifest: HarnessPlugin['manifest'] = {};
-      try { manifest = JSON.parse(manifestFile.content) as HarnessPlugin['manifest']; } catch { throw new Error('plugin.json is not valid JSON.'); }
+      let manifest: (HarnessPlugin['manifest'] & { $schema?: string }) = {};
+      try { manifest = JSON.parse(manifestFile.content) as typeof manifest; } catch { throw new Error('plugin.json is not valid JSON.'); }
       const name = String(manifest?.name || '');
       if (!name) throw new Error('plugin.json names no plugin.');
       if ((draft.plugins || []).some((p) => p.name === name)) throw new Error(`A plugin named ${name} is already installed on this Harness.`);
+      // The server says which package versions it installs; a package for another one is
+      // refused on Save, so say so now, while the folder is still in front of the person.
+      const schemas = await pluginSchemas();
+      if (schemas.length && !schemas.includes(String(manifest.$schema || ''))) {
+        throw new Error(manifest.$schema
+          ? `This package targets ${manifest.$schema}, which this server does not install (it installs ${schemas.join(', ')}).`
+          : 'plugin.json names no $schema, which every package must.');
+      }
       upd({ plugins: [...(draft.plugins || []), { name, enabled: true, files, manifest }] });
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+      setPluginNote({ kind: 'info', text: `${name} is added; it installs when you save the Harness.` });
+    } catch (e) { setPluginNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) }); }
     finally { setPluginBusy(false); if (pluginDirRef.current) pluginDirRef.current.value = ''; }
   }
+  const fmtMb = (n: number) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
   // The Harness's own tools and Skills as a package, zipped in the browser and handed to the
   // person as a file they can install anywhere that reads the Agent Plugins format.
   async function downloadPluginPackage() {
     if (!draft || pluginBusy) return;
-    setPluginBusy(true); setErr(null);
+    setPluginBusy(true); setPluginNote(null);
     try {
       const pkg = await exportPlugin(draft.id);
       const entries: Record<string, Uint8Array> = {};
@@ -99,7 +117,11 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
       a.href = URL.createObjectURL(blob); a.download = `${pkg.name || 'harness'}.zip`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+      const left = pkg.skipped || [];
+      setPluginNote({ kind: 'info', text: left.length
+        ? `Downloaded ${pkg.name}.zip. Not included, to re-enter where you install it: ${left.map((s) => s.path.replace(/^mcp\.json#\/mcpServers\//, '')).join(', ')}.`
+        : `Downloaded ${pkg.name}.zip.` });
+    } catch (e) { setPluginNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) }); }
     finally { setPluginBusy(false); }
   }
   const [cards, setCards] = useState<TraceCard[]>([]);
@@ -134,6 +156,14 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
     try {
       const s = await saveCustom(draft);
       setSaved(s); setDraft(s);
+      // A plugin the server installed with parts it could not load is only visible on this
+      // page; leaving now would hide it. Stay, open that row, and say so.
+      const partial = (s.plugins || []).filter((p) => (p.skipped || []).length);
+      if (partial.length) {
+        setPluginOpen(partial[0].name);
+        setPluginNote({ kind: 'info', text: `Saved. ${partial.map((p) => `${p.name}: ${(p.skipped || []).length} part${(p.skipped || []).length === 1 ? '' : 's'} not loaded`).join('; ')}. Open Details to see which.` });
+        return;
+      }
       // After a successful save, jump to Tasks with THIS harness selected so the user can
       // immediately run a task on the config they just changed.
       go('tasks');
@@ -356,9 +386,11 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           <section className="form-section">
             <div><h3>Plugins</h3><p>Install a package of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{(draft?.plugins || []).length} installed plugins</strong>
+              <div className="section-actions"><strong>{(draft?.plugins || []).length} installed {(draft?.plugins || []).length === 1 ? 'plugin' : 'plugins'}</strong>
                 <span className="section-actions-group">
-                  {!readOnly && draft?.id && !oob && <button className="button quiet small" type="button" disabled={pluginBusy} onClick={() => void downloadPluginPackage()}>
+                  {!readOnly && draft?.id && !oob && <button className="button quiet small" type="button" disabled={pluginBusy || dirty}
+                    title={dirty ? 'Save the Harness first; the package is built from what is saved.' : 'This Harness\'s own tools and Skills as a package'}
+                    onClick={() => void downloadPluginPackage()}>
                     <iconify-icon icon="tabler:download"></iconify-icon>Download as plugin</button>}
                   {!readOnly && <button className="button small" type="button" disabled={pluginBusy} onClick={() => pluginDirRef.current?.click()}>
                     <iconify-icon icon="tabler:plus"></iconify-icon>Install from folder</button>}
@@ -366,12 +398,13 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                 <input ref={pluginDirRef} type="file" hidden onChange={(e) => void installPluginFolder(e.target.files)}
                   {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} />
               </div>
+              {pluginNote && <div className={'plugin-note is-' + pluginNote.kind} role={pluginNote.kind === 'error' ? 'alert' : 'status'}>{pluginNote.text}</div>}
               <div className="capability-list">
                 {(draft?.plugins || []).map((p, idx) => {
                   const servers = p.mcpServers || [], skls = p.skills || [], skipped = p.skipped || [];
                   const pending = Boolean(p.files && p.files.length && !p.blob);
                   const m = p.manifest || {};
-                  const open = pluginOpen === idx;
+                  const open = pluginOpen === p.name;
                   return (
                     <div key={p.name} className={'capability-row plugin-row' + (open ? ' is-open' : '')}>
                       <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
@@ -398,7 +431,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                         )}
                       </div>
                       <div className="capability-actions">
-                        {!pending && <button className="button quiet small" type="button" onClick={() => setPluginOpen(open ? null : idx)}>{open ? 'Hide' : 'Details'}</button>}
+                        {!pending && <button className="button quiet small" type="button" onClick={() => setPluginOpen(open ? null : p.name)}>{open ? 'Hide' : 'Details'}</button>}
                         {!readOnly && <button className="button quiet small" type="button" onClick={() => upd({ plugins: (draft?.plugins || []).filter((_, k) => k !== idx) })}>Remove</button>}
                         <button className="toggle-button" type="button" disabled={readOnly} aria-pressed={p.enabled !== false}
                           onClick={() => upd({ plugins: (draft?.plugins || []).map((x, k) => (k === idx ? { ...x, enabled: !(x.enabled !== false) } : x)) })}>
@@ -411,7 +444,9 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                   <div className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
                     <div className="capability-copy"><strong>No plugins installed</strong>
-                      <span>A plugin is a folder with a plugin.json at its root, tools in mcp.json and Skills under skills. Install one to add all of it at once.</span></div>
+                      <span>{readOnly
+                        ? 'A built-in Harness carries no plugins. Create a Harness of your own to install packages of tools and Skills.'
+                        : 'A plugin is a folder with a plugin.json at its root, tools in mcp.json and Skills under skills. Install one to add all of it at once.'}</span></div>
                   </div>
                 )}
               </div>
