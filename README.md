@@ -17,7 +17,7 @@ The unified interface for agent harnesses.
   <a href="#the-unified-harness-protocol"><img src="https://img.shields.io/badge/OpenAI%20Responses-Compatible-2247D5?style=flat&amp;labelColor=444c56" alt="OpenAI Responses: Compatible"></a>
 </p>
 
-**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that brings Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends through one API.
+**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that turns existing harnesses like Codex and Claude Code into plug-and-play agent backends, letting your product run tasks, retrieve results, and switch harnesses through one API.
 
 <a href="https://github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository">
   <picture>
