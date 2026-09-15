@@ -186,21 +186,27 @@ def test_an_sse_server_reaches_each_client_in_its_own_spelling(tmp_path):
     assert o["probe_sse"]["type"] == "sse" and o["probe_http"]["type"] == "http"
 
 
-def test_clients_without_an_sse_transport_leave_the_server_out(tmp_path):
-    """goose 1.50.0's ExtensionConfig has no sse variant and dsh-mcp-client's config is a union of
-    stdio and streamable-http: an sse endpoint driven as streamable HTTP never answers, so neither
-    writer emits it (the gateway records the omission on the plugin at install time)."""
-    import dsh_driver
-    sse = {"name": "probe_sse", "url": "https://probe.example.invalid/sse", "transport": "sse"}
+def test_a_client_without_sse_gets_the_server_through_the_stdio_bridge(tmp_path):
+    """goose 1.50.0's ExtensionConfig has no sse variant, dsh-mcp-client's config is a union of
+    stdio and streamable-http, codex's client takes streamable HTTP and stdio. Each launches a
+    stdio server, so an SSE server reaches them as the bridge: url and headers in the launcher's
+    environment, never on its command line; other servers and other backends pass untouched."""
+    sse = {"name": "probe_sse", "url": "https://probe.example.invalid/sse", "transport": "sse",
+           "auth": "secret-token", "headers": {"X-Team": "t"}, "plugin": "hr-probe"}
     http = {"name": "probe_http", "url": "https://probe.example.invalid/mcp", "transport": "http"}
-    ext = rn._goose_extensions([sse, http], None)
-    assert "probe_sse" not in ext and ext["probe_http"]["type"] == "streamable_http"
-    out = pathlib.Path(dsh_driver._compose_patch(tmp_path / "home", [sse, http], relay_port=9999, model="m", cwd=str(tmp_path)))
-    import yaml
-    names = [r["config"]["serverName"] for e in yaml.safe_load(out.read_text()) if isinstance(e, dict)
-             for r in (e.get("insert") or []) if r.get("name") == "@deepseek-ai/dsh-mcp-client"]
-    assert names == ["probe_http"]
-
+    for backend in ("goose", "dsh", "codex"):
+        out = rn._sse_bridges(str(tmp_path), [sse, http], backend)
+        assert out[1] == http
+        b = out[0]
+        assert b["name"] == "probe_sse" and b["plugin"] == "hr-probe" and b["args"] == [] and "url" not in b and "auth" not in b
+        text = pathlib.Path(b["command"]).read_text()
+        assert "HR_MCP_URL=https://probe.example.invalid/sse" in text and "HR_MCP_TRANSPORT=sse" in text
+        assert '"Authorization": "Bearer secret-token"' in text and '"X-Team": "t"' in text
+        assert text.rstrip().endswith("mcp_bridge.py") and os.access(b["command"], os.X_OK)
+    assert rn._sse_bridges(str(tmp_path), [sse, http], "claude") == [sse, http]
+    # the writers then see a stdio entry, as for any plugin server
+    ext = rn._goose_extensions(rn._sse_bridges(str(tmp_path), [sse, http], "goose"), None)
+    assert ext["probe_sse"]["type"] == "stdio" and ext["probe_http"]["type"] == "streamable_http"
 
 def test_dsh_job_keeps_a_stdio_server(tmp_path):
     """_build_dsh hands the driver a job whose server list kept only urls, from before plugins:
