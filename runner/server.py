@@ -1855,7 +1855,8 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     # its dsh-agent-instructions loader), same mechanism as codex/hermes/pi.
     job = {"prompt": prompt, "model": model, "cwd": cwd,
            "session_id": resume_session_id or "",
-           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url")]}
+           # a server is a url or, for a plugin's stdio server, the launcher the runner wrote
+           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")]}
     if not _DSH_DEEPSEEK_MODEL.search(model or ""):
         # Family decides the route, not the integration's name: deepseek models keep the
         # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
