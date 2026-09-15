@@ -6,7 +6,7 @@
     </picture>
   </a>
 <br>
-The world's first unified interface for agent harnesses.
+The unified interface for agent harnesses.
 </h1>
 
 <p align="center">
@@ -371,9 +371,10 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
     </picture>
   </a>
 </p>
-
 <br>
 
 ## License
 
 HarnessRouter Community Edition is licensed under [Apache 2.0](LICENSE). Agent harness CLIs are installed on first launch and remain subject to their respective upstream licenses. See [NOTICE](NOTICE) for third-party notices and the [Starter Kits repository](https://github.com/HarnessRouter/starter-kit#licensing) for its separate licensing terms.
+
+</p>HarnessRouter is the world's first unified interface for agent harnesses.</p>
