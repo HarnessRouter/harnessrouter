@@ -295,6 +295,7 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
           <Param name="system_prompt" type="string">The agent&apos;s instructions (written into its workspace as AGENTS.md / CLAUDE.md).</Param>
           <Param name="mcp_servers" type="array">Tool connections: <code>{`{name, url, auth?, enabled}`}</code>. For <code>auth</code>, pass a secrets ref (below) or a <code>$headers.&#123;Name&#125;</code> per-request reference.</Param>
           <Param name="skills" type="array"><code>{`{name, files:[{path, content|content_b64}]}`}</code>, a bundle MUST include a <code>SKILL.md</code>; invalid bundles are rejected with 400. Skills can be whole folders: <code>path</code> is the file&apos;s relative path inside the skill (nested layouts like <code>guides/SKILL.md</code> install as-is); the root <code>SKILL.md</code> needs YAML frontmatter (<code>name</code>, <code>description</code>). Bundles over ~48&nbsp;KB are offloaded server-side and the saved agent returns that skill as <code>{`{name, enabled, blob}`}</code> with no <code>files</code>, normal; the folder still mounts into every run. On later updates pass such entries back unchanged; only include <code>files</code> when changing content.</Param>
+          <Param name="plugins" type="array">Packages in the Agent Plugins format: <code>{`{files:[{path, content|content_b64}], enabled?}`}</code>, each with a <code>plugin.json</code> at its root, tools in <code>mcp.json</code>, Skills under <code>skills/</code>. The saved agent returns each as <code>{`{name, enabled, blob, manifest, mcpServers, skills, skipped}`}</code>; pass such entries back unchanged, and include <code>files</code> only for a new or changed package.</Param>
           <Param name="disabled_tools" type="array">Inherited/built-in tool names to disable.</Param>
           <Param name="additional_headers" type="array">Header NAMES your product passes per request for app-level auth (see Additional headers above).</Param>
           <Param name="max_step" type="integer">Default agent step budget (default 400).</Param>
@@ -319,6 +320,21 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
         <p className="hr-meta">Read one skill&apos;s full files back (resolves the server-side offload of
           large bundles), for verification or editing. <code>{`{name}`}</code> matches the skill&apos;s
           <code> id</code> or <code>name</code>; returns <code>{`{ id, name, files: [{path, content|content_b64}] }`}</code>.</p>
+      </Endpoint>
+
+      <Endpoint method="GET" path="/v1/harnesses/{id}/plugins/{name}/files">
+        <p className="hr-meta">The complete package of one installed plugin, byte for byte. A plugin is a
+          folder in the Agent Plugins format (<code>plugin.json</code> at its root, tools in
+          <code> mcp.json</code>, Skills under <code>skills/</code>), sent on create or update as
+          <code>{`plugins: [{ files: [{path, content|content_b64}] }]`}</code>. The record you read back carries
+          what the server derived from it: <code>manifest</code>, <code>mcpServers</code>, <code>skills</code>
+          and <code>skipped</code>, plus a <code>blob</code> handle that round-trips on PUT.</p>
+      </Endpoint>
+
+      <Endpoint method="GET" path="/v1/harnesses/{id}/plugin">
+        <p className="hr-meta">This agent&apos;s own tools and Skills as an Agent Plugins package, ready to
+          send to another agent&apos;s <code>plugins</code> or to write to disk for any client that reads the
+          format. Credentials are never included; each omission is listed in <code>skipped</code>.</p>
       </Endpoint>
 
       <Endpoint method="GET" path="/v1/models">
