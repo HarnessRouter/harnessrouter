@@ -18,6 +18,23 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
 
+// A header value is bytes, not text: `Headers.set` throws a TypeError the moment a filename
+// carries a Chinese character or an emoji, and the download dies with it. RFC 6266 is the way
+// out, and it is the same shape the gateway sends: an ASCII fallback every client can read,
+// plus `filename*` with the real name percent-encoded. encodeURIComponent leaves ! ' ( ) * ~
+// alone and RFC 5987 does not allow them unescaped, so those are escaped here too.
+function contentDisposition(kind: 'inline' | 'attachment', filename: string): string {
+  let name = (filename || '').split(/[\\/]/).pop()?.trim() || '';
+  if (name === '' || name === '.' || name === '..') name = 'download';
+  // One `_` per character, not per UTF-16 unit, so an emoji leaves one placeholder and the
+  // fallback matches what the gateway sends for the same file.
+  let ascii = name.replace(/[^\x20-\x7e]/gu, '_').replace(/["\\]/g, '').slice(0, 120);
+  if (ascii.replace(/[\s.]/g, '') === '') ascii = 'download';
+  const star = encodeURIComponent(name).replace(/[!'()*~]/g,
+    (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${star}`;
+}
+
 export const dynamic = 'force-dynamic';
 
 const GATEWAY = (process.env.HARNESS_GATEWAY_URL || 'https://api.harnessrouter.ai').replace(/\/$/, '');
@@ -76,7 +93,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ sid: string
   // Attacker-influenceable content served from the console's own origin: nosniff so a text/plain
   // artifact can never be re-interpreted as script, and a filename so a save keeps its extension.
   out.set('x-content-type-options', 'nosniff');
-  out.set('content-disposition', `inline; filename="${name.replace(/"/g, '')}"`);
+  out.set('content-disposition', contentDisposition('inline', name));
   out.set('cache-control', 'private, no-store');
   return new NextResponse(res.body, { status: 200, headers: out });
 }

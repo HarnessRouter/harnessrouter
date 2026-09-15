@@ -49,4 +49,7 @@ def test_the_single_download_names_the_file_without_its_folder(monkeypatch):
     monkeypatch.setattr(gw, "_container_file_bytes", bytes_of)
     monkeypatch.setattr(gw, "_owned_session", lambda request, sid: _async_value(None))
     r = TestClient(gw.app).get("/v1/containers/s1/files/wf_x/content")
-    assert r.status_code == 200 and r.headers["content-disposition"] == 'attachment; filename="notes.txt"'
+    # RFC 6266 since #187: the ASCII fallback plus filename*, the same for every name.
+    assert r.status_code == 200
+    assert r.headers["content-disposition"] == (
+        'attachment; filename="notes.txt"; filename*=UTF-8\'\'notes.txt')
