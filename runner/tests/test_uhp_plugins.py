@@ -200,3 +200,15 @@ def test_clients_without_an_sse_transport_leave_the_server_out(tmp_path):
     names = [r["config"]["serverName"] for e in yaml.safe_load(out.read_text()) if isinstance(e, dict)
              for r in (e.get("insert") or []) if r.get("name") == "@deepseek-ai/dsh-mcp-client"]
     assert names == ["probe_http"]
+
+
+def test_dsh_job_keeps_a_stdio_server(tmp_path):
+    """_build_dsh hands the driver a job whose server list kept only urls, from before plugins:
+    the stdio row the driver knows how to write never saw the server (hosted, 2026-09-15, the
+    compose patch held the http row alone)."""
+    env = {"HOME": str(tmp_path)}
+    servers = [{"name": "probe", "command": "/ws/.launch-probe.sh", "args": ["--data", "/d"], "plugin": "hr-probe"},
+               {"name": "remote", "url": "https://mcp.example.invalid/mcp"}]
+    cmd = rn._build_dsh("deepseek", rn.Auth(api_key="k", base_url="https://api.deepseek.com"), "deepseek-v4-pro", "x", str(tmp_path), env, mcp_servers=servers)
+    job = json.loads(cmd[2])
+    assert [s["name"] for s in job["mcp_servers"]] == ["probe", "remote"]
