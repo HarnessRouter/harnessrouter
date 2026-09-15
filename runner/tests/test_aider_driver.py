@@ -351,3 +351,49 @@ def test_the_chat_history_is_restored_on_every_turn():
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
     assert '"--restore-chat-history"' in src
     assert '"--chat-history-file", str(hist / "chat.history.md")' in src
+
+
+# ── the Plugins sub-protocol (UHP 2026-09-12) ────────────────────────────────────
+def test_a_plugins_stdio_server_reaches_the_bridge_as_command_and_args():
+    """_plugin_launchers bakes env, cwd and the ${PLUGIN_ROOT}/${PLUGIN_DATA} placeholders into one
+    launcher script, so every writer sees the same {name, command, args}. aider has no MCP client of
+    its own, so "the writer" here is the bridge's server table plus the shim the turn builds."""
+    d = tempfile.mkdtemp()
+    pathlib.Path(d, "AGENTS.md").write_text("# contract\n")
+    env: dict = {}
+    _build_aider("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
+                 "gpt-5.4", "do it", d, env, mcp_servers=[
+                     {"name": "probe", "command": "/ws/.harness/plugin-data/demo/.launch-probe.sh",
+                      "args": ["--x", "1"]},
+                     {"name": "vault", "url": "https://mcp.example.invalid/mcp"}])
+    cfg = json.loads(pathlib.Path(d, ".harness", "aider-mcp.json").read_text())["mcpServers"]
+    assert cfg["probe"] == {"command": "/ws/.harness/plugin-data/demo/.launch-probe.sh",
+                            "args": ["--x", "1"]}
+    assert cfg["vault"]["url"].startswith("https://")
+    # both kinds are advertised to the model, and a stdio one is named as such
+    doc = pathlib.Path(d, "AGENTS.md").read_text()
+    assert "`probe` — stdio" in doc and "`vault` — streamable HTTP" in doc
+
+
+def test_the_bridge_resolves_a_stdio_entry_to_stdio_server_parameters():
+    """The half a config file cannot show. Verified live against a real stdio MCP server too: the
+    bridge listed its tool and called it, exit 0.
+
+    Skipped where the SDK is absent: `mcp` lives in AIDER's venv, not the runner's — deliberately,
+    because installing it beside the runner bumps starlette past what FastAPI 0.115.6 accepts."""
+    import pytest
+    pytest.importorskip("mcp", reason="the MCP SDK lives in aider's own venv")
+    servers = {"probe": {"command": "/bin/echo", "args": ["a", "b"], "env": {"K": "V"}}}
+    target = aider_mcp_bridge._target(servers, "probe")
+    assert target.command == "/bin/echo"
+    assert target.args == ["a", "b"]
+    assert target.env == {"K": "V"}
+
+
+def test_aider_is_registered_as_able_to_run_a_stdio_server():
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "gateway"))
+    _os.environ.setdefault("HR_BACKING", "local")
+    import app as A
+    assert "aider" in A._STDIO_MCP_BACKENDS

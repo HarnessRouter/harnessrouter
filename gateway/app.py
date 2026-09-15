@@ -13608,7 +13608,12 @@ _STDIO_MCP_BACKENDS = {"claude", "codex", "hermes", "gemini", "qwen", "opencode"
                        # kimi parses its MCP file with fastmcp's MCPConfig, whose stdio entry is the
                        # same {command, args} the launcher emits — so a plugin's stdio server needs
                        # nothing of kimi beyond the branch _kimi_mcp_config already has.
-                       "kimi"}
+                       "kimi",
+                       # aider has no MCP client of its own; runner/aider_mcp_bridge.py is one, on
+                       # the official SDK, and a stdio entry becomes StdioServerParameters there.
+                       # Verified against a real stdio server: the bridge lists its tools and calls
+                       # one, exit 0.
+                       "aider"}
 
 
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
