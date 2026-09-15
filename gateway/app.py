@@ -13546,7 +13546,11 @@ def _skill_key(name: str) -> str:
 # Runner backends that can launch a stdio MCP server (each writer emits command/args). pi's MCP
 # adapter and dsh take URLs only; a package that needs a process is refused for those bases rather
 # than accepted and skipped in a turn, which Harnesses §4.1 forbids.
-_STDIO_MCP_BACKENDS = {"claude", "codex", "hermes", "gemini", "qwen", "opencode", "goose", "omp", "cline"}
+_STDIO_MCP_BACKENDS = {"claude", "codex", "hermes", "gemini", "qwen", "opencode", "goose", "omp", "cline",
+                       # kimi parses its MCP file with fastmcp's MCPConfig, whose stdio entry is the
+                       # same {command, args} the launcher emits — so a plugin's stdio server needs
+                       # nothing of kimi beyond the branch _kimi_mcp_config already has.
+                       "kimi"}
 
 
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
