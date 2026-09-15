@@ -1,4 +1,11 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-pydantic==2.10.4
+pydantic==2.11.9
 pyyaml==6.0.2
+# The MCP SDK, for mcp_bridge.py: the runner hands the bridge to a client whose own transport
+# cannot reach a remote server (codex, dsh, goose take no SSE), and the bridge imports this.
+# Without the pin the image installs no mcp at all and every bridged server dies at start, which
+# is what shipped in 0.17.1 and 0.17.2. The version matches the hosted runner image
+# (docker/runner.Dockerfile.reference). It requires pydantic 2.11, which is why the pin above
+# moved: gateway and runner share one environment in this image.
+mcp==1.28.1
