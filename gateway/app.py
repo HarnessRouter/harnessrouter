@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import re
+import urllib.parse
 import collections
 import time
 import uuid
@@ -2906,7 +2907,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
     together if the read failed (hv is None → empty plugins), never inconsistently (review #5).
     `sid`: the session this turn belongs to, used to scope the database tool's credential to it."""
     if not harness_id:
-        return [], [], [], []
+        return [], [], [], [], []
     v = hv
     if not v:
         # An out-of-box harness has no stored record — there is nothing to read, and that is
@@ -2914,7 +2915,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         # of the deployment rather than of a saved configuration. Returning nothing here is why
         # the default harnesses, which is what most people actually use, had no image generation
         # and no document skills while custom ones did.
-        return [], _builtin_default_skills(), [], []
+        return [], _builtin_default_skills(), [], [], []
     v = await _mcp_migrate(org, harness_id, v)
 
     def _arr(prop):
@@ -3028,12 +3029,50 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             continue
         skills_out.append({"name": name, "files": files, "content": sk.get("content")})
 
+    # Installed plugins (Plugins §4, §6): each enabled package contributes its skills and its MCP
+    # servers, and travels whole to the runner so a stdio server has a root to run from. The
+    # harness's own lists above are never rewritten by any of this. Placeholders stay literal
+    # here; the runner expands them where the paths exist.
+    plugins_out: list[dict] = []
+    for pe in _plugins_of(v):
+        if not pe["enabled"]:
+            continue
+        pfiles = await _plugin_files_of(pe, org)
+        if not pfiles:
+            print(f"[plugins] '{pe['name']}' on {harness_id}: package missing from the blob store — not offered this turn", flush=True)
+            continue
+        plugins_out.append({"name": pe["name"], "files": pfiles})
+        for sk in pe["skills"]:
+            prefix = f"skills/{sk['name']}/"
+            sfiles = [{**f, "path": f["path"][len(prefix):]} for f in pfiles
+                      if isinstance(f, dict) and str(f.get("path") or "").startswith(prefix)]
+            if sfiles:
+                seen.add(sk["name"])
+                # A same-named own entry with enabled:false marks a built-in as off; the plugin's
+                # skill is the one that is on, so it must not be filtered out under that name.
+                suppressed = [n for n in suppressed if n != sk["name"]]
+                skills_out.append({"name": sk["name"], "files": sfiles, "plugin": pe["name"]})
+        for s in pe["mcpServers"]:
+            if s.get("transport") == "stdio":
+                mcp_out.append({"name": s["name"], "transport": "stdio", "command": s["command"],
+                                "args": list(s.get("args") or []), "env": dict(s.get("env") or {}),
+                                "cwd": s.get("cwd") or "", "plugin": pe["name"]})
+                continue
+            _blocked = await _ssrf_check(str(s.get("url") or ""))
+            if _blocked:
+                print(f"[plugins] refusing '{s['name']}' of {pe['name']} for harness {harness_id}: {_blocked}", flush=True)
+                continue
+            entry = {"name": s["name"], "url": s["url"], "transport": s.get("transport") or "http"}
+            if isinstance(s.get("headers"), dict):
+                entry["headers"] = {str(k): str(vv) for k, vv in s["headers"].items()}
+            mcp_out.append(entry)
+
     # Built-ins the harness never mentions: on when the image says so. Implicit, so the set follows
     # the image rather than whatever was true when the Harness was created.
     skills_out += _builtin_default_skills(seen)
 
     disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
-    return mcp_out, skills_out, suppressed, disabled_tools
+    return mcp_out, skills_out, suppressed, disabled_tools, plugins_out
 
 
 # ── API ──────────────────────────────────────────────────────────────────────────
@@ -3636,8 +3675,14 @@ async def llm_broker(path: str, request: Request):
 #      retry. Added the structured error envelope. The old `detail` string is still emitted beside
 #      it, because clients in the wild read it — it is documented as deprecated, not removed under
 #      them.
-UHP_VERSION = "2026-08-11"
-UHP_VERSIONS = [UHP_VERSION]
+UHP_VERSION = "2026-09-12"
+# Both versions, one code path: 2026-09-12 is additive to 2026-08-11 (plugins, and nothing
+# the earlier version defined changes shape), so the same objects answer either request and
+# the header is the only thing that differs. VERSIONING.md, server rule 3.
+UHP_VERSIONS = [UHP_VERSION, "2026-08-11"]
+# The Agent Plugins manifest schemas this server installs (Plugins §7). A package targeting
+# another version is refused with unsupported_plugin_schema naming this list.
+UHP_PLUGIN_SCHEMAS = ["https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"]
 
 # Capabilities are declared, not inferred, and the conformance suite checks each one against the
 # behaviour it promises. Reporting false is a supported answer; omitting a key is not, because a
@@ -3652,6 +3697,7 @@ UHP_CAPABILITIES = {
     "harness_management": True,
     "session_sharing": True,
     "idempotency": True,
+    "plugins": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 
@@ -3718,7 +3764,9 @@ async def _uhp_version(request: Request, call_next):
              "detail": f"This server does not implement UHP version '{want}'."},
             status_code=400, headers={"UHP-Version": UHP_VERSION})
     resp = await call_next(request)
-    resp.headers["UHP-Version"] = UHP_VERSION
+    # The version SERVED, which is the one asked for when it is one this server speaks: both
+    # versions answer with the same objects, so honouring the request is just saying so.
+    resp.headers["UHP-Version"] = want if want in UHP_VERSIONS else UHP_VERSION
     return resp
 
 
@@ -3729,6 +3777,7 @@ def uhp_discovery() -> dict:
     Nothing here is principal-specific."""
     return {"object": "uhp.discovery", "protocol": "uhp",
             "versions": UHP_VERSIONS, "default_version": UHP_VERSION,
+            "plugin_schemas": UHP_PLUGIN_SCHEMAS,
             "conformance_class": UHP_CONFORMANCE_CLASS,
             "capabilities": dict(UHP_CAPABILITIES),
             # The version this build IS (baked by the release workflow). "dev" for a build that
@@ -6699,7 +6748,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # HR-INF-010: the caller (create_response) already read this harness's vertex — thread it in
     # instead of re-reading it twice more here. Beyond cutting reads, a same-request snapshot means
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
-    mcp_servers, skills, skills_suppressed, tools_disabled = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
+    mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
     if mcp_servers or skills or skills_suppressed or tools_disabled:
         rec["plugins"] = {"mcp": [m.get("name") for m in mcp_servers], "skills": [s.get("name") for s in skills],
                           "skills_off": skills_suppressed, "tools_off": tools_disabled}
@@ -6787,7 +6836,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "prompt": runner_prompt, "max_turns": max_step,
                 "timeout_seconds": timeout_s,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
-                "mcp_servers": mcp_servers, "skills": skills, "agent_doc": agent_doc,
+                "mcp_servers": mcp_servers, "skills": skills, "plugins": plugin_pkgs, "agent_doc": agent_doc,
                 "skills_suppressed": skills_suppressed, "tools_disabled": turn_tools_off,
                 # Image generation, when an integration can serve it. A per-turn credential for
                 # the broker, never a provider key — see _image_auth.
@@ -12879,9 +12928,48 @@ def _kits() -> dict:
     return out
 
 
+def _kit_plugin(kit: dict) -> dict | None:
+    """The kit's plugin package, read whole from `<kit>/<harness.plugin>/` (an Agent Plugins
+    package: plugin.json at its root, the kit's skills under skills/). A launched Harness installs
+    it as a named, versioned plugin it can export, and the skills derive from the package; there
+    is no second list of them to keep in step. None when the kit ships no package."""
+    sub = str((kit.get("harness") or {}).get("plugin") or "")
+    root = pathlib.Path(_KITS_DIR) / str(kit.get("id") or "") / sub
+    if not sub:
+        return None
+    if not (root / "plugin.json").is_file():
+        print(f"[kits] {kit.get('id')}: harness.plugin names {sub}/ but there is no plugin.json in it", flush=True)
+        return None
+    files: list[dict] = []
+    for f in sorted(root.rglob("*")):
+        if not f.is_file() or f.stat().st_size > _SKILL_FILE_MAX:
+            continue
+        raw = f.read_bytes()
+        rel = f.relative_to(root).as_posix()
+        try:
+            files.append({"path": rel, "content": raw.decode()})
+        except UnicodeDecodeError:
+            files.append({"path": rel, "content_b64": base64.b64encode(raw).decode()})
+    return {"files": files, "enabled": True}
+
+
+def _kit_skill_names(kit: dict) -> list[str]:
+    """What launching this kit installs, for the catalog: the package's skills when it ships
+    one, else the names kit.json lists."""
+    pkg = _kit_plugin(kit)
+    if pkg:
+        try:
+            return [s["name"] for s in _plugin_read_package(pkg["files"])["skills"]]
+        except HTTPException:
+            return []
+    return [str(n) for n in ((kit.get("harness") or {}).get("skills") or [])]
+
+
 def _kit_skills(kit: dict) -> list[dict]:
-    """A kit's own skills, read from its folder. Self-contained by design: a kit carries the
-    skills its Harness needs rather than depending on what the image happens to bundle."""
+    """A kit's own skills, read from its folder, for a kit built before kits shipped a plugin
+    package (harness.skills names them). Self-contained by design: a kit carries the skills its
+    Harness needs rather than depending on what the image happens to bundle. Retire this with
+    the last image whose kits bake predates the package layout."""
     root = pathlib.Path(_KITS_DIR) / str(kit.get("id") or "")
     out: list[dict] = []
     for name in (kit.get("harness") or {}).get("skills") or []:
@@ -13333,6 +13421,7 @@ class HarnessBody(BaseModel):
     system_prompt: str | None = None
     mcp_servers: list | None = None
     skills: list | None = None
+    plugins: list | None = None            # installed Agent Plugins packages (Plugins chapter)
     disabled_tools: list | None = None     # inherited/built-in tool names the harness disabled
     max_step: int | None = None            # default agent step budget for this harness's turns
     timeout_seconds: int | None = None     # default per-turn wall-clock cap
@@ -13360,6 +13449,9 @@ def _harness_out(v: dict) -> dict:
             # Verbatim: what a client reads is what is stored, for every entry, which is the
             # ordinary contract and the only one there now is.
             "mcpServers": _mcp_list(v), "skills": _parse(v.get("skills")),
+            # Derived by the server from each package on every write, never copied into the two
+            # lists above: a client that PUTs back what it read cannot install a plugin twice.
+            "plugins": _plugins_of(v),
             "disabledTools": [t for t in _parse(v.get("disabled_tools")) if isinstance(t, str)],
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
@@ -13376,6 +13468,7 @@ def _harness_props(body: HarnessBody) -> dict:
     return {"name": body.name, "base": base, "base_label": body.base_label or base,
             "default_model": body.default_model or "", "system_prompt": body.system_prompt or "",
             "mcp_servers": json.dumps(body.mcp_servers or []), "skills": json.dumps(body.skills or []),
+            "plugins": json.dumps(body.plugins or []),
             "disabled_tools": json.dumps(body.disabled_tools or []),
             "additional_headers": json.dumps([str(h).strip() for h in (body.additional_headers or [])
                                               if isinstance(h, str) and str(h).strip()]),
@@ -13474,6 +13567,535 @@ async def _skill_bundle_files(sk: dict) -> list:
         files = [{"path": "SKILL.md", "content": sk["content"]}]
     return files or []
 
+# ── Plugins (UHP 2026-09-12, Plugins chapter) ─────────────────────────────────────────────
+# A plugin IS an Agent Plugins 1.0.0 package: plugin.json at the root, MCP servers in mcp.json,
+# skills under skills/. This gateway reads one the way that specification's client conformance
+# section says (manifest validated and closed, components discovered from their fixed locations,
+# a failure isolated to one component recorded rather than fatal), stores the package out of line,
+# and records what it derived on the harness. The harness's own mcpServers and skills are never
+# touched by a plugin: they report what a client wrote there, which is what keeps every 2026-08-11
+# client working (Plugins §4.1). Names are unique across the harness and its enabled plugins, and a
+# collision is refused here, at configuration time, rather than resolved silently in a turn.
+_PLUGIN_MANIFEST_SCHEMA = UHP_PLUGIN_SCHEMAS[0]
+_PLUGIN_MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+_PLUGIN_NAME_RE = re.compile(r"^(?!.*(--|\.\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_PLUGIN_PACKAGE_MAX = 16 * 1024 * 1024   # the JSON-encoded package; a plugin is code and prose, not data
+_PLUGIN_MANIFEST_FIELDS = {"$schema", "name", "version", "description", "author", "homepage",
+                           "repository", "license", "keywords", "extensions"}
+_PLUGIN_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PLUGIN_BLOB_RE = re.compile(r"^plg_[0-9a-f]{32}$")
+# The derived object rides on the harness record beside the blob handle; the record has a hard
+# per-property cap on the graph backing, so the manifest and component metadata are bounded here
+# rather than truncated there.
+_PLUGIN_DERIVED_MAX = 24_000
+
+
+def _plugin_blob_key(org: str, blob: str) -> str:
+    """Packages are stored under the org that installed them: a handle is unguessable, but a
+    handle that leaked would otherwise read another org's package back through a PUT."""
+    return f"plugins/{org}/{blob}.json"
+
+
+def _skill_key(name: str) -> str:
+    """The runner's skill directory name (its _skill_dir_name), so two skills the gateway sees
+    as different cannot land in one folder."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", str(name or ""))
+# Runner backends that can launch a stdio MCP server (each writer emits command/args). pi's MCP
+# adapter and dsh take URLs only; a package that needs a process is refused for those bases rather
+# than accepted and skipped in a turn, which Harnesses §4.1 forbids.
+_STDIO_MCP_BACKENDS = {"claude", "codex", "hermes", "gemini", "qwen", "opencode", "goose", "omp", "cline"}
+
+
+def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
+    return uhp_error(422, "plugin_invalid", f"Plugin {name or 'package'}: {reason}", "plugins",
+                     {"path": path, "reason": reason})
+
+
+def _plugin_path_ok(path, name: str) -> str:
+    if not isinstance(path, str) or not path or path.startswith("/"):
+        raise _plugin_invalid(name, str(path), "file paths are relative to the plugin root")
+    if any(seg in ("", ".", "..") for seg in path.split("/")):
+        raise _plugin_invalid(name, path, "the path escapes the plugin root")
+    if any(ord(c) < 32 or c == "\x7f" for c in path) or "\\" in path:
+        raise _plugin_invalid(name, path, "the path contains a control character or a backslash")
+    return path
+
+
+def _plugin_frontmatter(text: str) -> dict:
+    """The top-level scalars of a SKILL.md frontmatter: plain values, quoted values, trailing
+    comments dropped, and `>` / `|` block scalars joined, which is what the Agent Skills fields
+    (name, description) are written with in practice."""
+    m = re.match(r"^---\r?\n(.*?)\r?\n---", text or "", flags=re.S)
+    out: dict = {}
+    key, block = None, None
+    for line in (m.group(1) if m else "").splitlines():
+        if line.startswith((" ", "\t")):
+            if key and block is not None:
+                block.append(line.strip())
+            continue
+        if key and block is not None:
+            out[key] = " ".join(block).strip()
+            block = None
+        key = None
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        key, v = k.strip(), v.strip()
+        v = re.sub(r"\s+#.*$", "", v)
+        if v in (">", "|", ">-", "|-", ">+", "|+"):
+            block = []
+            continue
+        out[key] = v.strip("'\"")
+    if key and block is not None:
+        out[key] = " ".join(block).strip()
+    return out
+
+
+def _plugin_command_ok(cmd) -> str | None:
+    """Agent Plugins §7.2.1: one executable token, a bare name or a plugin-relative ./ path."""
+    if not isinstance(cmd, str) or not cmd or re.search(r"\s", cmd):
+        return "command must be one executable token"
+    if cmd.startswith("./"):
+        if any(seg in ("", ".", "..") for seg in cmd[2:].split("/")):
+            return "a plugin-relative command must stay within the plugin root"
+    elif "/" in cmd:
+        return "command must be a bare executable name or a path beginning with ./"
+    return None
+
+
+def _plugin_cwd_ok(cwd) -> str | None:
+    if not isinstance(cwd, str) or not cwd:
+        return "cwd must be a string"
+    for root in ("${PLUGIN_ROOT}", "${PLUGIN_DATA}", "."):
+        if cwd == root or cwd.startswith(root + "/"):
+            rest = cwd[len(root):].lstrip("/")
+            if any(seg in (".", "..") for seg in rest.split("/") if rest):
+                return "cwd escapes its root"
+            return None
+    return "cwd must be plugin-relative (./…) or rooted in ${PLUGIN_ROOT} or ${PLUGIN_DATA}"
+
+
+def _plugin_url_ok(url) -> str | None:
+    if not isinstance(url, str) or not url:
+        return "url must be a string"
+    try:
+        u = urllib.parse.urlsplit(url)
+    except Exception:  # noqa: BLE001
+        return "url is not a URL"
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return "url must be an absolute http or https URL"
+    if u.username or u.password or u.fragment:
+        return "url must not carry user information or a fragment"
+    host = u.hostname.lower()
+    loopback = host == "localhost" or host.startswith("127.") or host == "::1"
+    if u.scheme == "http" and not loopback:
+        return "a non-loopback url must use https"
+    return None
+
+
+def _plugin_server(sname: str, cfg) -> tuple[dict | None, str | None]:
+    """One mcp.json entry -> (a plugin MCP server object, None) or (None, why it is invalid)."""
+    if not isinstance(cfg, dict):
+        return None, "server entry is not an object"
+    t = cfg.get("type")
+    allowed = {"stdio": {"type", "command", "args", "env", "cwd"},
+               "streamable-http": {"type", "url", "headers"},
+               "sse": {"type", "url", "headers"}}.get(t)
+    if allowed is None:
+        return None, f"unknown transport type {t!r}"
+    extra = set(cfg) - allowed
+    if extra:
+        return None, f"fields {sorted(extra)} do not belong to a {t} server"
+    if t == "stdio":
+        why = _plugin_command_ok(cfg.get("command"))
+        if why:
+            return None, why
+        s: dict = {"name": sname, "transport": "stdio", "command": cfg["command"], "enabled": True}
+        if "args" in cfg:
+            if not isinstance(cfg["args"], list) or not all(isinstance(a, str) for a in cfg["args"]):
+                return None, "args must be a list of strings"
+            s["args"] = list(cfg["args"])
+        if "env" in cfg:
+            env = cfg["env"]
+            if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+                return None, "env must be an object of strings"
+            if not all(_PLUGIN_ENV_NAME_RE.match(k) for k in env):
+                return None, "env names must be environment variable names (letters, digits, underscore)"
+            if any(k.upper() in ("PLUGIN_ROOT", "PLUGIN_DATA") for k in env):
+                return None, "env must not name PLUGIN_ROOT or PLUGIN_DATA; the server sets those"
+            s["env"] = dict(env)
+        if "cwd" in cfg:
+            why = _plugin_cwd_ok(cfg["cwd"])
+            if why:
+                return None, why
+            s["cwd"] = cfg["cwd"]
+        return s, None
+    why = _plugin_url_ok(cfg.get("url"))
+    if why:
+        return None, why
+    s = {"name": sname, "transport": "http" if t == "streamable-http" else "sse",
+         "url": cfg["url"], "enabled": True}
+    if "headers" in cfg:
+        hdrs = cfg["headers"]
+        if not isinstance(hdrs, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in hdrs.items()):
+            return None, "headers must be an object of strings"
+        if len({k.lower() for k in hdrs}) != len(hdrs):
+            return None, "a header name appears more than once under different casing"
+        s["headers"] = dict(hdrs)
+    return s, None
+
+
+def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
+    """Read a package as an Agent Plugins client: {name, manifest, mcpServers, skills, skipped}.
+
+    Fatal (refused with plugin_invalid or unsupported_plugin_schema): no manifest, a manifest that
+    is not valid JSON or violates its closed schema, an escaping path, a `name` on the write that
+    contradicts the manifest. Not fatal, recorded in `skipped`: an unknown manifest field, a
+    non-object `extensions`, an invalid mcp.json or server entry, a skill folder whose SKILL.md
+    does not conform. That split is Agent Plugins §5.2 and §11.3, and the recording is UHP's own
+    rule that ignoring must be observable (Plugins §2.2)."""
+    if not isinstance(files, list) or not files:
+        raise _plugin_invalid(sent_name or "", "", "a plugin needs files")
+    by_path: dict[str, dict] = {}
+    for f in files:
+        if not isinstance(f, dict):
+            raise _plugin_invalid(sent_name or "", "", "files must be objects with a path")
+        path = _plugin_path_ok(f.get("path"), sent_name or "")
+        content, b64 = f.get("content"), f.get("content_b64")
+        if content is None and b64 is None:
+            raise _plugin_invalid(sent_name or "", path, "a file needs content or content_b64")
+        if content is not None and b64 is not None:
+            raise _plugin_invalid(sent_name or "", path, "a file carries content or content_b64, not both")
+        if content is not None and not isinstance(content, str):
+            raise _plugin_invalid(sent_name or "", path, "content must be a string")
+        if b64 is not None:
+            try:
+                base64.b64decode(b64, validate=True)
+            except Exception:  # noqa: BLE001
+                raise _plugin_invalid(sent_name or "", path, "content_b64 is not base64")
+        if path in by_path:
+            raise _plugin_invalid(sent_name or "", path, "the same path appears twice")
+        by_path[path] = f
+    skipped: list[dict] = []
+
+    raw = by_path.get("plugin.json")
+    if raw is None:
+        raise _plugin_invalid(sent_name or "", "plugin.json", "no plugin.json at the plugin root")
+    try:
+        manifest = json.loads(raw.get("content") if raw.get("content") is not None
+                              else base64.b64decode(raw.get("content_b64") or "").decode())
+    except Exception:  # noqa: BLE001
+        raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not valid JSON")
+    if not isinstance(manifest, dict):
+        raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not an object")
+    if "$schema" not in manifest:
+        raise _plugin_invalid(str(manifest.get("name") or sent_name or ""), "plugin.json#/$schema",
+                              "the manifest names no $schema")
+    if manifest.get("$schema") not in UHP_PLUGIN_SCHEMAS:
+        raise uhp_error(422, "unsupported_plugin_schema",
+                        "The manifest targets an Agent Plugins version this server does not install.",
+                        "plugins", {"supported": list(UHP_PLUGIN_SCHEMAS),
+                                    "declared": manifest.get("$schema")})
+    name = manifest.get("name")
+    if not isinstance(name, str) or not _PLUGIN_NAME_RE.match(name) or len(name) > 64:
+        raise _plugin_invalid(str(name or sent_name or ""), "plugin.json#/name",
+                              "name must be 1 to 64 characters of a-z, 0-9, hyphen and period, "
+                              "starting and ending alphanumeric, with no -- or ..")
+    if sent_name and sent_name != name:
+        raise _plugin_invalid(name, "plugin.json#/name",
+                              f"the write names the plugin {sent_name!r} but the manifest says {name!r}")
+    for k, v in manifest.items():
+        if k not in _PLUGIN_MANIFEST_FIELDS:
+            skipped.append({"path": f"plugin.json#/{k}", "reason": "unknown top-level field, ignored"})
+        elif k in ("version", "description", "homepage", "repository", "license") and not isinstance(v, str):
+            raise _plugin_invalid(name, f"plugin.json#/{k}", f"{k} must be a string")
+        elif k == "keywords" and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            raise _plugin_invalid(name, "plugin.json#/keywords", "keywords must be a list of strings")
+        elif k == "author" and not (isinstance(v, dict) and set(v) <= {"name", "email", "url"}
+                                    and all(isinstance(x, str) for x in v.values())):
+            raise _plugin_invalid(name, "plugin.json#/author",
+                                  "author may carry only name, email and url, each a string")
+        elif k == "extensions" and not isinstance(v, dict):
+            skipped.append({"path": "plugin.json#/extensions", "reason": "extensions is not an object, ignored"})
+
+    servers: list[dict] = []
+    raw = by_path.get("mcp.json")
+    if raw is not None:
+        try:
+            mcp = json.loads(raw.get("content") if raw.get("content") is not None
+                             else base64.b64decode(raw.get("content_b64") or "").decode())
+        except Exception:  # noqa: BLE001
+            mcp = None
+        entries = mcp.get("mcpServers") if isinstance(mcp, dict) else None
+        if not isinstance(mcp, dict) or set(mcp) != {"$schema", "mcpServers"} or not isinstance(entries, dict):
+            skipped.append({"path": "mcp.json", "reason": "not an object of exactly $schema and mcpServers"})
+            entries = {}
+        elif mcp.get("$schema") != _PLUGIN_MCP_SCHEMA:
+            skipped.append({"path": "mcp.json#/$schema",
+                            "reason": "mcp.json targets a different Agent Plugins version than plugin.json"})
+            entries = {}
+        for sname, cfg in entries.items():
+            s, why = _plugin_server(str(sname), cfg)
+            if s is None:
+                skipped.append({"path": f"mcp.json#/mcpServers/{sname}", "reason": why})
+            else:
+                servers.append(s)
+
+    skills: list[dict] = []
+    dirs = sorted({p.split("/")[1] for p in by_path if p.startswith("skills/") and p.count("/") >= 2})
+    for d in dirs:
+        md = by_path.get(f"skills/{d}/SKILL.md")
+        if md is None:
+            continue                     # a folder without SKILL.md is not a skill (Agent Plugins §7.1)
+        try:
+            text = md.get("content") if md.get("content") is not None else base64.b64decode(md.get("content_b64") or "").decode()
+        except Exception:  # noqa: BLE001
+            text = ""
+        fm = _plugin_frontmatter(text)
+        if fm.get("name") != d or not _SKILL_NAME_RE.match(d) or len(d) > 64:
+            skipped.append({"path": f"skills/{d}", "reason": "SKILL.md name must equal the directory name and follow Agent Skills naming"})
+            continue
+        if not fm.get("description") or len(fm["description"]) > 1024:
+            skipped.append({"path": f"skills/{d}", "reason": "SKILL.md needs a description of at most 1024 characters"})
+            continue
+        skills.append({"name": d, "description": fm["description"]})
+    return {"name": name, "manifest": manifest, "mcpServers": servers, "skills": skills, "skipped": skipped}
+
+
+def _plugins_of(v: dict | None) -> list[dict]:
+    """The stored plugin entries of a harness vertex, each with every derived field present."""
+    try:
+        a = json.loads((v or {}).get("plugins") or "[]")
+    except Exception:  # noqa: BLE001
+        a = []
+    out = []
+    for e in a if isinstance(a, list) else []:
+        if isinstance(e, dict) and e.get("name"):
+            out.append({"name": e["name"], "enabled": e.get("enabled", True) is not False,
+                        **({"blob": e["blob"]} if e.get("blob") else {}),
+                        "manifest": e.get("manifest") or {}, "mcpServers": e.get("mcpServers") or [],
+                        "skills": e.get("skills") or [], "skipped": e.get("skipped") or []})
+    return out
+
+
+async def _plugin_files_of(entry: dict, org: str) -> list:
+    files = entry.get("files")
+    if not files and entry.get("blob") and _PLUGIN_BLOB_RE.match(str(entry["blob"])):
+        raw = await _blob_get(_plugin_blob_key(org, str(entry["blob"])), kb=BLOB_KB)
+        if raw:
+            try:
+                files = json.loads(raw.decode())
+            except Exception:  # noqa: BLE001
+                files = None
+    return files if isinstance(files, list) else []
+
+
+def _plugin_collisions(plugins: list[dict], mcp_servers: list | None, skills: list | None,
+                       reserved_mcp: tuple[str, ...] = ()) -> None:
+    """Plugins §4.2: one namespace per component type across the harness and its enabled plugins.
+    Names are compared the way the runner keys them (its MCP and skill directory sanitisers), so
+    two names the protocol sees as different cannot land on one file. `reserved_mcp` names the
+    servers this deployment attaches to a harness itself, such as a kit's hosted database."""
+    servers: dict[str, str] = {}
+    for s in mcp_servers or []:
+        if isinstance(s, dict) and str(s.get("enabled")) not in ("False", "false", "0"):
+            servers[_mcp_name(str(s.get("name") or "mcp"))] = "harness"
+    for n in reserved_mcp:
+        servers[_mcp_name(str(n))] = "harness"
+    skill_owner: dict[str, str] = {}
+    for sk in skills or []:
+        if isinstance(sk, dict) and str(sk.get("enabled")) not in ("False", "false", "0"):
+            skill_owner[_skill_key(str(sk.get("name") or sk.get("id") or ""))] = "harness"
+    for pe in plugins:
+        if not pe.get("enabled", True):
+            continue
+        for s in pe.get("mcpServers") or []:
+            key = _mcp_name(str(s.get("name")))
+            if key in servers:
+                raise uhp_error(409, "plugin_conflict",
+                                f"MCP server '{s.get('name')}' exists on both {servers[key]} and plugin {pe['name']}.",
+                                "plugins", {"component": "mcp_server", "name": s.get("name"),
+                                            "between": [servers[key], pe["name"]]})
+            servers[key] = pe["name"]
+        for sk in pe.get("skills") or []:
+            key = _skill_key(sk["name"])
+            if key in skill_owner:
+                raise uhp_error(409, "plugin_conflict",
+                                f"skill '{sk['name']}' exists on both {skill_owner[key]} and plugin {pe['name']}.",
+                                "plugins", {"component": "skill", "name": sk["name"],
+                                            "between": [skill_owner[key], pe["name"]]})
+            skill_owner[key] = pe["name"]
+
+
+async def _plugins_prepare(body: HarnessBody, org: str, previous: list[dict] | None = None,
+                           reserved_mcp: tuple[str, ...] = ()) -> list[dict]:
+    """Validate and store every package on a create or update, and derive what the harness records.
+
+    Everything is checked before anything is stored, so a refused write leaves no orphan package
+    behind and the harness unchanged (the caller writes nothing until this returns). Files always
+    go to the blob store under this org: a package is bigger than the vertex prop cap by
+    construction, and one storage path is one fewer to get wrong. What the vertex carries is the
+    derived object and the blob handle, which is exactly what a client reads back and PUTs again.
+    `previous` is what the harness held before an update; packages the new list no longer refers to
+    are deleted once the new list is validated."""
+    base = _require_supported_base(body.base) if body.base else ""
+    body.base = base or body.base
+    backend = str(_BASE_CATALOG.get(base, {}).get("backend") or "")
+    staged: list[tuple[dict, str | None, str | None]] = []   # (entry, encoded files to store, kept blob)
+    seen: dict[str, str] = {}
+    for i, item in enumerate(body.plugins or []):
+        if not isinstance(item, dict):
+            raise uhp_error(400, "invalid_input", f"plugins[{i}]: must be an object.", "plugins")
+        sent = None
+        if "name" in item:
+            if not isinstance(item["name"], str) or not item["name"]:
+                raise _plugin_invalid("", "plugin.json#/name", "name must be a non-empty string when sent")
+            sent = item["name"]
+        files, blob = item.get("files"), item.get("blob")
+        if files:
+            blob = None                       # a fresh package supersedes whatever the handle held
+        elif blob:
+            if not isinstance(blob, str) or not _PLUGIN_BLOB_RE.match(blob):
+                raise _plugin_invalid(sent or "", "", "the blob handle is not one this server issued")
+            files = await _plugin_files_of({"blob": blob}, org)
+            if not files:
+                raise _plugin_invalid(sent or "", "", "the package this handle refers to is gone; send its files")
+        else:
+            raise _plugin_invalid(sent or "", "", "a plugin needs files or a blob handle")
+        encoded = json.dumps(files)
+        if len(encoded) > _PLUGIN_PACKAGE_MAX:
+            raise uhp_error(413, "file_too_large", "The plugin package is larger than this server accepts.",
+                            "plugins", {"max_bytes": _PLUGIN_PACKAGE_MAX})
+        derived = _plugin_read_package(files, sent)
+        name = derived["name"]
+        key = _mcp_name(name)
+        if name in seen or key in seen.values():
+            other = name if name in seen else next(n for n, k in seen.items() if k == key)
+            raise uhp_error(409, "plugin_conflict", f"Plugins '{other}' and '{name}' would share one name.", "plugins",
+                            {"component": "plugin", "name": name, "between": [other, name]})
+        seen[name] = key
+        enabled = item.get("enabled", True) is not False
+        if enabled and backend and backend not in _STDIO_MCP_BACKENDS \
+                and any(s.get("transport") == "stdio" for s in derived["mcpServers"]):
+            raise uhp_error(422, "unsupported_transport",
+                            f"Plugin {name} declares a stdio MCP server, which the {base} base cannot run.",
+                            "plugins", {"transport": "stdio", "base": base, "plugin": name})
+        # A remote server this deployment's network policy would refuse at turn time is refused
+        # here instead, and written down: the turn would otherwise drop it with only a log line.
+        kept: list[dict] = []
+        for s in derived["mcpServers"]:
+            blocked = await _ssrf_check(str(s.get("url") or "")) if s.get("transport") != "stdio" else ""
+            if blocked:
+                derived["skipped"].append({"path": f"mcp.json#/mcpServers/{s['name']}",
+                                           "reason": f"refused by this deployment's network policy: {blocked}"})
+            else:
+                kept.append(s)
+        derived["mcpServers"] = kept
+        entry = {"name": name, "enabled": enabled, "manifest": derived["manifest"],
+                 "mcpServers": derived["mcpServers"], "skills": derived["skills"],
+                 "skipped": derived["skipped"]}
+        if len(json.dumps(entry)) > _PLUGIN_DERIVED_MAX:
+            raise _plugin_invalid(name, "plugin.json", "the manifest and component metadata exceed 24 KB")
+        staged.append((entry, None if blob else encoded, blob))
+    out = [e for e, _, _ in staged]
+    _plugin_collisions(out, body.mcp_servers, body.skills, reserved_mcp)
+    # Every check passed: store the fresh packages, then let go of the ones this write dropped.
+    for entry, encoded, blob in staged:
+        if encoded is not None:
+            blob = _rid("plg")
+            if not await _blob_put(_plugin_blob_key(org, blob), encoded.encode(), kb=BLOB_KB):
+                raise uhp_error(502, "internal_error", f"Plugin {entry['name']}: the package could not be stored.", "plugins")
+        entry["blob"] = blob
+    kept_blobs = {e["blob"] for e in out}
+    for pe in previous or []:
+        if pe.get("blob") and pe["blob"] not in kept_blobs:
+            await _blob_delete(_plugin_blob_key(org, str(pe["blob"])), kb=BLOB_KB)
+    return out
+
+
+async def _plugins_discard(org: str, v: dict | None) -> None:
+    """Delete the packages of a harness being deleted."""
+    for pe in _plugins_of(v):
+        if pe.get("blob"):
+            await _blob_delete(_plugin_blob_key(org, str(pe["blob"])), kb=BLOB_KB)
+
+
+def _plugin_export_name(v: dict) -> str:
+    """Plugins §5: the harness name as a plugin name, or the id when nothing usable remains."""
+    def derive(s: str) -> str:
+        s = re.sub(r"[^a-z0-9.]+", "-", (s or "").lower()).strip("-")
+        s = re.sub(r"\.{2,}", ".", s).strip(".").strip("-")
+        return s[:64].strip("-.")
+    n = derive(str(v.get("name") or ""))
+    if not n or not _PLUGIN_NAME_RE.match(n):
+        n = derive(str(v.get("id") or "")) or "harness"
+    return n if _PLUGIN_NAME_RE.match(n) else "harness"
+
+
+async def _harness_export_plugin(v: dict) -> dict:
+    """The harness's own tools and skills as an Agent Plugins package (Plugins §5). Installed
+    plugins, the prompt, the model, the base and disabled tools are not part of it; credentials
+    never are, and each omission is written down so the importer knows what to re-enter."""
+    files: list[dict] = [{"path": "plugin.json", "content": json.dumps(
+        {"$schema": _PLUGIN_MANIFEST_SCHEMA, "name": _plugin_export_name(v)}, indent=2)}]
+    skipped: list[dict] = []
+    entries: dict = {}
+    for s in _mcp_list(v):
+        if str(s.get("enabled")) in ("False", "false", "0") or not s.get("url"):
+            continue
+        sname = str(s.get("name") or s.get("id") or "mcp")
+        url = str(s["url"])
+        try:
+            u = urllib.parse.urlsplit(url)
+            if u.username or u.password:
+                url = urllib.parse.urlunsplit((u.scheme, u.hostname + (f":{u.port}" if u.port else ""),
+                                               u.path, u.query, ""))
+                skipped.append({"path": f"mcp.json#/mcpServers/{sname}/url",
+                                "reason": "credentials in the url are not exported"})
+        except Exception:  # noqa: BLE001
+            pass
+        entries[sname] = {"type": "sse" if (s.get("transport") or "").lower() == "sse" else "streamable-http",
+                          "url": url}
+        for k in ("auth", "headers"):
+            if s.get(k):
+                skipped.append({"path": f"mcp.json#/mcpServers/{sname}/{k}",
+                                "reason": "credentials are not exported"})
+    if entries:
+        files.append({"path": "mcp.json", "content": json.dumps(
+            {"$schema": _PLUGIN_MCP_SCHEMA, "mcpServers": entries}, indent=2)})
+    try:
+        skills = json.loads(v.get("skills") or "[]")
+    except Exception:  # noqa: BLE001
+        skills = []
+    for sk in skills if isinstance(skills, list) else []:
+        if not isinstance(sk, dict) or str(sk.get("enabled")) in ("False", "false", "0"):
+            continue
+        sname = str(sk.get("name") or sk.get("id") or "")
+        if not sname:
+            continue
+        for f in await _skill_bundle_files(sk):
+            if not isinstance(f, dict) or not isinstance(f.get("path"), str):
+                continue
+            rel = f["path"]
+            ok = rel and not rel.startswith("/") and not any(seg in ("", ".", "..") for seg in rel.split("/")) \
+                and ((isinstance(f.get("content"), str)) != (f.get("content_b64") is not None))
+            if not ok:
+                skipped.append({"path": f"skills/{sname}/{rel}", "reason": "not a file a package can carry"})
+                continue
+            files.append({"path": f"skills/{sname}/{rel}",
+                          **({"content": f["content"]} if isinstance(f.get("content"), str) else {"content_b64": f["content_b64"]})})
+    derived = _plugin_read_package(files)
+    return {**derived, "enabled": True, "skipped": derived["skipped"] + skipped, "files": files}
+
+
+def _plugin_entry(v: dict, name: str) -> dict:
+    pe = next((e for e in _plugins_of(v) if e["name"] == name), None)
+    if not pe:
+        raise uhp_error(404, "plugin_not_found", f"No plugin '{name}' on this harness.", "plugin_name")
+    return pe
+
+
 
 def _workspace_keep(item_ws: str, workspace: str, ws_default: bool) -> bool:
     """Workspace filter with Default-Workspace leniency: unstamped legacy records belong
@@ -13490,6 +14112,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     workspace = request.headers.get("x-harness-workspace", "")
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    body.plugins = await _plugins_prepare(body, org)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
     props = {"org": org, "member": member, "workspace": workspace, **_harness_props(body),
@@ -13560,6 +14183,30 @@ async def get_harness_skill_files(org: str, hid: str, skill_id: str, request: Re
             "files": await _skill_bundle_files(sk)}
 
 
+@app.get("/v1/orgs/{org}/harnesses/{hid}/plugins/{name}/files")
+async def get_harness_plugin_files(org: str, hid: str, name: str, request: Request) -> dict:
+    """The complete package of one installed plugin (Plugins §3.1), byte-for-byte."""
+    await _owned_org(request, org)
+    v = await _vertex_get(hid)
+    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    pe = _plugin_entry(v, name)
+    files = await _plugin_files_of(pe, org)
+    if not files:
+        raise uhp_error(500, "internal_error", f"The stored package of plugin '{name}' is missing.", "plugin_name")
+    return {"name": pe["name"], "files": files}
+
+
+@app.get("/v1/orgs/{org}/harnesses/{hid}/plugin")
+async def export_harness_plugin(org: str, hid: str, request: Request) -> dict:
+    """The harness's own tools and skills as an Agent Plugins package (Plugins §5)."""
+    await _owned_org(request, org)
+    v = await _vertex_get(hid)
+    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    return await _harness_export_plugin(await _mcp_migrate(org, hid, v) or v)
+
+
 @app.put("/v1/orgs/{org}/harnesses/{hid}")
 async def update_harness(org: str, hid: str, body: HarnessBody, request: Request) -> dict:
     await _owned_org(request, org)
@@ -13568,9 +14215,18 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     if not cur or str(cur.get("org") or "") != org or str(cur.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     cur = await _mcp_migrate(org, hid, cur)
+    # Harnesses §5.2: id, base and createdAt are immutable. A body naming a different base is
+    # refused rather than applied, because applying it would change the behaviour of every
+    # session already attached to this harness.
+    if body.base and body.base != str(cur.get("base") or ""):
+        raise uhp_error(409, "harness_mismatch",
+                        "A harness's base cannot change; create a different harness for a different base.",
+                        "base", {"base": cur.get("base")})
+    body.base = str(cur.get("base") or body.base)
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     # AFTER the write: _harness_props can still refuse this save (an unsupported base), and a
     # refused save that had already scrubbed a record would disconnect a database nobody removed.
@@ -13592,6 +14248,7 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     # spending at a provider
     await _hosted_scrub_removed(org, hid, _mcp_list(cur), [])
     await _media_harness_purge(hid)
+    await _plugins_discard(org, cur)
     return {"id": hid, "deleted": True}
 
 
@@ -13716,6 +14373,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    body.plugins = await _plugins_prepare(body, org)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
     props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
@@ -13763,7 +14421,7 @@ async def list_kits(request: Request) -> dict:
                     "harnessId": (h or {}).get("id") or None,
                     # What the kit actually installs, from its own config — so the card can say
                     # what you get instead of asking you to take it on trust.
-                    "skills": [str(n) for n in ((kit.get("harness") or {}).get("skills") or [])],
+                    "skills": _kit_skill_names(kit),
                     # What a LAUNCHED kit is really running on. Not the same thing as the
                     # recommendation: the person may have chosen differently at launch, or changed
                     # it since. Showing the recommendation for a running kit would state something
@@ -13804,6 +14462,48 @@ class KitLaunchBody(BaseModel):
     base: str = ""
     model: str = ""
     database: KitDatabaseBody | None = None
+    # An existing Harness of yours to run the kit on, instead of the one launch made or would
+    # make: the kit's app then talks to that Harness, which receives the kit's package and its
+    # launch entries. How a package migrated to another Harness takes the kit with it.
+    harness: str = ""
+
+
+def _plugin_files_key(files: list) -> list[tuple]:
+    """A package's files as a comparable value: path, bytes and the executable bit, in path order."""
+    out = []
+    for f in files or []:
+        if not isinstance(f, dict):
+            continue
+        body = f.get("content_b64") if f.get("content_b64") is not None else f.get("content")
+        out.append((str(f.get("path") or ""), str(body or ""), bool(f.get("executable"))))
+    return sorted(out)
+
+
+async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
+                             reserved_mcp: tuple[str, ...] = ()) -> dict | None:
+    """The kit's current package on an existing kit Harness. Installed when the Harness holds no
+    package of that name, replaced when it holds another version, left alone when the versions
+    match; the kit's loose skills from before the package layout give way to the package's. Three
+    kit Harnesses launched before their kits shipped packages stayed without one through a
+    relaunch (hr-oss-test, 2026-09-14), while a fresh launch installed it."""
+    want = _plugin_read_package(kit_plugin["files"])
+    have = _plugins_of(v)
+    same = next((e for e in have if e["name"] == want["name"]), None)
+    if same and (same.get("manifest") or {}).get("version") == (want.get("manifest") or {}).get("version"):
+        # The version matching is not the whole story: a kit whose files changed under the same
+        # version (the Skill fix of 2026-09-14 shipped as 1.0.0 twice) would otherwise never reach
+        # a launched Harness. Launch reflects the package on disk, byte for byte.
+        stored = await _plugin_files_of({"blob": same["blob"]}, org) if same.get("blob") else []
+        if _plugin_files_key(stored) == _plugin_files_key(kit_plugin["files"]):
+            return None
+    body = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""),
+                       plugins=[e for e in have if e["name"] != want["name"]] + [kit_plugin])
+    body.plugins = await _plugins_prepare(body, org, previous=have, reserved_mcp=reserved_mcp)
+    await _vg_upsert("Harness", hid, {"plugins": json.dumps(body.plugins), "skills": json.dumps([]),
+                                      "updated_at": str(int(time.time() * 1000))})
+    print(f"[kits] {v.get('kit')}: package {want['name']} {(want.get('manifest') or {}).get('version')} "
+          f"{'replaced' if same else 'installed'} on {hid}", flush=True)
+    return await _vertex_get(hid)
 
 
 @app.post("/v1/kits/{kit_id}/launch")
@@ -13834,6 +14534,23 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     existing = next((r for r in await _vg_list_by_org("Harness", org)
                      if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"),
                     None)
+    want_h = (body_in.harness if body_in else "").strip()
+    if want_h and want_h != str((existing or {}).get("id") or ""):
+        # Run the kit on a Harness the person already has. One kit, one Harness: the previous kit
+        # Harness keeps its sessions and its package but is no longer the one the app talks to,
+        # and a Harness already running another kit is not taken over.
+        target = await _vertex_get(want_h)
+        if not target or str(target.get("org") or "") != org or str(target.get("deleted") or "0") == "1":
+            raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness")
+        other = str(target.get("kit") or "")
+        if other and other != kit_id:
+            raise uhp_error(409, "kit_conflict", f"That Harness runs the '{other}' kit.", "harness", {"kit": other})
+        now0 = str(int(time.time() * 1000))
+        if existing:
+            await _vg_upsert("Harness", str(existing["id"]), {"kit": "", "updated_at": now0})
+        await _vg_upsert("Harness", want_h, {"kit": kit_id, "updated_at": now0})
+        existing = await _vertex_get(want_h) or {**target, "kit": kit_id}
+        print(f"[kits] {kit_id} now runs on {want_h}", flush=True)
     if decl and not db_in and not existing:
         # Declaring launch.database is what makes it required: every panel this kit builds would
         # have nothing to read, so a launch without a connection is not a partial success.
@@ -13860,6 +14577,13 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
             # one record, not two of each.
             await _hosted_media_attach(org, hid0, existing, media_decl)
             existing = await _vertex_get(hid0) or existing
+        kit_plugin = _kit_plugin(kit)
+        if kit_plugin:
+            # The package comes from the kit definition, like the database tool above: a Harness
+            # launched before the kit shipped one, or one holding an older version, gets the
+            # current package on the next press of Launch. Same version: nothing is rewritten.
+            existing = await _kit_plugin_ensure(org, hid0, existing, kit_plugin, tuple(
+                str(d["name"]) for d in (decl, media_decl) if d and d.get("name"))) or existing
         return {"kit": kit_id, "harnessId": hid0,
                 "route": (kit.get("app") or {}).get("route") or "", "created": False,
                 "harness": _harness_out(existing)}
@@ -13880,15 +14604,23 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         base, model = want_base, want_model
     else:
         base, model = await _kit_base(org, kit)
+    kit_plugin = _kit_plugin(kit)
     body = HarnessBody(name=spec.get("name") or kit.get("title") or kit_id,
                        base=base,
                        default_model=model,
                        system_prompt=spec.get("system_prompt") or "",
-                       skills=_kit_skills(kit),
+                       # A kit that ships a package installs it; its skills derive from the
+                       # package. A kit from before that layout still carries them directly.
+                       skills=[] if kit_plugin else _kit_skills(kit),
+                       plugins=[kit_plugin] if kit_plugin else [],
                        mcp_servers=spec.get("mcp_servers") or [],
                        disabled_tools=spec.get("disabled_tools") or [])
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    # The hosted entries launch attaches below (a kit's database, the media server) are names a
+    # plugin's own servers must not take, so they count as the harness's here.
+    body.plugins = await _plugins_prepare(body, org, reserved_mcp=tuple(
+        str(d["name"]) for d in (decl, media_decl) if d and d.get("name")))
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
     props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
@@ -14038,11 +14770,37 @@ async def _cloud_me(base_url: str, api_key: str) -> dict:
     return me
 
 
-async def _cloud_harness_body(org: str, hid: str, v: dict) -> dict:
+async def _cloud_harness_body(org: str, hid: str, v: dict, plugins_ok: bool = False) -> dict:
     """What travels: the harness config, with every skill's files inlined (a bundle the local
     instance offloaded to a blob is a local detail; the hosted side gets the files). Never:
-    provider keys (not part of a harness), sessions, produced files, the local workspace."""
+    provider keys (not part of a harness), sessions, produced files, the local workspace.
+
+    Installed plugins travel whole, with their files, when the hosted side reports the plugins
+    capability. When it does not (a hosted side still on 2026-08-11), each enabled plugin travels
+    as what it contains, its skills and its remote servers on the harness's own lists, so the
+    hosted copy runs the same way; a stdio server has no place there and is left out."""
     out = _harness_out(await _mcp_migrate(org, hid, v))
+    plugins: list[dict] = []
+    mcp_extra: list[dict] = []
+    skills_extra: list[dict] = []
+    for pe in _plugins_of(v):
+        pfiles = await _plugin_files_of(pe, org)
+        if not pfiles:
+            continue
+        if plugins_ok:
+            plugins.append({"name": pe["name"], "enabled": pe["enabled"], "files": pfiles})
+            continue
+        if not pe["enabled"]:
+            continue
+        for sk in pe["skills"]:
+            prefix = f"skills/{sk['name']}/"
+            sfiles = [{**f, "path": f["path"][len(prefix):]} for f in pfiles
+                      if isinstance(f, dict) and str(f.get("path") or "").startswith(prefix)]
+            if sfiles:
+                skills_extra.append({"name": sk["name"], "enabled": True, "files": sfiles})
+        for s in pe["mcpServers"]:
+            if s.get("transport") != "stdio" and s.get("url"):
+                mcp_extra.append({k: s[k] for k in ("name", "url", "transport", "headers") if k in s})
     skills = []
     for sk in out.get("skills") or []:
         if not isinstance(sk, dict):
@@ -14059,7 +14817,8 @@ async def _cloud_harness_body(org: str, hid: str, v: dict) -> dict:
         skills.append(sk)
     return {"name": out["name"], "base": out["base"], "base_label": out.get("baseLabel") or out["base"],
             "default_model": out.get("defaultModel") or None, "system_prompt": out.get("systemPrompt") or None,
-            "mcp_servers": out.get("mcpServers") or [], "skills": skills,
+            "mcp_servers": (out.get("mcpServers") or []) + mcp_extra, "skills": skills + skills_extra,
+            **({"plugins": plugins} if plugins_ok else {}),
             "disabled_tools": out.get("disabledTools") or [], "max_step": out.get("maxStep"),
             "timeout_seconds": out.get("timeoutSeconds"), "additional_headers": out.get("additionalHeaders") or [],
             "kit": out.get("kit") or None,
@@ -14079,7 +14838,14 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     v = await _vertex_get(hid)
     if not v or str(v.get("org") or "") != org or str(v.get("deleted") or "") in ("1", "true"):
         return {"id": hid, "ok": False, "action": "skip", "error": "not found"}
-    body = await _cloud_harness_body(org, hid, v)
+    plugins_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as c:
+            d = (await c.get(f"{target['base_url']}/v1/uhp")).json()
+            plugins_ok = bool((d.get("capabilities") or {}).get("plugins"))
+    except Exception:  # noqa: BLE001
+        plugins_ok = False
+    body = await _cloud_harness_body(org, hid, v, plugins_ok)
     fp = _cloud_fingerprint(body)
     per = records.setdefault("harnesses", {}).setdefault(hid, {})
     tkey = _cloud_tkey(target)
@@ -14434,6 +15200,30 @@ async def get_harness_skill_files_public(hid: str, skill_id: str, request: Reque
             "files": await _skill_bundle_files(sk)}
 
 
+@app.get("/v1/harnesses/{hid}/plugins/{name}/files")
+async def get_harness_plugin_files_public(hid: str, name: str, request: Request) -> dict:
+    """UHP Plugins §3.1: the complete package of one installed plugin."""
+    org, _ = await _pub_org_member(request)
+    v = await _vertex_get(hid)
+    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    pe = _plugin_entry(v, name)
+    files = await _plugin_files_of(pe, org)
+    if not files:
+        raise uhp_error(500, "internal_error", f"The stored package of plugin '{name}' is missing.", "plugin_name")
+    return {"name": pe["name"], "files": files}
+
+
+@app.get("/v1/harnesses/{hid}/plugin")
+async def export_harness_plugin_public(hid: str, request: Request) -> dict:
+    """UHP Plugins §5: the harness's own tools and skills as an Agent Plugins package."""
+    org, _ = await _pub_org_member(request)
+    v = await _vertex_get(hid)
+    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    return await _harness_export_plugin(await _mcp_migrate(org, hid, v) or v)
+
+
 @app.put("/v1/harnesses/{hid}")
 async def update_harness_public(hid: str, body: HarnessBody, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
@@ -14441,8 +15231,14 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     v = await _mcp_migrate(org, hid, v)
+    if body.base and body.base != str(v.get("base") or ""):   # Harnesses §5.2, as in update_harness
+        raise uhp_error(409, "harness_mismatch",
+                        "A harness's base cannot change; create a different harness for a different base.",
+                        "base", {"base": v.get("base")})
+    body.base = str(v.get("base") or body.base)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     # AFTER the write: see update_harness.
     await _hosted_scrub_removed(org, hid, _mcp_list(v), body.mcp_servers)
@@ -14461,4 +15257,5 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     # spending at a provider
     await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
     await _media_harness_purge(hid)
+    await _plugins_discard(org, v)
     return {"id": hid, "deleted": True}
