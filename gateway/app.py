@@ -13484,6 +13484,14 @@ def _skill_key(name: str) -> str:
     """The runner's skill directory name (its _skill_dir_name), so two skills the gateway sees
     as different cannot land in one folder."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(name or ""))
+# Transports a base's own MCP client does not speak, by runner backend. A plugin server on one of
+# these installs as `skipped` with the reason, so the omission is on the record (Plugins §2.2)
+# rather than a silent miss in a turn; the plugin's other components still install. codex's client
+# takes streamable HTTP and stdio; dsh-mcp-client's config is a union of stdio and streamable-http;
+# goose 1.50.0's ExtensionConfig has no sse variant.
+_MCP_TRANSPORTS_MISSING = {"codex": {"sse"}, "dsh": {"sse"}, "goose": {"sse"}}
+
+
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
     return uhp_error(422, "plugin_invalid", f"Plugin {name or 'package'}: {reason}", "plugins",
                      {"path": path, "reason": reason})
@@ -13816,6 +13824,8 @@ async def _plugins_prepare(body: HarnessBody, org: str, previous: list[dict] | N
     derived object and the blob handle, which is exactly what a client reads back and PUTs again.
     `previous` is what the harness held before an update; packages the new list no longer refers to
     are deleted once the new list is validated."""
+    backend = str(_BASE_CATALOG.get(body.base or "", {}).get("backend") or "")
+    missing = _MCP_TRANSPORTS_MISSING.get(backend, set())
     staged: list[tuple[dict, str | None, str | None]] = []   # (entry, encoded files to store, kept blob)
     seen: dict[str, str] = {}
     for i, item in enumerate(body.plugins or []):
@@ -13854,6 +13864,10 @@ async def _plugins_prepare(body: HarnessBody, org: str, previous: list[dict] | N
         # here instead, and written down: the turn would otherwise drop it with only a log line.
         kept: list[dict] = []
         for s in derived["mcpServers"]:
+            if s.get("transport") in missing:
+                derived["skipped"].append({"path": f"mcp.json#/mcpServers/{s['name']}",
+                                           "reason": f"the {body.base} base's client has no {s['transport']} transport"})
+                continue
             blocked = await _ssrf_check(str(s.get("url") or "")) if s.get("transport") != "stdio" else ""
             if blocked:
                 derived["skipped"].append({"path": f"mcp.json#/mcpServers/{s['name']}",
