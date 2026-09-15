@@ -2331,7 +2331,7 @@ def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
             continue
         if not url:
             continue
-        entry: dict = {"type": "http", "url": url}
+        entry: dict = {"type": "sse" if str((s or {}).get("transport") or "").lower() == "sse" else "http", "url": url}
         auth = (s or {}).get("auth")
         if auth:
             hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
@@ -3491,7 +3491,9 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
         name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
         url = (sv.get("url") or "").strip()
         if url:
-            entry: dict = {"httpUrl": url}
+            # Their schema names the transport by the key: `url` is an SSE endpoint, `httpUrl` a
+            # streamable HTTP one; a server declared sse under httpUrl is silently never loaded.
+            entry: dict = {"url": url} if str(sv.get("transport") or "").lower() == "sse" else {"httpUrl": url}
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -3608,7 +3610,9 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
         name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
         url = (sv.get("url") or "").strip()
         if url:
-            entry: dict = {"httpUrl": url}
+            # Their schema names the transport by the key: `url` is an SSE endpoint, `httpUrl` a
+            # streamable HTTP one; a server declared sse under httpUrl is silently never loaded.
+            entry: dict = {"url": url} if str(sv.get("transport") or "").lower() == "sse" else {"httpUrl": url}
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -3756,7 +3760,7 @@ def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
             continue
         if not url:
             continue
-        entry: dict = {"transport": {"type": "streamableHttp", "url": url}}
+        entry: dict = {"transport": {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "streamableHttp", "url": url}}
         hdrs = sv.get("headers")
         if isinstance(hdrs, dict) and hdrs:
             entry["transport"]["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -4450,6 +4454,11 @@ def _goose_extensions(mcp_servers: list[dict] | None, tools_disabled: list[str] 
         url = (sv.get("url") or "").strip()
         cmd = sv.get("command")
         if url:
+            if str(sv.get("transport") or "").lower() == "sse":
+                # goose 1.50.0's ExtensionConfig has no sse variant (stdio, builtin, platform,
+                # streamable_http); an sse entry would fail to parse and take the config with it.
+                print(f"[goose] '{name}': sse transport is not one goose speaks, skipped", flush=True)
+                continue
             entry: dict = {"enabled": True, "type": "streamable_http", "name": name,
                            "uri": url, "timeout": 300}
             hdrs = sv.get("headers")

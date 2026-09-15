@@ -754,7 +754,9 @@ round-trips on the next PUT. The harness's own `mcpServers` and `skills` stay ex
 there; a plugin's components are listed on the plugin. Names must not collide across the harness and
 its enabled plugins. A package that declares a process (a `stdio` server) installs on every base: the
 runner writes one launcher per server and each agent's own MCP client runs it (pi's adapter and dsh's
-client included). `GET /v1/harnesses/{id}/plugin` exports the harness's own tools and Skills as a
+client included). A remote server reaches each client in its own spelling; a transport a base's client
+does not speak (SSE on codex, dsh and goose) is recorded on the plugin's `skipped` list with the reason
+and the rest of the package installs. `GET /v1/harnesses/{id}/plugin` exports the harness's own tools and Skills as a
 package, credentials omitted. The full contract is the
 [Plugins chapter](https://unifiedharnessprotocol.org/spec/2026-09-12/plugins) of the protocol.
 

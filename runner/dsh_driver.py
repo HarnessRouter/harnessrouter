@@ -421,11 +421,18 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
         name = "".join(c for c in str((s or {}).get("name") or f"mcp{i}") if c.isalnum() or c in "_-")[:32] or f"mcp{i}"
         if not url:
             # A plugin's stdio server: dsh-mcp-client's own stdio transport spawns the command
-            # (StdioClientTransport); the launcher the runner wrote carries env and cwd.
+            # (StdioClientTransport); the launcher the runner wrote carries env and cwd. The row
+            # names the workspace as cwd because the client's schema defaults it to "" and spawns
+            # with that, which never starts (hosted, 2026-09-15); the launcher cd's on its own.
             if (s or {}).get("command"):
                 inserted.append({"id": f"hr-mcp-{i}", "name": "@deepseek-ai/dsh-mcp-client",
-                                 "config": {"transport": "stdio", "serverName": name,
+                                 "config": {"transport": "stdio", "serverName": name, "cwd": cwd,
                                             "command": str(s["command"]), "args": [str(a) for a in (s.get("args") or [])]}})
+            continue
+        if str((s or {}).get("transport") or "").lower() == "sse":
+            # dsh-mcp-client's config is a union of stdio and streamable-http; an sse endpoint
+            # driven as streamable HTTP never answers, so the row is not written.
+            print(f"[dsh] '{name}': sse transport is not one dsh-mcp-client speaks, skipped", flush=True)
             continue
         entry = {"id": f"hr-mcp-{i}", "name": "@deepseek-ai/dsh-mcp-client",
                  "config": {"transport": "streamable-http", "serverName": name, "url": url}}
