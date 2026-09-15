@@ -2038,15 +2038,20 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
 
 def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
     """Write $HOME/.pi/agent/mcp.json for pi-mcp-adapter (same input contract as the claude/codex
-    writers: url + optional auth/headers). Returns whether any server was written. The agent-dir
+    writers: url + optional auth/headers, or command + args for a plugin's stdio server). Returns
+    whether any server was written. The agent-dir
     location is deliberate: project-local .pi/mcp.json sits behind pi's trust gate; the agent dir
     does not."""
     entries: dict = {}
     for s in servers or []:
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
         url = (s or {}).get("url")
         if not url:
+            # A plugin's stdio server: the adapter spawns `command` itself (its stdio transport,
+            # mutually exclusive with url), and the launcher the runner wrote carries env and cwd.
+            if (s or {}).get("command"):
+                entries[name] = {"command": s["command"], "args": list(s.get("args") or [])}
             continue
-        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
         entry: dict = {"url": url}
         auth = (s or {}).get("auth")
         if auth:
