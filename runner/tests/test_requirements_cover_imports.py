@@ -1,9 +1,10 @@
 """Everything the runner imports at module level must be something the image installs.
 
 `mcp_bridge.py` imported the MCP SDK and no requirements file pinned it. The image installs those
-files and nothing else into the one environment gateway and runner share, so the bridge died the
-moment a client tried to start it, and the only symptom was an MCP server that never connected.
-0.17.1 and 0.17.2 shipped that way.
+files and nothing else into the one environment gateway and runner share, so the bridge would die
+the moment a client tried to start it, and the only symptom would be an MCP server that never
+connected. The bridge landed after v0.17.2, so the next release would have been the first to carry
+it; verified against a real image built from this branch's requirements before and after.
 
 The check is derived rather than typed: every module-level third-party import in every runner
 module has to be pinned in `runner/requirements.txt` or `gateway/requirements.txt`. Module level is
