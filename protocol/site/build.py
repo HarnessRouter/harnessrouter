@@ -160,13 +160,15 @@ def measured_markdown() -> str:
 
 
 def inject_levels(examples_html: str) -> str:
-    """On the examples page, a card whose id is a measured slug gets its level. The level comes
-    from the report, never from the card's own text, so a listing cannot promote itself."""
+    """On the examples page, a card whose id is a measured slug gets its level AND its version from
+    the report, never from the card's own text, so a listing cannot promote itself and a typed
+    version cannot go stale (the Community Edition card said 2026-08-11 while its newest report
+    said 2026-09-12, 2026-09-15). A card with no report keeps whatever it typed."""
     for m in measured():
         if not m["level"]:
             continue
-        pat = (rf'(<div class="impl-card" id="{re.escape(m["slug"])}">.*?<p class="impl-meta">[^<]*</p>)')
-        badge = (f'\\1<p class="impl-level"><img src="/badges/{m["slug"]}.svg" width="{40 + len(m["level"] + " " + m["version"]) * 7 + 16}" height="20" '
+        pat = (rf'(<div class="impl-card" id="{re.escape(m["slug"])}">.*?<p class="impl-meta">)[^<]*(</p>)')
+        badge = (f'\\1UHP {m["version"]}\\2<p class="impl-level"><img src="/badges/{m["slug"]}.svg" width="{40 + len(m["level"] + " " + m["version"]) * 7 + 16}" height="20" '
                  f'alt="UHP {m["level"]} {m["version"]}, measured {m["date"]}">'
                  f'<a href="/conformance#measured-implementations">measured {m["date"]}</a></p>')
         examples_html = re.sub(pat, badge, examples_html, count=1, flags=re.S)
