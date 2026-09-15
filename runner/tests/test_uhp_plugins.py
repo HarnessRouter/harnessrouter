@@ -162,7 +162,41 @@ def test_dsh_client_gets_a_stdio_row(tmp_path):
     rows = [r for e in yaml.safe_load(out.read_text()) if isinstance(e, dict) for r in (e.get("insert") or [])
             if r.get("name") == "@deepseek-ai/dsh-mcp-client"]
     by = {r["config"]["serverName"]: r["config"] for r in rows}
-    assert by["probe"] == {"transport": "stdio", "serverName": "probe",
+    assert by["probe"] == {"transport": "stdio", "serverName": "probe", "cwd": str(tmp_path / "ws"),
                            "command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
                            "args": ["--data", "/ws/.harness/plugin-data/hr_probe"]}
     assert by["remote"]["transport"] == "streamable-http" and by["remote"]["url"] == "https://mcp.example.invalid/mcp"
+
+
+def test_an_sse_server_reaches_each_client_in_its_own_spelling(tmp_path):
+    """gemini and qwen name the transport by the key (`url` is SSE, `httpUrl` streamable HTTP);
+    cline and omp by a type. Every writer used to emit the streamable form for any url, so an sse
+    server was configured but never loaded (hosted, 2026-09-15: SSE=MISSING on all four)."""
+    sse = {"name": "probe_sse", "url": "https://probe.example.invalid/sse", "transport": "sse"}
+    http = {"name": "probe_http", "url": "https://probe.example.invalid/mcp", "transport": "http"}
+    rn._gemini_settings(tmp_path / "g", [sse, http], "gemini-3.8-flash")
+    g = json.loads((tmp_path / "g" / ".gemini" / "settings.json").read_text())["mcpServers"]
+    assert g["probe_sse"] == {"url": sse["url"]} and g["probe_http"] == {"httpUrl": http["url"]}
+    rn._qwen_settings(tmp_path / "q", [sse, http])
+    q = json.loads((tmp_path / "q" / ".qwen" / "settings.json").read_text())["mcpServers"]
+    assert q["probe_sse"] == {"url": sse["url"]} and q["probe_http"] == {"httpUrl": http["url"]}
+    omp_dir = tmp_path / "omp"
+    assert rn._omp_write_mcp(omp_dir, [sse, http]) is True
+    o = json.loads((omp_dir / "mcp.json").read_text())["mcpServers"]
+    assert o["probe_sse"]["type"] == "sse" and o["probe_http"]["type"] == "http"
+
+
+def test_clients_without_an_sse_transport_leave_the_server_out(tmp_path):
+    """goose 1.50.0's ExtensionConfig has no sse variant and dsh-mcp-client's config is a union of
+    stdio and streamable-http: an sse endpoint driven as streamable HTTP never answers, so neither
+    writer emits it (the gateway records the omission on the plugin at install time)."""
+    import dsh_driver
+    sse = {"name": "probe_sse", "url": "https://probe.example.invalid/sse", "transport": "sse"}
+    http = {"name": "probe_http", "url": "https://probe.example.invalid/mcp", "transport": "http"}
+    ext = rn._goose_extensions([sse, http], None)
+    assert "probe_sse" not in ext and ext["probe_http"]["type"] == "streamable_http"
+    out = pathlib.Path(dsh_driver._compose_patch(tmp_path / "home", [sse, http], relay_port=9999, model="m", cwd=str(tmp_path)))
+    import yaml
+    names = [r["config"]["serverName"] for e in yaml.safe_load(out.read_text()) if isinstance(e, dict)
+             for r in (e.get("insert") or []) if r.get("name") == "@deepseek-ai/dsh-mcp-client"]
+    assert names == ["probe_http"]

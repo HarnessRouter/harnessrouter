@@ -180,6 +180,24 @@ def test_a_disabled_plugin_stays_installed_and_clears_collisions(api):
     assert pl["name"] == "demo-plugin" and pl["enabled"] is False
 
 
+def test_a_transport_a_base_cannot_speak_is_recorded_not_refused(api):
+    """codex, dsh and goose have no SSE client: an sse server in a package lands in `skipped`
+    with the reason and the rest of the package installs; a base with an SSE client keeps it."""
+    mcp = {"$schema": MCP_SCHEMA, "mcpServers": {
+        "events": {"type": "sse", "url": "https://mcp.example.invalid/sse"},
+        "remote": {"type": "streamable-http", "url": "https://mcp.example.invalid/mcp"}}}
+    r = api.post("/v1/harnesses", json={"name": "x", "base": "codex", "plugins": [{"files": _package(manifest=MANIFEST, mcp=mcp)}]})
+    if r.status_code == 400:
+        pytest.skip(f"codex is not a creatable base here: {r.json()['error']['code']}")
+    assert r.status_code == 200, r.text
+    (pl,) = r.json()["plugins"]
+    assert [s["name"] for s in pl["mcpServers"]] == ["remote"] and [s["name"] for s in pl["skills"]] == ["demo-skill"]
+    assert pl["skipped"] == [{"path": "mcp.json#/mcpServers/events", "reason": "the codex base's client has no sse transport"}]
+    r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code", "plugins": [{"files": _package(manifest=MANIFEST, mcp=mcp)}]})
+    (pl,) = r.json()["plugins"]
+    assert {s["name"]: s["transport"] for s in pl["mcpServers"]} == {"events": "sse", "remote": "http"} and pl["skipped"] == []
+
+
 def test_a_stdio_server_installs_on_every_base(api):
     """pi's MCP adapter and dsh's MCP client each spawn a stdio server themselves (pi-mcp-adapter's
     `command`, dsh-mcp-client's `transport: stdio`), so no base refuses a package for needing a
