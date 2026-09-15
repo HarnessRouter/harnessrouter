@@ -132,3 +132,37 @@ def test_a_symlinked_data_directory_is_not_followed(tmp_path):
     assert not data.is_symlink() and data.is_dir(), "the planted link is replaced by a real directory"
     assert pathlib.Path(out["command"]).parent.resolve() == data.resolve()
     assert not list(outside.iterdir()), "nothing was written through the link"
+
+
+def test_pi_adapter_gets_a_stdio_command_entry(tmp_path):
+    """pi-mcp-adapter spawns a stdio server itself (`command`, mutually exclusive with `url`), so
+    a plugin's server reaches pi as the launcher the runner wrote, beside the URL servers. Before
+    this the writer skipped anything without a url and the gateway refused the package for pi."""
+    home = tmp_path / "home"
+    servers = [{"name": "probe", "command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
+                "args": ["--data", "/ws/.harness/plugin-data/hr_probe"], "plugin": "hr-probe"},
+               {"name": "remote", "url": "https://mcp.example.invalid/mcp", "headers": {"X-Team": "t"}}]
+    assert rn._pi_write_mcp(home, servers) is True
+    cfg = json.loads((home / ".pi" / "agent" / "mcp.json").read_text())["mcpServers"]
+    assert cfg["probe"] == {"command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
+                            "args": ["--data", "/ws/.harness/plugin-data/hr_probe"]}
+    assert cfg["remote"] == {"url": "https://mcp.example.invalid/mcp", "headers": {"X-Team": "t"}}
+
+
+def test_dsh_client_gets_a_stdio_row(tmp_path):
+    """dsh-mcp-client has a stdio transport of its own (StdioClientTransport on command/args), so a
+    plugin's server is one more inserted client row, discriminated on transport."""
+    import yaml
+    import dsh_driver
+    home = tmp_path / "home"
+    servers = [{"name": "probe", "command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
+                "args": ["--data", "/ws/.harness/plugin-data/hr_probe"], "plugin": "hr-probe"},
+               {"name": "remote", "url": "https://mcp.example.invalid/mcp"}]
+    out = pathlib.Path(dsh_driver._compose_patch(home, servers, relay_port=9999, model="m", cwd=str(tmp_path / "ws")))
+    rows = [r for e in yaml.safe_load(out.read_text()) if isinstance(e, dict) for r in (e.get("insert") or [])
+            if r.get("name") == "@deepseek-ai/dsh-mcp-client"]
+    by = {r["config"]["serverName"]: r["config"] for r in rows}
+    assert by["probe"] == {"transport": "stdio", "serverName": "probe",
+                           "command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
+                           "args": ["--data", "/ws/.harness/plugin-data/hr_probe"]}
+    assert by["remote"]["transport"] == "streamable-http" and by["remote"]["url"] == "https://mcp.example.invalid/mcp"

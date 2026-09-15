@@ -418,9 +418,15 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
                       {"id": "hr-fs-local", "name": "@deepseek-ai/dsh-fs-local", "config": {"cwd": cwd}}]
     for i, s in enumerate(servers):
         url = (s or {}).get("url")
-        if not url:
-            continue
         name = "".join(c for c in str((s or {}).get("name") or f"mcp{i}") if c.isalnum() or c in "_-")[:32] or f"mcp{i}"
+        if not url:
+            # A plugin's stdio server: dsh-mcp-client's own stdio transport spawns the command
+            # (StdioClientTransport); the launcher the runner wrote carries env and cwd.
+            if (s or {}).get("command"):
+                inserted.append({"id": f"hr-mcp-{i}", "name": "@deepseek-ai/dsh-mcp-client",
+                                 "config": {"transport": "stdio", "serverName": name,
+                                            "command": str(s["command"]), "args": [str(a) for a in (s.get("args") or [])]}})
+            continue
         entry = {"id": f"hr-mcp-{i}", "name": "@deepseek-ai/dsh-mcp-client",
                  "config": {"transport": "streamable-http", "serverName": name, "url": url}}
         hdrs: dict = {}

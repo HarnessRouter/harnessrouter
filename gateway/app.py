@@ -13484,12 +13484,6 @@ def _skill_key(name: str) -> str:
     """The runner's skill directory name (its _skill_dir_name), so two skills the gateway sees
     as different cannot land in one folder."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(name or ""))
-# Runner backends that can launch a stdio MCP server (each writer emits command/args). pi's MCP
-# adapter and dsh take URLs only; a package that needs a process is refused for those bases rather
-# than accepted and skipped in a turn, which Harnesses §4.1 forbids.
-_STDIO_MCP_BACKENDS = {"claude", "codex", "hermes", "gemini", "qwen", "opencode", "goose", "omp", "cline"}
-
-
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
     return uhp_error(422, "plugin_invalid", f"Plugin {name or 'package'}: {reason}", "plugins",
                      {"path": path, "reason": reason})
@@ -13822,9 +13816,6 @@ async def _plugins_prepare(body: HarnessBody, org: str, previous: list[dict] | N
     derived object and the blob handle, which is exactly what a client reads back and PUTs again.
     `previous` is what the harness held before an update; packages the new list no longer refers to
     are deleted once the new list is validated."""
-    base = _require_supported_base(body.base) if body.base else ""
-    body.base = base or body.base
-    backend = str(_BASE_CATALOG.get(base, {}).get("backend") or "")
     staged: list[tuple[dict, str | None, str | None]] = []   # (entry, encoded files to store, kept blob)
     seen: dict[str, str] = {}
     for i, item in enumerate(body.plugins or []):
@@ -13859,11 +13850,6 @@ async def _plugins_prepare(body: HarnessBody, org: str, previous: list[dict] | N
                             {"component": "plugin", "name": name, "between": [other, name]})
         seen[name] = key
         enabled = item.get("enabled", True) is not False
-        if enabled and backend and backend not in _STDIO_MCP_BACKENDS \
-                and any(s.get("transport") == "stdio" for s in derived["mcpServers"]):
-            raise uhp_error(422, "unsupported_transport",
-                            f"Plugin {name} declares a stdio MCP server, which the {base} base cannot run.",
-                            "plugins", {"transport": "stdio", "base": base, "plugin": name})
         # A remote server this deployment's network policy would refuse at turn time is refused
         # here instead, and written down: the turn would otherwise drop it with only a log line.
         kept: list[dict] = []
