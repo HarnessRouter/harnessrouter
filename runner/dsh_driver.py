@@ -429,11 +429,6 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
                                  "config": {"transport": "stdio", "serverName": name, "cwd": cwd,
                                             "command": str(s["command"]), "args": [str(a) for a in (s.get("args") or [])]}})
             continue
-        if str((s or {}).get("transport") or "").lower() == "sse":
-            # dsh-mcp-client's config is a union of stdio and streamable-http; an sse endpoint
-            # driven as streamable HTTP never answers, so the row is not written.
-            print(f"[dsh] '{name}': sse transport is not one dsh-mcp-client speaks, skipped", flush=True)
-            continue
         entry = {"id": f"hr-mcp-{i}", "name": "@deepseek-ai/dsh-mcp-client",
                  "config": {"transport": "streamable-http", "serverName": name, "url": url}}
         hdrs: dict = {}

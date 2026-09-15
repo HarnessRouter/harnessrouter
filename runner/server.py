@@ -895,6 +895,52 @@ _PLUGIN_PLACEHOLDER = re.compile(r"\$\{PLUGIN_(ROOT|DATA)\}")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+# Clients without a remote transport of their own: goose 1.50.0's ExtensionConfig has no sse
+# variant, dsh-mcp-client's config is a union of stdio and streamable-http, and codex's client
+# takes streamable HTTP and stdio. Every one of them launches a stdio server, so the runner hands
+# them the bridge (mcp_bridge.py) as one, and the bridge speaks SSE to the remote end. The server
+# reaches the agent on every base the same way; nothing is declared unsupported.
+_NO_SSE_BACKENDS = {"codex", "dsh", "goose"}
+_MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
+
+
+def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dict]:
+    """Each SSE server, for a backend whose client cannot speak SSE, becomes a stdio launcher that
+    runs the bridge with the url and headers in its environment (never on the command line, where
+    a ps listing would show an Authorization header). Other servers and backends pass untouched."""
+    if backend not in _NO_SSE_BACKENDS:
+        return list(servers or [])
+    out: list[dict] = []
+    for s in servers or []:
+        s = s or {}
+        url = str(s.get("url") or "").strip()
+        if not url or str(s.get("transport") or "").lower() != "sse":
+            out.append(s)
+            continue
+        name = _mcp_name(str(s.get("name") or s.get("id") or "mcp"))
+        headers: dict = {}
+        auth = s.get("auth")
+        if auth:
+            headers["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+        if isinstance(s.get("headers"), dict):
+            headers.update({str(k): str(v) for k, v in s["headers"].items() if k and v is not None})
+        bdir = pathlib.Path(_safe_join(cwd, ".harness/mcp-bridge"))
+        bdir.mkdir(parents=True, exist_ok=True)
+        launcher = bdir / f"{name}.sh"
+        lines = ["#!/bin/sh", "# written by the harness runner: this client has no SSE transport, so the bridge speaks it over stdio",
+                 f"export HR_MCP_URL={shlex.quote(url)}", "export HR_MCP_TRANSPORT=sse",
+                 f"export HR_MCP_HEADERS={shlex.quote(json.dumps(headers))}",
+                 f"exec python3 {shlex.quote(_MCP_BRIDGE)}", ""]
+        if launcher.is_symlink() or (launcher.exists() and not launcher.is_file()):
+            launcher.unlink()
+        fd = os.open(str(launcher), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o755)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(lines))
+        launcher.chmod(0o755)
+        out.append({k: v for k, v in s.items() if k not in ("url", "transport", "auth", "headers")} | {"name": s.get("name") or name, "command": str(launcher), "args": []})
+    return out
+
+
 def _plugin_launchers(cwd: str, servers: list[dict] | None) -> list[dict]:
     """The stdio servers a plugin declares, made runnable (UHP Plugins §6, Agent Plugins §7.2.1
     and §9): the two placeholders expanded once and non-recursively in args, env and cwd; a
@@ -4455,11 +4501,6 @@ def _goose_extensions(mcp_servers: list[dict] | None, tools_disabled: list[str] 
         url = (sv.get("url") or "").strip()
         cmd = sv.get("command")
         if url:
-            if str(sv.get("transport") or "").lower() == "sse":
-                # goose 1.50.0's ExtensionConfig has no sse variant (stdio, builtin, platform,
-                # streamable_http); an sse entry would fail to parse and take the config with it.
-                print(f"[goose] '{name}': sse transport is not one goose speaks, skipped", flush=True)
-                continue
             entry: dict = {"enabled": True, "type": "streamable_http", "name": name,
                            "uri": url, "timeout": 300}
             hdrs = sv.get("headers")
@@ -5846,7 +5887,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # Installed plugin packages, whole, at their roots; then every stdio server a plugin declares
     # becomes a launcher every backend writer below already knows how to hand to its CLI.
     plugin_roots = _write_plugins(cwd, req.plugins)
-    req.mcp_servers = _plugin_launchers(cwd, req.mcp_servers)
+    req.mcp_servers = _sse_bridges(cwd, _plugin_launchers(cwd, req.mcp_servers), req.backend)
     # A package that is also a Claude Code plugin reaches the claude CLI whole through
     # --plugin-dir, which loads its skills/ itself; folding those skills into the skills
     # directory too would offer each one twice.
