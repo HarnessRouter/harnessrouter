@@ -8059,10 +8059,33 @@ async def delete_response(response_id: str, request: Request):
 # `shared`/`share_token` props on the HarnessSession vertex (token reused across re-enables so a
 # re-shared link keeps working; disable flips `shared` off which kills the whole surface).
 
+# A response header is latin-1 on the wire: that is what ASGI defines and what Starlette encodes
+# to. So a filename with a Chinese character or an emoji cannot go into the quoted `filename` at
+# all — it raises UnicodeEncodeError inside the server and the download becomes a 500 with no
+# clue in it. RFC 6266 is the way out and this is the ONE place that builds the header: an ASCII
+# fallback every client can read, plus `filename*` carrying the real name percent-encoded, which
+# every current browser prefers when both are present.
+_CD_STRIP = re.compile(r'[\x00-\x1f\x7f"\\]')
+
+
+def _content_disposition(kind: str, filename: str) -> str:
+    """`attachment`/`inline` with a filename any client can take, whatever its characters."""
+    name = re.split(r"[\\/]", str(filename or ""))[-1].strip()
+    if name in ("", ".", ".."):
+        name = "download"
+    # The fallback: every byte a header can hold, with everything else standing in as `_` so the
+    # extension survives. A name that is entirely non-ASCII still leaves a usable "__.txt".
+    ascii_name = _CD_STRIP.sub("", name.encode("ascii", "replace").decode("ascii").replace("?", "_"))
+    if ascii_name.strip(" .") == "":
+        ascii_name = "download"
+    return (f'{kind}; filename="{ascii_name[:120]}"; '
+            f"filename*=UTF-8''{urllib.parse.quote(name, safe='')}")
+
+
 def _artifact_headers(media: str, fname: str) -> dict:
     # Browser-renderable types serve INLINE so html/css/js/img/pdf render directly (relative
     # asset urls in an html page resolve to sibling paths under the same route prefix).
-    return {"Content-Disposition": f'inline; filename="{fname}"',
+    return {"Content-Disposition": _content_disposition("inline", fname),
             "Cache-Control": "private, max-age=60",
             "X-Content-Type-Options": "nosniff"}
 
@@ -8876,7 +8899,7 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
     bg = BackgroundTask(os.unlink, zpath)
     return FileResponse(zpath, media_type="application/zip", background=bg,
                         headers={"Content-Disposition":
-                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
+                                 _content_disposition("attachment", f"{sid[:20]}-{scope}-files.zip")})
 
 
 @app.get("/v1/sessions/{sid}/files/{path:path}")
@@ -8982,7 +9005,7 @@ async def container_file_content(container_id: str, file_id: str, request: Reque
         raise HTTPException(404, "file not found")
     data, media, fname = got
     return Response(content=data, media_type=media,
-                    headers={"Content-Disposition": f'attachment; filename="{fname.rsplit("/", 1)[-1]}"'})
+                    headers={"Content-Disposition": _content_disposition("attachment", fname)})
 
 
 # Office types with no faithful browser renderer → convert to PDF server-side (LibreOffice) so the
