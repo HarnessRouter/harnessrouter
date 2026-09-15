@@ -1565,12 +1565,18 @@ CODEX_PROVIDERS = {
 # because Codex reserves its built-in ids: a [model_providers.openai] block is rejected outright
 # ("Built-in providers cannot be overridden"), which broke every bring-your-own OpenAI key. All
 # providers are namespaced rather than just that one, so a future reserved id can't break us again.
+# mcp_optional_startup_grace_ms = 0: codex builds its initial tool catalog after a shared grace of
+# one second by default and drops any MCP server still starting; the runner's SSE bridge takes about
+# that long to open its remote connection, so a plugin's SSE server was in the catalog on one turn
+# and missing on the next (hosted, 2026-09-15). Zero makes codex wait each server's own
+# startup_timeout_sec (10 s) instead.
 _CODEX_CONFIG_TMPL = """model = "{model}"
 model_provider = "{provider}"
 model_reasoning_effort = "{effort}"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_context_window = {ctx}
+mcp_optional_startup_grace_ms = 0
 [model_providers.{provider}]
 name = "{name}"
 base_url = "{base_url}"

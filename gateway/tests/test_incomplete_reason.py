@@ -47,3 +47,45 @@ def test_the_empty_output_settle_never_claims_a_cause():
     window = src[i:i + 1200]
     assert '"reason"' not in window.split("else:")[0], (
         "the empty-output settle claims a reason it cannot know")
+
+
+def test_a_finishing_owner_is_not_settled_from_under(monkeypatch):
+    """The session flips to done before its owner has written the checkpoint and the full
+    response record; a poller's reconcile in that window used to settle the record 'incomplete'
+    and a replica cached that for good. A fresh heartbeat means the owner is alive: leave it."""
+    import asyncio, time
+    calls = []
+    async def _vertex_get(vid):
+        return {"id": vid, "status": "done", "heartbeat": str(time.time() - 5)}
+    async def _blob_put(*a, **k):
+        calls.append("put"); return True
+    monkeypatch.setattr(A, "_vertex_get", _vertex_get)
+    monkeypatch.setattr(A, "_blob_put", _blob_put)
+    rec = {"id": "resp_x", "status": "running", "_session_id": "hsess1", "output": []}
+    out = asyncio.run(A._reconcile_response("resp_x", rec))
+    assert out["status"] == "running" and calls == []
+    # the same session with a dead owner is settled, as before
+    async def _vertex_get_dead(vid):
+        return {"id": vid, "status": "done", "heartbeat": str(time.time() - 10_000)}
+    async def _blob_get(*a, **k):
+        return None
+    async def _vg_upsert(*a, **k):
+        return None
+    monkeypatch.setattr(A, "_vertex_get", _vertex_get_dead)
+    monkeypatch.setattr(A, "_blob_get", _blob_get)
+    monkeypatch.setattr(A, "_vg_upsert", _vg_upsert)
+    out = asyncio.run(A._reconcile_response("resp_x", dict(rec)))
+    assert out["status"] == "incomplete" and calls == ["put"]
+
+
+def test_a_refused_turn_leaves_the_session_as_it_found_it():
+    """The lease is checked before the session is stamped running/starting: a follow-up refused
+    as 'already in progress' must not leave a finished session looking live, or the orphan sweep
+    adopts it and every retry is refused in turn (omp follow-ups, 2026-09-15)."""
+    import inspect
+    src = inspect.getsource(A._resp_execute)
+    admit = src.index("control_store.lease_admit(")
+    stamp = src.index('"turn_status": "starting"')
+    assert admit < stamp, "the session must be stamped only after admission"
+    refused = src.index('"a turn is already in progress for this session"')
+    assert refused < stamp, "a refused turn returns before the stamp"

@@ -2614,6 +2614,11 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     v = await _vertex_get(sid) or {}
     vs = str(v.get("status") or "")
     settled = None
+    if vs in ("done", "failed", "cancelled") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
+        # The session is terminal but its owner heartbeated moments ago: the owner is finalizing
+        # (collecting files, writing the checkpoint) and will write the full record itself,
+        # output, usage and served model included. Only an orphan is settled from the session.
+        return rec
     if vs in ("done", "failed", "cancelled"):
         settled = _RESP_STATUS_MAP.get(vs)
         # "completed" is a claim about THIS response, not about the session. A record with no
@@ -2631,9 +2636,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             # sheets kit polled mid-finalize, was handed a terminal 'incomplete', and wrote "the
             # turn ended without an answer" into every cell of a run whose answers the agent had
             # already produced. Leave a live turn alone; the sweep still settles a dead one once
-            # the heartbeat goes stale.
-            if time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
-                return rec
+            # the heartbeat goes stale (the guard above).
             settled = "incomplete"
             # NO reason is claimed here, deliberately. This branch cannot tell a turn that was
             # CUT (finalize died before the output landed) from one that ended cleanly having
@@ -6624,12 +6627,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # cancel_session resolve THIS turn's resp_id and latch the per-response cancel (the ONE cancel
     # mechanism), so the turn loop needs no per-poll vertex status read (HR-INF-010). Not re-written
     # here: accept already set it to this same resp_id and nothing clears it.
-    await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
-                               "heartbeat": str(time.time()), "runner_turn_id": "",
-                               **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
     # Session execution lease (HR-INF-012), acquired BEFORE hydrate — hydrate wipes /workspace, so
     # an overlapping turn is the real corruption risk. observe mode only LOGS a conflict; enforce
     # rejects it. rec carries the fence for heartbeat renewal + the checkpoint backstop.
+    # Admission comes before the session is stamped as running: a refused turn used to leave a
+    # finished session at running/starting with a fresh heartbeat, the orphan sweep then took it
+    # for a dead turn, and a client retrying its follow-up never got back in (omp, 2026-09-15).
     rec["lease_fence"] = 0
     if LEASE_MODE != "off" and control_store.enabled():
         try:
@@ -6651,6 +6654,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 return "failed", [], rec
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
+    await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
+                               "heartbeat": str(time.time()), "runner_turn_id": "",
+                               **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
     await _hydrate(sid, rec)
     if rec.get("hydrate_failed_with_checkpoint"):
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
