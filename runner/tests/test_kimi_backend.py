@@ -278,3 +278,32 @@ def test_the_init_event_is_emitted_once_per_turn():
     out, _ = _norm([{"role": "assistant", "content": "one"},
                     {"role": "assistant", "content": "two"}])
     assert len([e for e in out if e.get("subtype") == "init"]) == 1
+
+
+# ── the Plugins sub-protocol (UHP 2026-09-12) ────────────────────────────────────
+def test_a_plugins_stdio_server_reaches_kimi_as_command_and_args():
+    """_plugin_launchers bakes env, cwd and the ${PLUGIN_ROOT}/${PLUGIN_DATA} placeholders into one
+    launcher script so every backend writer sees the same {name, command, args} — "none of the nine
+    has to learn env or cwd". kimi parses its file with fastmcp's MCPConfig, whose stdio entry is
+    exactly that shape, so the branch _kimi_mcp_config already had is all a plugin needs."""
+    cmd, d, _ = _argv(mcp_servers=[
+        {"name": "probe", "command": "/ws/.harness/plugin-data/demo/.launch-probe.sh",
+         "args": ["--x", "1"]},
+        {"name": "vault", "url": "https://mcp.example.invalid/mcp"}])
+    cfg = json.loads((pathlib.Path(d) / ".harness" / "kimi-mcp.json").read_text())["mcpServers"]
+    assert cfg["probe"] == {"command": "/ws/.harness/plugin-data/demo/.launch-probe.sh",
+                            "args": ["--x", "1"]}
+    assert cfg["vault"]["url"].startswith("https://")
+    assert "--mcp-config-file" in cmd
+
+
+def test_kimi_is_registered_as_able_to_run_a_stdio_server():
+    """The gateway refuses a plugin's stdio server on a base that cannot launch one
+    (unsupported_transport). kimi can, so it must be in that set — otherwise a plugin that works
+    is rejected at write time."""
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "gateway"))
+    _os.environ.setdefault("HR_BACKING", "local")
+    import app as A
+    assert "kimi" in A._STDIO_MCP_BACKENDS
