@@ -389,13 +389,30 @@ neither is ever constructed on this deployment.
 `StatusUpdate`. kimi's result events carry `usage: {}` until `_relay_usage` lands, which is the
 agreed division of work — no harness PR builds its own usage pipeline.
 
-**The Vercel column, measured 2026-09-15/16 (candidate built from this branch, kimi 1.50.0).**
-42 ids, five scenarios each: **207 of 210 scenarios passed**, every turn served by the connection
-under test (no foreign connection on any pair). The three that did not pass are the provider's, in
-its own words: `gemini-2.5-flash-lite`'s artifact turn returned "The API returned an empty response"
-and the recycle that followed had nothing to recall; `qwen3.7-max`'s artifact turn returned
-"Upstream stream ended before terminal chunk" — the same sentence goose's column recorded for that
-id on this provider, so it is a property of the channel rather than of kimi.
+**The Vercel column, measured 2026-09-16 (candidate built from this branch, kimi 1.50.0).**
+46 ids, five scenarios each: **229 of 230 scenarios passed**, every turn served by the connection
+under test — no foreign connection on any pair.
+
+The single failure is `gemini-2.5-flash-lite`'s artifact turn, with the provider's own words: "The
+API returned an empty response". It is **deterministic through this product** (three independent
+runs on two different builds, same id, same scenario, same sentence) and takes ~175s, which is kimi
+retrying the empty response until `max_retries_per_step` is exhausted rather than one slow call.
+
+What it is NOT, each eliminated by measurement rather than reasoning:
+- not the request shape — the same conversation replayed by hand against the same provider answers
+  correctly, non-streaming and streaming, with one tool and with the full fifteen, and with a
+  system prompt padded to the size kimi sends;
+- not the `reasoning_effort` repair, which is applied identically on every other id here;
+- not a transient — `qwen3.7-max` failed the same scenario in the previous run with "Upstream stream
+  ended before terminal chunk" and PASSED here, so that one was the flake this is not.
+
+What could not be reproduced outside the product: replaying the exact four-step sequence
+(first, follow-up, switch to the partner model, artifact) through the real kimi binary against the
+same provider, with the workspace contract in AGENTS.md, completes all four turns and writes the
+file. So the remaining variable is something the gateway path adds that a CLI replay does not, and
+capturing the failing request needs an interception inside a live matrix turn. Recorded here as a
+row that fails with the provider's reproduced text, which is what the rules ask for, rather than
+guessed at.
 
 Vercel's answers carry the aggregator's vendor prefix (`openai/gpt-5.4`, `anthropic/claude-opus-5`,
 `alibaba/qwen3.7-max`), which rule 2 counts as the same model.
