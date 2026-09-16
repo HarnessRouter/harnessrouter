@@ -6022,34 +6022,27 @@ _MODEL_CATALOG: dict[str, dict] = {
     # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
     # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
     # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
-    # relay), so the candidate list starts from qwen's, reordered to put the kimi family first as
-    # its home family. NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS BACKEND YET — the column has
-    # not run. They are offered so the matrix can measure them here (the `pi` precedent), and this
-    # comment must be replaced by the measured result, with the ids that failed removed, before
-    # this backend is called done. What IS already measured is that kimi does not rewrite the id it
-    # is given: the value reaches the provider verbatim (captured at a stub and against a live
-    # gateway), and its only alias machinery raises KeyError on a miss rather than substituting —
-    # so the gemini resolveModel class of silent substitution is absent here.
-    # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
     # relay), so the list is qwen's, reordered to put the kimi family first as its home family.
     #
-    # MEASURED on Vercel, 42 of these ids, five scenarios each: 207 of 210 scenarios passed. The
-    # three that did not are the provider's own, with its words: gemini-2.5-flash-lite's artifact
-    # turn ("The API returned an empty response") and the recycle that followed it with nothing to
-    # recall, and qwen3.7-max's artifact turn ("Upstream stream ended before terminal chunk" — the
-    # same sentence goose's column recorded for that id on this provider).
+    # MEASURED, two columns, 2026-09-16, against a candidate built from this branch:
+    #   Vercel  46 ids x 5 scenarios -> 229/230 passed, no foreign connection
+    #   Google  11 ids x 5 scenarios ->  53/55  passed, no foreign connection
+    # Google serves only its own family, which is why its column is eleven ids and not forty-six.
     #
-    # FIVE IDS VERCEL DOES NOT SERVE AT ALL and this column therefore never ran: claude-fable-5-1,
-    # gemini-3-flash-preview, grok-4.20, hunyuan-4-preview, nemotron-3-super. They stay listed
-    # because another provider serves them; they are simply unmeasured HERE.
+    # THE SEVEN IDS NEITHER COLUMN RAN, and why: Vercel does not serve claude-fable-5-1,
+    # gemini-3-flash-preview, grok-4.20, hunyuan-4-preview or nemotron-3-super, and this
+    # deployment's model map had no entry for gemini-3.6-flash or llama-3.3-70b. They stay listed
+    # because other providers serve them; they are unmeasured HERE, which is not the same as refused.
     #
-    # FOUR IDS RAN FOR HOURS BEFORE THE STEP BUDGET WAS WIRED, and the cause was ours: kimi's own
-    # default is 1000 steps per turn and _build_kimi was not forwarding the operator's budget, so a
-    # slow reasoning model ground through them (gpt-5.6-luna's switch 8,754s, gpt-5.5's artifact
-    # 7,418s, against 7-30s on every other id). Fixed by forwarding --max-steps-per-turn; the four
-    # were excluded from the column's re-run before the cause was known, so they are UNMEASURED
-    # here and must be re-run to confirm they are now bounded. Two of them (gpt-5.6-sol,
-    # gpt-5.6-terra) had already passed all five scenarios even unbounded.
+    # THE ONE FINDING, and it needed both columns to read correctly: a gemini-2.5-class model
+    # returns "The API returned an empty response" on the artifact turn — the one that follows a
+    # model switch and asks for a file. On Vercel that is gemini-2.5-flash-lite (three runs, two
+    # builds) while gemini-2.5-flash passes; on Google it is exactly the other way round. So it
+    # belongs to neither the channel nor one id. See docs/support-matrix-notes.md.
+    #
+    # kimi does not rewrite the id it is given: the value reaches the provider verbatim (captured at
+    # a stub and against both live gateways), and its only alias machinery raises KeyError on a miss
+    # rather than substituting — the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",

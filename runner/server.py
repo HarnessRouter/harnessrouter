@@ -5119,26 +5119,32 @@ _KIMI_SESSION_NAME = "harness"
 
 
 # ── kimi ─────────────────────────────────────────────────────────────────────────
-# Kimi CLI's `--output-format stream-json` is NOT claude's, despite the shared flag name: it is one
-# kosong `Message` per line and NOTHING else. Measured against the pinned 1.50.0 by reading its only
-# emitter, kimi_cli/ui/print/visualize.py::JsonPrinter.feed, which matches StatusUpdate / StepBegin /
-# StepRetry / TurnBegin / TurnEnd and then falls through to `case _:  # ignore other messages`:
-#
-#   assistant text    {"role":"assistant","content":"…"}
-#   assistant call    {"role":"assistant","content":[…parts…],"tool_calls":[{"id",…,"function":{"name","arguments"}}]}
-#   tool result       {"role":"tool","content":"…","tool_call_id":"…"}
-#   notification      the Notification model — background-task notices
-#   plan display      {"content":…,"file_path":…} — plan mode only
-#
-# `content` is a PLAIN STRING on a text-only message and a LIST OF PARTS when the message carries
-# tool calls (both captured live), so both shapes are handled.
-#
-# Three absences drive every design choice below, and each was verified in the emitter AND in a live
-# capture rather than inferred:
-#   * no usage of any kind            -> the result event's usage is {} (see _kimi_eof)
-#   * no session id                   -> the runner MINTS the id instead of scraping one (_build_kimi)
-#   * no terminal / result event      -> this normaliser carries an `eof`, the opencode precedent
+
+
 def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `kimi --print --output-format stream-json` line to zero+ canonical claude events.
+
+    Shapes verified against the pinned 1.50.0 by reading its ONLY emitter,
+    kimi_cli/ui/print/visualize.py::JsonPrinter.feed, which matches StatusUpdate / StepBegin /
+    StepRetry / TurnBegin / TurnEnd and then falls through to `case _:  # ignore other messages`.
+    The flag name is claude's; the schema is not — it is one kosong `Message` per line:
+
+        assistant text    {"role":"assistant","content":"…"}
+        assistant call    {"role":"assistant","content":[…parts…],
+                           "tool_calls":[{"id",…,"function":{"name","arguments"}}]}
+        tool result       {"role":"tool","content":"…","tool_call_id":"…"}
+        notification      the Notification model — background-task notices
+        plan display      {"content":…,"file_path":…} — plan mode only
+
+    `content` is a PLAIN STRING on a text-only message and a LIST OF PARTS when the message carries
+    tool calls; both were captured live and both are handled.
+
+    THREE ABSENCES drive every design choice here, each verified in the emitter AND in a live
+    capture rather than inferred:
+      - no usage of any kind        -> the result event's usage is {} (see _kimi_eof)
+      - no session id               -> the runner MINTS one and announces it (_KIMI_SESSION_NAME)
+      - no terminal / result event  -> this normaliser carries an `eof`, the opencode precedent
+    """
     role = obj.get("role")
     pre: list[dict] = []
     if not state.get("_kimi_init"):
@@ -5211,7 +5217,7 @@ def _kimi_eof(state: dict, rc: int) -> list[dict]:
     for the catch-all. So unlike claude (`API Error: …`) and goose (`Ran into this error: …`) there
     is no failure NARRATED AS ASSISTANT TEXT to recognise, and this backend needs no error regex —
     registration point 6 is satisfied by the exit code instead. Pinned by
-    test_kimi_normalizer.py::test_failure_exit_codes_are_the_signal.
+    test_kimi_backend.py::test_failure_exit_codes_are_the_signal.
 
     The failure SENTENCE is a bare non-JSON line on stdout (`Error code: 401 - {…}`,
     `Connection error.`, `Unknown error: Failed to connect MCP servers: {…}`), which _run_turn_bg
