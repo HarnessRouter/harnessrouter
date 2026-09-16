@@ -221,9 +221,25 @@ def test_mcp_streamable_http_uses_url_not_httpurl():
                                     "headers": {"X-K": "v"}}])
     cfg = json.loads((pathlib.Path(d) / ".harness" / "kimi-mcp.json").read_text())
     assert cfg == {"mcpServers": {"deepwiki": {"url": "https://mcp.deepwiki.com/mcp",
-                                               "headers": {"X-K": "v"}}}}
+                                               "transport": "http", "headers": {"X-K": "v"}}}}
     assert "--mcp-config-file" in cmd
 
+
+
+def test_a_url_server_carries_the_transport_the_harness_declared(tmp_path):
+    """kimi's client (fastmcp) guesses a url server's transport from the PATH when the config does
+    not say: SSE iff the path matches /sse(/|?|&|$), streamable HTTP otherwise. A harness that
+    declared `transport: sse` for a server at any other path would be dialed as streamable HTTP,
+    and on this CLI a server that cannot be reached is fatal to the turn. So the declared transport
+    is written, and the url's spelling decides nothing."""
+    from server import _kimi_mcp_config
+    cfg = _kimi_mcp_config(tmp_path, [
+        {"name": "events", "transport": "sse", "url": "https://example.test/events"},
+        {"name": "api", "transport": "http", "url": "https://example.test/mcp"},
+    ])
+    servers = json.loads(cfg.read_text())["mcpServers"]
+    assert servers["events"] == {"url": "https://example.test/events", "transport": "sse"}
+    assert servers["api"] == {"url": "https://example.test/mcp", "transport": "http"}
 
 def test_no_mcp_flag_when_no_servers():
     cmd, _, _ = _argv()

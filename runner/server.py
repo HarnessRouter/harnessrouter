@@ -3804,7 +3804,15 @@ def _kimi_mcp_config(ws: pathlib.Path, mcp_servers: list[dict] | None) -> pathli
         name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
         url = (sv.get("url") or "").strip()
         if url:
-            entry: dict = {"url": url}
+            # The transport the harness DECLARED, written out: fastmcp's RemoteMCPServer takes an
+            # optional `transport` and, when it is absent, guesses from the url's path
+            # (mcp_config.py infer_transport_type_from_url: SSE iff the path matches
+            # /sse(/|?|&|$), streamable HTTP otherwise). An SSE server at any other path would be
+            # dialed as streamable HTTP, and on this CLI a server that fails to connect takes the
+            # whole turn with it. _qwen_settings makes the same choice through gemini-cli's
+            # url/httpUrl keys; this is the same choice in fastmcp's spelling.
+            entry: dict = {"url": url,
+                           "transport": "sse" if str(sv.get("transport") or "").lower() == "sse" else "http"}
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
