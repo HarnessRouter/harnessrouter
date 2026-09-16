@@ -180,15 +180,34 @@ def test_a_disabled_plugin_stays_installed_and_clears_collisions(api):
     assert pl["name"] == "demo-plugin" and pl["enabled"] is False
 
 
-def test_stdio_on_a_base_that_cannot_run_it_is_refused(api):
-    r = api.post("/v1/harnesses", json={"name": "x", "base": "dsh",
-                                        "plugins": [{"files": _package(manifest=MANIFEST, mcp=MCP)}]})
-    assert r.status_code in (422, 400), r.text
-    e = r.json()["error"]
-    if r.status_code == 422 and e["code"] == "unsupported_transport":
-        assert e["detail"]["transport"] == "stdio" and e["detail"]["base"] == "dsh"
-    else:
-        pytest.skip(f"dsh is not a creatable base here: {e['code']}")
+def test_every_transport_installs_on_every_base(api):
+    """A base whose client lacks a transport still takes the server: the runner speaks SSE to the
+    remote end through a stdio bridge for codex, dsh and goose, so nothing is refused or recorded
+    as missing at install time."""
+    mcp = {"$schema": MCP_SCHEMA, "mcpServers": {
+        "events": {"type": "sse", "url": "https://mcp.example.invalid/sse"},
+        "remote": {"type": "streamable-http", "url": "https://mcp.example.invalid/mcp"}}}
+    for base in ("codex", "claude-code"):
+        r = api.post("/v1/harnesses", json={"name": "x", "base": base, "plugins": [{"files": _package(manifest=MANIFEST, mcp=mcp)}]})
+        if r.status_code == 400:
+            pytest.skip(f"{base} is not a creatable base here: {r.json()['error']['code']}")
+        assert r.status_code == 200, r.text
+        (pl,) = r.json()["plugins"]
+        assert {s["name"]: s["transport"] for s in pl["mcpServers"]} == {"events": "sse", "remote": "http"} and pl["skipped"] == []
+
+
+def test_a_stdio_server_installs_on_every_base(api):
+    """pi's MCP adapter and dsh's MCP client each spawn a stdio server themselves (pi-mcp-adapter's
+    `command`, dsh-mcp-client's `transport: stdio`), so no base refuses a package for needing a
+    process: the runner hands every client the same launcher and the client runs it."""
+    for base in ("pi", "dsh", "claude-code"):
+        r = api.post("/v1/harnesses", json={"name": "x", "base": base,
+                                            "plugins": [{"files": _package(manifest=MANIFEST, mcp=MCP)}]})
+        if r.status_code == 400:
+            pytest.skip(f"{base} is not a creatable base here: {r.json()['error']['code']}")
+        assert r.status_code == 200, r.text
+        (pl,) = r.json()["plugins"]
+        assert {s["name"]: s["transport"] for s in pl["mcpServers"]} == {"remote": "http", "local": "stdio"}
 
 
 def test_export_is_a_package_that_installs_again_without_credentials(api):

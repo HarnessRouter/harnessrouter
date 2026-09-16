@@ -389,13 +389,47 @@ neither is ever constructed on this deployment.
 `StatusUpdate`. kimi's result events carry `usage: {}` until `_relay_usage` lands, which is the
 agreed division of work — no harness PR builds its own usage pipeline.
 
-**The Vercel column, measured 2026-09-15/16 (candidate built from this branch, kimi 1.50.0).**
-42 ids, five scenarios each: **207 of 210 scenarios passed**, every turn served by the connection
-under test (no foreign connection on any pair). The three that did not pass are the provider's, in
-its own words: `gemini-2.5-flash-lite`'s artifact turn returned "The API returned an empty response"
-and the recycle that followed had nothing to recall; `qwen3.7-max`'s artifact turn returned
-"Upstream stream ended before terminal chunk" — the same sentence goose's column recorded for that
-id on this provider, so it is a property of the channel rather than of kimi.
+**The Vercel column, measured 2026-09-16 (candidate built from this branch, kimi 1.50.0).**
+46 ids, five scenarios each: **229 of 230 scenarios passed**, every turn served by the connection
+under test — no foreign connection on any pair.
+
+The single failure is `gemini-2.5-flash-lite`'s artifact turn, with the provider's own words: "The
+API returned an empty response". It is **deterministic through this product** (three independent
+runs on two different builds, same id, same scenario, same sentence) and takes ~175s, which is kimi
+retrying the empty response until `max_retries_per_step` is exhausted rather than one slow call.
+
+What it is NOT, each eliminated by measurement rather than reasoning:
+- not the request shape — the same conversation replayed by hand against the same provider answers
+  correctly, non-streaming and streaming, with one tool and with the full fifteen, and with a
+  system prompt padded to the size kimi sends;
+- not the `reasoning_effort` repair, which is applied identically on every other id here;
+- not a transient — `qwen3.7-max` failed the same scenario in the previous run with "Upstream stream
+  ended before terminal chunk" and PASSED here, so that one was the flake this is not.
+
+What could not be reproduced outside the product: replaying the exact four-step sequence
+(first, follow-up, switch to the partner model, artifact) through the real kimi binary against the
+same provider, with the workspace contract in AGENTS.md, completes all four turns and writes the
+file. So the remaining variable is something the gateway path adds that a CLI replay does not.
+
+**The Google column then said what one column could not.** Same harness, same scenarios, 11 ids,
+**53 of 55 scenarios passed**, no foreign connection. The two failures are
+`gemini-2.5-flash`'s artifact turn — *the same sentence*, "The API returned an empty response" — and
+the recycle that followed it with nothing to recall. And `gemini-2.5-flash-lite`, which fails
+deterministically on Vercel, **passes all five here**:
+
+| id | Vercel | Google |
+|---|---|---|
+| `gemini-2.5-flash-lite` | artifact fails, empty response | 5/5 |
+| `gemini-2.5-flash` | 5/5 | artifact fails, empty response |
+
+So it is NOT the channel — both show it — and NOT one id, since each channel's healthy member is the
+other's casualty. What survives is the shape: **a gemini-2.5-class model returns an empty response on
+the artifact turn**, the one that follows a model switch and asks for a file, and which member of the
+family trips differs by provider (most likely the actual build behind the same name on each). One
+column alone would have supported the wrong conclusion — the Vercel notes above nearly recorded it as
+a property of that id on that channel.
+
+Recorded as rows that fail with the provider's reproduced text, which is what the rules ask for.
 
 Vercel's answers carry the aggregator's vendor prefix (`openai/gpt-5.4`, `anthropic/claude-opus-5`,
 `alibaba/qwen3.7-max`), which rule 2 counts as the same model.
@@ -427,6 +461,42 @@ line answers 400 through aggregator chat/completions when the request carries fu
 `_set_reasoning_effort_none` repairs per (route, model) — but on those backends that is a FAST
 error, and here it is an hours-long wait, which is not the same shape. Whether this is kimi's or the
 channel's is an open question: aider and openhands have no data on those four ids at all.
+
+**The custom-harness dimension passes, and deepwiki works here.** All claims on the kimi row:
+the skill and the tool policy were stored and came back on a read, the bundle reached the agent (the
+answer carried the token that exists only inside the script), the script ran (`stamp.txt` among the
+turn's produced files), and the declared MCP server was stored and called — `read_wiki_structure`,
+against `https://mcp.deepwiki.com/mcp`, which needed no override. Worth recording because goose
+cannot handshake with deepwiki and its row needs `MCP_URL=https://mcp.context7.com/mcp`; kimi's does
+not.
+
+**But `disabled_tool_unused` passes VACUOUSLY on this row, as it does on aider, qwen, gemini and
+cline.** The dimension switches off the fixed id `WebSearch`, and kimi's catalog does not list it —
+deliberately, because it is never constructed without a Moonshot search key. Nothing named the tool
+because nothing could, so that claim proves the policy was STORED and nothing about whether it TOOK
+EFFECT.
+
+**Measured separately, so the `hard` claim is not left resting on that.** A one-off experiment — the
+dimension run once with the disabled tool changed to `Shell`, a tool kimi has and this task needs;
+the shared script was NOT changed, and this is a recommendation rather than a diff:
+
+| | tools the turn used |
+|---|---|
+| Shell allowed | `ReadFile`, `Shell` |
+| Shell disabled | `ReadFile`, `ReadFile`, `WriteFile` |
+
+Shell is absent, and the agent reached the same result another way. The policy really withholds, so
+`tool_enforcement: "hard"` on this base is measured rather than asserted.
+
+**That experiment also exposed something about claim 4 that is the dimension's, not kimi's.** With
+Shell disabled the agent could execute nothing, yet `script_ran` still passed and `stamp.txt` still
+appeared: the agent read SKILL.md, read the script, and wrote the file itself. "The script actually
+ran" is judged by the file being among the produced files, and an agent that can read the script can
+produce that file without running it. Same shape as the vacuous pass above — a gap between the
+judge and the thing it means to prove — and harder to notice, since nothing about the row looks
+wrong. Two suggestions, both the maintainer's call: let the dimension name the tool it disables
+(a base that has no `WebSearch` could disable one it has), and make the script write something the
+agent cannot predict from reading it.
 
 **Known open question: `max_context_size`.** kimi requires one per model and plans compaction
 against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds one value for all

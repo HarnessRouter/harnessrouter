@@ -184,3 +184,6 @@ def test_codex_config_declares_the_catalog_window_and_no_feature_overrides(tmp_p
     import tomllib
     parsed = tomllib.loads(cfg)
     assert parsed["model_providers"]["hr-openai"]["wire_api"] == "responses"
+    # codex waits each MCP server's own startup timeout for the initial tool catalog, not the
+    # one-second shared grace that dropped the SSE bridge on alternate turns
+    assert parsed["mcp_optional_startup_grace_ms"] == 0

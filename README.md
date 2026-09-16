@@ -6,7 +6,7 @@
     </picture>
   </a>
 <br>
-The world's first unified interface for agent harnesses.
+The unified interface for agent harnesses.
 </h1>
 
 <p align="center">
@@ -17,7 +17,7 @@ The world's first unified interface for agent harnesses.
   <a href="#the-unified-harness-protocol"><img src="https://img.shields.io/badge/OpenAI%20Responses-Compatible-2247D5?style=flat&amp;labelColor=444c56" alt="OpenAI Responses: Compatible"></a>
 </p>
 
-**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that brings Codex, Claude Code, Hermes, DeepSeek Harness, and more into your product as agent backends through one API.
+**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that turns existing harnesses like Codex and Claude Code into plug-and-play agent backends, letting your product run tasks, retrieve results, and switch harnesses through one API.
 
 <a href="https://github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository">
   <picture>
@@ -371,9 +371,10 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
     </picture>
   </a>
 </p>
-
 <br>
 
 ## License
 
 HarnessRouter Community Edition is licensed under [Apache 2.0](LICENSE). Agent harness CLIs are installed on first launch and remain subject to their respective upstream licenses. See [NOTICE](NOTICE) for third-party notices and the [Starter Kits repository](https://github.com/HarnessRouter/starter-kit#licensing) for its separate licensing terms.
+
+<p><a href="https://harnessrouter.ai">HarnessRouter</a> is the world's first unified interface for agent harnesses.</p>

@@ -2632,6 +2632,11 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     v = await _vertex_get(sid) or {}
     vs = str(v.get("status") or "")
     settled = None
+    if vs in ("done", "failed", "cancelled") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
+        # The session is terminal but its owner heartbeated moments ago: the owner is finalizing
+        # (collecting files, writing the checkpoint) and will write the full record itself,
+        # output, usage and served model included. Only an orphan is settled from the session.
+        return rec
     if vs in ("done", "failed", "cancelled"):
         settled = _RESP_STATUS_MAP.get(vs)
         # "completed" is a claim about THIS response, not about the session. A record with no
@@ -2649,9 +2654,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             # sheets kit polled mid-finalize, was handed a terminal 'incomplete', and wrote "the
             # turn ended without an answer" into every cell of a run whose answers the agent had
             # already produced. Leave a live turn alone; the sweep still settles a dead one once
-            # the heartbeat goes stale.
-            if time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
-                return rec
+            # the heartbeat goes stale (the guard above).
             settled = "incomplete"
             # NO reason is claimed here, deliberately. This branch cannot tell a turn that was
             # CUT (finalize died before the output landed) from one that ended cleanly having
@@ -6026,15 +6029,6 @@ _MODEL_CATALOG: dict[str, dict] = {
     # its text turns answer but its first tool turn is refused on every channel (TokenRouter
     # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
     # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
-    # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
-    # relay), so the candidate list starts from qwen's, reordered to put the kimi family first as
-    # its home family. NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS BACKEND YET — the column has
-    # not run. They are offered so the matrix can measure them here (the `pi` precedent), and this
-    # comment must be replaced by the measured result, with the ids that failed removed, before
-    # this backend is called done. What IS already measured is that kimi does not rewrite the id it
-    # is given: the value reaches the provider verbatim (captured at a stub and against a live
-    # gateway), and its only alias machinery raises KeyError on a miss rather than substituting —
-    # so the gemini resolveModel class of silent substitution is absent here.
     # aider: same relay reach as the others (litellm's openai provider through the loopback relay).
     # NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS BACKEND YET — no column has run; they are
     # offered so the matrix can measure them here (the `pi` precedent). Ids are sent with an
@@ -6076,6 +6070,28 @@ _MODEL_CATALOG: dict[str, dict] = {
     # were excluded from the column's re-run before the cause was known, so they are UNMEASURED
     # here and must be re-run to confirm they are now bounded. Two of them (gpt-5.6-sol,
     # gpt-5.6-terra) had already passed all five scenarios even unbounded.
+    # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
+    # relay), so the list is qwen's, reordered to put the kimi family first as its home family.
+    #
+    # MEASURED, two columns, 2026-09-16, against a candidate built from this branch:
+    #   Vercel  46 ids x 5 scenarios -> 229/230 passed, no foreign connection
+    #   Google  11 ids x 5 scenarios ->  53/55  passed, no foreign connection
+    # Google serves only its own family, which is why its column is eleven ids and not forty-six.
+    #
+    # THE SEVEN IDS NEITHER COLUMN RAN, and why: Vercel does not serve claude-fable-5-1,
+    # gemini-3-flash-preview, grok-4.20, hunyuan-4-preview or nemotron-3-super, and this
+    # deployment's model map had no entry for gemini-3.6-flash or llama-3.3-70b. They stay listed
+    # because other providers serve them; they are unmeasured HERE, which is not the same as refused.
+    #
+    # THE ONE FINDING, and it needed both columns to read correctly: a gemini-2.5-class model
+    # returns "The API returned an empty response" on the artifact turn — the one that follows a
+    # model switch and asks for a file. On Vercel that is gemini-2.5-flash-lite (three runs, two
+    # builds) while gemini-2.5-flash passes; on Google it is exactly the other way round. So it
+    # belongs to neither the channel nor one id. See docs/support-matrix-notes.md.
+    #
+    # kimi does not rewrite the id it is given: the value reaches the provider verbatim (captured at
+    # a stub and against both live gateways), and its only alias machinery raises KeyError on a miss
+    # rather than substituting — the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
@@ -6712,12 +6728,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # cancel_session resolve THIS turn's resp_id and latch the per-response cancel (the ONE cancel
     # mechanism), so the turn loop needs no per-poll vertex status read (HR-INF-010). Not re-written
     # here: accept already set it to this same resp_id and nothing clears it.
-    await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
-                               "heartbeat": str(time.time()), "runner_turn_id": "",
-                               **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
     # Session execution lease (HR-INF-012), acquired BEFORE hydrate — hydrate wipes /workspace, so
     # an overlapping turn is the real corruption risk. observe mode only LOGS a conflict; enforce
     # rejects it. rec carries the fence for heartbeat renewal + the checkpoint backstop.
+    # Admission comes before the session is stamped as running: a refused turn used to leave a
+    # finished session at running/starting with a fresh heartbeat, the orphan sweep then took it
+    # for a dead turn, and a client retrying its follow-up never got back in (omp, 2026-09-15).
     rec["lease_fence"] = 0
     if LEASE_MODE != "off" and control_store.enabled():
         try:
@@ -6739,6 +6755,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 return "failed", [], rec
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
+    await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
+                               "heartbeat": str(time.time()), "runner_turn_id": "",
+                               **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
     await _hydrate(sid, rec)
     if rec.get("hydrate_failed_with_checkpoint"):
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
@@ -8147,10 +8166,33 @@ async def delete_response(response_id: str, request: Request):
 # `shared`/`share_token` props on the HarnessSession vertex (token reused across re-enables so a
 # re-shared link keeps working; disable flips `shared` off which kills the whole surface).
 
+# A response header is latin-1 on the wire: that is what ASGI defines and what Starlette encodes
+# to. So a filename with a Chinese character or an emoji cannot go into the quoted `filename` at
+# all — it raises UnicodeEncodeError inside the server and the download becomes a 500 with no
+# clue in it. RFC 6266 is the way out and this is the ONE place that builds the header: an ASCII
+# fallback every client can read, plus `filename*` carrying the real name percent-encoded, which
+# every current browser prefers when both are present.
+_CD_STRIP = re.compile(r'[\x00-\x1f\x7f"\\]')
+
+
+def _content_disposition(kind: str, filename: str) -> str:
+    """`attachment`/`inline` with a filename any client can take, whatever its characters."""
+    name = re.split(r"[\\/]", str(filename or ""))[-1].strip()
+    if name in ("", ".", ".."):
+        name = "download"
+    # The fallback: every byte a header can hold, with everything else standing in as `_` so the
+    # extension survives. A name that is entirely non-ASCII still leaves a usable "__.txt".
+    ascii_name = _CD_STRIP.sub("", name.encode("ascii", "replace").decode("ascii").replace("?", "_"))
+    if ascii_name.strip(" .") == "":
+        ascii_name = "download"
+    return (f'{kind}; filename="{ascii_name[:120]}"; '
+            f"filename*=UTF-8''{urllib.parse.quote(name, safe='')}")
+
+
 def _artifact_headers(media: str, fname: str) -> dict:
     # Browser-renderable types serve INLINE so html/css/js/img/pdf render directly (relative
     # asset urls in an html page resolve to sibling paths under the same route prefix).
-    return {"Content-Disposition": f'inline; filename="{fname}"',
+    return {"Content-Disposition": _content_disposition("inline", fname),
             "Cache-Control": "private, max-age=60",
             "X-Content-Type-Options": "nosniff"}
 
@@ -8964,7 +9006,7 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
     bg = BackgroundTask(os.unlink, zpath)
     return FileResponse(zpath, media_type="application/zip", background=bg,
                         headers={"Content-Disposition":
-                                 f'attachment; filename="{sid[:20]}-{scope}-files.zip"'})
+                                 _content_disposition("attachment", f"{sid[:20]}-{scope}-files.zip")})
 
 
 @app.get("/v1/sessions/{sid}/files/{path:path}")
@@ -9070,7 +9112,7 @@ async def container_file_content(container_id: str, file_id: str, request: Reque
         raise HTTPException(404, "file not found")
     data, media, fname = got
     return Response(content=data, media_type=media,
-                    headers={"Content-Disposition": f'attachment; filename="{fname.rsplit("/", 1)[-1]}"'})
+                    headers={"Content-Disposition": _content_disposition("attachment", fname)})
 
 
 # Office types with no faithful browser renderer → convert to PDF server-side (LibreOffice) so the
@@ -13621,21 +13663,6 @@ def _skill_key(name: str) -> str:
     """The runner's skill directory name (its _skill_dir_name), so two skills the gateway sees
     as different cannot land in one folder."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(name or ""))
-# Runner backends that can launch a stdio MCP server (each writer emits command/args). pi's MCP
-# adapter and dsh take URLs only; a package that needs a process is refused for those bases rather
-# than accepted and skipped in a turn, which Harnesses §4.1 forbids.
-_STDIO_MCP_BACKENDS = {"claude", "codex", "hermes", "gemini", "qwen", "opencode", "goose", "omp", "cline",
-                       # kimi parses its MCP file with fastmcp's MCPConfig, whose stdio entry is the
-                       # same {command, args} the launcher emits — so a plugin's stdio server needs
-                       # nothing of kimi beyond the branch _kimi_mcp_config already has.
-                       "kimi",
-                       # aider has no MCP client of its own; runner/aider_mcp_bridge.py is one, on
-                       # the official SDK, and a stdio entry becomes StdioServerParameters there.
-                       # Verified against a real stdio server: the bridge lists its tools and calls
-                       # one, exit 0.
-                       "aider"}
-
-
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
     return uhp_error(422, "plugin_invalid", f"Plugin {name or 'package'}: {reason}", "plugins",
                      {"path": path, "reason": reason})
@@ -13968,9 +13995,6 @@ async def _plugins_prepare(body: HarnessBody, org: str, previous: list[dict] | N
     derived object and the blob handle, which is exactly what a client reads back and PUTs again.
     `previous` is what the harness held before an update; packages the new list no longer refers to
     are deleted once the new list is validated."""
-    base = _require_supported_base(body.base) if body.base else ""
-    body.base = base or body.base
-    backend = str(_BASE_CATALOG.get(base, {}).get("backend") or "")
     staged: list[tuple[dict, str | None, str | None]] = []   # (entry, encoded files to store, kept blob)
     seen: dict[str, str] = {}
     for i, item in enumerate(body.plugins or []):
@@ -14005,11 +14029,6 @@ async def _plugins_prepare(body: HarnessBody, org: str, previous: list[dict] | N
                             {"component": "plugin", "name": name, "between": [other, name]})
         seen[name] = key
         enabled = item.get("enabled", True) is not False
-        if enabled and backend and backend not in _STDIO_MCP_BACKENDS \
-                and any(s.get("transport") == "stdio" for s in derived["mcpServers"]):
-            raise uhp_error(422, "unsupported_transport",
-                            f"Plugin {name} declares a stdio MCP server, which the {base} base cannot run.",
-                            "plugins", {"transport": "stdio", "base": base, "plugin": name})
         # A remote server this deployment's network policy would refuse at turn time is refused
         # here instead, and written down: the turn would otherwise drop it with only a log line.
         kept: list[dict] = []

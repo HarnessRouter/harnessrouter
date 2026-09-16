@@ -390,13 +390,11 @@ def test_the_bridge_resolves_a_stdio_entry_to_stdio_server_parameters():
     assert target.env == {"K": "V"}
 
 
-def test_aider_is_registered_as_able_to_run_a_stdio_server():
-    import os as _os
-    import sys as _sys
-    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "gateway"))
-    _os.environ.setdefault("HR_BACKING", "local")
-    import app as A
-    assert "aider" in A._STDIO_MCP_BACKENDS
+# The companion test that asserted membership of _STDIO_MCP_BACKENDS is gone with the set itself:
+# upstream (#185) stopped declaring any transport missing, because the runner now hands every client
+# one launcher shape and bridges SSE and streamable HTTP over stdio for the ones that cannot speak
+# them. Nothing about aider changed — the bridge already resolved a stdio entry — so what is left to
+# pin is the two tests above: the servers the turn writes, and the shape the bridge resolves them to.
 
 
 def test_the_driver_bounds_every_api_call():
