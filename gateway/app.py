@@ -6027,17 +6027,42 @@ _MODEL_CATALOG: dict[str, dict] = {
     # is given: the value reaches the provider verbatim (captured at a stub and against a live
     # gateway), and its only alias machinery raises KeyError on a miss rather than substituting —
     # so the gemini resolveModel class of silent substitution is absent here.
+    # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
+    # relay), so the list is qwen's, reordered to put the kimi family first as its home family.
+    #
+    # MEASURED on Vercel, 42 of these ids, five scenarios each: 207 of 210 scenarios passed. The
+    # three that did not are the provider's own, with its words: gemini-2.5-flash-lite's artifact
+    # turn ("The API returned an empty response") and the recycle that followed it with nothing to
+    # recall, and qwen3.7-max's artifact turn ("Upstream stream ended before terminal chunk" — the
+    # same sentence goose's column recorded for that id on this provider).
+    #
+    # FIVE IDS VERCEL DOES NOT SERVE AT ALL and this column therefore never ran: claude-fable-5-1,
+    # gemini-3-flash-preview, grok-4.20, hunyuan-4-preview, nemotron-3-super. They stay listed
+    # because another provider serves them; they are simply unmeasured HERE.
+    #
+    # FOUR IDS ARE MEASURED BUT PATHOLOGICALLY SLOW ON THIS PROVIDER, and that is stated here rather
+    # than hidden by removing them: gpt-5.6-sol and gpt-5.6-terra passed all five scenarios but took
+    # HOURS each; gpt-5.6-luna's switch hung 8,754s before failing; gpt-5.5's switch hung 2,200s and
+    # its artifact 7,418s. They were excluded from the column's re-run so one id could not eat a day
+    # of wall clock. The mechanism is not yet known — the cline/qwen entries record that the gpt-5.6
+    # line 400s through aggregator chat/completions when the request carries function tools, which
+    # _set_reasoning_effort_none repairs per (route, model), but that produces a FAST error on those
+    # backends and an hours-long wait here. Do not read this as "kimi cannot drive them".
     "kimi": {"default": "kimi-k3",
-             "models": ["kimi-k3", "kimi-k2.7-code",
-                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
-                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
-                        "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
-                        "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-                        "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
-                        "gemini-3.5-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash",
-                        "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash",
-                        "qwen3.8-max", "qwen3.7-max", "mistral-medium-3.5", "step-3.7-flash",
-                        "glm-5.3", "glm-5.3-flash", "grok-4.6", "grok-4.5"]},
+             "models": [
+                 "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5",
+                 "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
+                 "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-2.5-pro",
+                 "gemini-2.5-flash", "gemini-2.5-flash-lite", "grok-4.6", "grok-4.5", "grok-4.3",
+                 "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                 "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
+                 "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
+                 "nemotron-3.5-lightning", "nemotron-3-super"]},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
