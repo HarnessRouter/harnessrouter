@@ -374,6 +374,11 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
                       "./.harness/home/.dsh/cordis.yml",
+                      # opencode's undo/revert history: a git repo of the workspace that grew to
+                      # 699 MB / 71k files in twenty turns (#193). _opencode_config turns it off;
+                      # this keeps a workspace that already carries one from dragging it through
+                      # every later checkpoint. Nothing reads it once snapshots are off.
+                      "./.harness/home/.local/share/opencode/snapshot",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -466,7 +471,16 @@ def _git(ws: str, *args: str, check: bool = False) -> subprocess.CompletedProces
 
 def _git_ensure(ws: str) -> None:
     """Make /workspace a git repo with a secret-safe .gitignore (so .git, which travels in the
-    checkpoint tarball, never carries credentials)."""
+    checkpoint tarball, never carries credentials).
+
+    The CLI home (.harness/home) is ignored here too. The repo has one reader, /produced, and it
+    already drops every `.harness/` path (_PRODUCED_EXCLUDE_PREFIX); the home still travels
+    between turns because the checkpoint is a tar of the directory, not a `git archive`, so
+    --resume is unaffected. Committing it gave every transcript and session database a second
+    copy in .git/objects per checkpoint — and on opencode the two fed each other, its snapshot
+    repo (work tree = the workspace) capturing our .git while we committed its snapshots: twenty
+    turns of one small file reached a 1.4 GB tarball for ~220 KB of output and the gateway OOMed
+    (#193, 2026-09-16)."""
     p = pathlib.Path(ws)
     p.mkdir(parents=True, exist_ok=True)
     (p / ".gitignore").write_text("\n".join([
@@ -475,12 +489,21 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
         ".harness/goose/config/secrets.yaml",
+        "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
+        ".harness/home/",
         "",
     ]))
     if not (p / ".git").exists():
         _git(ws, "init", "-q")
         _git(ws, "config", "user.email", _GIT_ENV["GIT_AUTHOR_EMAIL"])
         _git(ws, "config", "user.name", _GIT_ENV["GIT_AUTHOR_NAME"])
+    else:
+        # An ignore rule does not release what an earlier checkpoint already committed: a
+        # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
+        # hydrated from before this rule would keep growing exactly as before. Drop the CLI
+        # home from the index (not from disk); the next checkpoint commit records the removal
+        # and from then on the ignore rule holds. A no-op on a repo that never tracked it.
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
 
 
 # ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
@@ -4088,6 +4111,10 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
                 "models": {model: {}},
             }
         },
+        # opencode's filesystem snapshots back the TUI's undo/revert; a fresh `run` per turn has
+        # no one to undo for, and HarnessRouter's checkpoint is the rollback here. Left on, it is
+        # a git repo of the workspace under $HOME — 699 MB of the 1.4 GB tarball in #193.
+        "snapshot": False,
     }
     mcp = _opencode_mcp(mcp_servers)
     if mcp:
