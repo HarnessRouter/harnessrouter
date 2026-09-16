@@ -5469,6 +5469,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
 _NO_DIAGNOSTIC_RE = re.compile(r"\w[\w-]* exited -?\d+ without reporting an error")
 
 
+_CLI_RESUME_HINT = re.compile(r"^To resume this session:")
+
+
 def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
     """The one line that explains a failed turn, in order of how much it says: the provider's
     refusal, the result event's own message, the CLI's last lines, the exit code. A normaliser's
@@ -5476,6 +5479,11 @@ def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
     lines win over it: goose's tokio panic ("Permission denied (os error 13) at path /tmp/...")
     sat in the stderr behind that sentence and the record never showed it (2026-09-13)."""
     ev_err = ev_err.strip()
+    # A CLI's advice on how to resume ITSELF is not part of the reason. kimi follows every failure
+    # sentence with "To resume this session: kimi -r <id>" (measured on a dead MCP server, 1.50.0);
+    # the person reading the record has no kimi to type that into, and the line names an internal
+    # the product does not show. The sentence before it is the reason and stays.
+    tail = "\n".join(ln for ln in tail.splitlines() if not _CLI_RESUME_HINT.match(ln.strip())).strip()
     if tail and _NO_DIAGNOSTIC_RE.fullmatch(ev_err):
         ev_err = ""
     return (refusal or ev_err or tail or f"exit_code={rc}, no diagnostic output")[:2000]

@@ -336,3 +336,17 @@ def test_no_budget_means_no_flag_rather_than_a_number_of_our_own():
     """An operator who set none gets kimi's own default, not one invented here."""
     cmd, _, _ = _argv()
     assert "--max-steps-per-turn" not in cmd
+
+
+
+def test_the_failure_reason_keeps_the_sentence_and_drops_the_cli_resume_hint():
+    """kimi follows a failure with "To resume this session: kimi -r <id>", advice for a person at
+    a terminal the product does not have. The sentence that says what failed is the reason; the
+    hint is not, and it names a command the product never shows."""
+    from server import _failure_reason
+    tail = ("Unknown error: Failed to connect MCP servers: {'dead': McpError('Timed out')}\n"
+            "To resume this session: kimi -r harness")
+    reason = _failure_reason("", "", tail, 1)
+    assert reason == "Unknown error: Failed to connect MCP servers: {'dead': McpError('Timed out')}"
+    assert _failure_reason("", "", "To resume this session: kimi -r harness", 1) == "exit_code=1, no diagnostic output"
+
