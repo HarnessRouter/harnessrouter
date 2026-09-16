@@ -232,6 +232,16 @@ def main() -> int:
         "--no-pretty", "--no-fancy-input", "--no-stream",
         "--no-check-update", "--no-show-release-notes", "--no-show-model-warnings",
         "--no-analytics",
+        # WITHOUT THIS A TURN CAN HANG FOREVER. aider's --timeout defaults to None, so a provider
+        # that accepts the connection and never finishes the stream leaves the API call waiting with
+        # no bound; aider's own retry loop cannot help, because it only fires on an exception and is
+        # itself bounded (retry_delay doubles until it passes RETRY_TIMEOUT=60, ~63s in total).
+        # Measured in the support matrix's vercel column: single scenarios ran 3,621s, 6,040s,
+        # 16,071s and 27,360s — against 7-30s for the same scenarios on a healthy call — and only
+        # the runner's 6-hour MAX_TURN_SECONDS eventually killed them. Every other backend surfaced
+        # the same provider flakiness as a fast error ("Upstream stream ended before terminal
+        # chunk"); on aider it was an unbounded wait.
+        "--timeout", os.environ.get("HR_AIDER_TIMEOUT", "300"),
         # The workspace is this product's checkpoint repo. aider committing into it would interleave
         # its commits with the harness's own, so aider keeps the repo map and leaves committing to
         # the harness. --no-gitignore stops it appending .aider* patterns to the .gitignore the

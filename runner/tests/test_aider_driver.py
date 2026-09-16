@@ -397,3 +397,13 @@ def test_aider_is_registered_as_able_to_run_a_stdio_server():
     _os.environ.setdefault("HR_BACKING", "local")
     import app as A
     assert "aider" in A._STDIO_MCP_BACKENDS
+
+
+def test_the_driver_bounds_every_api_call():
+    """MEASURED FAILURE this pins: aider's --timeout defaults to None, so a provider that accepts
+    the connection and never finishes the stream leaves the call waiting forever. aider's own retry
+    loop cannot save it — that only fires on an exception, and is itself bounded at ~63s. In the
+    vercel column single scenarios ran 3,621s, 6,040s, 16,071s and 27,360s against 7-30s healthy,
+    and only the runner's 6-hour cap ended them."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert '"--timeout", os.environ.get("HR_AIDER_TIMEOUT", "300")' in src
