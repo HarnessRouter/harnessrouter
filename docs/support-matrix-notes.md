@@ -389,6 +389,31 @@ neither is ever constructed on this deployment.
 `StatusUpdate`. kimi's result events carry `usage: {}` until `_relay_usage` lands, which is the
 agreed division of work — no harness PR builds its own usage pipeline.
 
+**The Vercel column, measured 2026-09-15/16 (candidate built from this branch, kimi 1.50.0).**
+42 ids, five scenarios each: **207 of 210 scenarios passed**, every turn served by the connection
+under test (no foreign connection on any pair). The three that did not pass are the provider's, in
+its own words: `gemini-2.5-flash-lite`'s artifact turn returned "The API returned an empty response"
+and the recycle that followed had nothing to recall; `qwen3.7-max`'s artifact turn returned
+"Upstream stream ended before terminal chunk" — the same sentence goose's column recorded for that
+id on this provider, so it is a property of the channel rather than of kimi.
+
+Vercel's answers carry the aggregator's vendor prefix (`openai/gpt-5.4`, `anthropic/claude-opus-5`,
+`alibaba/qwen3.7-max`), which rule 2 counts as the same model.
+
+**Five ids Vercel does not serve at all**, so this column never ran them: `claude-fable-5-1`,
+`gemini-3-flash-preview`, `grok-4.20`, `hunyuan-4-preview`, `nemotron-3-super`. They remain in the
+catalog because other providers serve them; they are unmeasured HERE, not rejected.
+
+**Four ids are pathologically slow on this provider and were excluded from the column's re-run so a
+single id could not eat a day of wall clock.** What was measured of them, before the exclusion:
+`gpt-5.6-sol` and `gpt-5.6-terra` passed all five scenarios but took HOURS each; `gpt-5.6-luna`'s
+switch hung 8,754s and then failed; `gpt-5.5`'s switch hung 2,200s and its artifact 7,418s. The
+mechanism is not established. The cline and qwen catalog entries already record that the gpt-5.6
+line answers 400 through aggregator chat/completions when the request carries function tools, which
+`_set_reasoning_effort_none` repairs per (route, model) — but on those backends that is a FAST
+error, and here it is an hours-long wait, which is not the same shape. Whether this is kimi's or the
+channel's is an open question: aider and openhands have no data on those four ids at all.
+
 **Known open question: `max_context_size`.** kimi requires one per model and plans compaction
 against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds one value for all
 ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN the agent compacts,
