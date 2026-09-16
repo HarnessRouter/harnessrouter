@@ -265,6 +265,15 @@ def main() -> int:
         _emit("error", {"text": f"aider did not return a coder (exit {coder!r})"})
         return 1
 
+    # THE OPERATOR'S STEP BUDGET. aider has no CLI flag for it: its loop is Coder.max_reflections,
+    # a class attribute defaulting to 3, and the driver holds the object. Unlike kimi (1000 steps)
+    # and openhands (500 iterations) aider's default is already small, so this is about honouring a
+    # budget that was set rather than about bounding a runaway — but a budget the caller set and the
+    # backend ignores is the kind of quiet lie this repo treats as a defect.
+    budget = job.get("max_turns")
+    if budget:
+        coder.max_reflections = max(1, int(budget))
+
     disabled = job.get("tools_disabled") or []
     gate = _Gate(disabled)
     _install(coder, gate, web_disabled=any(d.lower() in ("webfetch", "web_fetch", "websearch")

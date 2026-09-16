@@ -404,8 +404,22 @@ Vercel's answers carry the aggregator's vendor prefix (`openai/gpt-5.4`, `anthro
 `gemini-3-flash-preview`, `grok-4.20`, `hunyuan-4-preview`, `nemotron-3-super`. They remain in the
 catalog because other providers serve them; they are unmeasured HERE, not rejected.
 
-**Four ids are pathologically slow on this provider and were excluded from the column's re-run so a
-single id could not eat a day of wall clock.** What was measured of them, before the exclusion:
+**The four slow ids: the cause was found, and it was ours.** kimi's own default is **1000 steps per
+turn** (`config.py` `max_steps_per_turn`, raised from 500 upstream), and `_build_kimi` never passed
+the operator's step budget — the gateway's `max_step` reaches the runner as `max_turns` and every
+other backend forwards it (claude and goose as `--max-turns`), but this builder dropped it. On a
+fast model the default is invisible; on a slow reasoning one, 1000 steps at 10-30s each is three to
+eight hours, which is exactly the range that was measured. Now forwarded as
+`--max-steps-per-turn`. Reaching the cap is visible on this CLI rather than silent — it raises
+`MaxStepsReached`, which arrives as its own stdout line with a non-zero exit — so a truncated turn
+reads as truncated, unlike goose, which reports nothing at its cap.
+
+Two hypotheses were tested and rejected before that one: the relay's repair loop is bounded
+(`attempt < 2`), and the `reasoning_effort` shape is not the trigger — measured directly against
+Vercel with function tools on `gpt-5.6-sol`, `reasoning_effort: null` is a 400 in 0s while both the
+key deleted (what the relay does for kimi) and `reasoning_effort: "none"` answer 200 in 1-2s.
+
+**What was measured of those four before the fix**, with the budget still unbounded: What was measured of them, before the exclusion:
 `gpt-5.6-sol` and `gpt-5.6-terra` passed all five scenarios but took HOURS each; `gpt-5.6-luna`'s
 switch hung 8,754s and then failed; `gpt-5.5`'s switch hung 2,200s and its artifact 7,418s. The
 mechanism is not established. The cline and qwen catalog entries already record that the gpt-5.6

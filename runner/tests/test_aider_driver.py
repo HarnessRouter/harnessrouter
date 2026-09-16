@@ -407,3 +407,14 @@ def test_the_driver_bounds_every_api_call():
     and only the runner's 6-hour cap ended them."""
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
     assert '"--timeout", os.environ.get("HR_AIDER_TIMEOUT", "300")' in src
+
+
+def test_the_operators_step_budget_reaches_the_driver():
+    """aider has no CLI flag for it — its loop is Coder.max_reflections, a class attribute — so the
+    budget travels in the job and the driver sets it on the object. Pinned here because the dispatch
+    passes it and a builder that did not accept it would TypeError on the first aider turn, which no
+    unit test exercises."""
+    _, _, _, job = _build(max_turns=7)
+    assert job["max_turns"] == 7
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "coder.max_reflections = max(1, int(budget))" in src

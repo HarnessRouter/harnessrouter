@@ -307,3 +307,21 @@ def test_kimi_is_registered_as_able_to_run_a_stdio_server():
     _os.environ.setdefault("HR_BACKING", "local")
     import app as A
     assert "kimi" in A._STDIO_MCP_BACKENDS
+
+
+def test_the_operators_step_budget_reaches_the_cli():
+    """MEASURED FAILURE this pins: the gateway's step budget reaches the runner as max_turns and
+    every other backend passes it on (claude and goose as --max-turns), but this builder dropped it.
+    A turn was then bounded only by kimi's own default of 1000 steps per turn (config.py
+    max_steps_per_turn, raised 500 -> 1000 upstream), which on a slow reasoning model is HOURS: in
+    the vercel column gpt-5.6-luna's switch ran 8,754s and gpt-5.5's artifact 7,418s, against 7-30s
+    for the same scenarios on other ids."""
+    cmd, _, _ = _argv(max_turns=12)
+    assert "--max-steps-per-turn" in cmd
+    assert cmd[cmd.index("--max-steps-per-turn") + 1] == "12"
+
+
+def test_no_budget_means_no_flag_rather_than_a_number_of_our_own():
+    """An operator who set none gets kimi's own default, not one invented here."""
+    cmd, _, _ = _argv()
+    assert "--max-steps-per-turn" not in cmd
