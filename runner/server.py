@@ -3769,7 +3769,8 @@ def _kimi_mcp_config(ws: pathlib.Path, mcp_servers: list[dict] | None) -> pathli
 
 def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+                skills_dir: str | None = None, tools_disabled: list[str] | None = None,
+                max_turns: int | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in KIMI_PROVIDERS:
         raise HTTPException(400, f"unknown kimi provider '{pr}' (one of {sorted(KIMI_PROVIDERS)})")
@@ -3814,6 +3815,18 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
            # --print already implies auto-approval (cli/__init__.py:626 runtime_afk = ui == "print");
            # --yolo is passed anyway for one deterministic path, qwen's rationale unchanged.
            "--yolo"]
+    if max_turns:
+        # THE BUDGET, and without it a turn is bounded only by kimi's own default of 1000 steps
+        # (config.py max_steps_per_turn, raised 500 -> 1000 upstream). On a fast model that is
+        # invisible; on a slow reasoning one it is hours. Measured in the vercel column before this
+        # was wired: gpt-5.6-luna's switch ran 8,754s, gpt-5.5's artifact 7,418s and its switch
+        # 2,200s, while the same scenarios on other ids took 7-30s. The operator's step budget
+        # reaches every other backend (claude and goose take it as --max-turns); it was dropped here.
+        #
+        # Reaching the cap is VISIBLE on this CLI rather than silent: it raises MaxStepsReached,
+        # which arrives as its own stdout line and a non-zero exit, so a truncated turn reads as
+        # truncated. goose, by contrast, reports nothing at its cap.
+        cmd += ["--max-steps-per-turn", str(int(max_turns))]
     # ALWAYS named, on every turn, first or not: kimi mints a session with whatever id it is given
     # (cli/__init__.py:558-565 — find -> None -> create), so naming it on the first turn is what
     # makes the SECOND turn able to continue it. Passing it only on a resume is what broke the
@@ -6368,7 +6381,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         kimi_skills = os.path.join(cwd, ".harness", "skills") if installed_skills else None
         cmd = _build_kimi(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                          skills_dir=kimi_skills, tools_disabled=req.tools_disabled)
+                          skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
+                          max_turns=req.max_turns)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
