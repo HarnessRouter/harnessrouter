@@ -445,6 +445,42 @@ line answers 400 through aggregator chat/completions when the request carries fu
 error, and here it is an hours-long wait, which is not the same shape. Whether this is kimi's or the
 channel's is an open question: aider and openhands have no data on those four ids at all.
 
+**The custom-harness dimension passes, and deepwiki works here.** All claims on the kimi row:
+the skill and the tool policy were stored and came back on a read, the bundle reached the agent (the
+answer carried the token that exists only inside the script), the script ran (`stamp.txt` among the
+turn's produced files), and the declared MCP server was stored and called — `read_wiki_structure`,
+against `https://mcp.deepwiki.com/mcp`, which needed no override. Worth recording because goose
+cannot handshake with deepwiki and its row needs `MCP_URL=https://mcp.context7.com/mcp`; kimi's does
+not.
+
+**But `disabled_tool_unused` passes VACUOUSLY on this row, as it does on aider, qwen, gemini and
+cline.** The dimension switches off the fixed id `WebSearch`, and kimi's catalog does not list it —
+deliberately, because it is never constructed without a Moonshot search key. Nothing named the tool
+because nothing could, so that claim proves the policy was STORED and nothing about whether it TOOK
+EFFECT.
+
+**Measured separately, so the `hard` claim is not left resting on that.** A one-off experiment — the
+dimension run once with the disabled tool changed to `Shell`, a tool kimi has and this task needs;
+the shared script was NOT changed, and this is a recommendation rather than a diff:
+
+| | tools the turn used |
+|---|---|
+| Shell allowed | `ReadFile`, `Shell` |
+| Shell disabled | `ReadFile`, `ReadFile`, `WriteFile` |
+
+Shell is absent, and the agent reached the same result another way. The policy really withholds, so
+`tool_enforcement: "hard"` on this base is measured rather than asserted.
+
+**That experiment also exposed something about claim 4 that is the dimension's, not kimi's.** With
+Shell disabled the agent could execute nothing, yet `script_ran` still passed and `stamp.txt` still
+appeared: the agent read SKILL.md, read the script, and wrote the file itself. "The script actually
+ran" is judged by the file being among the produced files, and an agent that can read the script can
+produce that file without running it. Same shape as the vacuous pass above — a gap between the
+judge and the thing it means to prove — and harder to notice, since nothing about the row looks
+wrong. Two suggestions, both the maintainer's call: let the dimension name the tool it disables
+(a base that has no `WebSearch` could disable one it has), and make the script write something the
+agent cannot predict from reading it.
+
 **Known open question: `max_context_size`.** kimi requires one per model and plans compaction
 against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds one value for all
 ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN the agent compacts,
