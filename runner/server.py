@@ -960,6 +960,52 @@ _PLUGIN_PLACEHOLDER = re.compile(r"\$\{PLUGIN_(ROOT|DATA)\}")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+# Clients without a remote transport of their own: goose 1.50.0's ExtensionConfig has no sse
+# variant, dsh-mcp-client's config is a union of stdio and streamable-http, and codex's client
+# takes streamable HTTP and stdio. Every one of them launches a stdio server, so the runner hands
+# them the bridge (mcp_bridge.py) as one, and the bridge speaks SSE to the remote end. The server
+# reaches the agent on every base the same way; nothing is declared unsupported.
+_NO_SSE_BACKENDS = {"codex", "dsh", "goose"}
+_MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
+
+
+def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dict]:
+    """Each SSE server, for a backend whose client cannot speak SSE, becomes a stdio launcher that
+    runs the bridge with the url and headers in its environment (never on the command line, where
+    a ps listing would show an Authorization header). Other servers and backends pass untouched."""
+    if backend not in _NO_SSE_BACKENDS:
+        return list(servers or [])
+    out: list[dict] = []
+    for s in servers or []:
+        s = s or {}
+        url = str(s.get("url") or "").strip()
+        if not url or str(s.get("transport") or "").lower() != "sse":
+            out.append(s)
+            continue
+        name = _mcp_name(str(s.get("name") or s.get("id") or "mcp"))
+        headers: dict = {}
+        auth = s.get("auth")
+        if auth:
+            headers["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+        if isinstance(s.get("headers"), dict):
+            headers.update({str(k): str(v) for k, v in s["headers"].items() if k and v is not None})
+        bdir = pathlib.Path(_safe_join(cwd, ".harness/mcp-bridge"))
+        bdir.mkdir(parents=True, exist_ok=True)
+        launcher = bdir / f"{name}.sh"
+        lines = ["#!/bin/sh", "# written by the harness runner: this client has no SSE transport, so the bridge speaks it over stdio",
+                 f"export HR_MCP_URL={shlex.quote(url)}", "export HR_MCP_TRANSPORT=sse",
+                 f"export HR_MCP_HEADERS={shlex.quote(json.dumps(headers))}",
+                 f"exec python3 {shlex.quote(_MCP_BRIDGE)}", ""]
+        if launcher.is_symlink() or (launcher.exists() and not launcher.is_file()):
+            launcher.unlink()
+        fd = os.open(str(launcher), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o755)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(lines))
+        launcher.chmod(0o755)
+        out.append({k: v for k, v in s.items() if k not in ("url", "transport", "auth", "headers")} | {"name": s.get("name") or name, "command": str(launcher), "args": []})
+    return out
+
+
 def _plugin_launchers(cwd: str, servers: list[dict] | None) -> list[dict]:
     """The stdio servers a plugin declares, made runnable (UHP Plugins §6, Agent Plugins §7.2.1
     and §9): the two placeholders expanded once and non-recursively in args, env and cwd; a
@@ -1588,12 +1634,18 @@ CODEX_PROVIDERS = {
 # because Codex reserves its built-in ids: a [model_providers.openai] block is rejected outright
 # ("Built-in providers cannot be overridden"), which broke every bring-your-own OpenAI key. All
 # providers are namespaced rather than just that one, so a future reserved id can't break us again.
+# mcp_optional_startup_grace_ms = 0: codex builds its initial tool catalog after a shared grace of
+# one second by default and drops any MCP server still starting; the runner's SSE bridge takes about
+# that long to open its remote connection, so a plugin's SSE server was in the catalog on one turn
+# and missing on the next (hosted, 2026-09-15). Zero makes codex wait each server's own
+# startup_timeout_sec (10 s) instead.
 _CODEX_CONFIG_TMPL = """model = "{model}"
 model_provider = "{provider}"
 model_reasoning_effort = "{effort}"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_context_window = {ctx}
+mcp_optional_startup_grace_ms = 0
 [model_providers.{provider}]
 name = "{name}"
 base_url = "{base_url}"
@@ -1924,7 +1976,8 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     # its dsh-agent-instructions loader), same mechanism as codex/hermes/pi.
     job = {"prompt": prompt, "model": model, "cwd": cwd,
            "session_id": resume_session_id or "",
-           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url")]}
+           # a server is a url or, for a plugin's stdio server, the launcher the runner wrote
+           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")]}
     if not _DSH_DEEPSEEK_MODEL.search(model or ""):
         # Family decides the route, not the integration's name: deepseek models keep the
         # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
@@ -2107,15 +2160,20 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
 
 def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
     """Write $HOME/.pi/agent/mcp.json for pi-mcp-adapter (same input contract as the claude/codex
-    writers: url + optional auth/headers). Returns whether any server was written. The agent-dir
+    writers: url + optional auth/headers, or command + args for a plugin's stdio server). Returns
+    whether any server was written. The agent-dir
     location is deliberate: project-local .pi/mcp.json sits behind pi's trust gate; the agent dir
     does not."""
     entries: dict = {}
     for s in servers or []:
+        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
         url = (s or {}).get("url")
         if not url:
+            # A plugin's stdio server: the adapter spawns `command` itself (its stdio transport,
+            # mutually exclusive with url), and the launcher the runner wrote carries env and cwd.
+            if (s or {}).get("command"):
+                entries[name] = {"command": s["command"], "args": list(s.get("args") or [])}
             continue
-        name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
         entry: dict = {"url": url}
         auth = (s or {}).get("auth")
         if auth:
@@ -2395,7 +2453,7 @@ def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
             continue
         if not url:
             continue
-        entry: dict = {"type": "http", "url": url}
+        entry: dict = {"type": "sse" if str((s or {}).get("transport") or "").lower() == "sse" else "http", "url": url}
         auth = (s or {}).get("auth")
         if auth:
             hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
@@ -3568,7 +3626,9 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
         name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
         url = (sv.get("url") or "").strip()
         if url:
-            entry: dict = {"httpUrl": url}
+            # Their schema names the transport by the key: `url` is an SSE endpoint, `httpUrl` a
+            # streamable HTTP one; a server declared sse under httpUrl is silently never loaded.
+            entry: dict = {"url": url} if str(sv.get("transport") or "").lower() == "sse" else {"httpUrl": url}
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -3902,7 +3962,9 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
         name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
         url = (sv.get("url") or "").strip()
         if url:
-            entry: dict = {"httpUrl": url}
+            # Their schema names the transport by the key: `url` is an SSE endpoint, `httpUrl` a
+            # streamable HTTP one; a server declared sse under httpUrl is silently never loaded.
+            entry: dict = {"url": url} if str(sv.get("transport") or "").lower() == "sse" else {"httpUrl": url}
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -4050,7 +4112,7 @@ def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
             continue
         if not url:
             continue
-        entry: dict = {"transport": {"type": "streamableHttp", "url": url}}
+        entry: dict = {"transport": {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "streamableHttp", "url": url}}
         hdrs = sv.get("headers")
         if isinstance(hdrs, dict) and hdrs:
             entry["transport"]["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -6263,7 +6325,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # Installed plugin packages, whole, at their roots; then every stdio server a plugin declares
     # becomes a launcher every backend writer below already knows how to hand to its CLI.
     plugin_roots = _write_plugins(cwd, req.plugins)
-    req.mcp_servers = _plugin_launchers(cwd, req.mcp_servers)
+    req.mcp_servers = _sse_bridges(cwd, _plugin_launchers(cwd, req.mcp_servers), req.backend)
     # A package that is also a Claude Code plugin reaches the claude CLI whole through
     # --plugin-dir, which loads its skills/ itself; folding those skills into the skills
     # directory too would offer each one twice.

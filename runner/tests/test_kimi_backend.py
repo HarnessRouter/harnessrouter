@@ -297,16 +297,11 @@ def test_a_plugins_stdio_server_reaches_kimi_as_command_and_args():
     assert "--mcp-config-file" in cmd
 
 
-def test_kimi_is_registered_as_able_to_run_a_stdio_server():
-    """The gateway refuses a plugin's stdio server on a base that cannot launch one
-    (unsupported_transport). kimi can, so it must be in that set — otherwise a plugin that works
-    is rejected at write time."""
-    import os as _os
-    import sys as _sys
-    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "gateway"))
-    _os.environ.setdefault("HR_BACKING", "local")
-    import app as A
-    assert "kimi" in A._STDIO_MCP_BACKENDS
+# The companion test that asserted membership of _STDIO_MCP_BACKENDS is gone with the set itself:
+# upstream (#185) stopped declaring any transport missing, because the runner now hands every client
+# one launcher shape and bridges SSE and streamable HTTP over stdio for the ones that cannot speak
+# them. Nothing about kimi changed — its writer already emitted {command, args} — so what is left to
+# pin is the writer's output above, and that is where the value was.
 
 
 def test_the_operators_step_budget_reaches_the_cli():

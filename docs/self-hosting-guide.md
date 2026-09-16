@@ -752,8 +752,11 @@ The record you read back carries what the server derived from the package (`mani
 `mcpServers`, `skills`, and `skipped` for anything it could not load) and a `blob` handle that
 round-trips on the next PUT. The harness's own `mcpServers` and `skills` stay exactly what you wrote
 there; a plugin's components are listed on the plugin. Names must not collide across the harness and
-its enabled plugins, and a package that declares a process (a `stdio` server) is refused on a base
-that cannot run one. `GET /v1/harnesses/{id}/plugin` exports the harness's own tools and Skills as a
+its enabled plugins. A package that declares a process (a `stdio` server) installs on every base: the
+runner writes one launcher per server and each agent's own MCP client runs it (pi's adapter and dsh's
+client included). A remote server reaches each client in its own spelling, and a client without an SSE
+transport of its own (codex, dsh, goose) still takes an SSE server: the runner hands it a stdio bridge
+that speaks SSE to the remote end, so every transport installs on every base. `GET /v1/harnesses/{id}/plugin` exports the harness's own tools and Skills as a
 package, credentials omitted. The full contract is the
 [Plugins chapter](https://unifiedharnessprotocol.org/spec/2026-09-12/plugins) of the protocol.
 
