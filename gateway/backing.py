@@ -231,10 +231,24 @@ class FileBlobStore:
     async def delete(self, kb: str, file_id: str) -> bool:
         def _do():
             try:
-                self._p(kb, file_id).unlink(missing_ok=True)
-                return True
+                path = self._p(kb, file_id)
+                path.unlink(missing_ok=True)
             except (OSError, ValueError):
                 return False
+            # The directories a key's slashes created go with the last object in them, up to the
+            # store root. A blob store has no directories; this one only borrows them from the file
+            # system, and left alone they outlive every object: hr-test held 3,696 empty
+            # sessions/<sid>/ shells on 2026-09-16, one per session ever deleted. rmdir refuses a
+            # directory that still holds anything, which is the whole check.
+            base = (self._root / kb).resolve()
+            for parent in path.parents:
+                if parent == base or base not in parent.parents:
+                    break
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+            return True
         return await asyncio.to_thread(_do)
 
     async def list(self, kb: str, prefix: str, limit: int = 20, cursor: str | None = None) -> dict:
