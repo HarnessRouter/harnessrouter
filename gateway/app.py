@@ -6040,14 +6040,13 @@ _MODEL_CATALOG: dict[str, dict] = {
     # gemini-3-flash-preview, grok-4.20, hunyuan-4-preview, nemotron-3-super. They stay listed
     # because another provider serves them; they are simply unmeasured HERE.
     #
-    # FOUR IDS ARE MEASURED BUT PATHOLOGICALLY SLOW ON THIS PROVIDER, and that is stated here rather
-    # than hidden by removing them: gpt-5.6-sol and gpt-5.6-terra passed all five scenarios but took
-    # HOURS each; gpt-5.6-luna's switch hung 8,754s before failing; gpt-5.5's switch hung 2,200s and
-    # its artifact 7,418s. They were excluded from the column's re-run so one id could not eat a day
-    # of wall clock. The mechanism is not yet known — the cline/qwen entries record that the gpt-5.6
-    # line 400s through aggregator chat/completions when the request carries function tools, which
-    # _set_reasoning_effort_none repairs per (route, model), but that produces a FAST error on those
-    # backends and an hours-long wait here. Do not read this as "kimi cannot drive them".
+    # FOUR IDS RAN FOR HOURS BEFORE THE STEP BUDGET WAS WIRED, and the cause was ours: kimi's own
+    # default is 1000 steps per turn and _build_kimi was not forwarding the operator's budget, so a
+    # slow reasoning model ground through them (gpt-5.6-luna's switch 8,754s, gpt-5.5's artifact
+    # 7,418s, against 7-30s on every other id). Fixed by forwarding --max-steps-per-turn; the four
+    # were excluded from the column's re-run before the cause was known, so they are UNMEASURED
+    # here and must be re-run to confirm they are now bounded. Two of them (gpt-5.6-sol,
+    # gpt-5.6-terra) had already passed all five scenarios even unbounded.
     "kimi": {"default": "kimi-k3",
              "models": [
                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
