@@ -409,10 +409,27 @@ What it is NOT, each eliminated by measurement rather than reasoning:
 What could not be reproduced outside the product: replaying the exact four-step sequence
 (first, follow-up, switch to the partner model, artifact) through the real kimi binary against the
 same provider, with the workspace contract in AGENTS.md, completes all four turns and writes the
-file. So the remaining variable is something the gateway path adds that a CLI replay does not, and
-capturing the failing request needs an interception inside a live matrix turn. Recorded here as a
-row that fails with the provider's reproduced text, which is what the rules ask for, rather than
-guessed at.
+file. So the remaining variable is something the gateway path adds that a CLI replay does not.
+
+**The Google column then said what one column could not.** Same harness, same scenarios, 11 ids,
+**53 of 55 scenarios passed**, no foreign connection. The two failures are
+`gemini-2.5-flash`'s artifact turn — *the same sentence*, "The API returned an empty response" — and
+the recycle that followed it with nothing to recall. And `gemini-2.5-flash-lite`, which fails
+deterministically on Vercel, **passes all five here**:
+
+| id | Vercel | Google |
+|---|---|---|
+| `gemini-2.5-flash-lite` | artifact fails, empty response | 5/5 |
+| `gemini-2.5-flash` | 5/5 | artifact fails, empty response |
+
+So it is NOT the channel — both show it — and NOT one id, since each channel's healthy member is the
+other's casualty. What survives is the shape: **a gemini-2.5-class model returns an empty response on
+the artifact turn**, the one that follows a model switch and asks for a file, and which member of the
+family trips differs by provider (most likely the actual build behind the same name on each). One
+column alone would have supported the wrong conclusion — the Vercel notes above nearly recorded it as
+a property of that id on that channel.
+
+Recorded as rows that fail with the provider's reproduced text, which is what the rules ask for.
 
 Vercel's answers carry the aggregator's vendor prefix (`openai/gpt-5.4`, `anthropic/claude-opus-5`,
 `alibaba/qwen3.7-max`), which rule 2 counts as the same model.
