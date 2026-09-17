@@ -54,3 +54,21 @@ def test_an_empty_prefix_lists_the_whole_store(tmp_path):
 def test_a_prefix_that_escapes_the_store_lists_nothing(tmp_path):
     st = _store(tmp_path)
     assert asyncio.run(st.list("kb", "../", limit=20)) == {"items": [], "cursor": None}
+
+
+def test_deleting_the_last_object_removes_the_directories_its_key_made(tmp_path):
+    """A blob key's slashes borrow directories from the file system; the last object out takes
+    them with it, up to the store root, and a directory that still holds another object stays."""
+    import asyncio
+    from backing import FileBlobStore
+    st = FileBlobStore(str(tmp_path))
+    asyncio.run(st.put("kb", "sessions/s1/workspace.tgz", b"x"))
+    asyncio.run(st.put("kb", "sessions/s2/workspace.tgz", b"y"))
+    assert asyncio.run(st.delete("kb", "sessions/s1/workspace.tgz"))
+    assert not (tmp_path / "kb" / "sessions" / "s1").exists()      # its own shell is gone
+    assert (tmp_path / "kb" / "sessions" / "s2" / "workspace.tgz").exists()   # the sibling untouched
+    assert asyncio.run(st.delete("kb", "sessions/s2/workspace.tgz"))
+    assert not (tmp_path / "kb" / "sessions").exists()             # the shared parent too
+    assert (tmp_path / "kb").exists()                               # never the store root
+    assert asyncio.run(st.delete("kb", "sessions/s2/workspace.tgz"))   # deleting twice is fine
+

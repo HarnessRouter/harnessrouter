@@ -3714,7 +3714,7 @@ GEMINI_HELPER_ALIASES = {
 # them; a served model that still differs fails the turn (see _gemini_to_claude).
 GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                  "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
-                 "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")
+                 "gemini-3-flash-preview")
 
 
 def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "") -> None:

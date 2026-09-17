@@ -264,7 +264,7 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 
 9 pairs, 43 of 44 scenario runs passed.
 
-Not run in this column, 52 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 49 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -277,9 +277,6 @@ Not run in this column, 52 pairs the provider serves that the harness did not ru
 - codex x deepseek-v4-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x deepseek-v4-pro: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x deepseek-v4.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x gemini-2.5-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x gemini-2.5-flash-lite: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x gemini-2.5-pro: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x gemini-3-flash-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x gemini-3.1-flash-lite: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x gemini-3.1-pro-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -390,7 +387,7 @@ Not run in this column, 36 pairs the provider serves that the harness did not ru
 
 9 pairs, 43 of 44 scenario runs passed.
 
-Not run in this column, 50 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 47 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -403,9 +400,6 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 - codex x deepseek-v4-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x deepseek-v4-pro: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x deepseek-v4.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x gemini-2.5-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x gemini-2.5-flash-lite: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x gemini-2.5-pro: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x gemini-3-flash-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x gemini-3.1-flash-lite: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x gemini-3.1-pro-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -478,9 +472,6 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
@@ -490,7 +481,7 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 | dsh | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 
-11 pairs, 55 of 55 scenario runs passed.
+8 pairs, 40 of 40 scenario runs passed.
 
 ## Provider: dsh-openai
 
@@ -523,9 +514,6 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 | dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | OpenRouter |  |
 | dsh | deepseek-v4.1-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-2.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-2.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-2.5-pro | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | gemini-3.1-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
@@ -569,7 +557,7 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 | dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 
-56 pairs, 279 of 279 scenario runs passed.
+53 pairs, 264 of 264 scenario runs passed.
 
 Not run in this column, 5 pairs the provider serves that the harness did not run, with the reason:
 
@@ -646,9 +634,6 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
 | dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | Vercel AI Gateway |  |
 | dsh | deepseek-v4.1-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-2.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-2.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-2.5-pro | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3.1-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
@@ -694,7 +679,7 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
 | dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
 
-58 pairs, 277 of 281 scenario runs passed.
+55 pairs, 262 of 266 scenario runs passed.
 
 Not run in this column, 5 pairs the provider serves that the harness did not run, with the reason:
 
@@ -708,9 +693,6 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| gemini | gemini-2.5-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
-| gemini | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
-| gemini | gemini-2.5-pro | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-3-flash-preview | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
@@ -720,15 +702,12 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | gemini | gemini-3.7-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 | gemini | gemini-3.8-flash | pass | pass | pass (gemini-3.5-flash) | pass | pass | Google AI Studio |  |
 
-11 pairs, 55 of 55 scenario runs passed.
+8 pairs, 40 of 40 scenario runs passed.
 
 ## Provider: gemini-google
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| cline | gemini-2.5-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
-| cline | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
-| cline | gemini-2.5-pro | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio | retested once; first try: recycle answered without M1-gemini-2.5-pro: irst message of this task? Reply with just t |
 | cline | gemini-3-flash-preview | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | cline | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | cline | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
@@ -736,9 +715,6 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | cline | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | cline | gemini-3.7-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | cline | gemini-3.8-flash | pass | pass | pass (gemini-3.7-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
@@ -747,9 +723,6 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | dsh | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | dsh | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| hermes | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| hermes | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| hermes | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | hermes | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | hermes | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | hermes | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
@@ -758,9 +731,6 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | hermes | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | hermes | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | hermes | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| opencode | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | FAIL | FAIL | Google AI Studio | artifact: no file card (files: none); Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE ; recycle: answered without M1-gemini-2.5-flash: What exact word did I ask you to reply with in my very first message of this task? Reply with just tha ; opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: artifact no file card (files: none); Create a file named hello-opencode.txt containing ex; recycle answered without M1-gemini-2.5-flash: What exact word did I ask you to reply wit |
-| opencode | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try:  |
-| opencode | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: recycle answered without M1-gemini-2.5-pro: exact word did I ask you to reply with in my |
 | opencode | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Ba |
 | opencode | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Ba |
 | opencode | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Ba |
@@ -769,9 +739,6 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | opencode | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Ba |
 | opencode | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Ba |
 | opencode | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio | opencode rows re-run on 0.13.20 (opencode rides the loopback relay, #97) ; retested once; first try: artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Ba |
-| pi | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| pi | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| pi | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | pi | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | pi | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | pi | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
@@ -780,9 +747,6 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | pi | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | pi | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | pi | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| qwen | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| qwen | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| qwen | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | qwen | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | qwen | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | qwen | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
@@ -792,7 +756,7 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 | qwen | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | qwen | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 
-65 pairs, 323 of 325 scenario runs passed.
+47 pairs, 235 of 235 scenario runs passed.
 
 Not run in this column, 1 pairs the provider serves that the harness did not run, with the reason:
 
@@ -802,9 +766,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| cline | gemini-2.5-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
-| cline | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
-| cline | gemini-2.5-pro | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | cline | gemini-3-flash-preview | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | cline | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | cline | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
@@ -812,9 +773,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | cline | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | cline | gemini-3.7-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | cline | gemini-3.8-flash | pass | pass | pass (gemini-3.7-flash) | pass | pass | OpenRouter |  |
-| dsh | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| dsh | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| dsh | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | dsh | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | dsh | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | dsh | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
@@ -823,9 +781,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | dsh | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | dsh | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | dsh | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| hermes | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| hermes | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | FAIL | OpenRouter | recycle: answered without M1-gemini-2.5-flash-lite: What exact word did I ask you to reply with in my very first message of this task? Reply with jus ; retested once; first try: recycle answered without M1-gemini-2.5-flash-lite: What exact word did I ask you to repl |
-| hermes | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | hermes | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | hermes | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | hermes | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
@@ -834,9 +789,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | hermes | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | hermes | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | hermes | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| opencode | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| opencode | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| opencode | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | opencode | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | opencode | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | opencode | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
@@ -845,9 +797,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | opencode | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | opencode | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | opencode | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| pi | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| pi | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| pi | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | pi | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | pi | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | pi | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
@@ -856,9 +805,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | pi | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | OpenRouter |  |
 | pi | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | pi | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| qwen | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
-| qwen | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter | retested once; first try: followup answered without M2-gemini-2.5-flash-lite: rks) What is the desired visual aesth |
-| qwen | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | qwen | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | qwen | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | qwen | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
@@ -868,7 +814,7 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | qwen | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 | qwen | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | OpenRouter |  |
 
-65 pairs, 324 of 325 scenario runs passed.
+47 pairs, 235 of 235 scenario runs passed.
 
 Not run in this column, 301 pairs the provider serves that the harness did not run, with the reason:
 
@@ -1458,9 +1404,6 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| cline | gemini-2.5-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
-| cline | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
-| cline | gemini-2.5-pro | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | cline | gemini-3-flash-preview | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | cline | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | cline | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
@@ -1468,9 +1411,6 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 | cline | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | cline | gemini-3.7-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | cline | gemini-3.8-flash | pass | pass | pass (gemini-3.7-flash) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | FAIL | pass | Vercel AI Gateway | artifact: no file card (files: none); word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool I am sorry, I cannot fulfill this request. The availab ; retested once; first try: artifact no file card (files: none); O, then reply DONE. DEEPSEEK HARNESS Used a tool I a |
-| dsh | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
@@ -1479,9 +1419,6 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 | dsh | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | dsh | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| hermes | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| hermes | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway | retested once; first try: recycle answered without M1-gemini-2.5-flash-lite: What exact word did I ask you to repl |
-| hermes | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | hermes | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | hermes | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | hermes | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
@@ -1490,9 +1427,6 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 | hermes | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | FAIL | Vercel AI Gateway | recycle: answered without M1-gemini-3.6-flash: What exact word did I ask you to reply with in my very first message of this task? Reply with just tha ; retested once; first try: recycle answered without M1-gemini-3.6-flash: What exact word did I ask you to reply wit |
 | hermes | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | hermes | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| opencode | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| opencode | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| opencode | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | opencode | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | opencode | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | opencode | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
@@ -1501,9 +1435,6 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 | opencode | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | opencode | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | opencode | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| pi | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| pi | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| pi | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | pi | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | pi | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | pi | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
@@ -1512,9 +1443,6 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 | pi | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Vercel AI Gateway |  |
 | pi | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | pi | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| qwen | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
-| qwen | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway | retested once; first try: first answered without M1-gemini-2.5-flash-lite: ation creation process. To begin, ple |
-| qwen | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | qwen | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | qwen | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | qwen | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
@@ -1524,7 +1452,7 @@ Not run in this column, 229 pairs the provider serves that the harness did not r
 | qwen | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 | qwen | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Vercel AI Gateway |  |
 
-65 pairs, 323 of 325 scenario runs passed.
+47 pairs, 234 of 235 scenario runs passed.
 
 Not run in this column, 289 pairs the provider serves that the harness did not run, with the reason:
 
@@ -1831,11 +1759,8 @@ Not run in this column, 289 pairs the provider serves that the harness did not r
 
 5 pairs, 6 of 8 scenario runs passed.
 
-Not run in this column, 50 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 35 pairs the provider serves that the harness did not run, with the reason:
 
-- dsh x gemini-2.5-flash: not run, not run in this column
-- dsh x gemini-2.5-flash-lite: not run, not run in this column
-- dsh x gemini-2.5-pro: not run, not run in this column
 - dsh x gemini-3-flash-preview: not run, not run in this column
 - dsh x gemini-3.1-flash-lite: not run, not run in this column
 - dsh x gemini-3.1-pro-preview: not run, not run in this column
@@ -1843,9 +1768,6 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 - dsh x gemini-3.5-flash-lite: not run, not run in this column
 - dsh x gemini-3.7-flash: not run, not run in this column
 - dsh x gemini-3.8-flash: not run, not run in this column
-- hermes x gemini-2.5-flash: not run, not run in this column
-- hermes x gemini-2.5-flash-lite: not run, not run in this column
-- hermes x gemini-2.5-pro: not run, not run in this column
 - hermes x gemini-3-flash-preview: not run, not run in this column
 - hermes x gemini-3.1-flash-lite: not run, not run in this column
 - hermes x gemini-3.1-pro-preview: not run, not run in this column
@@ -1853,9 +1775,6 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 - hermes x gemini-3.5-flash-lite: not run, not run in this column
 - hermes x gemini-3.7-flash: not run, not run in this column
 - hermes x gemini-3.8-flash: not run, not run in this column
-- opencode x gemini-2.5-flash: not run, not run in this column
-- opencode x gemini-2.5-flash-lite: not run, not run in this column
-- opencode x gemini-2.5-pro: not run, not run in this column
 - opencode x gemini-3-flash-preview: not run, not run in this column
 - opencode x gemini-3.1-flash-lite: not run, not run in this column
 - opencode x gemini-3.1-pro-preview: not run, not run in this column
@@ -1863,9 +1782,6 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 - opencode x gemini-3.5-flash-lite: not run, not run in this column
 - opencode x gemini-3.7-flash: not run, not run in this column
 - opencode x gemini-3.8-flash: not run, not run in this column
-- pi x gemini-2.5-flash: not run, not run in this column
-- pi x gemini-2.5-flash-lite: not run, not run in this column
-- pi x gemini-2.5-pro: not run, not run in this column
 - pi x gemini-3-flash-preview: not run, not run in this column
 - pi x gemini-3.1-flash-lite: not run, not run in this column
 - pi x gemini-3.1-pro-preview: not run, not run in this column
@@ -1873,9 +1789,6 @@ Not run in this column, 50 pairs the provider serves that the harness did not ru
 - pi x gemini-3.5-flash-lite: not run, not run in this column
 - pi x gemini-3.7-flash: not run, not run in this column
 - pi x gemini-3.8-flash: not run, not run in this column
-- qwen x gemini-2.5-flash: not run, not run in this column
-- qwen x gemini-2.5-flash-lite: not run, not run in this column
-- qwen x gemini-2.5-pro: not run, not run in this column
 - qwen x gemini-3-flash-preview: not run, not run in this column
 - qwen x gemini-3.1-flash-lite: not run, not run in this column
 - qwen x gemini-3.1-pro-preview: not run, not run in this column
@@ -2009,9 +1922,6 @@ Not run in this column, 2 pairs the provider serves that the harness did not run
 | goose | deepseek-v4-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
 | goose | deepseek-v4-pro | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-pro (the provider's alias of the same model) |
 | goose | deepseek-v4.1-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| goose | gemini-2.5-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as google/gemini-2.5-flash (the provider's alias of the same model) |
-| goose | gemini-2.5-flash-lite | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as google/gemini-2.5-flash-lite (the provider's alias of the same model) |
-| goose | gemini-2.5-pro | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as google/gemini-2.5-pro (the provider's alias of the same model) |
 | goose | gemini-3-flash-preview | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as google/gemini-3-flash-preview (the provider's alias of the same model) |
 | goose | gemini-3.1-flash-lite | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) |
 | goose | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
@@ -2058,7 +1968,7 @@ Not run in this column, 2 pairs the provider serves that the harness did not run
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as qwen/qwen3.8-max-0902 (the provider's alias of the same model) |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-58 pairs, 289 of 290 scenario runs passed.
+55 pairs, 274 of 275 scenario runs passed.
 
 Not run in this column, 3 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2135,9 +2045,6 @@ Not run in this column, 3 pairs the provider serves that the harness did not run
 | goose | deepseek-v4-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
 | goose | deepseek-v4-pro | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4-pro (the provider's alias of the same model) |
 | goose | deepseek-v4.1-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| goose | gemini-2.5-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-flash (the provider's alias of the same model) |
-| goose | gemini-2.5-flash-lite | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-flash-lite (the provider's alias of the same model) |
-| goose | gemini-2.5-pro | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-pro (the provider's alias of the same model) |
 | goose | gemini-3-flash-preview | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3-flash (the provider's alias of the same model) |
 | goose | gemini-3.1-flash-lite | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) |
 | goose | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
@@ -2188,7 +2095,7 @@ Please retry if you think this is a transi |
 | goose | qwen3.8-max | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-max (the provider's alias of the same model) |
 | goose | step-3.7-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-60 pairs, 283 of 287 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
+57 pairs, 268 of 272 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -2257,9 +2164,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| omp | gemini-2.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| omp | gemini-2.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| omp | gemini-2.5-pro | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
@@ -2269,7 +2173,7 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | omp | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 | omp | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
 
-11 pairs, 55 of 55 scenario runs passed.
+8 pairs, 40 of 40 scenario runs passed.
 
 ## Provider: omp-openai
 
@@ -2305,9 +2209,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | omp | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
 | omp | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-pro (the provider's alias of the same model) |
 | omp | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| omp | gemini-2.5-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-2.5-flash (the provider's alias of the same model) |
-| omp | gemini-2.5-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-2.5-flash-lite (the provider's alias of the same model) |
-| omp | gemini-2.5-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-2.5-pro (the provider's alias of the same model) |
 | omp | gemini-3-flash-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3-flash-preview (the provider's alias of the same model) |
 | omp | gemini-3.1-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) |
 | omp | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
@@ -2350,7 +2251,7 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | omp | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as qwen/qwen3.8-max-0902 (the provider's alias of the same model) |
 | omp | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-55 pairs, 274 of 274 scenario runs passed.
+52 pairs, 259 of 259 scenario runs passed.
 
 Not run in this column, 6 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2431,9 +2332,6 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 | omp | deepseek-v4-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) |
 | omp | deepseek-v4-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4-pro (the provider's alias of the same model) |
 | omp | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| omp | gemini-2.5-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-flash (the provider's alias of the same model) |
-| omp | gemini-2.5-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-flash-lite (the provider's alias of the same model) |
-| omp | gemini-2.5-pro | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-2.5-pro (the provider's alias of the same model) |
 | omp | gemini-3-flash-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3-flash (the provider's alias of the same model) |
 | omp | gemini-3.1-flash-lite | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) |
 | omp | gemini-3.1-pro-preview | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as google/gemini-3.1-pro-preview (the provider's alias of the same model) |
@@ -2479,7 +2377,7 @@ Tool calling is not supporte |
 | omp | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-max (the provider's alias of the same model) |
 | omp | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | Vercel AI Gateway | served as stepfun/step-3.7-flash (the provider's alias of the same model) |
 
-57 pairs, 267 of 271 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
+54 pairs, 252 of 256 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -2800,7 +2698,7 @@ session_id: 20260913_060549_70cbeb |
 
 224 pairs, 1115 of 1120 scenario runs passed.
 
-Not run in this column, 142 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 124 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -2812,9 +2710,6 @@ Not run in this column, 142 pairs the provider serves that the harness did not r
 - cline x claude-sonnet-5: not run, not run in this column
 - cline x deepseek-v4-flash: not run, not run in this column
 - cline x deepseek-v4-pro: not run, not run in this column
-- cline x gemini-2.5-flash: not run, not run in this column
-- cline x gemini-2.5-flash-lite: not run, not run in this column
-- cline x gemini-2.5-pro: not run, not run in this column
 - cline x gemini-3-flash-preview: not run, not run in this column
 - cline x gemini-3.1-flash-lite: not run, not run in this column
 - cline x gemini-3.1-pro-preview: not run, not run in this column
@@ -2847,9 +2742,6 @@ Not run in this column, 142 pairs the provider serves that the harness did not r
 - cline x step-3.7-flash: not run, not run in this column
 - dsh x claude-fable-5-1: not run, not run in this column
 - dsh x deepseek-v4.1-flash: not run, not run in this column
-- dsh x gemini-2.5-flash: not run, not run in this column
-- dsh x gemini-2.5-flash-lite: not run, not run in this column
-- dsh x gemini-2.5-pro: not run, not run in this column
 - dsh x gemini-3-flash-preview: not run, not run in this column
 - dsh x gemini-3.1-flash-lite: not run, not run in this column
 - dsh x gemini-3.1-pro-preview: not run, not run in this column
@@ -2881,9 +2773,6 @@ Not run in this column, 142 pairs the provider serves that the harness did not r
 - dsh x qwen3.8-27b: not run, not run in this column
 - dsh x qwen3.8-flash: not run, not run in this column
 - hermes x claude-fable-5-1: not run, not run in this column
-- hermes x gemini-2.5-flash: not run, not run in this column
-- hermes x gemini-2.5-flash-lite: not run, not run in this column
-- hermes x gemini-2.5-pro: not run, not run in this column
 - hermes x gemini-3-flash-preview: not run, not run in this column
 - hermes x gemini-3.1-flash-lite: not run, not run in this column
 - hermes x gemini-3.1-pro-preview: not run, not run in this column
@@ -2893,9 +2782,6 @@ Not run in this column, 142 pairs the provider serves that the harness did not r
 - hermes x gemini-3.8-flash: not run, not run in this column
 - hermes x gpt-6-astra: not run, not run in this column
 - opencode x claude-fable-5-1: not run, not run in this column
-- opencode x gemini-2.5-flash: not run, not run in this column
-- opencode x gemini-2.5-flash-lite: not run, not run in this column
-- opencode x gemini-2.5-pro: not run, not run in this column
 - opencode x gemini-3-flash-preview: not run, not run in this column
 - opencode x gemini-3.1-flash-lite: not run, not run in this column
 - opencode x gemini-3.1-pro-preview: not run, not run in this column
@@ -2910,9 +2796,6 @@ Not run in this column, 142 pairs the provider serves that the harness did not r
 - opencode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x claude-fable-5-1: not run, not run in this column
-- pi x gemini-2.5-flash: not run, not run in this column
-- pi x gemini-2.5-flash-lite: not run, not run in this column
-- pi x gemini-2.5-pro: not run, not run in this column
 - pi x gemini-3-flash-preview: not run, not run in this column
 - pi x gemini-3.1-flash-lite: not run, not run in this column
 - pi x gemini-3.1-pro-preview: not run, not run in this column
@@ -2927,9 +2810,6 @@ Not run in this column, 142 pairs the provider serves that the harness did not r
 - pi x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x claude-fable-5-1: not run, not run in this column
-- qwen x gemini-2.5-flash: not run, not run in this column
-- qwen x gemini-2.5-flash-lite: not run, not run in this column
-- qwen x gemini-2.5-pro: not run, not run in this column
 - qwen x gemini-3-flash-preview: not run, not run in this column
 - qwen x gemini-3.1-flash-lite: not run, not run in this column
 - qwen x gemini-3.1-pro-preview: not run, not run in this column
@@ -3340,7 +3220,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - pi x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 - qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 213 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 198 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -3352,9 +3232,6 @@ Not run in this column, 213 pairs the provider serves that the harness did not r
 - cline x claude-sonnet-5: not run, not run in this column
 - cline x deepseek-v4-flash: not run, not run in this column
 - cline x deepseek-v4-pro: not run, not run in this column
-- cline x gemini-2.5-flash: not run, not run in this column
-- cline x gemini-2.5-flash-lite: not run, not run in this column
-- cline x gemini-2.5-pro: not run, not run in this column
 - cline x gemini-3-flash-preview: not run, not run in this column
 - cline x gemini-3.1-flash-lite: not run, not run in this column
 - cline x gemini-3.1-pro-preview: not run, not run in this column
@@ -3395,9 +3272,6 @@ Not run in this column, 213 pairs the provider serves that the harness did not r
 - hermes x claude-sonnet-5: not run, not run in this column
 - hermes x deepseek-v4-flash: not run, not run in this column
 - hermes x deepseek-v4-pro: not run, not run in this column
-- hermes x gemini-2.5-flash: not run, not run in this column
-- hermes x gemini-2.5-flash-lite: not run, not run in this column
-- hermes x gemini-2.5-pro: not run, not run in this column
 - hermes x gemini-3-flash-preview: not run, not run in this column
 - hermes x gemini-3.1-flash-lite: not run, not run in this column
 - hermes x gemini-3.1-pro-preview: not run, not run in this column
@@ -3436,9 +3310,6 @@ Not run in this column, 213 pairs the provider serves that the harness did not r
 - opencode x claude-sonnet-5: not run, not run in this column
 - opencode x deepseek-v4-flash: not run, not run in this column
 - opencode x deepseek-v4-pro: not run, not run in this column
-- opencode x gemini-2.5-flash: not run, not run in this column
-- opencode x gemini-2.5-flash-lite: not run, not run in this column
-- opencode x gemini-2.5-pro: not run, not run in this column
 - opencode x gemini-3-flash-preview: not run, not run in this column
 - opencode x gemini-3.1-flash-lite: not run, not run in this column
 - opencode x gemini-3.1-pro-preview: not run, not run in this column
@@ -3479,9 +3350,6 @@ Not run in this column, 213 pairs the provider serves that the harness did not r
 - pi x claude-sonnet-5: not run, not run in this column
 - pi x deepseek-v4-flash: not run, not run in this column
 - pi x deepseek-v4-pro: not run, not run in this column
-- pi x gemini-2.5-flash: not run, not run in this column
-- pi x gemini-2.5-flash-lite: not run, not run in this column
-- pi x gemini-2.5-pro: not run, not run in this column
 - pi x gemini-3-flash-preview: not run, not run in this column
 - pi x gemini-3.1-flash-lite: not run, not run in this column
 - pi x gemini-3.1-pro-preview: not run, not run in this column
@@ -3522,9 +3390,6 @@ Not run in this column, 213 pairs the provider serves that the harness did not r
 - qwen x claude-sonnet-5: not run, not run in this column
 - qwen x deepseek-v4-flash: not run, not run in this column
 - qwen x deepseek-v4-pro: not run, not run in this column
-- qwen x gemini-2.5-flash: not run, not run in this column
-- qwen x gemini-2.5-flash-lite: not run, not run in this column
-- qwen x gemini-2.5-pro: not run, not run in this column
 - qwen x gemini-3-flash-preview: not run, not run in this column
 - qwen x gemini-3.1-flash-lite: not run, not run in this column
 - qwen x gemini-3.1-pro-preview: not run, not run in this column
