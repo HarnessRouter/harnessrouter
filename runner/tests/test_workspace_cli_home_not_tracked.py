@@ -92,3 +92,76 @@ def test_opencode_is_told_not_to_snapshot(tmp_path):
                             "gpt-5.4", str(tmp_path), None, None, pr="openai")
     cfg = json.load(open(tmp_path / ".harness" / "opencode.json"))
     assert cfg["snapshot"] is False
+
+
+def test_a_workspace_that_already_tracks_the_cli_home_sheds_the_copies_in_its_history():
+    # untracking releases the index; it does not release .git/objects. Twenty pre-fix checkpoints
+    # of a 136 MB session db are twenty reachable blobs, and the tarball carries them on every
+    # later turn of that session (722 MB of the 1.4 GB in #193). The repo's one reader needs only
+    # the cursor's tree and HEAD's tree, so the rest is rewritten away — and what /produced
+    # answers must be the same before and after.
+    d = _ws_with_cli_home()
+    db = d / ".harness" / "home" / ".local" / "share" / "opencode" / "opencode.db"
+    blobs = []
+    for i in range(3):                                # three pre-fix checkpoints, each a new copy
+        db.write_bytes(bytes([i + 1]) * 65536)
+        blobs.append(_git(str(d), "hash-object", "--", str(db)).stdout.strip())
+        subprocess.run(["git", "-C", str(d), "add", "-f", "-A", "--", "plan.json", ".harness/home"], check=True)
+        subprocess.run(["git", "-C", str(d), "commit", "-q", "-m", f"checkpoint {i}"], check=True)
+    # the cursor exists and sits on that history (set by hand: _produced_ack runs _git_ensure,
+    # the very call under test)
+    _git(str(d), "update-ref", server._COLLECTED_REF, "HEAD")
+    (d / "plan.json").write_text('{"step": 2}')       # produced since the last collection, not yet collected
+    (d / "report.md").write_text("done")
+    before = {"plan.json", "report.md"}
+    for b in blobs:
+        assert _git(str(d), "cat-file", "-e", b).returncode == 0
+
+    _git_ensure(str(d))                               # the first call of the session's next turn
+
+    assert {f["path"] for f in _produced_list(str(d))} == before, "the cursor→worktree answer is unchanged"
+    assert not any(p.startswith(".harness/home/") for p in _git(str(d), "ls-files").stdout.split())
+    assert db.exists() and db.read_bytes()[:1] == b"\x03", "the file itself is untouched"
+    for b in blobs:
+        assert _git(str(d), "cat-file", "-e", b).returncode != 0, f"blob {b} is still reachable"
+    assert _git(str(d), "rev-list", "--count", "HEAD").stdout.strip() == "2"
+    # and the session goes on: the next checkpoint commits on top of the rewritten tip
+    _git(str(d), "add", "-A")
+    _git(str(d), "commit", "-q", "-m", "checkpoint")
+    assert _git(str(d), "rev-list", "--count", "HEAD").stdout.strip() == "3"
+    assert _git(str(d), "fsck", "--no-progress").returncode == 0
+
+
+def test_a_workspace_that_never_tracked_the_cli_home_is_not_rewritten():
+    d = _ws_with_cli_home()
+    _git(str(d), "add", "-A")
+    _git(str(d), "commit", "-q", "-m", "checkpoint 0")
+    (d / "plan.json").write_text("{1}")
+    _git(str(d), "add", "-A")
+    _git(str(d), "commit", "-q", "-m", "checkpoint 1")
+    head = _git(str(d), "rev-parse", "HEAD").stdout.strip()
+    _git_ensure(str(d))
+    assert _git(str(d), "rev-parse", "HEAD").stdout.strip() == head
+    assert _git(str(d), "rev-list", "--count", "HEAD").stdout.strip() == "2"
+
+
+def test_a_workspace_whose_cli_home_was_untracked_by_an_earlier_turn_still_sheds_the_copies():
+    # the index is the wrong signal: a session that untracked the home a turn ago has a clean
+    # index and the same reachable copies (seen live on a session that took one turn on the
+    # untrack-only build before this landed: 25 MB of .git and a 28 MB tarball, unchanged)
+    d = _ws_with_cli_home()
+    db = d / ".harness" / "home" / ".local" / "share" / "opencode" / "opencode.db"
+    db.write_bytes(b"\x07" * 65536)
+    blob = _git(str(d), "hash-object", "--", str(db)).stdout.strip()
+    subprocess.run(["git", "-C", str(d), "add", "-f", "-A", "--", "plan.json", ".harness/home"], check=True)
+    subprocess.run(["git", "-C", str(d), "commit", "-q", "-m", "pre-fix checkpoint"], check=True)
+    subprocess.run(["git", "-C", str(d), "rm", "-r", "-q", "--cached", "--", ".harness/home"], check=True)
+    subprocess.run(["git", "-C", str(d), "commit", "-q", "-m", "checkpoint (untracked, history kept)"], check=True)
+    assert not _git(str(d), "ls-files", "--", ".harness/home").stdout.strip()
+    assert _git(str(d), "cat-file", "-e", blob).returncode == 0
+    _git_ensure(str(d))
+    assert _git(str(d), "cat-file", "-e", blob).returncode != 0
+    assert _git(str(d), "rev-list", "--count", "HEAD").stdout.strip() == "1"   # no cursor yet: HEAD's tree alone
+    head = _git(str(d), "rev-parse", "HEAD").stdout.strip()
+    _git_ensure(str(d))                                                       # and it does not run twice
+    assert _git(str(d), "rev-parse", "HEAD").stdout.strip() == head

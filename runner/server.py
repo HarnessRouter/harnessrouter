@@ -464,9 +464,9 @@ def _ver(cmd: list[str]) -> str:
 
 
 # ── git-backed workspace (hydrate at turn start, checkpoint at turn end) ───────────
-def _git(ws: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True,
-                          env={**os.environ, **_GIT_ENV}, check=check, **_as_session(ws))
+                          env={**os.environ, **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
 
 
 def _git_ensure(ws: str) -> None:
@@ -501,9 +501,60 @@ def _git_ensure(ws: str) -> None:
         # An ignore rule does not release what an earlier checkpoint already committed: a
         # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
         # hydrated from before this rule would keep growing exactly as before. Drop the CLI
-        # home from the index (not from disk); the next checkpoint commit records the removal
-        # and from then on the ignore rule holds. A no-op on a repo that never tracked it.
-        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
+        # home from the index (not from disk); from then on the ignore rule holds.
+        if _git(ws, "ls-files", "--", ".harness/home").stdout.strip():
+            _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
+        # Untracking releases the index, not .git/objects: every copy the old checkpoints
+        # committed stays reachable from those commits and rides in every later tarball of the
+        # session (722 MB of the 1.4 GB in #193). The signal is the history, not the index — a
+        # session whose home was untracked by an earlier turn still carries the copies. Once
+        # per session: after the shed no reachable commit touches the path.
+        if _git(ws, "rev-list", "-1", "HEAD", "--", ".harness/home").stdout.strip():
+            _git_shed_cli_home_history(ws)
+
+
+def _git_shed_cli_home_history(ws: str) -> None:
+    """Rewrite a pre-#193 workspace repo down to what /produced reads — the collected cursor's
+    tree and HEAD's tree, each without .harness/home — and prune everything else.
+
+    /produced is the repo's one reader, and it reads two things: `diff refs/hr/collected` against
+    the worktree, and `status` (see _produced_list). Neither looks past those two trees, so the
+    history between and before them is dead weight, and for a session checkpointed before the
+    ignore rule it is where every earlier copy of the CLI home lives. Untracking alone leaves those
+    blobs reachable from the old commits, so the tarball would carry them on every later turn.
+    Each tree is rebuilt in a scratch index minus .harness/home (a path /produced excludes anyway),
+    so the cursor→worktree diff a caller sees before and after this is the same set of files.
+    gc prunes the unreachable blobs; on the reported repo that is the one-off cost of one gc,
+    paid at the session's first turn after upgrade."""
+    if _git(ws, "rev-parse", "-q", "--verify", "HEAD").returncode != 0:
+        return                                   # nothing committed yet: nothing to shed
+    scratch = os.path.join(ws, ".git", "hr-shed-index")   # owned by the session, like the rest of .git
+
+    def _tree_without_home(commit: str) -> str:
+        env = {"GIT_INDEX_FILE": scratch}
+        _git(ws, "read-tree", commit, env=env)
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home", env=env)
+        return _git(ws, "write-tree", env=env).stdout.strip()
+
+    try:
+        parent: list[str] = []
+        if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
+            c_tree = _tree_without_home(_COLLECTED_REF)
+            c_new = _git(ws, "commit-tree", c_tree, "-m", "collected (cli home history shed)").stdout.strip()
+            if c_new:
+                _git(ws, "update-ref", _COLLECTED_REF, c_new)
+                parent = ["-p", c_new]
+        h_tree = _tree_without_home("HEAD")
+        h_new = _git(ws, "commit-tree", h_tree, *parent, "-m", "checkpoint (cli home history shed)").stdout.strip()
+        if h_new:
+            _git(ws, "update-ref", "HEAD", h_new)      # HEAD is symbolic: this moves the branch
+    finally:
+        try:
+            os.unlink(scratch)
+        except OSError:
+            pass
+    _git(ws, "reflog", "expire", "--expire=now", "--all")
+    _git(ws, "gc", "-q", "--prune=now")
 
 
 # ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
