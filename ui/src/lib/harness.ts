@@ -133,10 +133,9 @@ export const OOB: OobHarness[] = [
     systemPrompt: 'You are goose, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'kimi', name: 'Kimi Code CLI', version: 'v2.0.0', backend: 'kimi', status: 'ready',
-    // Placeholder only, like every list above: the gateway's catalog wins once fetched. Measured on
-    // Vercel (46 ids, 229/230 scenarios) and Google (11 ids, 53/55); the gateway's
-    // _MODEL_CATALOG["kimi"] says which ids neither column ran and why. kimi family first, since it
-    // is the backend's home family.
+    // Placeholder only, like every list above: the gateway's catalog wins once fetched. Every id was
+    // measured on Kimi Code CLI 2.0.0 (five console scenarios, 248 of 250); the gateway's
+    // _MODEL_CATALOG["kimi"] and docs/support-matrix-notes.md carry the record.
     models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'kimi-k3', moreModels: 0,
     systemPrompt: 'You are Kimi Code CLI, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },

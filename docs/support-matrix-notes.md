@@ -313,7 +313,84 @@ re-run once.
   on opencode because the same pair passes on Vercel; the miss is recorded. OpenRouter's no-channel set
   is empty.
 
-## The kimi backend (Kimi Code CLI 1.50.0) — behaviour measured, columns NOT yet run
+## The kimi backend: Kimi Code CLI 2.0.0 (2026-09-17)
+
+0.18.0 wired this base to MoonshotAI/kimi-cli 1.50.0. That is the predecessor: its own README opens
+with "Kimi CLI is evolving into Kimi Code CLI", and the product, the one kimi.ai/code points at, is
+the TypeScript rewrite in MoonshotAI/kimi-code. The base now runs the product itself. Everything
+below was measured on the 2.0.0 binary, first on the test VM host and then through the product on a
+candidate image; the section after this one is the predecessor's record and no longer describes what
+the base runs.
+
+**The surface, as measured.**
+
+- Headless is `kimi -p <prompt> --output-format stream-json`, one JSON message per line: a version
+  line, assistant text (`content` a string), assistant tool calls (no `content` key, `arguments` a JSON
+  string), tool results, and LAST a `session.resume_hint` line, the only place the session id appears.
+  No usage and no result event: usage is the relay's, the process exiting ends the turn.
+- The model is defined from the environment alone (`KIMI_MODEL_NAME` and its family): a provider
+  synthesised in memory, no config file, no key at rest. After a full session the data home
+  (`KIMI_CODE_HOME`, under the workspace so a resume survives a recycle) held no trace of the key.
+  Telemetry and the self-update preflight are switched off by environment.
+- Resume is `-r <id>`. An id the store does not hold is a hard failure, exit 1 with `Session "<id>"
+  not found`, where the predecessor silently started over; the builder asks the store first and a lost
+  conversation is reported through the resume-lost note instead of failing the turn.
+- Failures are exit 1 and one stderr line, `error: failed to run prompt: <class>: <reason>`
+  (`provider.auth_error: 401 …`, `loop.max_steps_exceeded: …`), followed by a `See log: <path>` note
+  that is trimmed from the reason. The step budget is `KIMI_LOOP_MAX_STEPS_PER_TURN`; unset is unlimited.
+- Tool policy is an agent file (Markdown) whose `disallowedTools` match by exact NAME and are enforced
+  again before execution. The 26 names are the `tools` array of a live request captured at a stub.
+  The agent is bound when the session is created, so a policy change reaches the next conversation,
+  not the open one.
+- MCP is `$KIMI_CODE_HOME/mcp.json`: a `command` entry is stdio (args, env, cwd honoured), a `url` is
+  streamable HTTP, and a legacy server says `transport: "sse"` explicitly. Tools are named
+  `mcp__<server>__<tool>`. Skills come from `--skills-dir`; AGENTS.md is honoured.
+
+**Two things the product run found, both fixed before merge.**
+
+- With only Bash disallowed, kimi-k3 said it had no shell of its own "but I can dispatch a subagent
+  that does", and did: a built-in subagent carries its own tool list. The agent file now empties the
+  subagent allowlist whenever a tool is withheld; the same prompt then calls nothing and says it has
+  no shell.
+- An MCP server that cannot be reached is skipped in SILENCE: no stream line, nothing on stderr,
+  exit 0, where the predecessor failed the turn. The only trace is one line in the CLI's log. The
+  runner reads this turn's lines and the reply now ends with a note naming the server.
+
+**Measured through the product** on the candidate image (hr-test, 2026-09-17): a volume first started
+by 0.18.0 was upgraded from the old binary in place (`kimi, version 1.50.0` to `2.0.0`, digest
+checked); first turn, a follow-up that remembered, an artifact; a person's own skill with its script
+plus an MCP tool in ONE round, twice in one session (`Skill`, `Bash`, `mcp__probe__probe_http`), the
+script's value one that can only come from running it; the four plugin columns (skill, stdio, SSE,
+streamable HTTP).
+
+**Every id on the five console scenarios, through a real browser** (first turn, follow-up, switch to
+another model and back, an artifact checked on the file cards, a recycle that must recall the first
+message after the sandbox is let go): 50 ids across six connections (TokenRouter 38, Vercel 6,
+Anthropic 2, a custom OpenAI endpoint 2, Azure OpenAI 1, OpenRouter 1), **248 of 250**, taking the
+latest run of each id. The first full pass was 217 of 250, and all but two of its misses were one
+cause with two faces:
+
+- **The CLI sends request fields nobody configured**, captured at a stub across ten model families:
+  `max_tokens: 131072` on every request (as `max_completion_tokens` for a gpt or o name), an output
+  budget sized for a Kimi window, and `reasoning_effort: "high"` whenever the model NAME looks like a
+  reasoning model. OpenAI, Anthropic and Google refuse the first outright, each naming its limit
+  ("supports at most 128000 completion tokens", "131072 > 128000", "range is from 1 to 65537
+  (exclusive)"); on llama-3.3-70b the budget alone overflows the 131k window ("requested about
+  154972 tokens ... 131072 in the output"); TokenRouter turns the second into `thinking.type.enabled`,
+  which claude-fable-5-1, claude-fable-5, claude-opus-4.8, claude-opus-4.7 and claude-sonnet-5 refuse
+  ("Use thinking.type.adaptive"). The relay route this base registers is born dropping all three, so
+  the provider's defaults apply as on every other base. `prompt_cache_key`, the one other extra,
+  is harmless and stays. The CLI also retries a failing step ten times, a flat 400 included (143 to
+  178 s to surface a refusal); the base sets three attempts.
+- **claude-opus-5, artifact and recycle, three runs of three:** "Provider safety policy blocked the
+  response". Isolated through the API: the scenario's own words trip it. After the switch turn has
+  gpt-5.6-sol answer `M3-gpt-5.6-sol`, the next claude-opus-5 turn is blocked; the same shape with
+  neutral words (a text turn, a switch turn answering `SW-1`, then the file) passes every time, as
+  does the artifact prompt on a fresh session. It is the provider's policy meeting the test's
+  vocabulary, not the wiring, and the id stays listed.
+
+
+## The kimi backend's first wiring: Kimi CLI 1.50.0, the predecessor (superseded, kept as the record) — behaviour measured, columns NOT yet run
 
 No column has run for this harness. Everything below was measured against the pinned 1.50.0
 artifact — its source, its bytes on the wire, and two live turns through Vercel — and none of it is

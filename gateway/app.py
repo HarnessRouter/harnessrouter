@@ -6025,28 +6025,18 @@ _MODEL_CATALOG: dict[str, dict] = {
     # its text turns answer but its first tool turn is refused on every channel (TokenRouter
     # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
     # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
-    # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
-    # relay), so the list is qwen's, reordered to put the kimi family first as its home family.
+    # kimi (Kimi Code CLI): the same relay reach as qwen and cline (OpenAI chat/completions through the
+    # loopback relay), so the list is qwen's, reordered to put the kimi family first as its home family.
     #
-    # MEASURED, two columns, 2026-09-16, against a candidate built from this branch:
-    #   Vercel  46 ids x 5 scenarios -> 229/230 passed, no foreign connection
-    #   Google  11 ids x 5 scenarios ->  53/55  passed, no foreign connection
-    # Google serves only its own family, which is why its column is eleven ids and not forty-six.
+    # MEASURED on Kimi Code CLI 2.0.0, 2026-09-17, against a candidate built from the rewiring branch:
+    # every id below on the five console scenarios through a real browser, across six connections
+    # (TokenRouter 38, Vercel 6, Anthropic 2, a custom OpenAI endpoint 2, Azure OpenAI 1, OpenRouter 1):
+    # 248 of 250. The two misses are claude-opus-5's artifact and recycle turns, the provider's safety
+    # policy meeting the scenario's own words (neutral words pass); see docs/support-matrix-notes.md,
+    # which also records the three request fields this CLI invents and the route drops.
     #
-    # THE SEVEN IDS NEITHER COLUMN RAN, and why: Vercel does not serve claude-fable-5-1,
-    # gemini-3-flash-preview, grok-4.20, hunyuan-4-preview or nemotron-3-super, and this
-    # deployment's model map had no entry for gemini-3.6-flash or llama-3.3-70b. They stay listed
-    # because other providers serve them; they are unmeasured HERE, which is not the same as refused.
-    #
-    # THE ONE FINDING, and it needed both columns to read correctly: a gemini-2.5-class model
-    # returns "The API returned an empty response" on the artifact turn — the one that follows a
-    # model switch and asks for a file. On Vercel that is gemini-2.5-flash-lite (three runs, two
-    # builds) while gemini-2.5-flash passes; on Google it is exactly the other way round. So it
-    # belongs to neither the channel nor one id. See docs/support-matrix-notes.md.
-    #
-    # kimi does not rewrite the id it is given: the value reaches the provider verbatim (captured at
-    # a stub and against both live gateways), and its only alias machinery raises KeyError on a miss
-    # rather than substituting — the gemini resolveModel class of silent substitution is absent.
+    # The id reaches the provider verbatim: KIMI_MODEL_NAME is sent as `model` unchanged (captured at
+    # a stub), so the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
