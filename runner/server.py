@@ -2820,55 +2820,6 @@ def _drop_stream_options(body: bytes) -> bytes:
     return body
 
 
-_MAX_TOKENS_REFUSAL = re.compile(rb"max_tokens|max_completion_tokens|maxOutputTokens|output tokens", re.I)
-
-
-def _max_tokens_cap_from_refusal(data: bytes, body: bytes | None) -> int | None:
-    """The output-token limit a provider STATED while refusing a request for asking too many.
-
-    Kimi Code CLI budgets output from the context window and sends `max_tokens: 131072` on every
-    request; endpoints that allow less refuse the whole request, each naming its limit (measured
-    through the product, 2026-09-17):
-      OpenAI     "max_tokens is too large: 131072. This model supports at most 128000 completion tokens"
-      Anthropic  "max_tokens: 131072 > 128000, which is the maximum allowed number of output tokens"
-      Google     "maxOutputTokens value of 131072 but the supported range is from 1 (inclusive) to
-                  65537 (exclusive)"
-    The limit is the largest number in the message that is below what was sent (minus one when the
-    provider calls its bound exclusive). None when the refusal is about something else, or names no
-    usable number: then nothing is guessed."""
-    if not data or not _MAX_TOKENS_REFUSAL.search(data):
-        return None
-    try:
-        obj = json.loads(body or b"{}")
-        sent = int(obj.get("max_tokens") or obj.get("max_completion_tokens") or 0)
-    except Exception:  # noqa: BLE001
-        return None
-    if sent <= 1:
-        return None
-    text = data.decode("utf-8", "replace")
-    below = [int(n) for n in re.findall(r"(?<![\w.])(\d{3,9})(?![\w.])", text) if 1 < int(n) < sent]
-    if not below:
-        return None
-    cap = max(below)
-    if re.search(rf"{cap}\s*\(exclusive\)", text):
-        cap -= 1
-    return cap if cap >= 1 else None
-
-
-def _clamp_max_tokens(body: bytes, cap: int) -> bytes:
-    """Hold max_tokens / max_completion_tokens to `cap`; a body that asks for less is untouched."""
-    try:
-        obj = json.loads(body)
-        changed = False
-        for k in ("max_tokens", "max_completion_tokens"):
-            if isinstance(obj, dict) and isinstance(obj.get(k), int) and obj[k] > cap:
-                obj[k] = cap
-                changed = True
-        return json.dumps(obj, separators=(",", ":")).encode() if changed else body
-    except Exception:  # noqa: BLE001
-        return body
-
-
 def _rename_max_tokens(body: bytes) -> bytes:
     """max_tokens -> max_completion_tokens in one chat-completions body.
 
@@ -3298,8 +3249,6 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _body_model = ""
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
-            if flags.get(f"max_tokens_cap:{_body_model}"):
-                body = _clamp_max_tokens(body, int(flags[f"max_tokens_cap:{_body_model}"]))
             if flags.get("rename_max_tokens"):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
@@ -3340,14 +3289,6 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     # The provider named the fix itself; apply it, remember it for this route.
                     flags["rename_max_tokens"] = True
                     body = renamed
-                    headers["content-length"] = str(len(body))
-                    continue
-                cap = _max_tokens_cap_from_refusal(data, body) if e.code == 400 else None
-                if attempt < 2 and cap and body is not None:
-                    # The provider named its limit while refusing; hold the request to it and
-                    # remember it for this route and model, so the next request is not refused.
-                    flags[f"max_tokens_cap:{_body_model}"] = cap
-                    body = _clamp_max_tokens(body, cap)
                     headers["content-length"] = str(len(body))
                     continue
                 stringified = _stringify_tool_content(body) if body is not None else None
@@ -3615,8 +3556,12 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
-def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
-    """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI)."""
+def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = ()) -> tuple[str, str]:
+    """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
+
+    `drop_fields` names top-level request fields this route's client sends on its own initiative and
+    the harness never asked for; they are removed before the provider sees them (the same list the
+    relay grows by itself when a provider names an unknown field)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -3629,7 +3574,8 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
         # https://api.anthropic.com/chat/completions, a 404 with no body (2026-09-06 support
         # matrix; Anthropic's OpenAI-compatible surface lives under /v1). Bedrock keeps its host
         # (its own path is built in _bedrock_anthropic).
-        _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key, {"rename_max_tokens": False})
+        _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key,
+                                        {"rename_max_tokens": False, "drop_fields": tuple(drop_fields)})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -3831,6 +3777,20 @@ _KIMI_TOOLS = ("Agent", "AgentSwarm", "AskUserQuestion", "Bash", "CreateGoal", "
                "TaskList", "TaskOutput", "TaskStop", "TodoList", "UpdateGoal", "WaitFor", "Write")
 
 
+# Two request fields Kimi Code CLI sends on its own initiative, captured at a stub on 2.0.0, that no
+# person configured and that break models which are fine without them:
+#   max_tokens: 131072 on EVERY request, an output budget derived from a Kimi-sized window. OpenAI,
+#     Anthropic and Google each refuse the whole request (limits 128000, 128000, 65536), and on a
+#     131k-window model the budget alone overflows the context (llama-3.3-70b: "requested about
+#     154972 tokens ... 131072 in the output"). There is no knob for it on the openai provider type.
+#   reasoning_effort: "high" whenever the MODEL NAME looks like a reasoning model (claude-*), whatever
+#     capabilities are declared. TokenRouter turns that into thinking.type.enabled, which the newer
+#     Claude models refuse outright ("not supported for this model. Use thinking.type.adaptive"): five
+#     ids failed their first turn on it.
+# Every other base here sends neither and the provider's defaults apply; this base now does the same.
+_KIMI_DROP_FIELDS = ("max_tokens", "reasoning_effort")
+
+
 def _kimi_home(ws: pathlib.Path) -> pathlib.Path:
     """KIMI_CODE_HOME for this workspace: config, sessions, logs and mcp.json all land under it
     (env-vars reference). It sits under .harness/home so the sessions travel with the checkpoint
@@ -3936,7 +3896,7 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     if not auth.base_url:
         raise HTTPException(400, "kimi needs a base_url (none configured)")
     if auth.api_key:
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, drop_fields=_KIMI_DROP_FIELDS)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     ws = pathlib.Path(cwd)
     home = _kimi_home(ws)
