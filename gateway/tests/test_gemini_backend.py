@@ -44,9 +44,9 @@ def test_tokenrouter_drives_the_gemini_backend_for_the_ids_it_serves():
     tr = {"name": "My TokenRouter", "provider": "tokenrouter", "config": {"api_key": "t", "base_url": "https://api.tokenrouter.com/v1"}}
     google = {"name": "Google AI Studio", "provider": "google", "config": {"api_key": "g"}}
     assert gw._integration_driving([tr, google], "gemini", "gemini-3.8-flash", "My TokenRouter") is tr
-    assert "gemini-3.8-flash" in gw._integration_models(tr) and "gemini-2.5-flash" not in gw._integration_models(tr)
+    assert "gemini-3.8-flash" in gw._integration_models(tr) and "gemini-3.1-flash-lite" not in gw._integration_models(tr)
     # an id TokenRouter has no channel for falls through to the Google integration when the map named TokenRouter for it
-    assert gw._integration_driving([tr, google], "gemini", "gemini-2.5-flash", "Google AI Studio") is google
+    assert gw._integration_driving([tr, google], "gemini", "gemini-3.1-flash-lite", "Google AI Studio") is google
 
 
 def test_the_failed_turn_reason_is_the_runners_error_before_its_result():

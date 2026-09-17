@@ -149,10 +149,7 @@ def _reap_workspaces(keep: str = "") -> int:
             if e.stat().st_mtime >= cutoff:
                 continue
             shutil.rmtree(e.path, ignore_errors=True)
-            try:
-                _ws_marker_path(e.name).unlink()
-            except OSError:
-                pass
+            _ws_marker_clear(e.name)
             removed += 1
         except OSError:
             continue
@@ -421,6 +418,11 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
                       "./.harness/home/.dsh/cordis.yml",
+                      # opencode's undo/revert history: a git repo of the workspace that grew to
+                      # 699 MB / 71k files in twenty turns (#193). _opencode_config turns it off;
+                      # this keeps a workspace that already carries one from dragging it through
+                      # every later checkpoint. Nothing reads it once snapshots are off.
+                      "./.harness/home/.local/share/opencode/snapshot",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -515,14 +517,23 @@ def _ver(cmd: list[str]) -> str:
 
 
 # ── git-backed workspace (hydrate at turn start, checkpoint at turn end) ───────────
-def _git(ws: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True,
-                          env={**os.environ, **_GIT_ENV}, check=check, **_as_session(ws))
+                          env={**os.environ, **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
 
 
 def _git_ensure(ws: str) -> None:
     """Make /workspace a git repo with a secret-safe .gitignore (so .git, which travels in the
-    checkpoint tarball, never carries credentials)."""
+    checkpoint tarball, never carries credentials).
+
+    The CLI home (.harness/home) is ignored here too. The repo has one reader, /produced, and it
+    already drops every `.harness/` path (_PRODUCED_EXCLUDE_PREFIX); the home still travels
+    between turns because the checkpoint is a tar of the directory, not a `git archive`, so
+    --resume is unaffected. Committing it gave every transcript and session database a second
+    copy in .git/objects per checkpoint — and on opencode the two fed each other, its snapshot
+    repo (work tree = the workspace) capturing our .git while we committed its snapshots: twenty
+    turns of one small file reached a 1.4 GB tarball for ~220 KB of output and the gateway OOMed
+    (#193, 2026-09-16)."""
     p = pathlib.Path(ws)
     p.mkdir(parents=True, exist_ok=True)
     (p / ".gitignore").write_text("\n".join([
@@ -531,12 +542,77 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
         ".harness/goose/config/secrets.yaml",
+        "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
+        ".harness/home/",
         "",
     ]))
     if not (p / ".git").exists():
         _git(ws, "init", "-q")
         _git(ws, "config", "user.email", _GIT_ENV["GIT_AUTHOR_EMAIL"])
         _git(ws, "config", "user.name", _GIT_ENV["GIT_AUTHOR_NAME"])
+    else:
+        # An ignore rule does not release what an earlier checkpoint already committed: a
+        # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
+        # hydrated from before this rule would keep growing exactly as before. Drop the CLI
+        # home from the index (not from disk); from then on the ignore rule holds.
+        tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
+        if tracked:
+            _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
+        # Untracking releases the index, not .git/objects: every copy the old checkpoints
+        # committed stays reachable from those commits and rides in every later tarball of the
+        # session (722 MB of the 1.4 GB in #193). The gate is the index or the tip's tree, both
+        # O(1): before the rule every checkpoint re-added the home with `add -A`, so a history
+        # that holds it also holds it at the tip (the one gap, the index released but the tip
+        # not yet rewritten, is a crash between the two calls above and below, and the tip
+        # covers it). A walk of the history (`rev-list -- .harness/home`) would find the same
+        # repos and cost 130 ms per call at a thousand commits, four calls a turn, for the life
+        # of every session. Once per session: the shed leaves no home in either tree it keeps.
+        if tracked or _git(ws, "rev-parse", "-q", "--verify", "HEAD:.harness/home").returncode == 0:
+            _git_shed_cli_home_history(ws)
+
+
+def _git_shed_cli_home_history(ws: str) -> None:
+    """Rewrite a pre-#193 workspace repo down to what /produced reads — the collected cursor's
+    tree and HEAD's tree, each without .harness/home — and prune everything else.
+
+    /produced is the repo's one reader, and it reads two things: `diff refs/hr/collected` against
+    the worktree, and `status` (see _produced_list). Neither looks past those two trees, so the
+    history between and before them is dead weight, and for a session checkpointed before the
+    ignore rule it is where every earlier copy of the CLI home lives. Untracking alone leaves those
+    blobs reachable from the old commits, so the tarball would carry them on every later turn.
+    Each tree is rebuilt in a scratch index minus .harness/home (a path /produced excludes anyway),
+    so the cursor→worktree diff a caller sees before and after this is the same set of files.
+    gc prunes the unreachable blobs; on the reported repo that is the one-off cost of one gc,
+    paid at the session's first turn after upgrade."""
+    if _git(ws, "rev-parse", "-q", "--verify", "HEAD").returncode != 0:
+        return                                   # nothing committed yet: nothing to shed
+    scratch = os.path.join(ws, ".git", "hr-shed-index")   # owned by the session, like the rest of .git
+
+    def _tree_without_home(commit: str) -> str:
+        env = {"GIT_INDEX_FILE": scratch}
+        _git(ws, "read-tree", commit, env=env)
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home", env=env)
+        return _git(ws, "write-tree", env=env).stdout.strip()
+
+    try:
+        parent: list[str] = []
+        if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
+            c_tree = _tree_without_home(_COLLECTED_REF)
+            c_new = _git(ws, "commit-tree", c_tree, "-m", "collected (cli home history shed)").stdout.strip()
+            if c_new:
+                _git(ws, "update-ref", _COLLECTED_REF, c_new)
+                parent = ["-p", c_new]
+        h_tree = _tree_without_home("HEAD")
+        h_new = _git(ws, "commit-tree", h_tree, *parent, "-m", "checkpoint (cli home history shed)").stdout.strip()
+        if h_new:
+            _git(ws, "update-ref", "HEAD", h_new)      # HEAD is symbolic: this moves the branch
+    finally:
+        try:
+            os.unlink(scratch)
+        except OSError:
+            pass
+    _git(ws, "reflog", "expire", "--expire=now", "--all")
+    _git(ws, "gc", "-q", "--prune=now")
 
 
 # ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
@@ -3945,7 +4021,7 @@ GEMINI_HELPER_ALIASES = {
 # them; a served model that still differs fails the turn (see _gemini_to_claude).
 GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                  "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
-                 "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")
+                 "gemini-3-flash-preview")
 
 
 def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "") -> None:
@@ -4395,6 +4471,10 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
                 "models": {model: {}},
             }
         },
+        # opencode's filesystem snapshots back the TUI's undo/revert; a fresh `run` per turn has
+        # no one to undo for, and HarnessRouter's checkpoint is the rollback here. Left on, it is
+        # a git repo of the workspace under $HOME — 699 MB of the 1.4 GB tarball in #193.
+        "snapshot": False,
     }
     mcp = _opencode_mcp(mcp_servers)
     if mcp:
@@ -6008,6 +6088,32 @@ def _ws_marker_get(identifier: str) -> str:
         return ""
 
 
+def _ws_marker_clear(identifier: str) -> None:
+    try:
+        _ws_marker_path(identifier).unlink()
+    except OSError:
+        pass
+
+
+def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
+    """Whether this session's workspace still holds checkpoint `sha`: the marker says so AND the
+    folder is there to back it. The marker lives outside the workspace on purpose (it has to
+    survive the wipe), which also lets it outlive the workspace: the folder deleted from the
+    volume by hand while the runner container was merely stopped and started, or removed by
+    DELETE /workspace before it learned to drop the marker. Either way the next probe answered
+    "held", the gateway skipped the restore, and the turn ran on an empty folder — the CLI found
+    no session to resume and the conversation started over (richard-epsilla, #194). A workspace
+    restored from a checkpoint always carries its .git (the tarball does, and _git_ensure runs
+    after every restore), so a folder without one holds nothing, whatever the marker says; the
+    marker that vouched for it is dropped so the full hydrate that follows starts clean."""
+    if _ws_marker_get(identifier) != sha:
+        return False
+    if (ws_path / ".git").is_dir():
+        return True
+    _ws_marker_clear(identifier)
+    return False
+
+
 @app.post("/hydrate")
 async def hydrate(request: Request, identifier: str = "") -> dict:
     """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
@@ -6045,7 +6151,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # answers yes — making follow-up turns start instantly instead of paying wipe + untar.
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
-            if _ws_marker_get(identifier) == probe:
+            if _ws_holds(identifier, ws_path, probe):
                 collab_url = request.query_params.get("collab_url", "")
                 room = request.query_params.get("room", "")
                 if collab_url and room:
@@ -6559,6 +6665,11 @@ async def delete_workspace(identifier: str = "") -> dict:
     ws = _ws(ident)
     if os.path.realpath(ws) in (os.path.realpath(WORKSPACE_ROOT), "/"):
         raise HTTPException(status_code=400, detail="refusing to remove the workspace root")
+    # Whether or not the folder is still there: after this call the session holds nothing on
+    # this box, and the marker is part of that. Cleared before the "no folder" answer below,
+    # since a folder already gone behind its marker is exactly the case in which a marker left
+    # behind would answer the next probe "held" (as the reaper does when it removes a folder).
+    _ws_marker_clear(ident)
     if not os.path.isdir(ws):
         return {"identifier": ident, "removed": False, "reason": "no folder"}
     uid = _session_uid(ws)
