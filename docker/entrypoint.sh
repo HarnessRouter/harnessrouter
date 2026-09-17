@@ -240,7 +240,7 @@ install_opencode() {
 # download has to go unverified: the digests are pinned HERE instead, computed from the v1.50.0
 # release assets (each archive holds exactly ./goose). That is strictly stronger than the tag
 # alone, which can be moved and whose asset can be re-uploaded.
-# Kimi CLI, Apache-2.0 (MoonshotAI/kimi-cli), pinned to 1.50.0.
+# Kimi Code CLI, Apache-2.0 (MoonshotAI/kimi-cli), pinned to 1.50.0.
 #
 # THE STANDALONE BINARY, NOT PyPI, and the reason is this image. `pip install kimi-cli` pins
 # pydantic==2.12.5, aiohttp==3.13.3, httpx==0.28.1, fastmcp==3.2.4, fastapi and uvicorn — the same
@@ -442,8 +442,8 @@ install_backends() {
   fi
 
   if wanted kimi && [ ! -x "$(backend_bin kimi)" ]; then
-    echo "[harnessrouter] installing Kimi CLI (Apache-2.0)…"
-    try_install "Kimi CLI" install_kimi || true
+    echo "[harnessrouter] installing Kimi Code CLI (Apache-2.0)…"
+    try_install "Kimi Code CLI" install_kimi || true
   fi
 
   # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that

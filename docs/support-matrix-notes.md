@@ -313,7 +313,7 @@ re-run once.
   on opencode because the same pair passes on Vercel; the miss is recorded. OpenRouter's no-channel set
   is empty.
 
-## The kimi backend (Kimi CLI 1.50.0) — behaviour measured, columns NOT yet run
+## The kimi backend (Kimi Code CLI 1.50.0) — behaviour measured, columns NOT yet run
 
 No column has run for this harness. Everything below was measured against the pinned 1.50.0
 artifact — its source, its bytes on the wire, and two live turns through Vercel — and none of it is

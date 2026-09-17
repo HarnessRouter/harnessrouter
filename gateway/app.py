@@ -13294,8 +13294,8 @@ _BASE_CATALOG: dict[str, dict] = {
         "tool_enforcement": "hard",
     },
     "kimi": {
-        "label": "Kimi CLI", "backend": "kimi", "status": "ready",
-        "system_prompt": ("You are Kimi CLI, an autonomous coding agent. You work on a real git "
+        "label": "Kimi Code CLI", "backend": "kimi", "status": "ready",
+        "system_prompt": ("You are Kimi Code CLI, an autonomous coding agent. You work on a real git "
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
         # Measured from the `tools` array a live run SENT ITS PROVIDER, captured at a local stub —
