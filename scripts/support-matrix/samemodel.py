@@ -1,7 +1,7 @@
 """Whether a served model id names the model the pair asked for: the gateway's rule, verbatim.
 
 An aggregator adds or drops a vendor prefix (anthropic/claude-fable-5 is claude-fable-5) and a
-provider appends a dated or versioned suffix (claude-haiku-4-5-20251001, gemini-2.5-flash-001);
+provider appends a dated or versioned suffix (claude-haiku-4-5-20251001, gemini-3.5-flash-001);
 those are the provider's alias of the same model. A different family or number under any prefix
 (google/gemini-3-flash-preview for gemini-3.8-flash), or a tier word such as -lite, is another
 model: a finding. The OSS tree carries the same file; keep them identical."""
