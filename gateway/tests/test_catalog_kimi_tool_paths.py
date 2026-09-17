@@ -43,3 +43,16 @@ def test_kimi_is_chat_completions_only():
     """The runner defines its model as provider type `openai` through the relay, so a
     Responses-API-only id would fail on send."""
     assert "kimi" in A.CHAT_ONLY_BACKENDS
+
+
+def test_a_server_the_cli_ran_without_becomes_a_note_in_the_reply():
+    """Kimi Code CLI runs a turn without an MCP server it could not reach and says nothing; the
+    runner reads the CLI's own record of it and this is the sentence a person gets."""
+    one = A._blocks_from_canonical({"type": "system", "subtype": "mcp_unavailable",
+                                    "servers": [{"name": "dead", "reason": "fetch failed"}]})
+    assert one == [("text", '\n\n_Note: the MCP server "dead" could not be reached, so this reply ran '
+                            'without those tools._\n')]
+    two = A._blocks_from_canonical({"type": "system", "subtype": "mcp_unavailable",
+                                    "servers": [{"name": "a"}, {"name": "b"}]})
+    assert 'servers "a", "b"' in two[0][1]
+    assert A._blocks_from_canonical({"type": "system", "subtype": "mcp_unavailable", "servers": []}) == []

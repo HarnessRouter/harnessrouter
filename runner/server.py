@@ -45,6 +45,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.server
+import datetime
 import json
 import mimetypes
 import os
@@ -3804,9 +3805,15 @@ def _kimi_agent_file(ws: pathlib.Path, tools_disabled: list[str] | None) -> path
         return None
     path = ws / ".harness" / "kimi-agent.md"
     path.parent.mkdir(parents=True, exist_ok=True)
+    # `subagents: []` is part of the policy, not decoration. Measured through the product on 2.0.0:
+    # with only Bash disallowed, kimi-k3 answered "I don't have a direct shell tool, but I can
+    # dispatch a subagent that does" and called Agent; the built-in coder subagent carries its own
+    # tool list, so a withheld tool came back by delegation. With the allowlist empty the Agent tools
+    # have nobody to dispatch to and the same prompt answers that it has no shell.
     path.write_text("---\nname: harness\n"
                     "description: The harness agent with its tool policy applied.\n"
                     "disallowedTools:\n" + "".join(f"  - {n}\n" for n in names) +
+                    "subagents: []\n"
                     "---\n${base_prompt}\n")
     return path
 
@@ -5189,10 +5196,50 @@ def _kimi_eof(state: dict, rc: int) -> list[dict]:
     prefers a provider refusal it matches inside it; a placeholder here would shadow the real
     reason. usage is {} because the stream carries none; the relay stamps it."""
     final = state.get("final", "")
+    pre: list[dict] = []
+    down = _kimi_mcp_unavailable(state)
+    if down:
+        pre = [{"type": "system", "subtype": "mcp_unavailable", "servers": down}]
     if rc == 0:
-        return [{"type": "result", "subtype": "success", "is_error": False,
-                 "result": final, "usage": {}}]
-    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+        return pre + [{"type": "result", "subtype": "success", "is_error": False,
+                       "result": final, "usage": {}}]
+    return pre + [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+
+
+_KIMI_MCP_DOWN = re.compile(
+    r'^(\S+) ERROR mcp server unavailable\s+server=(\S+)\s+transport=\S+\s+status=\S+(?:\s+reason="([^"]*)")?')
+
+
+def _kimi_mcp_unavailable(state: dict) -> list[dict]:
+    """The MCP servers this turn could not reach, read from the CLI's own log.
+
+    Kimi Code CLI runs the turn WITHOUT an unreachable server and says nothing about it: no stream
+    line, nothing on stderr, exit 0 (measured on 2.0.0 against a dead endpoint; its predecessor
+    failed the turn instead). The only trace is one line in $KIMI_CODE_HOME/logs/kimi-code.log,
+    `<iso time> ERROR mcp server unavailable  server=<name> transport=<t> status=failed reason="…"`.
+    A person whose tool silently was not there has no way to know why the agent never used it, so
+    the lines written since this turn began become a system event the gateway renders as a note."""
+    cwd = state.get("cwd")
+    if not cwd:
+        return []
+    log = _kimi_home(pathlib.Path(cwd)) / "logs" / "kimi-code.log"
+    try:
+        lines = log.read_text(errors="replace").splitlines()[-400:]
+    except OSError:
+        return []
+    since = float(state.get("started") or 0) - 2.0
+    out: dict[str, dict] = {}
+    for ln in lines:
+        m = _KIMI_MCP_DOWN.match(ln)
+        if not m:
+            continue
+        try:
+            ts = datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if ts >= since:
+            out[m.group(2)] = {"name": m.group(2), "reason": (m.group(3) or "")[:200]}
+    return list(out.values())
 
 
 _kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
@@ -5313,7 +5360,7 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False) -> None:
     rec = _turns[turn_id]
-    state = {"model": model, "final": "", "partial": partial}
+    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time()}
     result_ev = None
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its

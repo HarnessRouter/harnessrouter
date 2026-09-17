@@ -26,6 +26,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (Auth, BACKENDS, CHECKPOINT_EXCLUDE, _KIMI_TOOLS,  # noqa: E402
+                    _kimi_mcp_unavailable,
                     _agent_doc_path, _build_kimi, _failure_reason, _kimi_eof, _kimi_has_session,
                     _kimi_home, _kimi_to_claude, _normalize_openai_chat_body, _resume_lost)
 
@@ -178,7 +179,8 @@ def test_disabled_tools_become_an_agent_file_by_name_on_a_new_session():
     cmd, d, _ = _argv(tools_disabled=["Bash", "NotATool"])
     path = pathlib.Path(cmd[cmd.index("--agent-file") + 1])
     text = path.read_text()
-    assert text.startswith("---\n") and "disallowedTools:\n  - Bash\n---" in text
+    assert text.startswith("---\n") and "disallowedTools:\n  - Bash\nsubagents: []\n---" in text
+    # a withheld tool must not come back by delegation: a built-in subagent carries its own tools
     assert "NotATool" not in text               # an unknown name "never matches anything": not written
     assert text.rstrip().endswith("${base_prompt}")     # the default prompt's injections stay
 
@@ -251,3 +253,23 @@ def test_null_reasoning_effort_is_still_dropped_in_the_relay():
         json.dumps({"model": "m", "reasoning_effort": None, "messages": []}).encode()))
     assert json.loads(_normalize_openai_chat_body(
         json.dumps({"model": "m", "reasoning_effort": "high", "messages": []}).encode()))["reasoning_effort"] == "high"
+
+
+def test_an_mcp_server_the_cli_silently_ran_without_is_said_out_loud():
+    """2.0.0 runs the turn without an unreachable server and prints nothing anywhere but its log.
+    Only this turn's lines count: an older failure is not this reply's news."""
+    import datetime, time
+    d = tempfile.mkdtemp(); logs = _kimi_home(pathlib.Path(d)) / "logs"; logs.mkdir(parents=True)
+    now = time.time()
+    iso = lambda ts: datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    (logs / "kimi-code.log").write_text(
+        f'{iso(now - 3600)} ERROR mcp server unavailable  server=old transport=http status=failed reason="fetch failed"\n'
+        f'{iso(now + 1)} INFO something else entirely\n'
+        f'{iso(now + 1)} ERROR mcp server unavailable  server=dead transport=http status=failed reason="fetch failed"\n')
+    state = {"cwd": d, "started": now, "final": "HELLO"}
+    assert _kimi_mcp_unavailable(state) == [{"name": "dead", "reason": "fetch failed"}]
+    evs = _kimi_eof(state, 0)
+    assert evs[0] == {"type": "system", "subtype": "mcp_unavailable", "servers": [{"name": "dead", "reason": "fetch failed"}]}
+    assert evs[-1]["type"] == "result" and evs[-1]["result"] == "HELLO" and evs[-1]["is_error"] is False
+    assert _kimi_eof({"final": "x"}, 0)[0]["type"] == "result"          # no cwd, no log: just the result
+

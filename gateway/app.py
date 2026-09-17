@@ -5097,6 +5097,16 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
         # learn the context was dropped, so it is a short, honest note at the top of the reply.
         out.append(("text", "_Note: the earlier conversation could not be restored. This reply "
                             "continues as a new session, without that context._\n\n"))
+    elif t == "system" and ev.get("subtype") == "mcp_unavailable":
+        # A CLI that runs the turn without an MCP server it could not reach, and says nothing (Kimi
+        # Code CLI does exactly that), leaves a person wondering why the agent never used their
+        # tool. The runner reads the CLI's own record of it; this is the sentence that tells them.
+        names = [str(s.get("name") or "") for s in ev.get("servers") or [] if isinstance(s, dict) and s.get("name")]
+        if names:
+            quoted = ", ".join(f'"{n}"' for n in names)
+            word = "server" if len(names) == 1 else "servers"
+            out.append(("text", f"\n\n_Note: the MCP {word} {quoted} could not be reached, so this "
+                                "reply ran without those tools._\n"))
     return out
 
 
@@ -13315,7 +13325,9 @@ _BASE_CATALOG: dict[str, dict] = {
         # "hard", and earned: an agent file's `disallowedTools` shapes the tools shown to the model
         # AND is enforced again before execution (the CLI's agents reference). Verified live on
         # 2.0.0: with Bash disallowed and asked for the machine's boot id, the agent called no tool
-        # and said it had no shell. It matches by exact tool NAME and a name it does not know
+        # and said it had no shell. The file also empties the subagent allowlist, because a built-in
+        # subagent carries its own tools and handed the withheld one back by delegation (measured
+        # through the product). It matches by exact tool NAME and a name it does not know
         # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
         # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
         "tool_enforcement": "hard",
