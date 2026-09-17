@@ -6182,9 +6182,9 @@ for _b, _e in _MODEL_CATALOG.items():
 # an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
 # test forbids listing such an id for such a harness.
 RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
-# kimi speaks chat/completions only: its provider type is openai_legacy (openai_responses
-# exists in the CLI but is not the type the runner writes), so a Responses-API-only id would be
-# a picker row that fails on send.
+# kimi speaks chat/completions only: the runner defines its model with provider type `openai`
+# through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
+# sets), so a Responses-API-only id would be a picker row that fails on send.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -13298,25 +13298,26 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are Kimi Code CLI, an autonomous coding agent. You work on a real git "
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
-        # Measured from the `tools` array a live run SENT ITS PROVIDER, captured at a local stub —
-        # these are the names the model actually sees, not doc-sourced ones.
-        #
-        # SearchWeb and ReadMediaFile are in the shipped default agent and are deliberately NOT
-        # listed: each raises SkipThisTool unless a Moonshot search key / a vision-capable model is
-        # configured, so neither is ever constructed here, and listing one would be the "tool id
-        # that matches nothing" this catalog's own rules forbid.
-        "tools": [("Shell", "Shell"), ("ReadFile", "File Read"), ("WriteFile", "File Write"),
-                  ("StrReplaceFile", "Edit"), ("Grep", "Search"), ("Glob", "Glob"),
-                  ("FetchURL", "Web Fetch"), ("SetTodoList", "Todo"), ("Agent", "Subagent"),
+        # Measured from the `tools` array a live Kimi Code CLI 2.0.0 run SENT ITS PROVIDER, captured at
+        # a local stub: these are the names the model actually sees, not doc-sourced ones. WebSearch
+        # is absent on purpose: it is declared only with a Moonshot search service configured, and
+        # listing it would be the "tool id that matches nothing" this catalog's own rules forbid.
+        "tools": [("Bash", "Shell"), ("Read", "File Read"), ("Write", "File Write"), ("Edit", "Edit"),
+                  ("Grep", "Search"), ("Glob", "Glob"), ("FetchURL", "Web Fetch"),
+                  ("ReadMediaFile", "Media Read"), ("TodoList", "Todo"), ("Skill", "Skill"),
+                  ("Agent", "Subagent"), ("AgentSwarm", "Subagent Swarm"),
                   ("AskUserQuestion", "Question"), ("TaskList", "Background Tasks"),
-                  ("TaskOutput", "Task Output"), ("TaskStop", "Task Stop"),
-                  ("EnterPlanMode", "Enter Plan"), ("ExitPlanMode", "Exit Plan")],
-        # "hard", and earned: a --agent-file with `extend: default` + `exclude_tools` means the tool
-        # is never constructed and never declared to the model. Verified live — an excluded tool was
-        # absent from the captured tools array. The enforcement depends entirely on
-        # runner/server.py's _KIMI_TOOL_PATHS, because kimi matches tool PATHS and a bare NAME is a
-        # silent no-op; test_catalog_kimi_tool_paths.py pins these ids equal to that table's keys so
-        # this claim cannot drift into an overstatement.
+                  ("TaskOutput", "Task Output"), ("TaskStop", "Task Stop"), ("WaitFor", "Wait"),
+                  ("EnterPlanMode", "Enter Plan"), ("ExitPlanMode", "Exit Plan"),
+                  ("CreateGoal", "Create Goal"), ("GetGoal", "Get Goal"), ("UpdateGoal", "Update Goal"),
+                  ("SetGoalBudget", "Goal Budget"), ("CronCreate", "Schedule Create"),
+                  ("CronList", "Schedule List"), ("CronDelete", "Schedule Delete")],
+        # "hard", and earned: an agent file's `disallowedTools` shapes the tools shown to the model
+        # AND is enforced again before execution (the CLI's agents reference). Verified live on
+        # 2.0.0: with Bash disallowed and asked for the machine's boot id, the agent called no tool
+        # and said it had no shell. It matches by exact tool NAME and a name it does not know
+        # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
+        # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
         "tool_enforcement": "hard",
     },
     "qwen": {

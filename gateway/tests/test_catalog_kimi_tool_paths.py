@@ -1,14 +1,13 @@
-"""kimi's "hard" tool enforcement is only real while the catalog and the path table agree.
+"""The console must never offer a Kimi Code CLI tool toggle the runner cannot enforce.
 
-kimi matches `exclude_tools` on tool PATHS (`kimi_cli.tools.shell:Shell`), not on the tool NAMES the
-model sees. Measured on 1.50.0: excluding the bare name "Shell" is a SILENT no-op — the tool stays
-in the array sent to the provider — while excluding the path removes it. So a catalog id with no
-row in runner/server.py's _KIMI_TOOL_PATHS would be offered as a toggle in the console, reported as
-off, and change nothing: the exact overstatement UHP §4.3 forbids and the reason this backend is
-allowed to claim `tool_enforcement: "hard"` at all.
-
-This test is named in both comments that make the claim (the catalog entry and the path table), so
-that a drift on either side fails here rather than on a live turn.
+Kimi Code CLI's agent files match `disallowedTools` by exact, case-sensitive tool NAME, and a name
+the CLI does not know "never matches anything" (its agents reference): a catalog id outside the
+runner's _KIMI_TOOLS would be offered as a toggle in the console, reported as off, and change
+nothing, the exact overstatement UHP section 4.3 forbids and the reason this backend is allowed to
+claim `tool_enforcement: "hard"` at all. _KIMI_TOOLS is the `tools` array of a live 2.0.0 request
+captured at a stub; this test holds the catalog to it, so a drift on either side fails here rather
+than on a live turn. (The file keeps its first name: under the CLI's predecessor the table mapped
+names to module paths.)
 """
 import os
 import pathlib
@@ -18,31 +17,29 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "runner"))
 os.environ.setdefault("HR_BACKING", "local")
 import app as A  # noqa: E402
-from server import _KIMI_TOOL_PATHS  # noqa: E402
+from server import _KIMI_TOOLS  # noqa: E402
 
 
 def test_every_advertised_kimi_tool_can_actually_be_withheld():
     advertised = {tid for tid, _label in A._BASE_CATALOG["kimi"]["tools"]}
-    assert advertised == set(_KIMI_TOOL_PATHS), (
-        "catalog ids and _KIMI_TOOL_PATHS keys must match exactly; "
-        f"only in catalog: {advertised - set(_KIMI_TOOL_PATHS)}, "
-        f"only in table: {set(_KIMI_TOOL_PATHS) - advertised}")
+    assert advertised == set(_KIMI_TOOLS), (
+        "catalog ids and _KIMI_TOOLS must match exactly; "
+        f"only in catalog: {advertised - set(_KIMI_TOOLS)}, only in the runner: {set(_KIMI_TOOLS) - advertised}")
 
 
 def test_kimi_claims_hard_enforcement_and_earns_it():
     assert A._BASE_CATALOG["kimi"]["tool_enforcement"] == "hard"
     assert A._BASE_CATALOG["kimi"]["backend"] == "kimi"
+    assert A._BASE_CATALOG["kimi"]["label"] == "Kimi Code CLI"
 
 
-def test_tools_gated_behind_a_key_or_a_vision_model_are_not_offered():
-    """SearchWeb and ReadMediaFile are in kimi's shipped default agent but raise SkipThisTool
-    unless a Moonshot search key / a vision-capable model is configured, so neither is ever
-    constructed here. Listing one would be a picker row for a tool that does not exist."""
-    advertised = {tid for tid, _ in A._BASE_CATALOG["kimi"]["tools"]}
-    assert "SearchWeb" not in advertised
-    assert "ReadMediaFile" not in advertised
+def test_a_tool_that_needs_a_moonshot_service_is_not_offered():
+    """WebSearch is declared only with a Moonshot search service configured, which this product
+    never sets, so it is not in the captured array and must not be a picker row."""
+    assert "WebSearch" not in {tid for tid, _ in A._BASE_CATALOG["kimi"]["tools"]}
 
 
 def test_kimi_is_chat_completions_only():
-    """Its provider type is openai_legacy, so a Responses-API-only id would fail on send."""
+    """The runner defines its model as provider type `openai` through the relay, so a
+    Responses-API-only id would fail on send."""
     assert "kimi" in A.CHAT_ONLY_BACKENDS
