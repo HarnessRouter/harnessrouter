@@ -240,54 +240,56 @@ install_opencode() {
 # download has to go unverified: the digests are pinned HERE instead, computed from the v1.50.0
 # release assets (each archive holds exactly ./goose). That is strictly stronger than the tag
 # alone, which can be moved and whose asset can be re-uploaded.
-# Kimi CLI, Apache-2.0 (MoonshotAI/kimi-cli), pinned to 1.50.0.
+# Kimi Code CLI, MIT (MoonshotAI/kimi-code), pinned to 2.0.0.
 #
-# THE STANDALONE BINARY, NOT PyPI, and the reason is this image. `pip install kimi-cli` pins
-# pydantic==2.12.5, aiohttp==3.13.3, httpx==0.28.1, fastmcp==3.2.4, fastapi and uvicorn — the same
-# packages the runner itself is a FastAPI app on — so it would need its own venv (the dsh/hermes
-# precedent) at 314 MB and ~50 s. The release binary is ~93 MB, carries no Python-version
-# constraint at all, and cannot collide with the runner's interpreter.
+# THIS IS THE SUCCESSOR, NOT Kimi CLI. 0.18.0 shipped MoonshotAI/kimi-cli 1.50.0, the Python
+# predecessor whose own README says it "is evolving into Kimi Code CLI"; the product is the
+# TypeScript rewrite in MoonshotAI/kimi-code, a single binary that is also called `kimi`. The pin
+# below is compared against `kimi --version` on every start, so a volume that still holds the old
+# binary ("kimi, version 1.50.0") is upgraded in place rather than left running the wrong product.
 #
-# Upstream DOES publish a per-asset .sha256 beside each archive, so unlike goose there is an
-# upstream checksum to cite. The digests are still pinned HERE rather than fetched: a checksum
-# served from the same origin as the artifact adds nothing against a compromised origin, while a
-# digest pinned in this file fails closed if the tag is moved or the asset re-uploaded. The values
-# below were read from the 1.50.0 assets and agree with upstream's own .sha256 files.
+# The release archive, not the install script and not npm: the script pipes a moving target into a
+# shell, while an asset under a tag can be pinned. Upstream publishes a per-asset .sha256 beside
+# each archive; the digests are still pinned HERE rather than fetched, because a checksum served
+# from the same origin as the artifact adds nothing against a compromised origin, while a digest
+# in this file fails closed if the tag is moved or the asset re-uploaded. The values below were
+# read from the 2.0.0 assets and agree with upstream's own .sha256 files. The release tag is
+# "@moonshot-ai/kimi-code@<version>", which has to be percent-encoded in the download URL.
 #
-# Everything runner/server.py's kimi code was written against — the stream-json line shapes, the
-# openai_legacy env override, exclude_tools matching PATHS, the sessions/<md5(cwd)>/<id> layout,
-# and the 75/1 provider-failure exit codes — was read out of THIS version.
+# Everything runner/server.py's kimi code relies on (the stream-json line shapes, the model defined
+# from KIMI_MODEL_* alone, -r refusing an unknown session, agent files matching tool NAMES,
+# $KIMI_CODE_HOME/mcp.json, the exit-1 failure line) was measured on THIS version.
+KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
 install_kimi() {
   case "$(uname -m)" in
-    x86_64)        km_arch="x86_64";  km_sha="10ccaa26ee7f5bb43f7c05baf808c11cd0160710b07ac422382d1d1923f3dab6" ;;
-    aarch64|arm64) km_arch="aarch64"; km_sha="de235322f48abe63e7a8d737f39f0c00fecf724f1dfaa1ae02491bb773ae8070" ;;
+    x86_64)        km_arch="x64";   km_sha="ebc1ad504e458d66f0cc57d4e9d709a2060647f5b89d4e21026903b96204c3ed" ;;
+    aarch64|arm64) km_arch="arm64"; km_sha="870fdb2fc45622fed92753bc4995ff80ba02e15a6304b396b5a70df1c7a23174" ;;
     *) echo "unsupported architecture $(uname -m) for kimi"; return 1 ;;
   esac
-  km_ver="${HR_KIMI_VERSION:-1.50.0}"; km_ver="${km_ver#v}"
-  if [ "$km_ver" != "1.50.0" ]; then
+  if [ "$KIMI_PIN" != "2.0.0" ]; then
     # Same contract as goose's: an operator who overrides the version supplies the digest for the
     # version they chose, or is TOLD the archive is unverified. Read as ${VAR:-} because this
     # script runs under `set -euo pipefail`.
     if [ -n "${HR_KIMI_SHA256:-}" ]; then
       km_sha="$HR_KIMI_SHA256"
     else
-      echo "[harnessrouter] WARN: HR_KIMI_VERSION=$km_ver overrides the pinned 1.50.0, and no"
+      echo "[harnessrouter] WARN: HR_KIMI_VERSION=$KIMI_PIN overrides the pinned 2.0.0, and no"
       echo "[harnessrouter]       HR_KIMI_SHA256 was given — this kimi archive is UNVERIFIED."
       km_sha=""
     fi
   fi
-  km_url="https://github.com/MoonshotAI/kimi-cli/releases/download/${km_ver}/kimi-${km_ver}-${km_arch}-unknown-linux-gnu.tar.gz"
+  km_url="https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai%2Fkimi-code%40${KIMI_PIN}/kimi-code-linux-${km_arch}.tar.gz"
   km_tmp="$(mktemp -d)"
   curl -fsSL "$km_url" -o "$km_tmp/kimi.tar.gz" || { rm -rf "$km_tmp"; return 1; }
   if [ -n "$km_sha" ]; then
     km_have="$(sha256sum "$km_tmp/kimi.tar.gz" | awk '{print $1}')"
     if [ "$km_sha" != "$km_have" ]; then
-      echo "kimi $km_ver: archive digest mismatch for $km_arch (want $km_sha, have $km_have)"
+      echo "kimi $KIMI_PIN: archive digest mismatch for $km_arch (want $km_sha, have $km_have)"
       rm -rf "$km_tmp"; return 1
     fi
   fi
-  tar -xzf "$km_tmp/kimi.tar.gz" -C "$km_tmp" || { rm -rf "$km_tmp"; return 1; }
-  km_bin="$(find "$km_tmp" -type f -name kimi -perm -u+x | head -n 1)"
+  mkdir "$km_tmp/x" && tar -xzf "$km_tmp/kimi.tar.gz" -C "$km_tmp/x" || { rm -rf "$km_tmp"; return 1; }
+  km_bin="$(find "$km_tmp/x" -type f -name kimi -perm -u+x | head -n 1)"
   [ -n "$km_bin" ] || { echo "release archive contained no kimi binary"; rm -rf "$km_tmp"; return 1; }
   mkdir -p "$TOOLS/bin" && install -m 755 "$km_bin" "$TOOLS/bin/kimi" \
     || { rm -rf "$km_tmp"; return 1; }
@@ -441,9 +443,12 @@ install_backends() {
     try_install "goose" install_goose || true
   fi
 
-  if wanted kimi && [ ! -x "$(backend_bin kimi)" ]; then
-    echo "[harnessrouter] installing Kimi CLI (Apache-2.0)…"
-    try_install "Kimi CLI" install_kimi || true
+  # `kimi --version` prints the bare version on Kimi Code CLI ("2.0.0") and "kimi, version 1.50.0" on
+  # its predecessor, so comparing it to the pin both installs a missing binary and replaces the old
+  # product on a volume that was first started by 0.18.0.
+  if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
+    echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
+    try_install "Kimi Code CLI" install_kimi || true
   fi
 
   # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that

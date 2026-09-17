@@ -333,16 +333,16 @@ problem, because it only offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi CLI |
+| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI |
+| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi CLI |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI |
 
 </details>
 

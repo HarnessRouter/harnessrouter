@@ -1,18 +1,23 @@
-"""The kimi backend (MoonshotAI/kimi-cli, Apache-2.0, pinned to 1.50.0).
+"""The kimi backend: Kimi Code CLI (MoonshotAI/kimi-code, MIT, pinned to 2.0.0).
 
-Every shape asserted here was read off the 1.50.0 artifact the installer pins, or captured from a
-live turn — not from the docs. Each test pins one thing that would otherwise fail SILENTLY: the
-tool call that never renders, the disabled tool that disables nothing, the lost session that
-answers from an empty history as a completed turn, the provider 400 that kills every turn on one
-gateway.
+0.18.0 wired this base to MoonshotAI/kimi-cli 1.50.0, the Python predecessor whose own README says
+it "is evolving into Kimi Code CLI". The product is the TypeScript rewrite, a different integration
+surface, and everything asserted here was measured on the 2.0.0 binary the installer pins (the VM
+host, 2026-09-17), not read off the docs. Each test pins one thing that would otherwise fail
+SILENTLY or loudly in production: the session id that only appears on the last line, the resume of
+an id the store does not hold (a hard exit 1 on this CLI), the disabled tool that disables
+nothing, the SSE server dialed as HTTP, the key written to disk.
 
-Source anchors (all 1.50.0):
-  JsonPrinter.feed (the only emitter)  kimi_cli/ui/print/visualize.py
-  _classify_provider_error             kimi_cli/ui/print/__init__.py
-  openai_legacy env override           kimi_cli/llm.py:305-311
-  exclude_tools (paths, not names)     kimi_cli/soul/agent.py:447-450
-  Session.find / md5(work_dir)         kimi_cli/session.py, kimi_cli/metadata.py:36
-  telemetry default + endpoint         kimi_cli/telemetry/transport.py:22
+Measured facts the code rests on:
+  stream-json lines      meta system.version / assistant text / assistant tool_calls / tool / meta
+                         session.resume_hint (LAST line, the only place the session id appears)
+  model from env alone   KIMI_MODEL_NAME (+ _PROVIDER_TYPE, _BASE_URL, _API_KEY, _MAX_CONTEXT_SIZE):
+                         a provider synthesised in memory, nothing persisted, no key at rest
+  failures               exit 1 and one stderr line `error: failed to run prompt: <class>: <reason>`
+                         (provider.auth_error, loop.max_steps_exceeded, Session "<id>" not found)
+  tool policy            agent file (Markdown) `disallowedTools` by exact NAME, bound at session
+                         creation; --agent-file is refused beside -r
+  MCP                    $KIMI_CODE_HOME/mcp.json; url = streamable HTTP, transport "sse" explicit
 """
 import json
 import pathlib
@@ -20,14 +25,16 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import (Auth, BACKENDS, _KIMI_SESSION_NAME, _KIMI_TOOL_PATHS,  # noqa: E402
-                    _agent_doc_path,
-                    _build_kimi, _kimi_eof, _kimi_to_claude, _normalize_openai_chat_body,
-                    _resume_lost)
+from server import (Auth, BACKENDS, CHECKPOINT_EXCLUDE, _KIMI_TOOLS,  # noqa: E402
+                    _kimi_mcp_unavailable, _HERMES_RELAY, _drop_top_level_field,
+                    _agent_doc_path, _build_kimi, _failure_reason, _kimi_eof, _kimi_has_session,
+                    _kimi_home, _kimi_to_claude, _normalize_openai_chat_body, _resume_lost)
+
+SID = "session_ce4ef4a0-1606-430e-89fd-f228abfda9e7"
 
 
-def _argv(**kw):
-    d = tempfile.mkdtemp()
+def _argv(d=None, **kw):
+    d = d or tempfile.mkdtemp()
     env: dict = {}
     cmd = _build_kimi("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
                       "kimi-k3", "do it", d, env, **kw)
@@ -35,318 +42,257 @@ def _argv(**kw):
 
 
 def _norm(lines):
-    state: dict = {}
+    state: dict = {"model": "kimi-k3"}
     out = []
     for line in lines:
         out += _kimi_to_claude(line, state)
     return out, state
 
 
-def _body(lines):
-    """The turn's events with the system/init one dropped — it is asserted on its own below."""
-    out, state = _norm(lines)
-    return [e for e in out if e.get("subtype") != "init"], state
+def _store(d, sid=SID):
+    """A session as 2.0.0 lays it down: sessions/<workdir key>/<session id>/…"""
+    p = _kimi_home(pathlib.Path(d)) / "sessions" / "wd_ws_86f57a64234a" / sid
+    (p / "agents" / "main").mkdir(parents=True)
+    (p / "state.json").write_text("{}")
+    return p
 
 
-# ── the stream's four line shapes ────────────────────────────────────────────────
-def test_assistant_text_is_a_plain_string_not_a_part_list():
-    """Captured live: a text-only message carries `content` as a STRING. A normalizer that assumes
-    claude's list-of-blocks (the flag name is the same, `stream-json`) renders nothing at all."""
-    out, state = _body([{"role": "assistant", "content": "Created hello.txt. DONE"}])
-    assert out == [{"type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Created hello.txt. DONE"}]}}]
-    assert state["final"] == "Created hello.txt. DONE"
+# ── the stream ───────────────────────────────────────────────────────────────────
+def test_assistant_text_is_a_plain_string():
+    out, state = _norm([{"role": "meta", "type": "system.version", "version": "2.0.0"},
+                        {"role": "assistant", "content": "KC-ONE-5e1"}])
+    assert out == [{"type": "assistant", "message": {"content": [{"type": "text", "text": "KC-ONE-5e1"}]}}]
+    assert state["final"] == "KC-ONE-5e1"
 
 
-def test_tool_call_message_carries_a_list_content_and_does_not_overwrite_the_answer():
-    """Captured live: the tool-carrying message has `content: []` and the answer arrives after it.
-    Taking `final` from the last assistant LINE rather than the last assistant TEXT would leave the
-    turn's result empty."""
-    out, state = _body([
-        {"role": "assistant", "content": [],
-         "tool_calls": [{"type": "function", "id": "call_1",
-                         "function": {"name": "WriteFile",
-                                      "arguments": '{"path": "hello.txt", "content": "hi"}'}}]},
-        {"role": "tool", "content": "<system>File successfully overwritten.</system>",
-         "tool_call_id": "call_1"},
-        {"role": "assistant", "content": "done. DONE"},
+def test_a_tool_call_has_no_content_key_and_does_not_overwrite_the_answer():
+    """Captured live: the tool-carrying message has NO `content` key at all and the answer arrives
+    after the tool result."""
+    out, state = _norm([
+        {"role": "assistant", "tool_calls": [{"type": "function", "id": "call_1", "function": {
+            "name": "Write", "arguments": '{"path":"kc.txt","content":"HELLO\\n"}'}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Wrote 6 bytes to kc.txt"},
+        {"role": "assistant", "content": "DONE"},
     ])
-    assert state["final"] == "done. DONE"
+    assert state["final"] == "DONE"
     call = out[0]["message"]["content"][0]
-    assert call["type"] == "tool_use" and call["name"] == "WriteFile" and call["id"] == "call_1"
-    # arguments arrive as a JSON STRING (OpenAI's shape) and must reach the trace as an object
-    assert call["input"] == {"path": "hello.txt", "content": "hi"}
+    assert call == {"type": "tool_use", "id": "call_1", "name": "Write",
+                    "input": {"path": "kc.txt", "content": "HELLO\n"}}
     res = out[1]["message"]["content"][0]
     assert res["type"] == "tool_result" and res["tool_use_id"] == "call_1"
-    assert "File successfully overwritten" in res["content"]
+    assert res["content"] == "Wrote 6 bytes to kc.txt"
 
 
 def test_unparseable_tool_arguments_keep_the_raw_text_instead_of_dropping_the_call():
-    out, _ = _body([{"role": "assistant", "content": [],
-                     "tool_calls": [{"id": "c9", "function": {"name": "Shell",
-                                                              "arguments": "{not json"}}]}])
+    out, _ = _norm([{"role": "assistant", "tool_calls": [{"id": "c", "function": {
+        "name": "Bash", "arguments": "{not json"}}]}])
     assert out[0]["message"]["content"][0]["input"] == {"arguments": "{not json"}
 
 
-def test_unknown_line_shapes_are_dropped_not_crashed():
-    """Notifications and plan displays share the stream and carry no role we render."""
-    seen = {"_kimi_init": True}      # the init event is emitted once, before these
-    assert _kimi_to_claude({"id": "n1", "category": "task", "title": "done"}, seen) == []
-    assert _kimi_to_claude({"content": "a plan", "file_path": "/tmp/p.md"}, seen) == []
+def test_the_session_id_arrives_on_the_last_line_and_is_announced_from_it():
+    """The resume hint is the only line that names the session. Without an init event carrying it
+    the run loop records no conversation id and every follow-up starts a new conversation."""
+    out, _ = _norm([{"role": "assistant", "content": "hi"},
+                    {"role": "meta", "type": "session.resume_hint", "session_id": SID,
+                     "command": f"kimi -r {SID}", "content": f"To resume this session: kimi -r {SID}"}])
+    assert out[-1] == {"type": "system", "subtype": "init", "session_id": SID, "model": "kimi-k3"}
+    assert sum(1 for e in out if e.get("subtype") == "init") == 1
 
 
-# ── the turn's end: exit code is the status, and the reason comes from stdout ─────
-def test_failure_exit_codes_are_the_signal():
-    """kimi classifies provider failures ITSELF (Print._classify_provider_error): 75 EX_TEMPFAIL for
-    connection/timeout/empty-response and 429/500/502/503/504, 1 for every other APIStatusError.
-    So this backend needs no error-prose regex — unlike claude's `API Error:` and goose's `Ran into
-    this error:`, a failed turn here never reads as a completed one. Registration point 6 is
-    satisfied by the exit code, and this test is what pins that claim."""
-    assert _kimi_eof({"final": "hi"}, 0) == [
-        {"type": "result", "subtype": "success", "is_error": False, "result": "hi", "usage": {}}]
-    for rc in (75, 1):
-        ev = _kimi_eof({"final": "partial text"}, rc)[0]
-        assert ev["is_error"] is True and ev["subtype"] == "error"
-        # EMPTY on purpose: _run_turn_bg fills an empty result from the errbuf tail, where kimi's
-        # bare stdout line ("Error code: 401 - {…}") is. A placeholder sentence would shadow the
-        # real reason; the partial assistant text would report a 401 as if the model had answered.
-        assert ev["result"] == ""
+def test_version_and_unknown_lines_are_dropped_not_crashed():
+    out, _ = _norm([{"role": "meta", "type": "system.version", "version": "2.0.0"},
+                    {"role": "meta", "type": "something.new"}, {"role": "system"}, {}])
+    assert out == []
 
 
-def test_usage_is_empty_because_the_stream_carries_none():
-    """kimi's stream-json has no token counts at all (JsonPrinter drops StatusUpdate). Per the
-    2026-09-13 decision no harness PR builds its own usage pipeline: `_relay_usage` stamps these
-    rows from the provider's own bytes. goose's eof emits {} for the same reason."""
-    assert _kimi_eof({"final": "x"}, 0)[0]["usage"] == {}
-    assert BACKENDS["kimi"]["normalize"] is _kimi_to_claude
-    assert getattr(BACKENDS["kimi"]["normalize"], "eof", None) is _kimi_eof
+def test_the_exit_code_is_the_status_and_a_failure_leaves_the_reason_to_the_cli_s_own_line():
+    ok = _kimi_eof({"final": "answer"}, 0)[0]
+    assert ok["is_error"] is False and ok["result"] == "answer" and ok["usage"] == {}
+    bad = _kimi_eof({"final": "half an answer"}, 1)[0]
+    assert bad["is_error"] is True and bad["result"] == ""      # never report a failure as an answer
 
 
-# ── a lost session must not answer from an empty history ─────────────────────────
-def test_resume_lost_asks_the_store_because_argv_cannot_tell():
-    """kimi MINTS a session with whatever id it is handed (find -> None -> create), so --session is
-    on the command line whether or not the conversation exists. The argv heuristic every other
-    backend uses would report "present" for a session that is gone — and the turn would answer from
-    an empty history as a completed turn."""
-    cmd, d, _ = _argv(resume_session_id="11111111-2222-3333-4444-555555555555")
-    assert "--session" in cmd and "11111111-2222-3333-4444-555555555555" in cmd
-    # the id IS in argv, and the session is still absent: the store is what decides
-    assert _resume_lost("kimi", cmd, "11111111-2222-3333-4444-555555555555", d) == \
-        "11111111-2222-3333-4444-555555555555"
+def test_the_failure_reason_drops_the_cli_s_notes_to_a_person_at_its_terminal():
+    tail = ("error: failed to run prompt: provider.auth_error: 401 Invalid API-key provided.\n"
+            "See log: /data/workspaces/hsess1/.harness/home/.kimi-code/logs/kimi-code.log")
+    assert _failure_reason("", "", tail, 1) == \
+        "error: failed to run prompt: provider.auth_error: 401 Invalid API-key provided."
+    assert _failure_reason("", "", "To resume this session: kimi -r session_x", 1) == \
+        "exit_code=1, no diagnostic output"
 
-    import hashlib
-    share = pathlib.Path(d) / ".harness" / "home" / ".kimi"
-    sdir = share / "sessions" / hashlib.md5(d.encode()).hexdigest() / \
-        "11111111-2222-3333-4444-555555555555"
-    sdir.mkdir(parents=True)
-    (sdir / "context.jsonl").write_text("{}\n")
-    assert _resume_lost("kimi", cmd, "11111111-2222-3333-4444-555555555555", d) is None
+
+# ── the command and its environment ──────────────────────────────────────────────
+def test_the_model_is_defined_from_the_environment_and_nothing_is_written_with_a_key():
+    cmd, d, env = _argv()
+    assert cmd[:5] == ["kimi", "-p", "do it", "--output-format", "stream-json"]
+    assert env["KIMI_MODEL_NAME"] == "kimi-k3" and env["KIMI_MODEL_PROVIDER_TYPE"] == "openai"
+    assert env["KIMI_CODE_HOME"] == str(_kimi_home(pathlib.Path(d)))
+    assert env["KIMI_DISABLE_TELEMETRY"] == "1" and env["KIMI_CODE_NO_AUTO_UPDATE"] == "1"
+    assert int(env["KIMI_MODEL_MAX_CONTEXT_SIZE"]) > 0
+    # the relay stands between the CLI and the provider: neither the real key nor the real base
+    assert env["KIMI_MODEL_API_KEY"] != "sk-t" and "up.example" not in env["KIMI_MODEL_BASE_URL"]
+    for f in pathlib.Path(d).rglob("*"):
+        if f.is_file():
+            assert "sk-t" not in f.read_text(errors="replace"), f"the key was written to {f}"
+    assert not list(pathlib.Path(d).rglob("config.toml"))       # no config file at all
+    # -p refuses --yolo/--auto beside it, and there is no work-dir flag: the process cwd is the workspace
+    assert not {"--yolo", "--auto", "-y", "-w"} & set(cmd)
+
+
+def test_the_operators_step_budget_reaches_the_cli_and_none_means_no_variable():
+    assert _argv(max_turns=40)[2]["KIMI_LOOP_MAX_STEPS_PER_TURN"] == "40"
+    assert "KIMI_LOOP_MAX_STEPS_PER_TURN" not in _argv()[2]
+
+
+def test_a_session_the_store_holds_is_resumed_and_one_it_does_not_hold_is_never_passed():
+    """`kimi -r <unknown id>` is exit 1 on this CLI (`Session "<id>" not found`), so passing an id
+    the store lost would fail the whole turn. The builder asks the store; the lost conversation is
+    reported through _resume_lost instead, and the turn runs fresh."""
+    d = tempfile.mkdtemp(); _store(d)
+    cmd, _, _ = _argv(d, resume_session_id=SID)
+    assert cmd[cmd.index("-r") + 1] == SID
+    assert _resume_lost("kimi", cmd, SID, d) is None
+    lost, d2, _ = _argv(resume_session_id=SID)
+    assert "-r" not in lost
+    assert _resume_lost("kimi", lost, SID, d2) == SID
+    assert _resume_lost("kimi", lost, None, d2) is None
+
+
+def test_the_store_lookup_refuses_an_id_that_is_a_path():
+    d = tempfile.mkdtemp(); _store(d)
+    home = _kimi_home(pathlib.Path(d))
+    assert _kimi_has_session(home, SID)
+    for bad in ("", "../..", "a/b", ".hidden", "session_nope"):
+        assert not _kimi_has_session(home, bad)
 
 
 def test_resume_lost_keeps_the_other_backends_unchanged():
-    """The generalisation must not move claude/opencode/goose off their builders' own conclusion."""
-    assert _resume_lost("opencode", ["opencode", "run", "hi"], "ses_a") == "ses_a"
-    assert _resume_lost("opencode", ["opencode", "--session", "ses_a", "hi"], "ses_a") is None
-    assert _resume_lost("goose", ["goose", "-n", "harness"], "harness") == "harness"
-    assert _resume_lost("goose", ["goose", "-n", "harness", "-r"], "harness") is None
-    assert _resume_lost("hermes", ["hermes"], "s1") is None   # says so itself, not in the table
+    assert _resume_lost("claude", ["claude", "--resume", "abc"], "abc", "/x") is None
+    assert _resume_lost("claude", ["claude"], "abc", "/x") == "abc"
+    assert _resume_lost("goose", ["goose", "-n", "harness", "-r"], "harness", "/x") is None
+    assert _resume_lost("goose", ["goose", "-n", "harness"], "harness", "/x") == "harness"
+    assert _resume_lost("codex", ["codex"], "abc", "/x") is None      # carries its own note
 
 
-# ── argv, config and environment ─────────────────────────────────────────────────
-def test_model_reaches_the_provider_through_the_config_not_the_m_flag():
-    """-m names an ALIAS in config.models; the id that goes upstream is models.<alias>.model. A
-    builder that put the model id on -m would be resolving it against a table that does not contain
-    it, and kimi raises KeyError on that rather than substituting."""
-    cmd, d, _ = _argv()
-    assert cmd[cmd.index("-m") + 1] == "hr"
-    cfg = (pathlib.Path(d) / ".harness" / "kimi-config.toml").read_text()
-    assert 'model = "kimi-k3"' in cfg
-    assert 'type = "openai_legacy"' in cfg
-    assert "max_context_size = " in cfg
-    # telemetry is ON by default and posts to telemetry-logs.kimi.com; there is no env kill switch,
-    # which is why the config file is mandatory rather than a convenience.
-    assert "telemetry = false" in cfg
-    # no credential on disk: the placeholders exist only so the provider block parses
-    assert "sk-t" not in cfg
+# ── tool policy ──────────────────────────────────────────────────────────────────
+def test_disabled_tools_become_an_agent_file_by_name_on_a_new_session():
+    cmd, d, _ = _argv(tools_disabled=["Bash", "NotATool"])
+    path = pathlib.Path(cmd[cmd.index("--agent-file") + 1])
+    text = path.read_text()
+    assert text.startswith("---\n") and "disallowedTools:\n  - Bash\nsubagents: []\n---" in text
+    # a withheld tool must not come back by delegation: a built-in subagent carries its own tools
+    assert "NotATool" not in text               # an unknown name "never matches anything": not written
+    assert text.rstrip().endswith("${base_prompt}")     # the default prompt's injections stay
 
 
-def test_the_real_key_never_reaches_the_cli_and_home_is_not_touched():
-    cmd, d, env = _argv()
-    assert env["OPENAI_API_KEY"].startswith("hr-relay-")      # the relay bearer, not sk-t
-    assert env["OPENAI_BASE_URL"] != "https://up.example/v1"
-    assert env["KIMI_SHARE_DIR"] == str(pathlib.Path(d) / ".harness" / "home" / ".kimi")
-    assert "HOME" not in env      # a dedicated share dir, so unlike qwen this never redirects HOME
-    # rich.print hard-wraps at 80 in a non-tty, and a wrapped "Error code: 400 - {…}" reaches
-    # errbuf as three fragments _failure_reason cannot match a refusal in.
-    assert env["COLUMNS"] == "400"
-    assert "--print" in cmd and cmd[cmd.index("--output-format") + 1] == "stream-json"
-    assert cmd[-2] == "-p" and cmd[-1] == "do it"
+def test_no_agent_file_when_nothing_is_disabled_or_when_resuming():
+    assert "--agent-file" not in _argv()[0]
+    assert "--agent-file" not in _argv(tools_disabled=["NotATool"])[0]
+    d = tempfile.mkdtemp(); _store(d)
+    cmd, _, _ = _argv(d, resume_session_id=SID, tools_disabled=["Bash"])
+    assert "-r" in cmd and "--agent-file" not in cmd     # the CLI refuses the two together
+
+
+def test_the_tool_names_are_the_captured_array():
+    assert {"Bash", "Read", "Write", "Edit", "Grep", "Glob", "FetchURL", "Skill", "Agent"} <= set(_KIMI_TOOLS)
+    assert "WebSearch" not in _KIMI_TOOLS and len(set(_KIMI_TOOLS)) == len(_KIMI_TOOLS)
+
+
+# ── MCP, skills, instructions ────────────────────────────────────────────────────
+def _mcp(d):
+    return json.loads((_kimi_home(pathlib.Path(d)) / "mcp.json").read_text())["mcpServers"]
+
+
+def test_mcp_servers_carry_the_transport_the_harness_declared():
+    _, d, _ = _argv(mcp_servers=[
+        {"name": "events", "transport": "sse", "url": "https://example.test/events"},
+        {"name": "api", "transport": "http", "url": "https://example.test/mcp", "headers": {"X-K": "v"}},
+        {"name": "local", "command": "/ws/launch.sh", "args": ["--root", "/p"], "env": {"A": "1"}, "cwd": "/p"}])
+    got = _mcp(d)
+    assert got["events"] == {"url": "https://example.test/events", "transport": "sse"}
+    assert got["api"] == {"url": "https://example.test/mcp", "headers": {"X-K": "v"}}   # no transport = HTTP
+    assert got["local"] == {"command": "/ws/launch.sh", "args": ["--root", "/p"], "env": {"A": "1"}, "cwd": "/p"}
+
+
+def test_the_mcp_file_is_rewritten_every_turn_so_a_removed_server_is_gone():
+    d = tempfile.mkdtemp()
+    _argv(d, mcp_servers=[{"name": "api", "url": "https://example.test/mcp"}])
+    assert "api" in _mcp(d)
+    _argv(d)
+    assert _mcp(d) == {}
+
+
+def test_a_plugins_stdio_server_reaches_kimi_as_command_and_args():
+    """_plugin_launchers hands every writer {name, command, args}; that is mcp.json's stdio entry."""
+    _, d, _ = _argv(mcp_servers=[{"name": "probe", "command": "/ws/.harness/plugins/x/launch-probe.sh", "args": []}])
+    assert _mcp(d)["probe"] == {"command": "/ws/.harness/plugins/x/launch-probe.sh", "args": []}
+
+
+def test_skills_dir_is_named_only_when_there_are_skills():
+    assert "--skills-dir" not in _argv()[0]
+    cmd, _, _ = _argv(skills_dir="/ws/.harness/skills")
+    assert cmd[cmd.index("--skills-dir") + 1] == "/ws/.harness/skills"
 
 
 def test_agent_doc_is_agents_md():
     assert _agent_doc_path("/ws", "kimi").name == "AGENTS.md"
 
 
-# ── tool policy: the trap that makes "hard" enforcement real or a lie ────────────
-def test_excluded_tools_are_written_as_paths_never_bare_names():
-    """MEASURED on 1.50.0: exclude_tools matches tool PATHS. In one probe both "Shell" (bare name)
-    and "kimi_cli.tools.web:FetchURL" (path) were excluded — FetchURL disappeared from the tools
-    array the model received and Shell did NOT. A bare name is a silent no-op, and the console
-    would report the tool as off while the model still had it."""
-    cmd, d, _ = _argv(tools_disabled=["Shell", "FetchURL"])
-    spec = json.loads((pathlib.Path(d) / ".harness" / "kimi-agent.yaml").read_text())
-    assert spec["agent"]["extend"] == "default"
-    assert spec["agent"]["exclude_tools"] == ["kimi_cli.tools.shell:Shell",
-                                              "kimi_cli.tools.web:FetchURL"]
-    assert "Shell" not in spec["agent"]["exclude_tools"]
-    assert "--agent-file" in cmd
+# ── the rest of the wiring ───────────────────────────────────────────────────────
+def test_registry_and_checkpoint():
+    assert BACKENDS["kimi"]["normalize"] is _kimi_to_claude and hasattr(_kimi_to_claude, "eof")
+    assert "./.harness/home/.kimi-code/logs" in CHECKPOINT_EXCLUDE
+    assert not any(e.rstrip("/").endswith(".kimi-code/sessions") or e.rstrip("/").endswith(".kimi-code")
+                   for e in CHECKPOINT_EXCLUDE), "sessions must travel or a resume dies with the sandbox"
 
 
-def test_no_agent_file_when_nothing_is_disabled():
-    cmd, d, _ = _argv()
-    assert "--agent-file" not in cmd
-    assert not (pathlib.Path(d) / ".harness" / "kimi-agent.yaml").exists()
+def test_null_reasoning_effort_is_still_dropped_in_the_relay():
+    """Kimi Code CLI 2.0.0 sends no reasoning_effort at all (captured at a stub); the repair stays
+    for any client that sends the null, and a real value is the caller's choice."""
+    assert "reasoning_effort" not in json.loads(_normalize_openai_chat_body(
+        json.dumps({"model": "m", "reasoning_effort": None, "messages": []}).encode()))
+    assert json.loads(_normalize_openai_chat_body(
+        json.dumps({"model": "m", "reasoning_effort": "high", "messages": []}).encode()))["reasoning_effort"] == "high"
 
 
-def test_every_tool_path_is_a_module_path():
-    for name, path in _KIMI_TOOL_PATHS.items():
-        assert path.startswith("kimi_cli.tools.") and ":" in path, (name, path)
+def test_an_mcp_server_the_cli_silently_ran_without_is_said_out_loud():
+    """2.0.0 runs the turn without an unreachable server and prints nothing anywhere but its log.
+    Only this turn's lines count: an older failure is not this reply's news."""
+    import datetime, time
+    d = tempfile.mkdtemp(); logs = _kimi_home(pathlib.Path(d)) / "logs"; logs.mkdir(parents=True)
+    now = time.time()
+    iso = lambda ts: datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    (logs / "kimi-code.log").write_text(
+        f'{iso(now - 3600)} ERROR mcp server unavailable  server=old transport=http status=failed reason="fetch failed"\n'
+        f'{iso(now + 1)} INFO something else entirely\n'
+        f'{iso(now + 1)} ERROR mcp server unavailable  server=dead transport=http status=failed reason="fetch failed"\n')
+    state = {"cwd": d, "started": now, "final": "HELLO"}
+    assert _kimi_mcp_unavailable(state) == [{"name": "dead", "reason": "fetch failed"}]
+    evs = _kimi_eof(state, 0)
+    assert evs[0] == {"type": "system", "subtype": "mcp_unavailable", "servers": [{"name": "dead", "reason": "fetch failed"}]}
+    assert evs[-1]["type"] == "result" and evs[-1]["result"] == "HELLO" and evs[-1]["is_error"] is False
+    assert _kimi_eof({"final": "x"}, 0)[0]["type"] == "result"          # no cwd, no log: just the result
 
 
-# ── MCP ──────────────────────────────────────────────────────────────────────────
-def test_mcp_streamable_http_uses_url_not_httpurl():
-    """The one field that differs from _qwen_settings, which inherited gemini-cli's `httpUrl`.
-    kimi parses the config with fastmcp's MCPConfig, where streamable HTTP is `url`."""
-    cmd, d, _ = _argv(mcp_servers=[{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp",
-                                    "headers": {"X-K": "v"}}])
-    cfg = json.loads((pathlib.Path(d) / ".harness" / "kimi-mcp.json").read_text())
-    assert cfg == {"mcpServers": {"deepwiki": {"url": "https://mcp.deepwiki.com/mcp",
-                                               "transport": "http", "headers": {"X-K": "v"}}}}
-    assert "--mcp-config-file" in cmd
+def test_the_two_fields_the_cli_invents_never_reach_the_provider():
+    """Captured at a stub on 2.0.0: max_tokens 131072 on every request and reasoning_effort "high"
+    for a claude-named model. Through the product they failed gpt, claude and gemini ids on the
+    output limit, five newer Claude ids on thinking.type.enabled, and llama-3.3-70b on its window.
+    The route is born dropping both, so the provider's defaults apply as on every other base."""
+    _, _, env = _argv()
+    tok = env["KIMI_MODEL_API_KEY"]
+    flags = _HERMES_RELAY["routes"][tok][2]
+    assert set(flags["drop_fields"]) == {"max_tokens", "max_completion_tokens", "reasoning_effort"}
+    # the same budget under its other name for a gpt-named model, and the caching hint that stays
+    body = json.dumps({"model": "claude-sonnet-5", "max_tokens": 131072, "max_completion_tokens": 131072,
+                       "reasoning_effort": "high", "prompt_cache_key": "session_x",
+                       "messages": [], "stream": True}).encode()
+    for f in flags["drop_fields"]:
+        body = _drop_top_level_field(body, f)
+    assert json.loads(body) == {"model": "claude-sonnet-5", "prompt_cache_key": "session_x",
+                                "messages": [], "stream": True}
 
 
-
-def test_a_url_server_carries_the_transport_the_harness_declared(tmp_path):
-    """kimi's client (fastmcp) guesses a url server's transport from the PATH when the config does
-    not say: SSE iff the path matches /sse(/|?|&|$), streamable HTTP otherwise. A harness that
-    declared `transport: sse` for a server at any other path would be dialed as streamable HTTP,
-    and on this CLI a server that cannot be reached is fatal to the turn. So the declared transport
-    is written, and the url's spelling decides nothing."""
-    from server import _kimi_mcp_config
-    cfg = _kimi_mcp_config(tmp_path, [
-        {"name": "events", "transport": "sse", "url": "https://example.test/events"},
-        {"name": "api", "transport": "http", "url": "https://example.test/mcp"},
-    ])
-    servers = json.loads(cfg.read_text())["mcpServers"]
-    assert servers["events"] == {"url": "https://example.test/events", "transport": "sse"}
-    assert servers["api"] == {"url": "https://example.test/mcp", "transport": "http"}
-
-def test_no_mcp_flag_when_no_servers():
-    cmd, _, _ = _argv()
-    assert "--mcp-config-file" not in cmd
-
-
-# ── the relay repair kimi needs ──────────────────────────────────────────────────
-def test_null_reasoning_effort_is_dropped_before_the_provider_sees_it():
-    """kimi sends `reasoning_effort: null` on every request and Vercel's AI Gateway answers HTTP
-    400 ("Invalid option: expected one of …"), measured twice in one live turn — so without this
-    every kimi turn on that gateway fails before it begins. Null means "unset"; deleting the key
-    says the same thing in a shape every endpoint accepts."""
-    body = json.dumps({"model": "m", "reasoning_effort": None,
-                       "messages": [{"role": "user", "content": "hi"}]}).encode()
-    out = json.loads(_normalize_openai_chat_body(body))
-    assert "reasoning_effort" not in out
-    assert out["messages"] == [{"role": "user", "content": "hi"}]
-
-
-def test_a_real_reasoning_effort_is_left_alone():
-    """Only null is touched: a chosen effort is the caller's, and _set_reasoning_effort_none sets
-    "none" deliberately elsewhere."""
-    for value in ("none", "minimal", "high"):
-        body = json.dumps({"reasoning_effort": value,
-                           "messages": [{"role": "user", "content": "hi"}]}).encode()
-        assert json.loads(_normalize_openai_chat_body(body))["reasoning_effort"] == value
-
-
-# ── conversation continuity: the bug the support matrix found ────────────────────
-def test_the_first_turn_names_the_session_so_the_second_can_continue_it():
-    """MEASURED FAILURE this pins: with --session added only on a resume, the first turn wrote its
-    history under an id nobody could name again, so every follow-up silently started a new
-    conversation in the same workspace. The support matrix's recycle scenario failed on every kimi
-    row while first/follow-up/switch passed — those three never ask the agent to remember
-    anything, so nothing else noticed."""
-    cmd, _, _ = _argv()                     # a FIRST turn: no resume id
-    assert "--session" in cmd
-    assert cmd[cmd.index("--session") + 1] == _KIMI_SESSION_NAME
-
-
-def test_the_normalizer_reports_the_session_id_or_nothing_can_resume():
-    """_run_turn_bg records the conversation id ONLY from a system/init event, and that recorded id
-    is what the next turn resumes with. kimi's own stream carries no session id anywhere, so the
-    runner mints one and announces it here."""
-    out, _ = _norm([{"role": "assistant", "content": "hi"}])
-    init = out[0]
-    assert init["type"] == "system" and init["subtype"] == "init"
-    assert init["session_id"] == _KIMI_SESSION_NAME
-
-
-def test_the_init_event_is_emitted_once_per_turn():
-    out, _ = _norm([{"role": "assistant", "content": "one"},
-                    {"role": "assistant", "content": "two"}])
-    assert len([e for e in out if e.get("subtype") == "init"]) == 1
-
-
-# ── the Plugins sub-protocol (UHP 2026-09-12) ────────────────────────────────────
-def test_a_plugins_stdio_server_reaches_kimi_as_command_and_args():
-    """_plugin_launchers bakes env, cwd and the ${PLUGIN_ROOT}/${PLUGIN_DATA} placeholders into one
-    launcher script so every backend writer sees the same {name, command, args} — "none of the nine
-    has to learn env or cwd". kimi parses its file with fastmcp's MCPConfig, whose stdio entry is
-    exactly that shape, so the branch _kimi_mcp_config already had is all a plugin needs."""
-    cmd, d, _ = _argv(mcp_servers=[
-        {"name": "probe", "command": "/ws/.harness/plugin-data/demo/.launch-probe.sh",
-         "args": ["--x", "1"]},
-        {"name": "vault", "url": "https://mcp.example.invalid/mcp"}])
-    cfg = json.loads((pathlib.Path(d) / ".harness" / "kimi-mcp.json").read_text())["mcpServers"]
-    assert cfg["probe"] == {"command": "/ws/.harness/plugin-data/demo/.launch-probe.sh",
-                            "args": ["--x", "1"]}
-    assert cfg["vault"]["url"].startswith("https://")
-    assert "--mcp-config-file" in cmd
-
-
-# The companion test that asserted membership of _STDIO_MCP_BACKENDS is gone with the set itself:
-# upstream (#185) stopped declaring any transport missing, because the runner now hands every client
-# one launcher shape and bridges SSE and streamable HTTP over stdio for the ones that cannot speak
-# them. Nothing about kimi changed — its writer already emitted {command, args} — so what is left to
-# pin is the writer's output above, and that is where the value was.
-
-
-def test_the_operators_step_budget_reaches_the_cli():
-    """MEASURED FAILURE this pins: the gateway's step budget reaches the runner as max_turns and
-    every other backend passes it on (claude and goose as --max-turns), but this builder dropped it.
-    A turn was then bounded only by kimi's own default of 1000 steps per turn (config.py
-    max_steps_per_turn, raised 500 -> 1000 upstream), which on a slow reasoning model is HOURS: in
-    the vercel column gpt-5.6-luna's switch ran 8,754s and gpt-5.5's artifact 7,418s, against 7-30s
-    for the same scenarios on other ids."""
-    cmd, _, _ = _argv(max_turns=12)
-    assert "--max-steps-per-turn" in cmd
-    assert cmd[cmd.index("--max-steps-per-turn") + 1] == "12"
-
-
-def test_no_budget_means_no_flag_rather_than_a_number_of_our_own():
-    """An operator who set none gets kimi's own default, not one invented here."""
-    cmd, _, _ = _argv()
-    assert "--max-steps-per-turn" not in cmd
-
-
-
-def test_the_failure_reason_keeps_the_sentence_and_drops_the_cli_resume_hint():
-    """kimi follows a failure with "To resume this session: kimi -r <id>", advice for a person at
-    a terminal the product does not have. The sentence that says what failed is the reason; the
-    hint is not, and it names a command the product never shows."""
-    from server import _failure_reason
-    tail = ("Unknown error: Failed to connect MCP servers: {'dead': McpError('Timed out')}\n"
-            "To resume this session: kimi -r harness")
-    reason = _failure_reason("", "", tail, 1)
-    assert reason == "Unknown error: Failed to connect MCP servers: {'dead': McpError('Timed out')}"
-    assert _failure_reason("", "", "To resume this session: kimi -r harness", 1) == "exit_code=1, no diagnostic output"
+def test_a_hard_refusal_does_not_burn_ten_attempts():
+    assert _argv()[2]["KIMI_LOOP_MAX_ATTEMPTS_PER_STEP"] == "3"
 
