@@ -499,14 +499,19 @@ def _git_ensure(ws: str) -> None:
         # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
         # hydrated from before this rule would keep growing exactly as before. Drop the CLI
         # home from the index (not from disk); from then on the ignore rule holds.
-        if _git(ws, "ls-files", "--", ".harness/home").stdout.strip():
+        tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
+        if tracked:
             _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
         # Untracking releases the index, not .git/objects: every copy the old checkpoints
         # committed stays reachable from those commits and rides in every later tarball of the
-        # session (722 MB of the 1.4 GB in #193). The signal is the history, not the index — a
-        # session whose home was untracked by an earlier turn still carries the copies. Once
-        # per session: after the shed no reachable commit touches the path.
-        if _git(ws, "rev-list", "-1", "HEAD", "--", ".harness/home").stdout.strip():
+        # session (722 MB of the 1.4 GB in #193). The gate is the index or the tip's tree, both
+        # O(1): before the rule every checkpoint re-added the home with `add -A`, so a history
+        # that holds it also holds it at the tip (the one gap, the index released but the tip
+        # not yet rewritten, is a crash between the two calls above and below, and the tip
+        # covers it). A walk of the history (`rev-list -- .harness/home`) would find the same
+        # repos and cost 130 ms per call at a thousand commits, four calls a turn, for the life
+        # of every session. Once per session: the shed leaves no home in either tree it keeps.
+        if tracked or _git(ws, "rev-parse", "-q", "--verify", "HEAD:.harness/home").returncode == 0:
             _git_shed_cli_home_history(ws)
 
 

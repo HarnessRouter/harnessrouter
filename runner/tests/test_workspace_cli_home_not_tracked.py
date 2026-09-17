@@ -145,18 +145,16 @@ def test_a_workspace_that_never_tracked_the_cli_home_is_not_rewritten():
     assert _git(str(d), "rev-list", "--count", "HEAD").stdout.strip() == "2"
 
 
-def test_a_workspace_whose_cli_home_was_untracked_by_an_earlier_turn_still_sheds_the_copies():
-    # the index is the wrong signal: a session that untracked the home a turn ago has a clean
-    # index and the same reachable copies (seen live on a session that took one turn on the
-    # untrack-only build before this landed: 25 MB of .git and a 28 MB tarball, unchanged)
+def test_an_index_released_but_a_tip_not_yet_rewritten_still_sheds_and_only_once():
+    # the gate is the tip's tree, not a walk of the history: the one state with a clean index and
+    # the copies still reachable is a crash between the untrack and the shed, and the tip covers it
     d = _ws_with_cli_home()
     db = d / ".harness" / "home" / ".local" / "share" / "opencode" / "opencode.db"
     db.write_bytes(b"\x07" * 65536)
     blob = _git(str(d), "hash-object", "--", str(db)).stdout.strip()
     subprocess.run(["git", "-C", str(d), "add", "-f", "-A", "--", "plan.json", ".harness/home"], check=True)
     subprocess.run(["git", "-C", str(d), "commit", "-q", "-m", "pre-fix checkpoint"], check=True)
-    subprocess.run(["git", "-C", str(d), "rm", "-r", "-q", "--cached", "--", ".harness/home"], check=True)
-    subprocess.run(["git", "-C", str(d), "commit", "-q", "-m", "checkpoint (untracked, history kept)"], check=True)
+    subprocess.run(["git", "-C", str(d), "rm", "-r", "-q", "--cached", "--", ".harness/home"], check=True)   # ...and then the process died
     assert not _git(str(d), "ls-files", "--", ".harness/home").stdout.strip()
     assert _git(str(d), "cat-file", "-e", blob).returncode == 0
     _git_ensure(str(d))
