@@ -70,3 +70,17 @@ def test_delete_workspace_takes_the_marker_with_it(runner, tmp_path):
     assert runner.delete("/workspace?identifier=s1").json()["removed"] is True
     assert not server._ws_marker_path("s1").exists()
     assert runner.post(f"/hydrate?identifier=s1&probe={sha}", content=b"").json()["skipped"] is False
+
+
+def test_delete_workspace_clears_the_marker_even_when_the_folder_is_already_gone(runner, tmp_path):
+    # the folder removed by hand, the marker left standing: DELETE answers "no folder", and must
+    # still take the marker with it — this is the very state in which a marker lies to the probe
+    body, sha = _checkpoint()
+    runner.post("/hydrate?identifier=s1", content=body)
+    import shutil
+    shutil.rmtree(tmp_path / "ws" / "s1")
+    assert server._ws_marker_path("s1").exists()
+    r = runner.delete("/workspace?identifier=s1").json()
+    assert r["removed"] is False and r["reason"] == "no folder"
+    assert not server._ws_marker_path("s1").exists()
+    assert runner.post(f"/hydrate?identifier=s1&probe={sha}", content=b"").json()["skipped"] is False

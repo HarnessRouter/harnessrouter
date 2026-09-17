@@ -6196,11 +6196,15 @@ async def delete_workspace(identifier: str = "") -> dict:
     ws = _ws(ident)
     if os.path.realpath(ws) in (os.path.realpath(WORKSPACE_ROOT), "/"):
         raise HTTPException(status_code=400, detail="refusing to remove the workspace root")
+    # Whether or not the folder is still there: after this call the session holds nothing on
+    # this box, and the marker is part of that. Cleared before the "no folder" answer below,
+    # since a folder already gone behind its marker is exactly the case in which a marker left
+    # behind would answer the next probe "held" (as the reaper does when it removes a folder).
+    _ws_marker_clear(ident)
     if not os.path.isdir(ws):
         return {"identifier": ident, "removed": False, "reason": "no folder"}
     uid = _session_uid(ws)
     shutil.rmtree(ws, ignore_errors=True)
-    _ws_marker_clear(ident)   # as the reaper does: a marker without its folder would answer the next probe
     if uid is not None:
         # the session's passwd/group entries were only ever for this folder
         try:
