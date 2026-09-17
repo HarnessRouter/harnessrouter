@@ -312,3 +312,194 @@ re-run once.
   recall misses on muse-spark-1.1; hermes passed its re-run, opencode missed twice. muse-spark-1.1 stays
   on opencode because the same pair passes on Vercel; the miss is recorded. OpenRouter's no-channel set
   is empty.
+
+## The kimi backend (Kimi CLI 1.50.0) — behaviour measured, columns NOT yet run
+
+No column has run for this harness. Everything below was measured against the pinned 1.50.0
+artifact — its source, its bytes on the wire, and two live turns through Vercel — and none of it is
+a substitute for a column. `docs/support-matrix.md` is rendered from
+`docs/support-matrix-results.json` and is deliberately untouched by this change.
+
+**Verified by running the real image, not only by reading the CLI.** `docker build` of this tree,
+then a container with `HR_BACKENDS=kimi`: `install_kimi` downloaded the pinned archive, the digest
+check passed, and the container reported `backends available: kimi` with
+`/data/agent-tools/bin/kimi --version` answering `kimi, version 1.50.0`. The two pinned digests were
+also compared against upstream's own published `.sha256` files and match character for character.
+
+**One real turn was run end to end in that image**, against Vercel, with the argv and the
+`config.toml` the runner generates — not a hand-written approximation. It is an A/B that settles the
+`reasoning_effort` question: the same command sent straight to Vercel answers
+`Error code: 400 - {… 'param': 'reasoning_effort' …}`, on ONE stdout line (so the `COLUMNS=400`
+mitigation for rich's 80-column wrapping works); sent through `_normalize_openai_chat_body`, the turn
+completes and prints `{"role":"assistant","content":"PROBE-OK"}` with exit 0. That line is also the
+shape `_kimi_to_claude` expects — `content` a plain STRING, not a list of blocks.
+
+Two more things that turn settled, from the state it left behind rather than from the notes:
+
+- `Connection error.` really does exit **75**, observed when the relay was not yet listening.
+- The `_resume_lost` probe matches kimi's own store: `md5("/tmp/ws")` is `59fa73ff…`, which is
+  exactly the directory kimi created, and `context.jsonl` is in it — so the probe reports the
+  session PRESENT for the id that ran and LOST for one that never existed.
+
+**A failed turn reads as failed, by exit code rather than by prose.** kimi classifies provider
+failures itself (`Print._classify_provider_error`): 75 (EX_TEMPFAIL) for connection, timeout and
+empty-response errors and for HTTP 429/500/502/503/504; 1 for every other status error and for the
+catch-all. The reason arrives as a bare non-JSON line on stdout (`Error code: 401 - {…}`,
+`Connection error.`), which the runner already collects and `_failure_reason` already prefers. This
+is the first backend here that needs no error-prose regex at all — contrast claude's `API Error: …`
+and goose's `Ran into this error: …`, both of which are narrated as assistant text.
+
+**The CLI reports no served model anywhere**, so every kimi row is substitution-checked from the
+relay (`_relay_served_model`), the same path goose, cline and qwen use. Measured: a live turn's
+upstream SSE carried `"model":"openai/gpt-5.4-nano"`, which `_served_model_in` matches. Separately,
+kimi does not rewrite the id it is given — the value reaches the provider verbatim, and its only
+alias machinery raises `KeyError` on a miss rather than substituting, so the gemini `resolveModel`
+class of silent substitution is absent.
+
+**`reasoning_effort: null` is on every kimi request and Vercel's AI Gateway answers it with HTTP
+400** ("Invalid option: expected one of \"none\"|\"minimal\"|…", reproduced twice in one live turn).
+Without the relay dropping that key, every kimi turn on Vercel fails before it begins. The drop is
+in `_normalize_openai_chat_body`, so it applies to any backend that sends the same shape.
+
+**An unreachable MCP server KILLS the turn on this backend** — `Unknown error: Failed to connect
+MCP servers: {…}` and exit 1, verified live against a dead server — it does not degrade. That is
+the opposite of goose (warns on stderr, continues) and of hermes (disables HTTP MCP with a log
+line), and it means the visibility UHP §4.1 asks for is satisfied loudly here, at the cost of a
+flaky third-party server taking every turn with it. The matrix probes the server once before a run
+and skips the MCP half when it is unreachable, so the custom-harness dimension is unaffected; a
+user-configured server that dies mid-session is the real exposure.
+
+**A resumed session that is gone is silent.** `--session <unknown-id>` does not error: kimi mints a
+session with that id and answers from an empty history, with no stdout line and no change of exit
+code. `_resume_lost`'s kimi arm therefore asks the store — `sessions/<md5(work_dir)>/<id>/context.jsonl`,
+kimi's own predicate — rather than reading argv, where the id is present either way.
+
+**Tool policy is real but path-keyed.** `exclude_tools` matches tool PATHS
+(`kimi_cli.tools.shell:Shell`), not the names the model sees; a bare name is a silent no-op.
+Measured in one probe: excluding `kimi_cli.tools.web:FetchURL` removed it from the tools array,
+while excluding `Shell` did not. `tool_enforcement: "hard"` is honest only because
+`runner/server.py`'s `_KIMI_TOOL_PATHS` translates, and a gateway test pins the catalog's ids equal
+to that table's keys.
+
+**`SearchWeb` and `ReadMediaFile` are not offered.** Both ship in kimi's default agent and both
+raise `SkipThisTool` unless a Moonshot search key / a vision-capable model is configured, so
+neither is ever constructed on this deployment.
+
+**Token usage is absent from the stream**, not merely named differently: `JsonPrinter` drops every
+`StatusUpdate`. kimi's result events carry `usage: {}` until `_relay_usage` lands, which is the
+agreed division of work — no harness PR builds its own usage pipeline.
+
+**The Vercel column, measured 2026-09-16 (candidate built from this branch, kimi 1.50.0).**
+46 ids, five scenarios each: **229 of 230 scenarios passed**, every turn served by the connection
+under test — no foreign connection on any pair.
+
+The single failure is `gemini-2.5-flash-lite`'s artifact turn, with the provider's own words: "The
+API returned an empty response". It is **deterministic through this product** (three independent
+runs on two different builds, same id, same scenario, same sentence) and takes ~175s, which is kimi
+retrying the empty response until `max_retries_per_step` is exhausted rather than one slow call.
+
+What it is NOT, each eliminated by measurement rather than reasoning:
+- not the request shape — the same conversation replayed by hand against the same provider answers
+  correctly, non-streaming and streaming, with one tool and with the full fifteen, and with a
+  system prompt padded to the size kimi sends;
+- not the `reasoning_effort` repair, which is applied identically on every other id here;
+- not a transient — `qwen3.7-max` failed the same scenario in the previous run with "Upstream stream
+  ended before terminal chunk" and PASSED here, so that one was the flake this is not.
+
+What could not be reproduced outside the product: replaying the exact four-step sequence
+(first, follow-up, switch to the partner model, artifact) through the real kimi binary against the
+same provider, with the workspace contract in AGENTS.md, completes all four turns and writes the
+file. So the remaining variable is something the gateway path adds that a CLI replay does not.
+
+**The Google column then said what one column could not.** Same harness, same scenarios, 11 ids,
+**53 of 55 scenarios passed**, no foreign connection. The two failures are
+`gemini-2.5-flash`'s artifact turn — *the same sentence*, "The API returned an empty response" — and
+the recycle that followed it with nothing to recall. And `gemini-2.5-flash-lite`, which fails
+deterministically on Vercel, **passes all five here**:
+
+| id | Vercel | Google |
+|---|---|---|
+| `gemini-2.5-flash-lite` | artifact fails, empty response | 5/5 |
+| `gemini-2.5-flash` | 5/5 | artifact fails, empty response |
+
+So it is NOT the channel — both show it — and NOT one id, since each channel's healthy member is the
+other's casualty. What survives is the shape: **a gemini-2.5-class model returns an empty response on
+the artifact turn**, the one that follows a model switch and asks for a file, and which member of the
+family trips differs by provider (most likely the actual build behind the same name on each). One
+column alone would have supported the wrong conclusion — the Vercel notes above nearly recorded it as
+a property of that id on that channel.
+
+Recorded as rows that fail with the provider's reproduced text, which is what the rules ask for.
+
+Vercel's answers carry the aggregator's vendor prefix (`openai/gpt-5.4`, `anthropic/claude-opus-5`,
+`alibaba/qwen3.7-max`), which rule 2 counts as the same model.
+
+**Five ids Vercel does not serve at all**, so this column never ran them: `claude-fable-5-1`,
+`gemini-3-flash-preview`, `grok-4.20`, `hunyuan-4-preview`, `nemotron-3-super`. They remain in the
+catalog because other providers serve them; they are unmeasured HERE, not rejected.
+
+**The four slow ids: the cause was found, and it was ours.** kimi's own default is **1000 steps per
+turn** (`config.py` `max_steps_per_turn`, raised from 500 upstream), and `_build_kimi` never passed
+the operator's step budget — the gateway's `max_step` reaches the runner as `max_turns` and every
+other backend forwards it (claude and goose as `--max-turns`), but this builder dropped it. On a
+fast model the default is invisible; on a slow reasoning one, 1000 steps at 10-30s each is three to
+eight hours, which is exactly the range that was measured. Now forwarded as
+`--max-steps-per-turn`. Reaching the cap is visible on this CLI rather than silent — it raises
+`MaxStepsReached`, which arrives as its own stdout line with a non-zero exit — so a truncated turn
+reads as truncated, unlike goose, which reports nothing at its cap.
+
+Two hypotheses were tested and rejected before that one: the relay's repair loop is bounded
+(`attempt < 2`), and the `reasoning_effort` shape is not the trigger — measured directly against
+Vercel with function tools on `gpt-5.6-sol`, `reasoning_effort: null` is a 400 in 0s while both the
+key deleted (what the relay does for kimi) and `reasoning_effort: "none"` answer 200 in 1-2s.
+
+**What was measured of those four before the fix**, with the budget still unbounded: What was measured of them, before the exclusion:
+`gpt-5.6-sol` and `gpt-5.6-terra` passed all five scenarios but took HOURS each; `gpt-5.6-luna`'s
+switch hung 8,754s and then failed; `gpt-5.5`'s switch hung 2,200s and its artifact 7,418s. The
+mechanism is not established. The cline and qwen catalog entries already record that the gpt-5.6
+line answers 400 through aggregator chat/completions when the request carries function tools, which
+`_set_reasoning_effort_none` repairs per (route, model) — but on those backends that is a FAST
+error, and here it is an hours-long wait, which is not the same shape. Whether this is kimi's or the
+channel's is an open question: aider and openhands have no data on those four ids at all.
+
+**The custom-harness dimension passes, and deepwiki works here.** All claims on the kimi row:
+the skill and the tool policy were stored and came back on a read, the bundle reached the agent (the
+answer carried the token that exists only inside the script), the script ran (`stamp.txt` among the
+turn's produced files), and the declared MCP server was stored and called — `read_wiki_structure`,
+against `https://mcp.deepwiki.com/mcp`, which needed no override. Worth recording because goose
+cannot handshake with deepwiki and its row needs `MCP_URL=https://mcp.context7.com/mcp`; kimi's does
+not.
+
+**But `disabled_tool_unused` passes VACUOUSLY on this row, as it does on aider, qwen, gemini and
+cline.** The dimension switches off the fixed id `WebSearch`, and kimi's catalog does not list it —
+deliberately, because it is never constructed without a Moonshot search key. Nothing named the tool
+because nothing could, so that claim proves the policy was STORED and nothing about whether it TOOK
+EFFECT.
+
+**Measured separately, so the `hard` claim is not left resting on that.** A one-off experiment — the
+dimension run once with the disabled tool changed to `Shell`, a tool kimi has and this task needs;
+the shared script was NOT changed, and this is a recommendation rather than a diff:
+
+| | tools the turn used |
+|---|---|
+| Shell allowed | `ReadFile`, `Shell` |
+| Shell disabled | `ReadFile`, `ReadFile`, `WriteFile` |
+
+Shell is absent, and the agent reached the same result another way. The policy really withholds, so
+`tool_enforcement: "hard"` on this base is measured rather than asserted.
+
+**That experiment also exposed something about claim 4 that is the dimension's, not kimi's.** With
+Shell disabled the agent could execute nothing, yet `script_ran` still passed and `stamp.txt` still
+appeared: the agent read SKILL.md, read the script, and wrote the file itself. "The script actually
+ran" is judged by the file being among the produced files, and an agent that can read the script can
+produce that file without running it. Same shape as the vacuous pass above — a gap between the
+judge and the thing it means to prove — and harder to notice, since nothing about the row looks
+wrong. Two suggestions, both the maintainer's call: let the dimension name the tool it disables
+(a base that has no `WebSearch` could disable one it has), and make the script write something the
+agent cannot predict from reading it.
+
+**Known open question: `max_context_size`.** kimi requires one per model and plans compaction
+against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds one value for all
+ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN the agent compacts,
+never whether it answers: too large lets a thread overflow the real window (the provider then
+errors), too small compacts early and wastes tokens.

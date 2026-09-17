@@ -16,6 +16,7 @@ const LOGO: Record<string, string> = {
   gemini: '/logos/gemini.png',
   omp: '/logos/omp.png',
   goose: '/logos/goose.png',   // the flying goose from goose-docs.ai (logo_light.png, cropped to the mark)
+  kimi: '/logos/kimi.png',     // the official Kimi mark (the K app icon from kimi.ai/code), supplied by Richard 2026-09-17
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {

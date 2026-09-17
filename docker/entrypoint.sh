@@ -177,7 +177,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -196,6 +196,7 @@ backend_bin() {
     cline)  echo "$TOOLS/bin/cline" ;;
     omp)    echo "$TOOLS/bin/omp" ;;
     goose)  echo "$TOOLS/bin/goose" ;;
+    kimi)   echo "$TOOLS/bin/kimi" ;;
   esac
 }
 
@@ -239,6 +240,61 @@ install_opencode() {
 # download has to go unverified: the digests are pinned HERE instead, computed from the v1.50.0
 # release assets (each archive holds exactly ./goose). That is strictly stronger than the tag
 # alone, which can be moved and whose asset can be re-uploaded.
+# Kimi CLI, Apache-2.0 (MoonshotAI/kimi-cli), pinned to 1.50.0.
+#
+# THE STANDALONE BINARY, NOT PyPI, and the reason is this image. `pip install kimi-cli` pins
+# pydantic==2.12.5, aiohttp==3.13.3, httpx==0.28.1, fastmcp==3.2.4, fastapi and uvicorn — the same
+# packages the runner itself is a FastAPI app on — so it would need its own venv (the dsh/hermes
+# precedent) at 314 MB and ~50 s. The release binary is ~93 MB, carries no Python-version
+# constraint at all, and cannot collide with the runner's interpreter.
+#
+# Upstream DOES publish a per-asset .sha256 beside each archive, so unlike goose there is an
+# upstream checksum to cite. The digests are still pinned HERE rather than fetched: a checksum
+# served from the same origin as the artifact adds nothing against a compromised origin, while a
+# digest pinned in this file fails closed if the tag is moved or the asset re-uploaded. The values
+# below were read from the 1.50.0 assets and agree with upstream's own .sha256 files.
+#
+# Everything runner/server.py's kimi code was written against — the stream-json line shapes, the
+# openai_legacy env override, exclude_tools matching PATHS, the sessions/<md5(cwd)>/<id> layout,
+# and the 75/1 provider-failure exit codes — was read out of THIS version.
+install_kimi() {
+  case "$(uname -m)" in
+    x86_64)        km_arch="x86_64";  km_sha="10ccaa26ee7f5bb43f7c05baf808c11cd0160710b07ac422382d1d1923f3dab6" ;;
+    aarch64|arm64) km_arch="aarch64"; km_sha="de235322f48abe63e7a8d737f39f0c00fecf724f1dfaa1ae02491bb773ae8070" ;;
+    *) echo "unsupported architecture $(uname -m) for kimi"; return 1 ;;
+  esac
+  km_ver="${HR_KIMI_VERSION:-1.50.0}"; km_ver="${km_ver#v}"
+  if [ "$km_ver" != "1.50.0" ]; then
+    # Same contract as goose's: an operator who overrides the version supplies the digest for the
+    # version they chose, or is TOLD the archive is unverified. Read as ${VAR:-} because this
+    # script runs under `set -euo pipefail`.
+    if [ -n "${HR_KIMI_SHA256:-}" ]; then
+      km_sha="$HR_KIMI_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_KIMI_VERSION=$km_ver overrides the pinned 1.50.0, and no"
+      echo "[harnessrouter]       HR_KIMI_SHA256 was given — this kimi archive is UNVERIFIED."
+      km_sha=""
+    fi
+  fi
+  km_url="https://github.com/MoonshotAI/kimi-cli/releases/download/${km_ver}/kimi-${km_ver}-${km_arch}-unknown-linux-gnu.tar.gz"
+  km_tmp="$(mktemp -d)"
+  curl -fsSL "$km_url" -o "$km_tmp/kimi.tar.gz" || { rm -rf "$km_tmp"; return 1; }
+  if [ -n "$km_sha" ]; then
+    km_have="$(sha256sum "$km_tmp/kimi.tar.gz" | awk '{print $1}')"
+    if [ "$km_sha" != "$km_have" ]; then
+      echo "kimi $km_ver: archive digest mismatch for $km_arch (want $km_sha, have $km_have)"
+      rm -rf "$km_tmp"; return 1
+    fi
+  fi
+  tar -xzf "$km_tmp/kimi.tar.gz" -C "$km_tmp" || { rm -rf "$km_tmp"; return 1; }
+  km_bin="$(find "$km_tmp" -type f -name kimi -perm -u+x | head -n 1)"
+  [ -n "$km_bin" ] || { echo "release archive contained no kimi binary"; rm -rf "$km_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$km_bin" "$TOOLS/bin/kimi" \
+    || { rm -rf "$km_tmp"; return 1; }
+  rm -rf "$km_tmp"
+}
+
+
 install_goose() {
   case "$(uname -m)" in
     x86_64)        gs_arch="x86_64";  gs_sha="6389eea4440178de006fa148d466ac411021315ff7f72b1014beae2d445851e2" ;;
@@ -383,6 +439,11 @@ install_backends() {
   if wanted goose && [ ! -x "$(backend_bin goose)" ]; then
     echo "[harnessrouter] installing goose (Apache-2.0)…"
     try_install "goose" install_goose || true
+  fi
+
+  if wanted kimi && [ ! -x "$(backend_bin kimi)" ]; then
+    echo "[harnessrouter] installing Kimi CLI (Apache-2.0)…"
+    try_install "Kimi CLI" install_kimi || true
   fi
 
   # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that
