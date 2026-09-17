@@ -2820,6 +2820,55 @@ def _drop_stream_options(body: bytes) -> bytes:
     return body
 
 
+_MAX_TOKENS_REFUSAL = re.compile(rb"max_tokens|max_completion_tokens|maxOutputTokens|output tokens", re.I)
+
+
+def _max_tokens_cap_from_refusal(data: bytes, body: bytes | None) -> int | None:
+    """The output-token limit a provider STATED while refusing a request for asking too many.
+
+    Kimi Code CLI budgets output from the context window and sends `max_tokens: 131072` on every
+    request; endpoints that allow less refuse the whole request, each naming its limit (measured
+    through the product, 2026-09-17):
+      OpenAI     "max_tokens is too large: 131072. This model supports at most 128000 completion tokens"
+      Anthropic  "max_tokens: 131072 > 128000, which is the maximum allowed number of output tokens"
+      Google     "maxOutputTokens value of 131072 but the supported range is from 1 (inclusive) to
+                  65537 (exclusive)"
+    The limit is the largest number in the message that is below what was sent (minus one when the
+    provider calls its bound exclusive). None when the refusal is about something else, or names no
+    usable number: then nothing is guessed."""
+    if not data or not _MAX_TOKENS_REFUSAL.search(data):
+        return None
+    try:
+        obj = json.loads(body or b"{}")
+        sent = int(obj.get("max_tokens") or obj.get("max_completion_tokens") or 0)
+    except Exception:  # noqa: BLE001
+        return None
+    if sent <= 1:
+        return None
+    text = data.decode("utf-8", "replace")
+    below = [int(n) for n in re.findall(r"(?<![\w.])(\d{3,9})(?![\w.])", text) if 1 < int(n) < sent]
+    if not below:
+        return None
+    cap = max(below)
+    if re.search(rf"{cap}\s*\(exclusive\)", text):
+        cap -= 1
+    return cap if cap >= 1 else None
+
+
+def _clamp_max_tokens(body: bytes, cap: int) -> bytes:
+    """Hold max_tokens / max_completion_tokens to `cap`; a body that asks for less is untouched."""
+    try:
+        obj = json.loads(body)
+        changed = False
+        for k in ("max_tokens", "max_completion_tokens"):
+            if isinstance(obj, dict) and isinstance(obj.get(k), int) and obj[k] > cap:
+                obj[k] = cap
+                changed = True
+        return json.dumps(obj, separators=(",", ":")).encode() if changed else body
+    except Exception:  # noqa: BLE001
+        return body
+
+
 def _rename_max_tokens(body: bytes) -> bytes:
     """max_tokens -> max_completion_tokens in one chat-completions body.
 
@@ -3249,6 +3298,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _body_model = ""
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
+            if flags.get(f"max_tokens_cap:{_body_model}"):
+                body = _clamp_max_tokens(body, int(flags[f"max_tokens_cap:{_body_model}"]))
             if flags.get("rename_max_tokens"):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
@@ -3289,6 +3340,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     # The provider named the fix itself; apply it, remember it for this route.
                     flags["rename_max_tokens"] = True
                     body = renamed
+                    headers["content-length"] = str(len(body))
+                    continue
+                cap = _max_tokens_cap_from_refusal(data, body) if e.code == 400 else None
+                if attempt < 2 and cap and body is not None:
+                    # The provider named its limit while refusing; hold the request to it and
+                    # remember it for this route and model, so the next request is not refused.
+                    flags[f"max_tokens_cap:{_body_model}"] = cap
+                    body = _clamp_max_tokens(body, cap)
                     headers["content-length"] = str(len(body))
                     continue
                 stringified = _stringify_tool_content(body) if body is not None else None
@@ -3893,6 +3952,10 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     env["KIMI_MODEL_API_KEY"] = auth.api_key or ""
     env["KIMI_MODEL_MAX_CONTEXT_SIZE"] = str(KIMI_CONTEXT_WINDOW)
     env["NO_COLOR"] = "1"
+    # The CLI retries a failing step up to ten times, a provider's flat 400 included: measured, a
+    # request a model refuses outright took 143 to 178 s to fail. Three total attempts still rides
+    # out a transient error and lets a real refusal reach the person in seconds.
+    env["KIMI_LOOP_MAX_ATTEMPTS_PER_STEP"] = "3"
     if max_turns:
         # THE BUDGET. Unset means unlimited on this CLI, and on a slow reasoning model that was
         # hours on its predecessor. Reaching it is loud: exit 1 with loop.max_steps_exceeded.

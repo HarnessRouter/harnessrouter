@@ -26,7 +26,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (Auth, BACKENDS, CHECKPOINT_EXCLUDE, _KIMI_TOOLS,  # noqa: E402
-                    _kimi_mcp_unavailable,
+                    _kimi_mcp_unavailable, _clamp_max_tokens, _max_tokens_cap_from_refusal,
                     _agent_doc_path, _build_kimi, _failure_reason, _kimi_eof, _kimi_has_session,
                     _kimi_home, _kimi_to_claude, _normalize_openai_chat_body, _resume_lost)
 
@@ -272,4 +272,28 @@ def test_an_mcp_server_the_cli_silently_ran_without_is_said_out_loud():
     assert evs[0] == {"type": "system", "subtype": "mcp_unavailable", "servers": [{"name": "dead", "reason": "fetch failed"}]}
     assert evs[-1]["type"] == "result" and evs[-1]["result"] == "HELLO" and evs[-1]["is_error"] is False
     assert _kimi_eof({"final": "x"}, 0)[0]["type"] == "result"          # no cwd, no log: just the result
+
+
+def test_the_relay_learns_a_model_s_output_limit_from_the_refusal_that_states_it():
+    """Kimi Code CLI sends max_tokens 131072 on every request; these are the three refusals the
+    product run collected, verbatim. The limit is read from the message, never guessed."""
+    sent = json.dumps({"model": "m", "max_tokens": 131072, "messages": []}).encode()
+    cases = [
+        (b'{"error":{"message":"max_tokens is too large: 131072. This model supports at most 128000 completion tokens, whereas you provided 131072."}}', 128000),
+        (b'{"error":{"message":"max_tokens: 131072 > 128000, which is the maximum allowed number of output tokens for claude-sonnet-4-6"}}', 128000),
+        (b'{"error":{"message":"Unable to submit request because it has a maxOutputTokens value of 131072 but the supported range is from 1 (inclusive) to 65537 (exclusive)."}}', 65536),
+    ]
+    for data, want in cases:
+        assert _max_tokens_cap_from_refusal(data, sent) == want
+    # a refusal about something else, or one that names no usable number, teaches nothing
+    assert _max_tokens_cap_from_refusal(b'{"error":{"message":"Invalid API key 12345"}}', sent) is None
+    assert _max_tokens_cap_from_refusal(b'{"error":{"message":"max_tokens is invalid"}}', sent) is None
+    assert _max_tokens_cap_from_refusal(cases[0][0], json.dumps({"model": "m", "messages": []}).encode()) is None
+    assert json.loads(_clamp_max_tokens(sent, 128000))["max_tokens"] == 128000
+    small = json.dumps({"model": "m", "max_tokens": 4096}).encode()
+    assert _clamp_max_tokens(small, 128000) is small                   # asking for less is left alone
+
+
+def test_a_hard_refusal_does_not_burn_ten_attempts():
+    assert _argv()[2]["KIMI_LOOP_MAX_ATTEMPTS_PER_STEP"] == "3"
 
