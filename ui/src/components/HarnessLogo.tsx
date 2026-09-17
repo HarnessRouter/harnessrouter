@@ -16,9 +16,7 @@ const LOGO: Record<string, string> = {
   gemini: '/logos/gemini.png',
   omp: '/logos/omp.png',
   goose: '/logos/goose.png',   // the flying goose from goose-docs.ai (logo_light.png, cropped to the mark)
-  // kimi is deliberately absent: ui/public/logos/kimi.png does not exist yet, and a row here
-  // pointing at a missing file renders a broken image, which is worse than the generic glyph the
-  // lookup falls back to. Add the asset and the row together.
+  kimi: '/logos/kimi.png',     // the official Kimi mark (the K app icon from kimi.ai/code), supplied by Richard 2026-09-17
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {
