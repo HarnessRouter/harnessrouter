@@ -5097,6 +5097,16 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
         # learn the context was dropped, so it is a short, honest note at the top of the reply.
         out.append(("text", "_Note: the earlier conversation could not be restored. This reply "
                             "continues as a new session, without that context._\n\n"))
+    elif t == "system" and ev.get("subtype") == "mcp_unavailable":
+        # A CLI that runs the turn without an MCP server it could not reach, and says nothing (Kimi
+        # Code CLI does exactly that), leaves a person wondering why the agent never used their
+        # tool. The runner reads the CLI's own record of it; this is the sentence that tells them.
+        names = [str(s.get("name") or "") for s in ev.get("servers") or [] if isinstance(s, dict) and s.get("name")]
+        if names:
+            quoted = ", ".join(f'"{n}"' for n in names)
+            word = "server" if len(names) == 1 else "servers"
+            out.append(("text", f"\n\n_Note: the MCP {word} {quoted} could not be reached, so this "
+                                "reply ran without those tools._\n"))
     return out
 
 
@@ -6015,28 +6025,18 @@ _MODEL_CATALOG: dict[str, dict] = {
     # its text turns answer but its first tool turn is refused on every channel (TokenRouter
     # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
     # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
-    # kimi: the same relay reach as qwen and cline (OpenAI chat/completions through the loopback
-    # relay), so the list is qwen's, reordered to put the kimi family first as its home family.
+    # kimi (Kimi Code CLI): the same relay reach as qwen and cline (OpenAI chat/completions through the
+    # loopback relay), so the list is qwen's, reordered to put the kimi family first as its home family.
     #
-    # MEASURED, two columns, 2026-09-16, against a candidate built from this branch:
-    #   Vercel  46 ids x 5 scenarios -> 229/230 passed, no foreign connection
-    #   Google  11 ids x 5 scenarios ->  53/55  passed, no foreign connection
-    # Google serves only its own family, which is why its column is eleven ids and not forty-six.
+    # MEASURED on Kimi Code CLI 2.0.0, 2026-09-17, against a candidate built from the rewiring branch:
+    # every id below on the five console scenarios through a real browser, across six connections
+    # (TokenRouter 38, Vercel 6, Anthropic 2, a custom OpenAI endpoint 2, Azure OpenAI 1, OpenRouter 1):
+    # 248 of 250. The two misses are claude-opus-5's artifact and recycle turns, the provider's safety
+    # policy meeting the scenario's own words (neutral words pass); see docs/support-matrix-notes.md,
+    # which also records the three request fields this CLI invents and the route drops.
     #
-    # THE SEVEN IDS NEITHER COLUMN RAN, and why: Vercel does not serve claude-fable-5-1,
-    # gemini-3-flash-preview, grok-4.20, hunyuan-4-preview or nemotron-3-super, and this
-    # deployment's model map had no entry for gemini-3.6-flash or llama-3.3-70b. They stay listed
-    # because other providers serve them; they are unmeasured HERE, which is not the same as refused.
-    #
-    # THE ONE FINDING, and it needed both columns to read correctly: a gemini-2.5-class model
-    # returns "The API returned an empty response" on the artifact turn — the one that follows a
-    # model switch and asks for a file. On Vercel that is gemini-2.5-flash-lite (three runs, two
-    # builds) while gemini-2.5-flash passes; on Google it is exactly the other way round. So it
-    # belongs to neither the channel nor one id. See docs/support-matrix-notes.md.
-    #
-    # kimi does not rewrite the id it is given: the value reaches the provider verbatim (captured at
-    # a stub and against both live gateways), and its only alias machinery raises KeyError on a miss
-    # rather than substituting — the gemini resolveModel class of silent substitution is absent.
+    # The id reaches the provider verbatim: KIMI_MODEL_NAME is sent as `model` unchanged (captured at
+    # a stub), so the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
@@ -6182,9 +6182,9 @@ for _b, _e in _MODEL_CATALOG.items():
 # an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
 # test forbids listing such an id for such a harness.
 RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
-# kimi speaks chat/completions only: its provider type is openai_legacy (openai_responses
-# exists in the CLI but is not the type the runner writes), so a Responses-API-only id would be
-# a picker row that fails on send.
+# kimi speaks chat/completions only: the runner defines its model with provider type `openai`
+# through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
+# sets), so a Responses-API-only id would be a picker row that fails on send.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
@@ -13294,29 +13294,32 @@ _BASE_CATALOG: dict[str, dict] = {
         "tool_enforcement": "hard",
     },
     "kimi": {
-        "label": "Kimi CLI", "backend": "kimi", "status": "ready",
-        "system_prompt": ("You are Kimi CLI, an autonomous coding agent. You work on a real git "
+        "label": "Kimi Code CLI", "backend": "kimi", "status": "ready",
+        "system_prompt": ("You are Kimi Code CLI, an autonomous coding agent. You work on a real git "
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
-        # Measured from the `tools` array a live run SENT ITS PROVIDER, captured at a local stub —
-        # these are the names the model actually sees, not doc-sourced ones.
-        #
-        # SearchWeb and ReadMediaFile are in the shipped default agent and are deliberately NOT
-        # listed: each raises SkipThisTool unless a Moonshot search key / a vision-capable model is
-        # configured, so neither is ever constructed here, and listing one would be the "tool id
-        # that matches nothing" this catalog's own rules forbid.
-        "tools": [("Shell", "Shell"), ("ReadFile", "File Read"), ("WriteFile", "File Write"),
-                  ("StrReplaceFile", "Edit"), ("Grep", "Search"), ("Glob", "Glob"),
-                  ("FetchURL", "Web Fetch"), ("SetTodoList", "Todo"), ("Agent", "Subagent"),
+        # Measured from the `tools` array a live Kimi Code CLI 2.0.0 run SENT ITS PROVIDER, captured at
+        # a local stub: these are the names the model actually sees, not doc-sourced ones. WebSearch
+        # is absent on purpose: it is declared only with a Moonshot search service configured, and
+        # listing it would be the "tool id that matches nothing" this catalog's own rules forbid.
+        "tools": [("Bash", "Shell"), ("Read", "File Read"), ("Write", "File Write"), ("Edit", "Edit"),
+                  ("Grep", "Search"), ("Glob", "Glob"), ("FetchURL", "Web Fetch"),
+                  ("ReadMediaFile", "Media Read"), ("TodoList", "Todo"), ("Skill", "Skill"),
+                  ("Agent", "Subagent"), ("AgentSwarm", "Subagent Swarm"),
                   ("AskUserQuestion", "Question"), ("TaskList", "Background Tasks"),
-                  ("TaskOutput", "Task Output"), ("TaskStop", "Task Stop"),
-                  ("EnterPlanMode", "Enter Plan"), ("ExitPlanMode", "Exit Plan")],
-        # "hard", and earned: a --agent-file with `extend: default` + `exclude_tools` means the tool
-        # is never constructed and never declared to the model. Verified live — an excluded tool was
-        # absent from the captured tools array. The enforcement depends entirely on
-        # runner/server.py's _KIMI_TOOL_PATHS, because kimi matches tool PATHS and a bare NAME is a
-        # silent no-op; test_catalog_kimi_tool_paths.py pins these ids equal to that table's keys so
-        # this claim cannot drift into an overstatement.
+                  ("TaskOutput", "Task Output"), ("TaskStop", "Task Stop"), ("WaitFor", "Wait"),
+                  ("EnterPlanMode", "Enter Plan"), ("ExitPlanMode", "Exit Plan"),
+                  ("CreateGoal", "Create Goal"), ("GetGoal", "Get Goal"), ("UpdateGoal", "Update Goal"),
+                  ("SetGoalBudget", "Goal Budget"), ("CronCreate", "Schedule Create"),
+                  ("CronList", "Schedule List"), ("CronDelete", "Schedule Delete")],
+        # "hard", and earned: an agent file's `disallowedTools` shapes the tools shown to the model
+        # AND is enforced again before execution (the CLI's agents reference). Verified live on
+        # 2.0.0: with Bash disallowed and asked for the machine's boot id, the agent called no tool
+        # and said it had no shell. The file also empties the subagent allowlist, because a built-in
+        # subagent carries its own tools and handed the withheld one back by delegation (measured
+        # through the product). It matches by exact tool NAME and a name it does not know
+        # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
+        # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
         "tool_enforcement": "hard",
     },
     "qwen": {
