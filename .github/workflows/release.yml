@@ -249,9 +249,17 @@ jobs:
       #
       # Created LAST, after the manifest has been read back from the registry: a Release that
       # exists for an image nobody can pull is worse than no Release, because it is the page
-      # people trust. Skipped for a workflow_dispatch run, which has no tag to attach to.
+      # people trust.
+      #
+      # On EVERY run, a dispatched one included. This step used to be skipped for
+      # workflow_dispatch "which has no tag to attach to", and the result was the same silent
+      # staleness the paragraph above describes, by another door: 0.18.0 and 0.18.1 were published
+      # to Docker Hub by dispatch on 2026-09-17 and the repository showed v0.17.3 as its latest
+      # tag and Release until someone asked why. A dispatched run has no tag YET, so the Release
+      # makes it, at the commit this run built (--target; ignored when the tag already exists, as
+      # it does on a tag push). A tag created with this workflow's own token does not start
+      # another run, so publishing by dispatch does not build twice.
       - name: Publish the GitHub Release
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -267,4 +275,4 @@ jobs:
           fi
           # --generate-notes works out the previous tag itself; passing --notes-start-tag from a
           # `gh release list` subshell added a second thing that needed the repo and could fail.
-          gh release create "v$V" --repo "$REPO" --title "v$V" --generate-notes
+          gh release create "v$V" --repo "$REPO" --title "v$V" --generate-notes --target "$GITHUB_SHA"
