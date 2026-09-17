@@ -3787,8 +3787,12 @@ _KIMI_TOOLS = ("Agent", "AgentSwarm", "AskUserQuestion", "Bash", "CreateGoal", "
 #     capabilities are declared. TokenRouter turns that into thinking.type.enabled, which the newer
 #     Claude models refuse outright ("not supported for this model. Use thinking.type.adaptive"): five
 #     ids failed their first turn on it.
-# Every other base here sends neither and the provider's defaults apply; this base now does the same.
-_KIMI_DROP_FIELDS = ("max_tokens", "reasoning_effort")
+# The budget travels under a second name for an OpenAI-named model (gpt-*, o*): the CLI sends
+# max_completion_tokens: 131072 there instead, captured at the same stub across ten model families,
+# and gpt-5.4-mini refused it exactly as the others refused max_tokens. prompt_cache_key, the one
+# other extra it sends, is a caching hint no endpoint here objects to and stays.
+# Every other base here sends none of these and the provider's defaults apply; this base now does too.
+_KIMI_DROP_FIELDS = ("max_tokens", "max_completion_tokens", "reasoning_effort")
 
 
 def _kimi_home(ws: pathlib.Path) -> pathlib.Path:

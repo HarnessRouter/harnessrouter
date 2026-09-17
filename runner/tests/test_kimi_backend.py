@@ -282,12 +282,15 @@ def test_the_two_fields_the_cli_invents_never_reach_the_provider():
     _, _, env = _argv()
     tok = env["KIMI_MODEL_API_KEY"]
     flags = _HERMES_RELAY["routes"][tok][2]
-    assert set(flags["drop_fields"]) == {"max_tokens", "reasoning_effort"}
-    body = json.dumps({"model": "claude-sonnet-5", "max_tokens": 131072, "reasoning_effort": "high",
+    assert set(flags["drop_fields"]) == {"max_tokens", "max_completion_tokens", "reasoning_effort"}
+    # the same budget under its other name for a gpt-named model, and the caching hint that stays
+    body = json.dumps({"model": "claude-sonnet-5", "max_tokens": 131072, "max_completion_tokens": 131072,
+                       "reasoning_effort": "high", "prompt_cache_key": "session_x",
                        "messages": [], "stream": True}).encode()
     for f in flags["drop_fields"]:
         body = _drop_top_level_field(body, f)
-    assert json.loads(body) == {"model": "claude-sonnet-5", "messages": [], "stream": True}
+    assert json.loads(body) == {"model": "claude-sonnet-5", "prompt_cache_key": "session_x",
+                                "messages": [], "stream": True}
 
 
 def test_a_hard_refusal_does_not_burn_ten_attempts():
