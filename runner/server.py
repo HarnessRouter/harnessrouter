@@ -149,10 +149,7 @@ def _reap_workspaces(keep: str = "") -> int:
             if e.stat().st_mtime >= cutoff:
                 continue
             shutil.rmtree(e.path, ignore_errors=True)
-            try:
-                _ws_marker_path(e.name).unlink()
-            except OSError:
-                pass
+            _ws_marker_clear(e.name)
             removed += 1
         except OSError:
             continue
@@ -5554,6 +5551,32 @@ def _ws_marker_get(identifier: str) -> str:
         return ""
 
 
+def _ws_marker_clear(identifier: str) -> None:
+    try:
+        _ws_marker_path(identifier).unlink()
+    except OSError:
+        pass
+
+
+def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
+    """Whether this session's workspace still holds checkpoint `sha`: the marker says so AND the
+    folder is there to back it. The marker lives outside the workspace on purpose (it has to
+    survive the wipe), which also lets it outlive the workspace: the folder deleted from the
+    volume by hand while the runner container was merely stopped and started, or removed by
+    DELETE /workspace before it learned to drop the marker. Either way the next probe answered
+    "held", the gateway skipped the restore, and the turn ran on an empty folder — the CLI found
+    no session to resume and the conversation started over (richard-epsilla, #194). A workspace
+    restored from a checkpoint always carries its .git (the tarball does, and _git_ensure runs
+    after every restore), so a folder without one holds nothing, whatever the marker says; the
+    marker that vouched for it is dropped so the full hydrate that follows starts clean."""
+    if _ws_marker_get(identifier) != sha:
+        return False
+    if (ws_path / ".git").is_dir():
+        return True
+    _ws_marker_clear(identifier)
+    return False
+
+
 @app.post("/hydrate")
 async def hydrate(request: Request, identifier: str = "") -> dict:
     """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
@@ -5591,7 +5614,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # answers yes — making follow-up turns start instantly instead of paying wipe + untar.
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
-            if _ws_marker_get(identifier) == probe:
+            if _ws_holds(identifier, ws_path, probe):
                 collab_url = request.query_params.get("collab_url", "")
                 room = request.query_params.get("room", "")
                 if collab_url and room:
@@ -6099,6 +6122,7 @@ async def delete_workspace(identifier: str = "") -> dict:
         return {"identifier": ident, "removed": False, "reason": "no folder"}
     uid = _session_uid(ws)
     shutil.rmtree(ws, ignore_errors=True)
+    _ws_marker_clear(ident)   # as the reaper does: a marker without its folder would answer the next probe
     if uid is not None:
         # the session's passwd/group entries were only ever for this folder
         try:
