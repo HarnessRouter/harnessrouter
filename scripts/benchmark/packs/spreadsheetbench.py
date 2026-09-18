@@ -22,27 +22,23 @@ NAME = "spreadsheetbench"
 INPUT = "input.xlsx"
 OUTPUT = "output.xlsx"
 
-# The suite's own framing (inference/prompt_format.py), addressed to an agent with a workspace
-# instead of a code generator: the file is there, the answer is a file, and the answer goes only
-# where the instruction says. VALUES rather than formulas keeps the grade about the task, not
-# about whether the grading machine's spreadsheet engine evaluates a function the same way.
-PROMPT = """You are working in a workspace that contains a spreadsheet file. Solve the spreadsheet manipulation task below by editing the workbook and saving the result to output_path inside the workspace. Python 3 is available; install packages with pip if you need them (openpyxl, pandas). Do not use the internet for anything other than pip: no web search, no fetching pages, no looking the task up. Write cell VALUES, not formulas, unless the instruction asks for formulas. Only modify cells inside answer_position on the answer sheet; leave everything else exactly as it is (other sheets, formatting, column widths). When the file is saved, reply with one line: done.
+# The suite's framing (inference/prompt_format.py) in plain words, addressed to an agent with a
+# workspace: the file is there, the answer is a file, and the answer goes only where the task
+# says. None of the suite's own field names appear: a turn that saw "instruction_type:
+# Sheet-Level Manipulation" recognised the suite and spent twenty minutes grepping the whole
+# filesystem for its data and trying to `pip download` it (measured 2026-09-18) — the vocabulary
+# was the search key. VALUES rather than formulas keeps the grade about the task, not about
+# whether the grading machine's spreadsheet engine evaluates a function the same way.
+PROMPT = """You are working in a workspace that contains a spreadsheet, {spreadsheet_path}. Do the task below by editing that workbook and saving the result as {output_path} in the workspace.
 
-### instruction
-{instruction}
+The task: {instruction}
 
-### spreadsheet_path
-{spreadsheet_path}
+Where the answer goes: sheet "{answer_sheet}", cells {answer_position}. {scope}
 
-### instruction_type
-{instruction_type}
-
-### answer_position
-{answer_sheet}!{answer_position}
-
-### output_path
-{output_path}
+Python 3 is available; install packages with pip if you need them (openpyxl, pandas). Do not use the internet, and do not look for this task or its answer anywhere else on this machine: everything you need is in the workspace. Write cell values, not formulas, unless the task asks for formulas. Leave everything outside the answer cells exactly as it is (other sheets, formatting, column widths). When {output_path} is saved, reply with one line: done.
 """
+SCOPE = {"Cell-Level Manipulation": "Only those cells change.",
+         "Sheet-Level Manipulation": "Everything the task asks for lands inside that range, and nothing outside it changes."}
 
 
 def load(root: str) -> list[dict]:
@@ -53,8 +49,8 @@ def stage(task: dict, root: str) -> dict:
     init = os.path.join(root, "spreadsheet", task["id"], f"1_{task['id']}_init.xlsx")
     with open(init, "rb") as f:
         data = f.read()
-    prompt = PROMPT.format(instruction=task["instruction"], spreadsheet_path=INPUT,
-                           instruction_type=task["instruction_type"], answer_sheet=task["answer_sheet"],
+    prompt = PROMPT.format(instruction=task["instruction"].strip(), spreadsheet_path=INPUT,
+                           scope=SCOPE.get(task["instruction_type"], ""), answer_sheet=task["answer_sheet"],
                            answer_position=task["answer_position"], output_path=OUTPUT)
     return {"prompt": prompt, "files": [(INPUT, data)]}
 

@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render import render  # noqa: E402
-from run import network_use, prompt_matches, tool_outcomes, usage_of  # noqa: E402
+from run import lookup_use, network_use, prompt_matches, tool_outcomes, usage_of  # noqa: E402
 
 
 def test_a_truncated_stored_prompt_still_identifies_its_session():
@@ -49,6 +49,22 @@ def test_a_url_spelled_in_code_is_not_network_use():
     assert network_use([{"name": "bash", "arguments": json.dumps({"command": cmd})}]) == []
     assert network_use([{"name": "bash", "arguments": json.dumps({"command": "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://x\")'"})}])
     assert network_use([{"name": "bash", "arguments": json.dumps({"command": "python3 -c 'import requests; requests.get(\"http://x\")'"})}])
+
+
+def test_searching_the_machine_for_the_task_is_a_lookup():
+    """Measured 2026-09-18: two turns recognised the suite and went looking for its data — a
+    recursive grep of the whole filesystem for its vocabulary, a pip download by its name."""
+    sh = lambda c: [{"name": "bash", "arguments": json.dumps({"command": c})}]
+    assert lookup_use(sh('grep -rl "Sheet-Level Manipulation" / --include=*.json 2>/dev/null | head'))
+    assert lookup_use(sh("grep -rl 'delete rows in an Excel worksheet' / 2>/dev/null | head -20"))
+    assert lookup_use(sh("find / -name '*golden*.xlsx' 2>/dev/null"))
+    assert lookup_use(sh("cd /tmp && timeout 60 pip download spreadsheetbench -d /tmp/sb --no-deps"))
+    assert lookup_use(sh("rg 'answer_position' /data 2>/dev/null"))
+    # the workspace is the agent's to search; pip for a library is not a lookup
+    assert lookup_use(sh("grep -rn 'TOTAL' /data/workspaces/hsess1234/ | head")) == []
+    assert lookup_use(sh("find /data/workspaces/hsess1234 -name '*.xlsx'")) == []
+    assert lookup_use(sh("grep -r 'Sheet1' . && pip install openpyxl pandas")) == []
+    assert lookup_use(sh("ls -la /data/workspaces/hsess1234")) == []
 
 
 def test_usage_keeps_fresh_cached_and_output_apart():
@@ -90,6 +106,14 @@ def test_a_finding_is_listed_and_left_out_of_the_score():
     assert "| 1 | 1 (100%) |" in row, row            # one counted run of four
     assert "3 runs are findings, not counted" in row
     assert "reached the network: webfetch" in md and "served by integration:other" in md and "served as gpt-5.5" in md
+    md = render([_rec(task="e", lookup=["bash: grep -rl x /"])])
+    assert "looked for the task outside the workspace: bash: grep -rl x /" in md
+
+
+def test_a_capped_run_is_a_failure_and_the_row_says_how_many():
+    md = render([_rec(task="a"), _rec(task="b", resolved=False, reward=0.0, capped=900, detail="time cap 900 s; no workbook produced")])
+    row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
+    assert "| 2 | 1 (50%) |" in row and "1 runs hit the time cap (counted as failures)" in row, row
 
 
 def test_an_unreported_served_model_is_noted_not_scored_against():

@@ -33,14 +33,19 @@ record names another connection is a finding, never a score. The matrix's rule 1
 suffix is the same model, another family, number or tier is not. A harness whose turn record
 carries no served model is scored, and the row says on how many runs rule 2 could not be checked.
 
-**3. It did the task, not a lookup.** The sandbox has internet. The first pilot's third task
-fetched its own ground truth from the suite's public data, because the task id was in a filename.
-So a pack names nothing — the workbook is `input.xlsx`, the answer `output.xlsx`, the prompt
-carries no id — and a run whose tool calls made a request (a web tool; `curl`, `wget`, `git clone`,
-`urllib.request`, `requests`, `httpx`, `aiohttp` in a shell or script) is a finding, never a
+**3. It did the task, not a lookup.** The sandbox has internet and a filesystem. The first
+pilot's third task fetched its own ground truth from the suite's public data, because the task id
+was in a filename; two later turns recognised the suite from its field names in the prompt and
+spent half an hour grepping the whole filesystem for its data and trying to `pip download` it.
+So a pack names nothing — the workbook is `input.xlsx`, the answer `output.xlsx`, the prompt is
+plain words with none of the suite's vocabulary — and a run whose tool calls made a request (a
+web tool; `curl`, `wget`, `git clone`, `urllib.request`, `requests`, `httpx`, `aiohttp` in a
+shell or script) or searched the machine for the task (a recursive `grep`, `rg` or `find`
+rooted outside the workspace; a package fetched under a suite's name) is a finding, never a
 score. Package installs are the sandbox's normal traffic and do not count; a URL merely spelled
-in code (an xlsx's XML namespaces) does not either. Disable the harness's web tools as well, on
-the harness or the connection: the rule catches what the switch missed.
+in code (an xlsx's XML namespaces) does not either; the workspace is the agent's to search.
+Disable the harness's web tools as well, on the harness or the connection: the rule catches what
+the switch missed.
 
 **4. Tokens on one convention.** Fresh input, cached input and output are reported apart and
 never summed: a cached read is the same prompt read again, not new input. The runner's contract
@@ -49,6 +54,10 @@ instance older than #209 reports cline's input gross, and its rows say so in the
 
 **5. No judge.** A suite whose grading needs a model's opinion is not a pack. Findings and
 runner errors are listed under the table, not scored.
+
+Every task has a time cap, `TASK_CAP_S` (900 s by default): a turn still running at the cap is
+cancelled through the API and graded as it stands, a failure, not a finding — the cap is part of
+the task. The row says how many runs hit it.
 
 ## Running it
 

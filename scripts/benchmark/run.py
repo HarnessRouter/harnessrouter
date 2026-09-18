@@ -68,23 +68,42 @@ NET_IN_SHELL = re.compile(r"\b(curl|wget|git\s+clone)\b|\burllib\.request\b|\bre
                           r"|\bhttpx\.|\baiohttp\b", re.I)
 
 
+# The other way to look a task up: on the machine. Two turns that recognised the suite from its
+# vocabulary grepped the whole filesystem for its data and tried to download it by name
+# (measured 2026-09-18). A recursive grep or find rooted outside the workspace, or a package
+# fetched under a suite's name, is a lookup; the workspace itself (/data/workspaces/…) is not.
+OUTSIDE = r"(?:/|/(?:data|root|home|usr|opt|srv|var|etc)(?!/workspaces/)\S*)"
+LOOKUP_IN_SHELL = re.compile(r"\bgrep\b[^|;&\n]*\s-[A-Za-z]*[rR][A-Za-z]*\b[^|;&\n]*\s" + OUTSIDE + r"(?:\s|$)"
+                             r"|\brg\b[^|;&\n]*\s" + OUTSIDE + r"(?:\s|$)"
+                             r"|\bfind\s+" + OUTSIDE + r"(?:\s|$)"
+                             r"|\bpip3?\s+(?:download|install)\b[^\n]*\b\S*(?:bench|dataset)\S*", re.I)
+
+
+def _command_of(t: dict) -> str:
+    args = t.get("arguments") or ""
+    if isinstance(args, str) and args.startswith("{"):
+        try:
+            return str(json.loads(args).get("command", ""))
+        except ValueError:
+            return args
+    return args if isinstance(args, str) else ""
+
+
 def network_use(tools: list[dict]) -> list[str]:
     hits = []
     for t in tools or []:
         name = str(t.get("name") or "")
-        args = t.get("arguments") or ""
         if WEB_TOOL.search(name):
             hits.append(name)
             continue
-        cmd = args
-        if isinstance(args, str) and args.startswith("{"):
-            try:
-                cmd = json.loads(args).get("command", "")
-            except ValueError:
-                cmd = args
-        if isinstance(cmd, str) and NET_IN_SHELL.search(cmd):
+        cmd = _command_of(t)
+        if NET_IN_SHELL.search(cmd):
             hits.append(f"{name}: {cmd[:120]}")
     return hits
+
+
+def lookup_use(tools: list[dict]) -> list[str]:
+    return [f"{t.get('name')}: {_command_of(t)[:120]}" for t in tools or [] if LOOKUP_IN_SHELL.search(_command_of(t))]
 
 
 # ── usage on one convention ───────────────────────────────────────────────────────────────────────
@@ -147,14 +166,19 @@ def prompt_matches(stored: str, prompt: str) -> bool:
     return any(p and p in prompt for p in probes)
 
 
-def recover_session(before: set[str], harness_id: str, prompt: str, t0: float, wait_s: int = 1800) -> dict | None:
+TASK_CAP_S = int(os.environ.get("TASK_CAP_S", "900"))
+
+
+def recover_session(before: set[str], harness_id: str, prompt: str, t0: float, cap_s: int = TASK_CAP_S) -> dict | None:
     """The session this harness opened for this prompt since t0 that was not there before, once
     it has finished: an instance whose console proxy cuts a synchronous request at five minutes
     (fixed by #214) still ran the turn, and the record is the record. With several workers the
     prompt tells the sessions apart; a session whose stored prompt cannot be read is taken only
-    when it is the sole new one."""
-    deadline = t0 + wait_s
-    while time.time() < deadline:
+    when it is the sole new one. A turn still running at the task's time cap is cancelled and
+    returned as it stands: the cap is part of the task, and two turns that grepped the whole
+    filesystem for their answer ran for half an hour before this existed."""
+    cancelled = False
+    while True:
         new = [s for s in api("GET", "/v1/sessions?limit=100").get("sessions", [])
                if s["session_id"] not in before and harness_id in (s.get("harness_id"), s.get("backend"))]
         mine = [s for s in new if prompt_matches(str(s.get("user_prompt") or ""), prompt)]
@@ -162,10 +186,21 @@ def recover_session(before: set[str], harness_id: str, prompt: str, t0: float, w
             mine = new
         if not mine:
             return None
-        if mine[0].get("status") not in ("running", "queued", None):
-            return mine[0]
+        sess = mine[0]
+        if sess.get("status") not in ("running", "queued", "starting", None):
+            if cancelled:
+                sess["capped"] = cap_s
+            return sess
+        if time.time() - t0 >= cap_s and not cancelled:
+            try:
+                api("POST", f"/v1/sessions/{sess['session_id']}/cancel", {})
+            except urllib.error.HTTPError:
+                pass
+            cancelled = True
+        if cancelled and time.time() - t0 >= cap_s + 180:
+            sess["capped"] = cap_s   # the runner did not confirm the stop; the record is what it is
+            return sess
         time.sleep(10)
-    return None
 
 
 def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: str, provider: str, workdir: str) -> dict:
@@ -182,7 +217,8 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
     t0 = time.time()
     sid = rid = None
     try:
-        resp = api("POST", "/v1/responses", body)
+        # the request waits as long as the task may; past that, the session is cancelled below
+        resp = api("POST", "/v1/responses", body, timeout=TASK_CAP_S)
         rid = resp.get("id")
         while resp.get("status") in ("in_progress", "queued"):
             time.sleep(5)
@@ -198,7 +234,7 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
             return rec
         rec.update(status="completed" if sess.get("status") == "done" else sess.get("status"), recovered=err,
                    wall_s=sess.get("elapsed") or round(time.time() - t0, 1), sid=sess["session_id"],
-                   usage=usage_of(sess.get("usage")), turn_error=None)
+                   usage=usage_of(sess.get("usage")), turn_error=None, capped=sess.get("capped"))
         sid, rid = sess["session_id"], sess.get("last_response_id")
     if not sid:
         rec["error"] = "no session id on the response"
@@ -211,7 +247,8 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
                substituted=bool(served) and not alias_of(model, served),
                served_unreported=not served,
                tool_calls=len(tools), tools=sorted({str(t.get("name")) for t in tools}),
-               network=network_use(tools), files=[f.get("filename") for f in (turn.get("files") or [])],
+               network=network_use(tools), lookup=lookup_use(tools),
+               files=[f.get("filename") for f in (turn.get("files") or [])],
                assistant=(turn.get("assistant") or "")[:200])
     if rec.get("turn_error") is None and turn.get("error"):
         rec["turn_error"] = turn.get("error")
@@ -237,6 +274,8 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
         produced[name] = path
     g = pack.grade(task, root, produced, tdir)
     rec.update(reward=g["reward"], resolved=bool(g["resolved"]), detail=g.get("detail", ""))
+    if rec.get("capped") and not rec["resolved"]:
+        rec["detail"] = f"time cap {rec['capped']} s; " + rec["detail"]
     if os.environ.get("KEEP") != "1":
         try:
             api("DELETE", f"/v1/sessions/{sid}")
@@ -299,8 +338,8 @@ def main() -> None:
                     rec["foreign"] = rec["connection"]
                 save(rec)
                 verdict = ("ERROR " + rec["error"][:80]) if rec.get("error") else \
-                    ("FINDING network" if rec.get("network") else "FINDING foreign" if rec.get("foreign") else
-                     "FINDING substituted" if rec.get("substituted") else
+                    ("FINDING network" if rec.get("network") else "FINDING lookup" if rec.get("lookup") else
+                     "FINDING foreign" if rec.get("foreign") else "FINDING substituted" if rec.get("substituted") else
                      ("pass" if rec.get("resolved") else f"FAIL {rec.get('detail', '')[:60]}"))
                 log(f"TASK {label} x {model} {t['id']}: {verdict} {rec.get('wall_s', '?')}s tools={rec.get('tool_calls', '?')} "
                     f"served={rec.get('served') or 'unreported'} tokens={json.dumps(rec.get('usage') or {})}")
