@@ -13352,8 +13352,8 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are Aider, an autonomous coding agent. You work on a real git "
                           "workspace, editing files and proposing shell commands to complete the "
                           "task end to end."),
-        # aider has no tool loop: the request body's keys are exactly
-        # ['messages','model','temperature'] — no `tools`, no `functions`. Its tool SURFACE is the
+        # aider has no tool loop: the request body's keys are exactly ['messages','model'] — no
+        # `tools`, no `functions` (and no temperature, see the driver). Its tool SURFACE is the
         # shell command the model proposes in a fenced block, which the driver's gate decides; that
         # one is withholdable and is listed. "Edit" is aider's edit engine: it is what aider IS, it
         # cannot be withheld, and it is therefore NOT listed — offering a switch that does nothing

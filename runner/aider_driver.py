@@ -416,6 +416,12 @@ def main() -> int:
     # a per-model settings file would replace every other setting of the model with the class
     # defaults, so the attribute is set on the object, which is what format_chat_chunks reads.
     coder.main_model.examples_as_sys_msg = True
+    # NO TEMPERATURE. aider sends `temperature: 0` for every id its settings do not know, and a
+    # provider that has retired the field refuses the whole turn: claude-fable-5-1 on TokenRouter
+    # answered "`temperature` is deprecated for this model" and the turn died after 171 s of
+    # retries (console matrix, hr-test 2026-09-18). No other base sets a temperature; aider's own
+    # per-model switch leaves it out.
+    coder.main_model.use_temperature = False
 
     disabled = job.get("tools_disabled") or []
     gate = _Gate(disabled)

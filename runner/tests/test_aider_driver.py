@@ -630,6 +630,14 @@ def test_the_agent_doc_is_the_system_message_and_the_conversation_holds_only_the
     assert "coder.main_model.examples_as_sys_msg = True" in src
 
 
+def test_no_temperature_is_sent_since_a_provider_that_retired_the_field_refuses_the_turn():
+    """claude-fable-5-1 on TokenRouter: "`temperature` is deprecated for this model", turn dead
+    after 171 s of retries (console matrix, hr-test 2026-09-18). aider sends 0 for every id its
+    settings do not know; no other base sets one; aider's own switch leaves it out."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "coder.main_model.use_temperature = False" in src
+
+
 def test_the_models_reasoning_is_not_rendered_as_its_answer():
     """MEASURED FAILURE this pins (vercel|aider|grok-4.20, 2026-09-18): the transcript showed the
     model's chain of thought -- "(wait, no, that's not how it works)... So my response should be:"
