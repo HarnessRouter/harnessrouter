@@ -210,7 +210,8 @@ def test_the_doc_tells_the_model_how_this_workspace_works_and_names_the_skills_b
     """aider's own prompt says the USER adds files and may run the suggested commands; here the
     driver does both, and a model that was not told behaved as aider's prompt says (guessed a
     skill's token, declared itself unable to run a tool, invented a result). The block names each
-    SKILL.md by the workspace-relative path aider's file-mention matcher accepts."""
+    SKILL.md as a `cat` the model can run on any turn; aider's own file-mention route adds only
+    files git already tracks, which a first turn's skill files are not."""
     d = tempfile.mkdtemp()
     sk = pathlib.Path(d, ".harness", "skills", "plugin-probe"); sk.mkdir(parents=True)
     sk.joinpath("SKILL.md").write_text("---\nname: plugin-probe\n---\n")
@@ -219,7 +220,7 @@ def test_the_doc_tells_the_model_how_this_workspace_works_and_names_the_skills_b
                  "gpt-5.4", "do it", d, {}, mcp_servers=[])
     text = doc.read_text()
     assert "## How this workspace works for you" in text
-    assert "- `.harness/skills/plugin-probe/SKILL.md`" in text
+    assert "- `cat .harness/skills/plugin-probe/SKILL.md`" in text
     assert "```bash" in text and "Report only output you were actually given" in text
     # written fresh each turn on top of the doc the turn wrote: no growth across turns
     doc.write_text("# harness contract\n")

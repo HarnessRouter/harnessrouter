@@ -4126,24 +4126,25 @@ def _aider_working_notes(cwd: str, servers: dict | None = None) -> str:
     the output back in the same turn. Unless the model is told so it behaves as aider's prompt
     says, measured 2026-09-18 on hr-test: asked to use a skill it guessed the token instead of
     reading SKILL.md, asked to call an MCP tool it wrote "I'm constrained here to only return
-    SEARCH/REPLACE blocks", asked for a streamable-HTTP tool it invented the result. Every path
-    below is relative to the workspace, the spelling aider's file-mention matcher accepts; the
-    skills block above keeps its absolute folders for composing commands."""
+    SEARCH/REPLACE blocks", asked for a streamable-HTTP tool it invented the result. Reading goes
+    through the shell on purpose: aider's own file-mention route adds only files git already
+    tracks, and on a session's first turn the skill files are not committed yet (measured: the
+    model named the path exactly and the turn ended there). `cat` works on every turn. The paths
+    are workspace-relative; the skills block above keeps its absolute folders for composing
+    commands."""
     skills = sorted(p.relative_to(cwd).as_posix()
                     for p in (pathlib.Path(cwd) / ".harness" / "skills").glob("*/SKILL.md"))
     lines = ["\n## How this workspace works for you\n",
              "You cannot open files or run anything yourself; the harness does both for you "
              "between messages, without asking anyone.\n",
-             "- To read a file that is not in the chat, write its workspace-relative path exactly "
-             "as listed, on its own, and end your reply. The file is added to the chat and you "
-             "continue from there."]
+             "- To run a command, put it in a ```bash fenced block and end your reply. It is "
+             "executed and its output is given back to you in the next message; then continue.",
+             "- To read a file that is not in the chat, run `cat <path>` that way."]
     if skills:
-        lines.append("  The skills installed here are read the same way:")
-        lines += [f"  - `{rel}`" for rel in skills]
-    lines += ["- To run a command, put it in a ```bash fenced block. It is executed after your "
-              "reply and its output is given back to you in the next message. This is how a "
-              "skill's scripts run (cd into the skill's folder first)"
-              + (" and how MCP tools are called (`hr-mcp`, below)." if servers else "."),
+        lines.append("  Read a skill before using it:")
+        lines += [f"  - `cat {rel}`" for rel in skills]
+    lines += ["- A skill's scripts run the same way (cd into the skill's folder first)"
+              + (", and so do MCP tool calls (`hr-mcp`, below)." if servers else "."),
               "- Report only output you were actually given. Never write the result you expect "
               "a command or a tool to produce; if you have not run it yet, run it first.\n"]
     return "\n".join(lines)
