@@ -320,7 +320,7 @@ wheels = [
 
 [[package]]
 name = "uhp-conformance"
-version = "2026.8.11.post1"
+version = "2026.9.12"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },

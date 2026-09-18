@@ -709,7 +709,7 @@ variables. It is a setup check, not a technical prerequisite for the API.
 
 ### Create a key on this CE instance for your backend
 
-1. Sign in to the Console of the CE instance your product will call, then open `/keys` on that same host and port ([default local address](http://localhost:3000/keys)). Community Edition currently hides this page from the sidebar, so use its URL directly.
+1. Sign in to the Console of the CE instance your product will call, then open **API Keys** in the sidebar ([default local address](http://localhost:3000/keys)).
 2. Confirm the workspace containing the harness, then select **Create API key**. Give it a name and select **Create key**.
 3. Copy the secret shown once. Store it in your product backend's secret store or environment. The examples call this variable `HARNESSROUTER_API_KEY`.
 

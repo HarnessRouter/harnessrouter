@@ -8461,16 +8461,27 @@ async def upload_file(request: Request, purpose: str = Form("user_data"), file: 
                 raise HTTPException(413, f"file exceeds the {_UPLOAD_MAX_BYTES // (1024*1024)} MiB upload limit")
             yield chunk
 
-    h = _blob_headers("application/octet-stream")
-    try:
-        r = await _client().put(_blob_url(f"uploads/{fid}", RESP_BLOB_KB),
-                                headers=h, content=_pipe())
-    except HTTPException:
-        raise                     # the 413 from _pipe surfaces verbatim
-    except httpx.HTTPError as e:  # early server reject can surface as a WriteError, not a status
-        raise HTTPException(502, "durable upload failed") from e
-    if r.status_code >= 400:
-        raise HTTPException(502, "durable upload failed")
+    if _blob_streaming():
+        h = _blob_headers("application/octet-stream")
+        try:
+            r = await _client().put(_blob_url(f"uploads/{fid}", RESP_BLOB_KB),
+                                    headers=h, content=_pipe())
+        except HTTPException:
+            raise                     # the 413 from _pipe surfaces verbatim
+        except httpx.HTTPError as e:  # early server reject can surface as a WriteError, not a status
+            raise HTTPException(502, "durable upload failed") from e
+        if r.status_code >= 400:
+            raise HTTPException(502, "durable upload failed")
+    else:
+        # Local backing: the store has no HTTP surface to stream into (the VG-only _blob_url /
+        # _blob_headers above raised AttributeError here and every upload on a self-hosted
+        # instance answered 500, #198). Read the part through the same cap-enforcing pipe and
+        # hand the store the bytes; the cap bounds what is held, as it already bounds the turn body.
+        buf = bytearray()
+        async for chunk in _pipe():
+            buf += chunk
+        if not await BACKING.blob.put(RESP_BLOB_KB, f"uploads/{fid}", bytes(buf)):
+            raise HTTPException(502, "durable upload failed")
     await _blob_put(f"uploads/{fid}.meta", json.dumps(
         {"filename": file.filename, "media_type": file.content_type or "application/octet-stream"}).encode(),
         kb=RESP_BLOB_KB)
