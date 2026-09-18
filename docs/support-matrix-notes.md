@@ -896,3 +896,94 @@ alone. Fixed in `_install`; re-measured on a rebuilt image, the same cards now r
 stayed FAIL**: the artifact row is judged on the file card, and the recall answer never contained
 the word either way. The leak reached the transcript only -- aider writes `partial_response_content`
 to the chat history (`base_coder.py:1828`), so no later turn was fed the reasoning.
+
+## aider, the review of PR #211 on hr-test (2026-09-18)
+
+Reviewed on a derived image of the PR branch merged with main, on the 0.18.4 base, with every
+built-in skill installed as a fresh volume installs them. What the review changed, each with the
+measurement that made it a defect, and then what the columns say on the image that carries the
+changes.
+
+**Every turn carried the whole skill library.** The PR passed every file of every installed
+skill bundle through `--read` on every turn: on hr-test that is 27 files and 264 KB for the three
+built-in bundles, two licences and a PNG among them, and `Reply with exactly: AIDER-SMOKE-OK` cost
+**45,030 input tokens**. The same turn on the review image costs 3,039. The agent doc alone
+reaches the model; a skill is read when a task calls for it, as on every base without a loader.
+
+**The agent doc is the system message.** `--read` delivered it as a USER message ("Here are some
+READ ONLY files, provided for your reference") ahead of the conversation, and aider's few-shot
+examples for the edit format went in as user/assistant turns ahead of that. So the first user
+message the model saw was never the user's: asked what the first message of the task asked for,
+the gpt-5 family answered `Change` (aider's `Change get_factorial()` example) and, once the
+examples were folded away, `reference` (the read-only preamble). The doc now rides aider's own
+`Model.system_prompt_prefix` hook, ahead of the system message aider composes, and the examples
+fold into that message through aider's own `examples_as_sys_msg`, set on the object because a
+settings-file entry replaces every other setting of the model with class defaults. The PR's A/B
+of that switch (above) was run with the history cap still in place, which is why it could not
+move a verdict: the first message was being summarised away regardless.
+
+**The conversation was summarised away after four short turns.** aider keeps at most
+`min(max(window/16, 1k), 8k)` tokens of chat history, and 1k for an id litellm has no record of,
+which is most of this catalog; past that it summarises the history with a model call on every
+turn. Measured in the console matrix: after first, follow-up, switch and artifact, the recycle
+question could not be answered on ids that had answered the follow-up one turn earlier. The
+driver passes `--max-chat-history-tokens` as half the window when the record says it, else
+96,000, which fits the catalog's smallest windows; the other bases keep the whole transcript the
+same way.
+
+**The model was never told how this workspace works.** aider's prompt tells it the USER adds
+files and may run the commands it suggests. Here the driver does both, and a model that was not
+told behaved as aider's prompt says: asked to use a skill it guessed the token instead of reading
+SKILL.md; asked for an MCP tool it wrote "I'm constrained here to only return SEARCH/REPLACE
+blocks"; asked for a streamable-HTTP tool it invented the result. The doc now carries a block
+that says what happens between messages, names each installed SKILL.md as a `cat` the model can
+run on any turn (aider's own file-mention route adds only files git already tracks, and on a
+session's first turn the skill files are not committed yet, measured), and forbids reporting
+output that was never received. Plugin matrix before: 1 of 4 columns (skills guessed, stdio
+refused, http invented). After, run twice: **4 of 4 both times**. `custom-harness.mjs`, which the
+PR ran nine times without a pass: **3 of 3**, `skill_reached`, `script_ran`, `mcp_called` all
+true each time.
+
+**The operator's step budget never reached the driver.** The builder accepted `max_turns` and
+`turn()` did not pass it; the test that claimed to pin the dispatch pinned the builder. Fixed and
+pinned on the dispatch.
+
+**Usage was empty on every kimi and aider turn.** Both normalisers wrote `usage: {}` on the
+promise that "the relay stamps it", and nothing in this tree did: the console showed no tokens for
+either base. The relay now reads the provider's usage off the bytes as they pass, the way it
+already reads the served model (OpenAI `prompt_tokens` netted to fresh input by the cached part,
+Anthropic's counters as they are, Gemini's `usageMetadata`, streamed or not), sums it over the
+turn's calls and stamps it on a result event that arrived empty. Measured after: aider
+`input 3,039 / output 9`, then `input 2,710 / cache_read 2,176` on the follow-up; kimi
+`input 7,487 / cache_read 13,312`.
+
+**`temperature` refused by a provider.** aider sends `temperature: 0` for every id its settings do
+not know; `claude-fable-5-1` on TokenRouter answered "`temperature` is deprecated for this model"
+and the turn died after 171 s of retries. No other base sets one; aider's own `use_temperature`
+switch leaves it out.
+
+**Edit markup rendered as the answer.** A file-writing task's reply card read
+`hello.py ```python <<<<<<< SEARCH ======= print("aider") >>>>>>> REPLACE ``` `. That is aider's
+wire format for an edit; the driver strips it from the text (the text event AND the result event,
+since the gateway stores the latter as the answer) and reports each edited file as an `Edit` card,
+as file edits render on every other base.
+
+**Two claims removed.** The catalog listed `Web Fetch` as a withholdable tool while the runner
+always ran aider with `--no-detect-urls`, so the switch withheld something that never happened;
+the web is reached through a shell command like everything else, under the one gate. And the
+install was opt-in "per the 300 MB line", but the console offers every base the gateway's
+catalogue lists, so on a default install Aider was a base that failed on its first task; it is in
+the default `HR_BACKENDS` (fresh volume: healthy after 147 s against 114 s without it, 687 MB),
+and an operator who does not want it leaves it out.
+
+**Smaller:** a failure reason no longer names aider's in-chat commands (`- Use /drop …`); the two
+bridge tests that imported the aider venv's SDK (mcp 2.x, httpx2) under the runner's 1.x
+environment, which is why the PR's runner job was red, stub those modules by name; aider's own
+app icon is in the harness list.
+
+**Verified unchanged:** the hard tool policy (Shell withheld: the model's `cat
+/proc/sys/kernel/random/boot_id` was refused at the gate with the policy as its result and no
+UUID in the answer; allowed: the UUID came back); cancel (a 60-function module task cancelled
+mid-flight: `runner_killed: true`, no driver process left, session `cancelled`); the console at
+1440 and 390 (settings page, task page with the edit card and the file card, no markup, no
+overflow, no page errors).
