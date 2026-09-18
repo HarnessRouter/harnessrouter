@@ -987,3 +987,30 @@ UUID in the answer; allowed: the UUID came back); cancel (a 60-function module t
 mid-flight: `runner_killed: true`, no driver process left, session `cancelled`); the console at
 1440 and 390 (settings page, task page with the edit card and the file card, no markup, no
 overflow, no page errors).
+
+**The columns on the review image (`pr211-a9e7a51`, hr-test, 2026-09-18).** Console scenario
+matrix, 50 ids × first / follow-up / switch / artifact / recycle, connections as the console
+routes them (TokenRouter for most, Vercel 6, Anthropic 2, Custom OpenAI 2, OpenRouter 1, Azure 1):
+
+```
+first 50/50   follow-up 47/50   switch 50/50   artifact 47/50   recycle 47/50   = 241/250
+```
+
+The nine: `claude-opus-5` three times, the provider's `finish_reason content_filter` on the
+scenario's own words (the same id tripped the same way in the kimi review); `gemini-3.5-flash` and
+`gemini-3.6-flash` on the follow-up, the reminder tail continued (upstream's, above);
+`gpt-5.2` and `llama-3.3-70b` on the recycle recall, answering with a later word; `gpt-5.4` and
+`gpt-5.4-mini` on the artifact after three literal-reply turns, answering `DONE` with no edit
+block (the same prompt on a fresh session writes the file; measured twice). Two of these were
+re-run three times and flipped both ways, so read them as what this run measured.
+
+A pattern worth knowing about the base itself: aider answers with ONE response per turn, and a
+reflection follows only when aider has something to feed back (a command's output, a file it
+added). "Create the file, then run wc on it and tell me the count" therefore often ends after
+the edit: the model writes the block, aider applies it, and no second pass happens unless the
+model also proposed the command in the same response. Every other base loops on tool calls.
+
+Conformance, run alone against an aider harness on gpt-5.4: 75/75 at full. A provider refusal
+(a custom connection with a bogus key): the task fails with "The API provider is not able to
+authenticate you. Check your API key." and nothing of aider's around it. Fresh volume on the final
+image: healthy after 150 s, 687 MB venv, `aider-ready` reads 0.86.2.
