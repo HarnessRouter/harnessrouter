@@ -1070,6 +1070,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "kimi"): "tokenrouter",
     ("custom", "kimi"): "openai-api",
     ("google", "kimi"): "openai-api",
+    # openhands reaches every provider the same way: the driver points the agent-server's LLM at
+    # the loopback relay, so whatever the relay fronts is what the agent talks to.
+    ("anthropic", "openhands"): "anthropic",   ("openai", "openhands"): "openai",
+    ("azure-foundry", "openhands"): "azure",
+    ("openrouter", "openhands"): "openai-api",
+    ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
+    ("llmtr", "openhands"): "tokenrouter",
+    ("custom", "openhands"): "openai-api",
+    ("google", "openhands"): "openai-api",
     ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
     ("azure-foundry", "qwen"): "azure",
     ("openrouter", "qwen"): "openai-api",
@@ -1133,6 +1142,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
     ("harnessrouter", "kimi"): "tokenrouter",
+    ("harnessrouter", "openhands"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
 }
@@ -4598,7 +4608,8 @@ _CUSTOM_FORMAT_BACKENDS = {
     # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
     # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
     # until it is — the picker greys out what the router cannot actually run.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi"},
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
+               "openhands"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
@@ -6051,6 +6062,27 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
+    # loopback relay), so the list is theirs. NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS
+    # BACKEND YET — no column has run; they are offered so the matrix can measure them here
+    # (the `pi` precedent). The id is sent with an `openai/` prefix by the runner, which is
+    # load-bearing: without an explicit provider litellm infers one from the base url, and a
+    # relay url inferred as Vercel produced `Missing credentials … VERCEL_AI_GATEWAY_API_KEY`
+    # on a resumed turn.
+    "openhands": {"default": "gpt-5.4",
+                  "models": [
+                      "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                      "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5",
+                      "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
+                      "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                      "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                      "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
+                      "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                      "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
+                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                      "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
+                      "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
+                      "nemotron-3.5-lightning", "nemotron-3-super"]},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -6185,7 +6217,10 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # kimi speaks chat/completions only: the runner defines its model with provider type `openai`
 # through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
 # sets), so a Responses-API-only id would be a picker row that fails on send.
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi")
+# openhands speaks chat/completions: its LLM is litellm's openai provider through the relay
+# (the id is sent `openai/<id>`), so a Responses-API-only id would be a picker row that fails
+# on send.
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "openhands")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -13331,6 +13366,30 @@ _BASE_CATALOG: dict[str, dict] = {
         # through the product). It matches by exact tool NAME and a name it does not know
         # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
         # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
+        "tool_enforcement": "hard",
+    },
+    "openhands": {
+        "label": "OpenHands", "backend": "openhands", "status": "ready",
+        # NOT delivered as a system prompt: the agent-server composes its own from the SDK's agent
+        # definition and accepts no override, so these instructions reach the model through the
+        # workspace's AGENTS.md, which its file tools read.
+        "system_prompt": ("You are OpenHands, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tools the runner gives the agent, by the names it gives them. Upstream's default
+        # preset has a fourth, `browser_tool_set`, and it is NOT offered: it needs a Chromium this
+        # image does not carry, and the server's own log says so (`Error preloading … Exception:
+        # Chromium is …`). Listing a tool that cannot run is the overstatement UHP 4.3 forbids.
+        "tools": [("Shell", "Shell"), ("Edit", "File Edit"), ("Todo", "Todo")],
+        # "hard", and MEASURED with a control rather than asserted: on a fresh conversation with
+        # Shell and Edit both withheld, "create a file and reply DONE" produced no file and NO TOOL
+        # CALL AT ALL ("I don't currently have any filesystem or shell tool access"), while the same
+        # request under the full list wrote the file through file_editor. Enforcement is by omission
+        # from the agent's tool list — a tool the agent was never given cannot be called.
+        #
+        # ONE HONEST LIMIT, because a shell is a file writer: disabling Edit alone does not stop a
+        # file from being written, since the agent reaches for `printf > file` instead. That is true
+        # of every backend here that has a shell.
         "tool_enforcement": "hard",
     },
     "qwen": {

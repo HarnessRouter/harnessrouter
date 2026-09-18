@@ -197,6 +197,7 @@ backend_bin() {
     omp)    echo "$TOOLS/bin/omp" ;;
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
+    openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
   esac
 }
 
@@ -260,6 +261,46 @@ install_opencode() {
 # from KIMI_MODEL_* alone, -r refusing an unknown session, agent files matching tool NAMES,
 # $KIMI_CODE_HOME/mcp.json, the exit-1 failure line) was measured on THIS version.
 KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
+# OpenHands V1, MIT (OpenHands/agent-sdk), pinned to 1.49.2 — the AGENT SERVER, not the CLI.
+#
+# PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
+# actively maintained" and whose last release is 1.16.0 of 2026-05-08. This is the interface its
+# vendor does maintain: `openhands-agent-server`, released 1.49.2 on 2026-09-17.
+#
+# THE THREE PINS GO IN ONE pip INVOCATION, and that is not cosmetic. `openhands-agent-server`
+# imports `openhands.tools` and `libtmux` at module level and declares NEITHER; `openhands-tools`
+# is what brings both. Installed one at a time, pip resolves each call on its own and lands on
+# browser-use 0.13.10, which pins `openai==2.26.0` against the server's own `openai>=2.33.0` — a
+# set `pip check` refuses. Given all three at once it backtracks to browser-use 0.11.13 and the
+# environment is consistent (verified: `No broken requirements found`, and the same resolution uv
+# reaches). The 1.34.0 set the OpenHands platform itself declares does not resolve at all
+# (`ResolutionImpossible`, lmnr against openhands-sdk), so 1.49.2 is the floor as well as the pin.
+#
+# Own venv, the dsh/hermes precedent: it pins litellm, fastmcp, pydantic and a browser stack, and
+# must not share the runner's interpreter.
+install_openhands() {
+  oh_py="${HR_OPENHANDS_BASE_PYTHON:-python3}"
+  "$oh_py" -m venv "$TOOLS/openhands-venv" || return 1
+  "$TOOLS/openhands-venv/bin/pip" install -q --disable-pip-version-check \
+    "openhands-agent-server==${HR_OPENHANDS_VERSION:-1.49.2}" \
+    "openhands-tools==${HR_OPENHANDS_VERSION:-1.49.2}" \
+    "openhands-sdk==${HR_OPENHANDS_VERSION:-1.49.2}" || return 1
+  # Prove the server can actually START before declaring the install good. Importing its api module
+  # is what catches the undeclared dependencies above: the failure they cause is an import error at
+  # the first live turn, not a pip error here.
+  "$TOOLS/openhands-venv/bin/python" -c '
+import sys
+import libtmux  # noqa: F401 — undeclared by the server, brought by openhands-tools
+import openhands.agent_server.api  # noqa: F401 — the module the server boots from
+import importlib.metadata as md
+want = sys.argv[1]
+have = md.version("openhands-agent-server")
+if have != want:
+    sys.exit("openhands-agent-server %s installed, wanted %s" % (have, want))
+' "${HR_OPENHANDS_VERSION:-1.49.2}" || return 1
+  command -v tmux >/dev/null 2>&1 || { echo "openhands: the tmux binary is missing"; return 1; }
+}
+
 install_kimi() {
   case "$(uname -m)" in
     x86_64)        km_arch="x64";   km_sha="ebc1ad504e458d66f0cc57d4e9d709a2060647f5b89d4e21026903b96204c3ed" ;;
@@ -446,6 +487,14 @@ install_backends() {
   # `kimi --version` prints the bare version on Kimi Code CLI ("2.0.0") and "kimi, version 1.50.0" on
   # its predecessor, so comparing it to the pin both installs a missing binary and replaces the old
   # product on a volume that was first started by 0.18.0.
+  # OPT-IN, not in HR_BACKENDS by default: 666 MB of venv, the aider precedent and well above the
+  # 300 MB line agreed 2026-09-13. Every fresh volume would otherwise pay for a backend most
+  # operators will not pick.
+  if wanted openhands && [ ! -x "$(backend_bin openhands)" ]; then
+    echo "[harnessrouter] installing OpenHands agent-server ${HR_OPENHANDS_VERSION:-1.49.2} (MIT) — ~666 MB, this takes a minute…"
+    try_install "OpenHands" install_openhands || true
+  fi
+
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
     try_install "Kimi Code CLI" install_kimi || true

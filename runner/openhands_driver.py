@@ -1,0 +1,360 @@
+"""One OpenHands turn, as a runner subprocess.
+
+Spawned per turn by server.py, the same one-process-per-turn contract every other backend keeps:
+the runner reads NDJSON off stdout and cancel is a process-group kill. Inside, this starts an
+`openhands-agent-server` on loopback, drives ONE turn over its HTTP + WebSocket API, and exits.
+
+WHY A SERVER AT ALL. The base runs OpenHands V1 through `openhands-agent-server`, the REST/WebSocket
+interface its vendor maintains (OpenHands/agent-sdk). The CLI that used to be the obvious choice —
+PyPI `openhands`, from OpenHands/openhands-cli — opens its README with "This project is no longer
+actively maintained" and last released 1.16.0 on 2026-05-08. The agent server released 1.49.2 on
+2026-09-17.
+
+WHY ONE SERVER PER TURN rather than one resident server. Measured on the pinned 1.49.2: cold start
+to a serving `/alive` is 3.3-4.1 s, and a conversation created by one server process is read back
+intact by a DIFFERENT process on a different port over the same on-disk store (verified by killing
+the first and querying the second). That is what makes the per-turn shape work at all, and it is
+the shape this product needs: sandboxes are recycled between turns, so a resident server would hold
+conversation state for workspaces that no longer exist. The cost is that 3.7 s on every turn.
+
+The event protocol is dsh_driver's: one {"m": method, "p": payload} JSON object per line on stdout,
+normalised by _openhands_to_claude in server.py.
+"""
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import pathlib
+import secrets
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+_T0 = time.time()
+
+def _conversation_id(tools: list[str]) -> str:
+    """The conversation id the runner MINTS, for aider's and goose's reason: it has to be
+    reproducible from the workspace alone after a sandbox recycle. The API takes `conversation_id`
+    on the create call (a request field, not a server-assigned one), so a uuid5 is all it takes — a
+    uuid rather than a name because the field is typed `uuid.UUID`.
+
+    THE TOOL POLICY IS PART OF THE IDENTITY, and that is not decoration. The agent is frozen at the
+    conversation's FIRST creation: measured on 1.49.2, a second create for the same id carrying
+    `tools: []` left the persisted agent holding `['terminal', 'file_editor']` and the turn wrote
+    its file anyway, and there is no endpoint that updates an agent (`PATCH /conversations/{id}` is
+    metadata — "like title"). Keying the id on the policy means a changed policy is a new
+    conversation, created with the tools it asks for. The cost is that changing the policy starts a
+    new thread; the alternative is running with a tool the operator has since disabled, which is the
+    overstatement UHP 4.3 forbids and the direction this must never fail in.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL,
+                          "https://harnessrouter.dev/openhands/harness?tools=" + ",".join(tools)))
+
+
+def _emit(method: str, payload) -> None:
+    sys.stdout.write(json.dumps({"m": method, "p": payload}, default=str) + "\n")
+    sys.stdout.flush()
+
+
+def _free_port() -> int:
+    """A port the kernel just handed out and nobody else holds. Bound and released rather than
+    guessed, because turns of different sessions run side by side on one host."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _write_config(home: pathlib.Path, api_key: str) -> pathlib.Path:
+    """The server's own config file, per turn.
+
+    Every path is pointed under .harness/openhands/ so the conversation store travels in the
+    checkpoint (and is excluded from produced files by the `.harness/` prefix), and VSCODE IS OFF:
+    it defaults to on and binds port 8001, which one process per turn would collide on immediately.
+    """
+    cfg = {
+        "session_api_keys": [api_key],
+        "conversations_path": str(home / "conversations"),
+        "workspace_path": str(home / "project"),
+        "bash_events_dir": str(home / "bash_events"),
+        "enable_vscode": False,
+        "allow_cors_origins": [],
+    }
+    path = home / "agent-server-config.json"
+    path.write_text(json.dumps(cfg, indent=2))
+    return path
+
+
+def _req(url: str, key: str, method: str = "GET", body: dict | None = None, timeout: float = 30.0):
+    data = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(url, data=data, method=method,
+                               headers={"X-Session-API-Key": key,
+                                        "content-type": "application/json"})
+    with urllib.request.urlopen(r, timeout=timeout) as resp:
+        raw = resp.read().decode(errors="replace")
+    return json.loads(raw) if raw.strip() else None
+
+
+def _wait_alive(port: int, proc: subprocess.Popen, deadline: float) -> bool:
+    """/alive needs no key and answers as soon as the app is mounted; measured 0.03 s ahead of the
+    first authenticated call, so there is no second readiness gate worth waiting on."""
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return False
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/alive", timeout=2):
+                return True
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.1)
+    return False
+
+
+def _agent_spec(job: dict) -> dict:
+    """The agent, with NO CREDENTIAL IN IT. The key travels in the server's environment instead.
+
+    MEASURED, and this is the whole reason for the shape: the conversation state persisted to disk
+    carries the entire LLM spec — model, base_url, retries, timeouts — and `api_key: None`. The
+    server keeps no key at rest, exactly as its docs claim. So a key passed here reaches the first
+    turn and NOTHING after it: a later turn's server rebuilds the agent from that state, has no
+    credential, and litellm's own retry/backoff then hides the failure for two minutes before the
+    conversation lands in `error` with
+    `Vercel_ai_gatewayException - Missing credentials. Please pass an api_key…`. Re-POSTing the
+    create call with the agent does not fix it either; the history survives, the credential does not.
+
+    Passing it in the environment makes it a property of THIS turn's process, which every turn sets
+    afresh, so resume needs nothing persisted. `usage_id` names the row this turn's spend lands on
+    and is not sent to the provider.
+    """
+    tools = [{"name": n} for n in _tools(job)]
+    return {"llm": {"model": job["model"], "base_url": job.get("base_url") or None,
+                    "usage_id": "harness"},
+            "tools": tools}
+
+
+# The tools this base gives the agent, by the names openhands-tools registers. An agent created
+# without this list gets NONE — measured: asked to write a file it answered "I can't create files in
+# this environment because no filesystem tool is available".
+#
+# `browser_tool_set` is in upstream's default preset and is deliberately NOT here: it needs a
+# Chromium this image does not carry, and its absence already shows up as `Error preloading …
+# Exception: Chromium is …` in the server's own log. A tool that cannot run is not offered.
+_TOOLS = ("terminal", "file_editor", "task_tracker")
+# What the console calls them. The catalog lists the console names; the disable list arrives in
+# those, and enforcement is by OMISSION from the agent's tool list, which is as hard as it gets:
+# a tool the agent was never given cannot be called.
+_TOOL_NAMES = {"Shell": "terminal", "Edit": "file_editor", "Todo": "task_tracker"}
+
+
+def _tools(job: dict) -> list[str]:
+    off = {str(x) for x in (job.get("tools_disabled") or [])}
+    off |= {_TOOL_NAMES[x] for x in off if x in _TOOL_NAMES}
+    return [t for t in _TOOLS if t not in off]
+
+
+def _conversation(base: str, key: str, job: dict, cwd: str) -> tuple[str, bool]:
+    """This turn's conversation: the minted id if the store already holds it, else created with it.
+
+    Asking first is the goose lesson the 2026-09-13 decision generalised — the store answers whether
+    the conversation is there, and the harness never infers it from its own argv.
+    """
+    cid = _conversation_id(_tools(job))
+    try:
+        info = _req(f"{base}/api/conversations/{cid}", key)
+        if info and info.get("id"):
+            return cid, True
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    body: dict = {"conversation_id": cid,
+                  "workspace": {"working_dir": cwd},
+                  "agent": _agent_spec(job)}
+    # THE OPERATOR'S STEP BUDGET. The server's own default is 500 iterations per run; a budget the
+    # caller set and the backend ignored is the quiet lie this repo treats as a defect (kimi shipped
+    # that bug at 1000 steps and turns ran for hours).
+    budget = job.get("max_turns")
+    if budget:
+        body["max_iterations"] = max(1, int(budget))
+    _req(f"{base}/api/conversations", key, method="POST", body=body, timeout=120)
+    return cid, False
+
+
+# What a turn's end looks like on the wire. The server reports execution status as an EVENT
+# (ConversationStateUpdateEvent), so one WebSocket carries both the content and the terminal
+# signal and nothing has to poll the conversation alongside it.
+_TERMINAL = {"finished", "error", "stuck", "idle"}
+_FAILED = {"error", "stuck"}
+
+
+def _text_of(content) -> str:
+    """A Message's content is a list of typed blocks; only text blocks are prose."""
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text") or ""))
+        elif isinstance(block, str):
+            parts.append(block)
+    return "".join(parts)
+
+
+def _on_event(ev: dict, state: dict) -> None:
+    """One SDK event -> zero or more NDJSON lines.
+
+    Only the shapes this product renders are translated. StreamingDeltaEvent is deliberately NOT:
+    the final MessageEvent carries the same text whole, and emitting both would render the answer
+    twice.
+    """
+    kind = str(ev.get("kind") or ev.get("type") or "")
+    if kind == "MessageEvent":
+        msg = ev.get("llm_message") or ev.get("message") or {}
+        if str(msg.get("role") or "") == "assistant":
+            text = _text_of(msg.get("content"))
+            if text.strip():
+                state["final"] = text
+                _emit("text", {"text": text})
+    elif kind == "ActionEvent":
+        action = ev.get("action") or {}
+        if str(action.get("kind") or "") == "FinishAction":
+            # How a turn ENDS when the agent has tools: the answer rides the finish action rather
+            # than a trailing assistant message (measured — turns that answer in prose alone emit a
+            # MessageEvent and no finish, so both paths are real). Rendering it as a tool call would
+            # show the user a "finish" step and leave the turn with no answer at all.
+            text = str(action.get("message") or "")
+            if text.strip():
+                state["final"] = text
+                _emit("text", {"text": text})
+            return
+        tuid = str(ev.get("tool_call_id") or ev.get("id") or len(state.setdefault("calls", [])))
+        state.setdefault("calls", []).append(tuid)
+        state["last_call"] = tuid
+        _emit("tool_call", {"id": tuid, "name": str(ev.get("tool_name") or "Tool"),
+                            "input": ev.get("action") or {}})
+    elif kind == "ObservationEvent":
+        obs = ev.get("observation") or {}
+        if str(obs.get("kind") or "") == "FinishObservation":
+            # Its action was suppressed above, so rendering this would leave an orphan tool result
+            # under a call id the transcript never showed. Measured in a real artifact turn.
+            return
+        tuid = str(ev.get("tool_call_id") or state.get("last_call") or "t0")
+        _emit("tool_result", {"id": tuid, "output": ev.get("observation") or {}})
+    elif kind in ("AgentErrorEvent", "ConversationErrorEvent"):
+        # A REAL failure. Recorded, not rendered: it is the turn's reason, not part of its answer.
+        _emit("error", {"text": str(ev.get("error") or ev.get("message") or kind)})
+    elif kind == "ConversationStateUpdateEvent":
+        # The event is a generic key/value state update — `last_user_message_id` rides the same
+        # shape — so the KEY has to be checked. Reading `value` alone once set the status to a
+        # message uuid, which only failed to end the turn early because a uuid is not a status.
+        if str(ev.get("key") or "") == "execution_status":
+            value = ev.get("value")
+            if isinstance(value, str) and value:
+                state["status"] = value.lower()
+
+
+def _run_turn(base: str, ws_base: str, key: str, cid: str, prompt: str, state: dict,
+              max_seconds: float) -> None:
+    """Send the message and read the conversation's events until the turn ends.
+
+    The WebSocket is opened BEFORE the message is sent: the run starts the moment the POST lands,
+    and a socket opened afterwards would miss whatever the agent did first.
+    """
+    from websockets.sync.client import connect
+
+    url = f"{ws_base}/sockets/events/{cid}"
+    # KEEPALIVE OFF. The client library pings every 20 s and closes the socket when a pong does not
+    # come back in time; measured on a resumed conversation, that fired mid-turn and the turn died
+    # with `sent 1011 (internal error) keepalive ping timeout` after 178 s with no answer. Nothing
+    # here needs the client to prove the link: the server pushes, and this loop already has its own
+    # deadline. A liveness check that ends healthy turns is worse than no liveness check.
+    with connect(url, additional_headers={"X-Session-API-Key": key},
+                 open_timeout=30, close_timeout=5, ping_interval=None) as ws:
+        _req(f"{base}/api/conversations/{cid}/events", key, method="POST",
+             body={"role": "user", "content": [{"type": "text", "text": prompt}], "run": True},
+             timeout=60)
+        deadline = time.time() + max_seconds
+        while time.time() < deadline:
+            try:
+                raw = ws.recv(timeout=max(1.0, min(30.0, deadline - time.time())))
+            except TimeoutError:
+                continue
+            try:
+                ev = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(ev, dict):
+                _on_event(ev, state)
+                if state.get("status") in _TERMINAL and state.get("sent"):
+                    return
+                # the run is only over once it has started: the status is `idle` until the first
+                # step lands, and returning on that would end the turn before it began
+                if state.get("status") == "running":
+                    state["sent"] = True
+        state["timeout"] = True
+
+
+def main() -> int:
+    job = json.loads(sys.argv[1])
+    cwd = job.get("cwd") or os.getcwd()
+    os.chdir(cwd)
+    home = pathlib.Path(cwd, ".harness", "openhands")
+    home.mkdir(parents=True, exist_ok=True)
+
+    key = secrets.token_urlsafe(24)
+    port = _free_port()
+    cfg = _write_config(home, key)
+
+    env = dict(os.environ)
+    env["OPENHANDS_AGENT_SERVER_CONFIG_PATH"] = str(cfg)
+    # THE PROVIDER CREDENTIAL, and the only place it lives (see _agent_spec). The id is sent with an
+    # `openai/` prefix by the builder so litellm routes through its openai provider verbatim instead
+    # of INFERRING one from the base url — the inference is what produced `Vercel_ai_gatewayException
+    # … set the VERCEL_AI_GATEWAY_API_KEY`, a provider-specific variable nothing here would set.
+    if job.get("api_key"):
+        env["OPENAI_API_KEY"] = str(job["api_key"])
+    if job.get("base_url"):
+        env["OPENAI_BASE_URL"] = str(job["base_url"])
+    # The SDK prints a multi-line banner to STDOUT on import, which is this driver's NDJSON channel
+    # for the server's own process; off by its own switch rather than by filtering lines.
+    env["OPENHANDS_SUPPRESS_BANNER"] = "1"
+
+    python = os.environ.get("HR_OPENHANDS_PYTHON", sys.executable)
+    proc = subprocess.Popen(
+        [python, "-m", "openhands.agent_server", "--host", "127.0.0.1", "--port", str(port)],
+        cwd=cwd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        start_new_session=False)
+
+    base, ws_base = f"http://127.0.0.1:{port}", f"ws://127.0.0.1:{port}"
+    state: dict = {}
+    try:
+        if not _wait_alive(port, proc, time.time() + 120):
+            err = (proc.stderr.read().decode(errors="replace")[-2000:] if proc.stderr else "")
+            _emit("error", {"text": f"agent-server did not start: {err.strip() or 'no output'}"})
+            _emit("result", {"final": "", "ok": False, "seconds": round(time.time() - _T0, 2)})
+            return 1
+        cid, resumed = _conversation(base, key, job, cwd)
+        _emit("init", {"model": job["model"], "conversation_id": cid, "resumed": resumed})
+        _run_turn(base, ws_base, key, cid, job["prompt"], state,
+                  float(os.environ.get("HR_OPENHANDS_TURN_SECONDS", "1800")))
+    except Exception as exc:  # noqa: BLE001 — the reason belongs in the record, not in a traceback
+        _emit("error", {"text": f"{type(exc).__name__}: {exc}"})
+    finally:
+        with contextlib.suppress(Exception):
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=10)
+        with contextlib.suppress(Exception):
+            proc.kill()
+
+    status = state.get("status") or ""
+    ok = bool(state.get("final")) and status not in _FAILED and not state.get("timeout")
+    _emit("result", {"final": state.get("final") or "", "ok": ok, "status": status,
+                     "seconds": round(time.time() - _T0, 2)})
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

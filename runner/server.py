@@ -266,11 +266,25 @@ def _goose_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
 #
 # A backend absent from this table cannot lose a session, or has not been measured — either way it
 # never reports one lost. Adding a backend here is registration point 5.
+def _openhands_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask the agent-server's own store whether this conversation is there.
+
+    It cannot be read off argv: the driver mints the id and passes it whatever the store holds, and
+    the server creates a conversation for an id it does not know. The store is a directory named for
+    the id with the dashes removed, holding base_state.json and an events log — the shape the driver
+    read back after killing one server and querying another."""
+    home = pathlib.Path(cwd) / ".harness" / "openhands" / "conversations"
+    if not home.is_dir():
+        return False
+    return any((d / "base_state.json").is_file() for d in home.iterdir() if d.is_dir())
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
+    "openhands": _openhands_session_present,
 }
 
 
@@ -437,6 +451,7 @@ DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
+OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -1186,7 +1201,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # content VERBATIM into the system prompt: verified live, inside a
         # "<!-- From: .../AGENTS.md -->" fence, with a behavioural instruction in it obeyed.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi")
+                                   "goose", "kimi", "openhands")
         else "CLAUDE.md")
 
 
@@ -5149,6 +5164,48 @@ _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 # ── kimi ─────────────────────────────────────────────────────────────────────────
 
 
+OPENHANDS_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+OPENHANDS_PYTHON = os.environ.get("HR_OPENHANDS_PYTHON",
+                                  "/data/agent-tools/openhands-venv/bin/python")
+OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openhands_driver.py")
+
+
+def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                     tools_disabled: list[str] | None = None,
+                     max_turns: int | None = None) -> list[str]:
+    """OpenHands V1, driven through `openhands-agent-server` (OpenHands/agent-sdk, MIT).
+
+    NOT the CLI. PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project
+    is no longer actively maintained" and whose last release is 1.16.0 of 2026-05-08; the agent
+    server released 1.49.2 on 2026-09-17. The turn process is runner/openhands_driver.py, which
+    starts a server on loopback, drives ONE turn over its HTTP + WebSocket API and exits — the same
+    one-process-per-turn contract as every other backend, and the codex app-server precedent.
+
+    THE MODEL ID IS SENT WITH AN `openai/` PREFIX and the key rides the driver's environment rather
+    than the conversation. Both are forced by what the server persists: base_state.json carries the
+    whole LLM spec with `api_key: None`, so a key passed on the create call reaches the first turn
+    and nothing after it, and without an explicit provider litellm INFERS one from the base url —
+    which is how a relay url produced `Vercel_ai_gatewayException … set the VERCEL_AI_GATEWAY_API_KEY`
+    on a resumed turn. Every turn rides the loopback relay for the qwen reason: the real key never
+    enters the agent's environment and the provider's own `model` passes through for the
+    served-model check."""
+    pr = provider or "openai-api"
+    if pr not in OPENHANDS_PROVIDERS:
+        raise HTTPException(400,
+                            f"unknown openhands provider '{pr}' (one of {sorted(OPENHANDS_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "openhands needs a base_url (none configured)")
+    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+    job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
+           "base_url": relay_base, "api_key": relay_tok,
+           "tools_disabled": list(tools_disabled or []),
+           # the server's own default is 500 iterations per run; an operator's budget that the
+           # backend drops is the quiet lie kimi shipped at 1000 steps
+           "max_turns": max_turns}
+    return [OPENHANDS_PYTHON, OPENHANDS_DRIVER, json.dumps(job)]
+
+
 def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE `kimi -p … --output-format stream-json` line to zero+ canonical claude events.
 
@@ -5275,6 +5332,84 @@ _kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
+# ── openhands ────────────────────────────────────────────────────────────────────
+# The turn process is runner/openhands_driver.py, which re-emits what it observes on the
+# agent-server's WebSocket as NDJSON in the dsh_driver shape. The driver has already decided what
+# is prose, what is a tool call and what is a failure — it sees typed SDK events, not text — so
+# this maps one shape to another and judges nothing.
+_OPENHANDS_SESSION_NAME = "harness"
+
+
+def _openhands_to_claude(obj: dict, state: dict) -> list[dict]:
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if not state.get("_oh_init"):
+        # _run_turn_bg records the conversation id ONLY from a system/init event, and that recorded
+        # id is what makes the next turn a follow-up rather than a new thread.
+        state["_oh_init"] = True
+        return ([{"type": "system", "subtype": "init", "session_id": _OPENHANDS_SESSION_NAME,
+                  "model": state.get("model")}]
+                + _openhands_event(obj, state, m, p))
+    return _openhands_event(obj, state, m, p)
+
+
+def _openhands_event(obj: dict, state: dict, m, p) -> list[dict]:
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if not txt.strip():
+            return []
+        state["final"] = txt
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if m == "tool_call":
+        state["_oh_last_call"] = str(p.get("id") or "t0")
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": state["_oh_last_call"], "name": str(p.get("name") or "Tool"),
+             "input": p.get("input") or {}}]}}]
+    if m == "tool_result":
+        out = p.get("output")
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result",
+             "tool_use_id": str(p.get("id") or state.get("_oh_last_call") or "t0"),
+             "is_error": bool(isinstance(out, dict) and out.get("is_error")),
+             "content": json.dumps(out, default=str) if not isinstance(out, str) else out}]}}]
+    if m == "error":
+        # Reached the conversation's error channel, which the model's prose cannot reach. Recorded,
+        # NOT rendered: it is the turn's failure reason, not part of its answer.
+        state["_oh_error"] = str(p.get("text") or "")
+        return []
+    if m == "warning":
+        state.setdefault("_oh_warnings", []).append(str(p.get("text") or ""))
+        return []
+    if m == "init":
+        state["_oh_conversation"] = str(p.get("conversation_id") or "")
+        return []
+    if m == "result":
+        err = state.get("_oh_error") or ""
+        ok = bool(p.get("ok")) and not err
+        final = str(p.get("final") or state.get("final") or "")
+        if ok:
+            state["final"] = final
+        # usage is {} deliberately: per the 2026-09-13 decision no harness PR builds its own usage
+        # pipeline, and _relay_usage stamps these rows.
+        return [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                 "result": final if ok else (err or f"the turn ended {p.get('status') or 'unknown'}"),
+                 "usage": {}}]
+    return []
+
+
+def _openhands_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result event, so this fires only when the process died before
+    reaching it — a crash, a kill, an import failure."""
+    err = state.get("_oh_error") or ""
+    if rc == 0 and not err:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": err, "usage": {}}]
+
+
+_openhands_to_claude.eof = _openhands_eof   # type: ignore[attr-defined]
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -5313,6 +5448,9 @@ BACKENDS = {
     # normaliser and an eof rather than the passthrough qwen's claude-shaped stream can use.
     "kimi": {"providers": sorted(KIMI_PROVIDERS), "default_model": KIMI_DEFAULT_MODEL,
              "normalize": _kimi_to_claude},
+    "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
+                  "default_model": OPENHANDS_DEFAULT_MODEL,
+                  "normalize": _openhands_to_claude},
 }
 
 
@@ -6518,6 +6656,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
                           max_turns=req.max_turns)
+    elif backend == "openhands":
+        model = model or OPENHANDS_DEFAULT_MODEL
+        cmd = _build_openhands(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id,
+                               mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
