@@ -22,7 +22,7 @@ uhp-conformance \
 | `--api-key` | Bearer token, or set `UHP_API_KEY`. |
 | `--class` | `core`, `extended` or `full`. Cumulative — `full` runs everything. |
 | `--harness-id` | Run tasks against a specific harness instead of the first one listed. |
-| `--model` | Run tasks with a specific model. |
+| `--model` | Run tasks with a specific model. Required when the harness named by `--harness-id` has no default model: the suite says so and stops before the first task rather than waiting out the task timeout on each. |
 | `--task-timeout` | Seconds to allow one agent task. Default 300. |
 | `--only` | Comma-separated check ids, for iterating on one failure. |
 | `--json` | Write a machine-readable report. |

@@ -131,7 +131,7 @@ These credentials sign you into the Console. You do not need a HarnessRouter API
 
 ### 4. Connect a model provider
 
-Open **Integrations → Add Integration**. Choose a provider, give the integration a name, and add its API key. Its supported models become available in the Console.
+Open **Bring Your Own Key** in the sidebar and press **Add Integration**. Choose a provider, give the integration a name, and add its API key. Its supported models become available in the Console.
 
 This provider key authorizes model requests. It is separate from the HarnessRouter API key used for product integration below.
 
