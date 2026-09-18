@@ -45,6 +45,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.server
+import datetime
 import json
 import mimetypes
 import os
@@ -149,10 +150,7 @@ def _reap_workspaces(keep: str = "") -> int:
             if e.stat().st_mtime >= cutoff:
                 continue
             shutil.rmtree(e.path, ignore_errors=True)
-            try:
-                _ws_marker_path(e.name).unlink()
-            except OSError:
-                pass
+            _ws_marker_clear(e.name)
             removed += 1
         except OSError:
             continue
@@ -242,21 +240,6 @@ def _own_tree(root: str, uid: int, from_uids: set[int]) -> None:
                 continue
 
 
-def _kimi_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
-    """Ask kimi's store whether this session exists, with kimi's own predicate.
-
-    `Session.find` treats a session as existing iff sessions/<md5(work_dir)>/<id>/context.jsonl is
-    on disk, so this makes the identical check. It CANNOT be inferred from argv: --session is on the
-    command line whether or not the session exists, because kimi mints a session with whatever id it
-    is handed (cli/__init__.py:558-565, find -> None -> "not found, creating new session" ->
-    Session.create). Measured on 1.50.0: resuming an id that never existed printed nothing, changed
-    no exit code, and left a brand-new session directory behind — with a working provider it would
-    have answered from an empty history as a completed turn, which is the exact failure this whole
-    mechanism exists to stop."""
-    share = pathlib.Path(cwd) / ".harness" / "home" / ".kimi"
-    return (_kimi_session_dir(share, cwd, session_id) / "context.jsonl").exists()
-
-
 def _aider_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     """aider has no session id at all: its continuation is a chat-history FILE, and a missing one
     resumes silently with no output difference whatsoever (measured on 0.86.2). So the question
@@ -278,8 +261,8 @@ def _aider_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
 
 
 def _argv_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
-    """The builder looked the session up and said so in argv: claude's --resume and opencode's
-    --session carry the id only when it was found in this workspace."""
+    """The builder looked the session up and said so in argv: claude's --resume, opencode's
+    --session and kimi's -r carry the id only when it was found in this workspace."""
     return session_id in cmd
 
 
@@ -304,11 +287,11 @@ def _goose_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
 # A backend absent from this table cannot lose a session, or has not been measured — either way it
 # never reports one lost. Adding a backend here is registration point 5.
 _SESSION_PRESENT = {
-    "aider": _aider_session_present,
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
-    "kimi": _kimi_session_present,
+    "kimi": _argv_session_present,
+    "aider": _aider_session_present,
 }
 
 
@@ -442,11 +425,23 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
                       "./.harness/home/.dsh/cordis.yml",
+                      # opencode's undo/revert history: a git repo of the workspace that grew to
+                      # 699 MB / 71k files in twenty turns (#193). _opencode_config turns it off;
+                      # this keeps a workspace that already carries one from dragging it through
+                      # every later checkpoint. Nothing reads it once snapshots are off.
+                      "./.harness/home/.local/share/opencode/snapshot",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
                       "node_modules", ".venv", "venv", "__pycache__", ".pnpm-store",
-                      ".cache/pip", ".npm/_cacache"]
+                      ".cache/pip", ".npm/_cacache",
+                      # Kimi Code CLI: sessions/ is what a resume reads and it travels; its logs,
+                      # response cache and update-check state do not need to, and a log is the one
+                      # place a CLI may print what it was handed. The key itself is never at rest:
+                      # the model is defined from the environment (see _build_kimi).
+                      "./.harness/home/.kimi-code/logs",
+                      "./.harness/home/.kimi-code/cache",
+                      "./.harness/home/.kimi-code/updates"]
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
@@ -468,13 +463,12 @@ CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
 CODEX_CONTEXT_WINDOW = os.environ.get("CODEX_CONTEXT_WINDOW", "272000")
-# kimi REQUIRES a per-model max_context_size in its config (no default), and plans compaction
-# against it: loop_control.compaction_trigger_ratio 0.85 over reserved_context_size 50000. The
-# same problem codex has above, solved the same way and for the same reason — a number that is
-# too LARGE compacts late and lets the thread overflow the real window (the provider then 400s);
-# too small compacts early and wastes tokens on a turn that would have fit. One value across the
-# catalog is a known approximation: it is honest only because being wrong changes WHEN the agent
-# compacts, never whether it answers. A per-id window belongs in the catalog, not here.
+# Kimi Code CLI takes the model's window as KIMI_MODEL_MAX_CONTEXT_SIZE (its own default is 256k) and
+# plans compaction against it. The same problem codex has above, solved the same way and for the
+# same reason: a number that is too LARGE compacts late and lets the thread overflow the real window
+# (the provider then 400s); too small compacts early and wastes tokens on a turn that would have
+# fit. One value across the catalog is a known approximation: it is honest only because being wrong
+# changes WHEN the agent compacts, never whether it answers. A per-id window belongs in the catalog.
 KIMI_CONTEXT_WINDOW = os.environ.get("KIMI_CONTEXT_WINDOW", "272000")
 # Provider defaults (overridable per-turn via auth.base_url). Wired from pool env.
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -537,14 +531,23 @@ def _ver(cmd: list[str]) -> str:
 
 
 # ── git-backed workspace (hydrate at turn start, checkpoint at turn end) ───────────
-def _git(ws: str, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True,
-                          env={**os.environ, **_GIT_ENV}, check=check, **_as_session(ws))
+                          env={**os.environ, **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
 
 
 def _git_ensure(ws: str) -> None:
     """Make /workspace a git repo with a secret-safe .gitignore (so .git, which travels in the
-    checkpoint tarball, never carries credentials)."""
+    checkpoint tarball, never carries credentials).
+
+    The CLI home (.harness/home) is ignored here too. The repo has one reader, /produced, and it
+    already drops every `.harness/` path (_PRODUCED_EXCLUDE_PREFIX); the home still travels
+    between turns because the checkpoint is a tar of the directory, not a `git archive`, so
+    --resume is unaffected. Committing it gave every transcript and session database a second
+    copy in .git/objects per checkpoint — and on opencode the two fed each other, its snapshot
+    repo (work tree = the workspace) capturing our .git while we committed its snapshots: twenty
+    turns of one small file reached a 1.4 GB tarball for ~220 KB of output and the gateway OOMed
+    (#193, 2026-09-16)."""
     p = pathlib.Path(ws)
     p.mkdir(parents=True, exist_ok=True)
     (p / ".gitignore").write_text("\n".join([
@@ -553,12 +556,77 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
         ".harness/goose/config/secrets.yaml",
+        "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
+        ".harness/home/",
         "",
     ]))
     if not (p / ".git").exists():
         _git(ws, "init", "-q")
         _git(ws, "config", "user.email", _GIT_ENV["GIT_AUTHOR_EMAIL"])
         _git(ws, "config", "user.name", _GIT_ENV["GIT_AUTHOR_NAME"])
+    else:
+        # An ignore rule does not release what an earlier checkpoint already committed: a
+        # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
+        # hydrated from before this rule would keep growing exactly as before. Drop the CLI
+        # home from the index (not from disk); from then on the ignore rule holds.
+        tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
+        if tracked:
+            _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
+        # Untracking releases the index, not .git/objects: every copy the old checkpoints
+        # committed stays reachable from those commits and rides in every later tarball of the
+        # session (722 MB of the 1.4 GB in #193). The gate is the index or the tip's tree, both
+        # O(1): before the rule every checkpoint re-added the home with `add -A`, so a history
+        # that holds it also holds it at the tip (the one gap, the index released but the tip
+        # not yet rewritten, is a crash between the two calls above and below, and the tip
+        # covers it). A walk of the history (`rev-list -- .harness/home`) would find the same
+        # repos and cost 130 ms per call at a thousand commits, four calls a turn, for the life
+        # of every session. Once per session: the shed leaves no home in either tree it keeps.
+        if tracked or _git(ws, "rev-parse", "-q", "--verify", "HEAD:.harness/home").returncode == 0:
+            _git_shed_cli_home_history(ws)
+
+
+def _git_shed_cli_home_history(ws: str) -> None:
+    """Rewrite a pre-#193 workspace repo down to what /produced reads — the collected cursor's
+    tree and HEAD's tree, each without .harness/home — and prune everything else.
+
+    /produced is the repo's one reader, and it reads two things: `diff refs/hr/collected` against
+    the worktree, and `status` (see _produced_list). Neither looks past those two trees, so the
+    history between and before them is dead weight, and for a session checkpointed before the
+    ignore rule it is where every earlier copy of the CLI home lives. Untracking alone leaves those
+    blobs reachable from the old commits, so the tarball would carry them on every later turn.
+    Each tree is rebuilt in a scratch index minus .harness/home (a path /produced excludes anyway),
+    so the cursor→worktree diff a caller sees before and after this is the same set of files.
+    gc prunes the unreachable blobs; on the reported repo that is the one-off cost of one gc,
+    paid at the session's first turn after upgrade."""
+    if _git(ws, "rev-parse", "-q", "--verify", "HEAD").returncode != 0:
+        return                                   # nothing committed yet: nothing to shed
+    scratch = os.path.join(ws, ".git", "hr-shed-index")   # owned by the session, like the rest of .git
+
+    def _tree_without_home(commit: str) -> str:
+        env = {"GIT_INDEX_FILE": scratch}
+        _git(ws, "read-tree", commit, env=env)
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home", env=env)
+        return _git(ws, "write-tree", env=env).stdout.strip()
+
+    try:
+        parent: list[str] = []
+        if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
+            c_tree = _tree_without_home(_COLLECTED_REF)
+            c_new = _git(ws, "commit-tree", c_tree, "-m", "collected (cli home history shed)").stdout.strip()
+            if c_new:
+                _git(ws, "update-ref", _COLLECTED_REF, c_new)
+                parent = ["-p", c_new]
+        h_tree = _tree_without_home("HEAD")
+        h_new = _git(ws, "commit-tree", h_tree, *parent, "-m", "checkpoint (cli home history shed)").stdout.strip()
+        if h_new:
+            _git(ws, "update-ref", "HEAD", h_new)      # HEAD is symbolic: this moves the branch
+    finally:
+        try:
+            os.unlink(scratch)
+        except OSError:
+            pass
+    _git(ws, "reflog", "expire", "--expire=now", "--all")
+    _git(ws, "gc", "-q", "--prune=now")
 
 
 # ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
@@ -3517,8 +3585,12 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
-def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
-    """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI)."""
+def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = ()) -> tuple[str, str]:
+    """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
+
+    `drop_fields` names top-level request fields this route's client sends on its own initiative and
+    the harness never asked for; they are removed before the provider sees them (the same list the
+    relay grows by itself when a provider names an unknown field)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -3531,7 +3603,8 @@ def _hermes_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
         # https://api.anthropic.com/chat/completions, a 404 with no body (2026-09-06 support
         # matrix; Anthropic's OpenAI-compatible surface lives under /v1). Bedrock keeps its host
         # (its own path is built in _bedrock_anthropic).
-        _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key, {"rename_max_tokens": False})
+        _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key,
+                                        {"rename_max_tokens": False, "drop_fields": tuple(drop_fields)})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -3719,113 +3792,93 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
 
 KIMI_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 
-# Every kimi tool, mapped from the name the model sees to the MODULE PATH its agent spec needs.
+# Every built-in tool Kimi Code CLI declares to the model, by the exact name its agent files match.
 #
-# THE TRAP THIS TABLE EXISTS FOR, measured on 1.50.0: `exclude_tools` matches tool PATHS, not tool
-# names. In one probe both "Shell" (bare name) and "kimi_cli.tools.web:FetchURL" (path) were
-# excluded — FetchURL disappeared from the tools array the model received and Shell did NOT. A bare
-# name is a SILENT no-op: the console would report the tool as off while the model still has it,
-# which is exactly the failure registration point 9 warns about, and it is why this backend can
-# claim tool_enforcement "hard" only through this table. _BASE_CATALOG["kimi"]'s tool ids are
-# pinned equal to these keys by test_catalog_kimi_tool_paths.py, so the console can never offer a
-# name that has no path here.
-#
-# SearchWeb and ReadMediaFile are deliberately absent: both are in the shipped default agent but
-# raise SkipThisTool unless a Moonshot search key / a vision-capable model is configured
-# (kimi_cli/tools/web/search.py:47, kimi_cli/tools/file/read_media.py:54), so neither is ever
-# constructed here and listing either would be offering a tool that does not exist.
-_KIMI_TOOL_PATHS = {
-    "Agent": "kimi_cli.tools.agent:Agent",
-    "AskUserQuestion": "kimi_cli.tools.ask_user:AskUserQuestion",
-    "SetTodoList": "kimi_cli.tools.todo:SetTodoList",
-    "Shell": "kimi_cli.tools.shell:Shell",
-    "TaskList": "kimi_cli.tools.background:TaskList",
-    "TaskOutput": "kimi_cli.tools.background:TaskOutput",
-    "TaskStop": "kimi_cli.tools.background:TaskStop",
-    "ReadFile": "kimi_cli.tools.file:ReadFile",
-    "Glob": "kimi_cli.tools.file:Glob",
-    "Grep": "kimi_cli.tools.file:Grep",
-    "WriteFile": "kimi_cli.tools.file:WriteFile",
-    "StrReplaceFile": "kimi_cli.tools.file:StrReplaceFile",
-    "FetchURL": "kimi_cli.tools.web:FetchURL",
-    "EnterPlanMode": "kimi_cli.tools.plan.enter:EnterPlanMode",
-    "ExitPlanMode": "kimi_cli.tools.plan:ExitPlanMode",
-}
+# MEASURED, not read off the docs: the `tools` array of a live 2.0.0 request, captured at a local
+# stub with no provider involved. The console offers exactly these as toggles, and
+# test_catalog_kimi_tool_paths.py pins _BASE_CATALOG["kimi"]'s tool ids equal to this tuple so the
+# catalog can never offer a name the CLI would not recognise (an unknown name in disallowedTools
+# "never matches anything", per the agents reference, which would be a toggle that does nothing).
+# WebSearch is absent on purpose: it is declared only with a Moonshot search service configured.
+_KIMI_TOOLS = ("Agent", "AgentSwarm", "AskUserQuestion", "Bash", "CreateGoal", "CronCreate",
+               "CronDelete", "CronList", "Edit", "EnterPlanMode", "ExitPlanMode", "FetchURL",
+               "GetGoal", "Glob", "Grep", "Read", "ReadMediaFile", "SetGoalBudget", "Skill",
+               "TaskList", "TaskOutput", "TaskStop", "TodoList", "UpdateGoal", "WaitFor", "Write")
 
 
-def _kimi_session_dir(share: pathlib.Path, cwd: str, session_id: str) -> pathlib.Path:
-    """Where kimi keeps one session, asked the way kimi itself asks it.
+# Two request fields Kimi Code CLI sends on its own initiative, captured at a stub on 2.0.0, that no
+# person configured and that break models which are fine without them:
+#   max_tokens: 131072 on EVERY request, an output budget derived from a Kimi-sized window. OpenAI,
+#     Anthropic and Google each refuse the whole request (limits 128000, 128000, 65536), and on a
+#     131k-window model the budget alone overflows the context (llama-3.3-70b: "requested about
+#     154972 tokens ... 131072 in the output"). There is no knob for it on the openai provider type.
+#   reasoning_effort: "high" whenever the MODEL NAME looks like a reasoning model (claude-*), whatever
+#     capabilities are declared. TokenRouter turns that into thinking.type.enabled, which the newer
+#     Claude models refuse outright ("not supported for this model. Use thinking.type.adaptive"): five
+#     ids failed their first turn on it.
+# The budget travels under a second name for an OpenAI-named model (gpt-*, o*): the CLI sends
+# max_completion_tokens: 131072 there instead, captured at the same stub across ten model families,
+# and gpt-5.4-mini refused it exactly as the others refused max_tokens. prompt_cache_key, the one
+# other extra it sends, is a caching hint no endpoint here objects to and stays.
+# Every other base here sends none of these and the provider's defaults apply; this base now does too.
+_KIMI_DROP_FIELDS = ("max_tokens", "max_completion_tokens", "reasoning_effort")
 
-    `Session.find` (kimi_cli/session.py) treats a session as existing iff
-    sessions/<md5(work_dir)>/<id>/context.jsonl is on disk, and metadata.py:36 hashes the work dir
-    with plain md5. Reproducing that predicate is the whole of _resume_lost's kimi arm — the goose
-    lesson (a byte search for the session NAME matched the workspace path and reported a session
-    that was not there) is why this asks the store instead of searching it."""
-    key = hashlib.md5(cwd.encode("utf-8")).hexdigest()   # noqa: S324 - kimi's own key, not a digest
-    return share / "sessions" / key / session_id
+
+def _kimi_home(ws: pathlib.Path) -> pathlib.Path:
+    """KIMI_CODE_HOME for this workspace: config, sessions, logs and mcp.json all land under it
+    (env-vars reference). It sits under .harness/home so the sessions travel with the checkpoint
+    and a resume survives a recycled sandbox, and so nothing of it shows up as a produced file."""
+    return ws / ".harness" / "home" / ".kimi-code"
 
 
-def _kimi_config(ws: pathlib.Path, model: str) -> pathlib.Path:
-    """kimi's config file. Required, not optional, for three separate reasons measured on 1.50.0:
-
-    1. OPENAI_BASE_URL / OPENAI_API_KEY only OVERRIDE an existing provider entry (llm.py:305-311,
-       `case "openai_legacy" | "openai_responses":`), so a provider block must exist to be
-       overridden. Env alone configures nothing.
-    2. `-m` names an ALIAS in config.models, not a model id; the id that reaches the provider is
-       models.<alias>.model. So the real id is written HERE and `-m hr` is a constant.
-    3. telemetry defaults to TRUE and posts to telemetry-logs.kimi.com (telemetry/transport.py:22).
-       There is no env kill switch — it is a config key only.
-
-    No credential is written: the placeholders below exist so the provider block parses, and the
-    environment wins over both. --config (the inline-string form) is deliberately not used: it
-    would put the provider block on argv, where /proc exposes it."""
-    path = ws / ".harness" / "kimi-config.toml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    esc = model.replace("\\", "\\\\").replace('"', '\\"')
-    path.write_text(
-        "default_model = \"hr\"\n"
-        "telemetry = false\n"
-        "\n"
-        "[providers.hr]\n"
-        "type = \"openai_legacy\"\n"
-        "base_url = \"http://127.0.0.1:1/v1\"\n"
-        "api_key = \"set-from-environment\"\n"
-        "\n"
-        "[models.hr]\n"
-        "provider = \"hr\"\n"
-        f"model = \"{esc}\"\n"
-        f"max_context_size = {KIMI_CONTEXT_WINDOW}\n")
-    return path
+def _kimi_has_session(home: pathlib.Path, session_id: str) -> bool:
+    """Is this conversation in the store? Sessions live at sessions/<workdir key>/<session id>/
+    (measured on 2.0.0; the key is `wd_<dirname>_<hash>`), so the id is looked up under any key
+    rather than recomputing a hash this code does not own. It matters because `kimi -r <unknown id>`
+    is a hard failure on this CLI, exit 1 with `Session "<id>" not found`, where its predecessor
+    silently started a new conversation: the runner must not pass an id the store does not hold."""
+    sid = (session_id or "").strip()
+    if not sid or "/" in sid or sid.startswith("."):
+        return False
+    return any((home / "sessions").glob(f"*/{sid}"))
 
 
 def _kimi_agent_file(ws: pathlib.Path, tools_disabled: list[str] | None) -> pathlib.Path | None:
-    """A per-turn agent spec that withholds tools, or None when nothing is disabled.
+    """A per-session agent file that withholds tools, or None when nothing is disabled.
 
-    `extend: default` resolves to the shipped agent.yaml, and an excluded tool is never constructed
-    and never declared to the model (kimi_cli/soul/agent.py:447-450) — this is what makes kimi's
-    tool_enforcement "hard" rather than "instruction". Names are translated through
-    _KIMI_TOOL_PATHS because kimi matches paths, not names; see that table's comment."""
-    paths = [_KIMI_TOOL_PATHS[t] for t in (tools_disabled or []) if t in _KIMI_TOOL_PATHS]
-    if not paths:
+    An agent file is Markdown with a frontmatter block; `disallowedTools` matches built-in tools by
+    exact, case-sensitive name, shapes the tools shown to the model AND is enforced again before
+    execution (agents reference), which is what makes tool_enforcement "hard" here. Measured on
+    2.0.0: with Bash disallowed and asked for the machine's boot id, the agent called no tool and
+    answered that it had no shell. The body is ${base_prompt} so the workspace instructions, skills
+    and plugin injections of the default prompt stay in effect."""
+    names = [t for t in (tools_disabled or []) if t in _KIMI_TOOLS]
+    if not names:
         return None
-    path = ws / ".harness" / "kimi-agent.yaml"
+    path = ws / ".harness" / "kimi-agent.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(   # YAML is a superset of JSON, and json.dumps quotes safely
-        {"version": 1, "agent": {"extend": "default", "name": "harness", "exclude_tools": paths}},
-        indent=2))
+    # `subagents: []` is part of the policy, not decoration. Measured through the product on 2.0.0:
+    # with only Bash disallowed, kimi-k3 answered "I don't have a direct shell tool, but I can
+    # dispatch a subagent that does" and called Agent; the built-in coder subagent carries its own
+    # tool list, so a withheld tool came back by delegation. With the allowlist empty the Agent tools
+    # have nobody to dispatch to and the same prompt answers that it has no shell.
+    path.write_text("---\nname: harness\n"
+                    "description: The harness agent with its tool policy applied.\n"
+                    "disallowedTools:\n" + "".join(f"  - {n}\n" for n in names) +
+                    "subagents: []\n"
+                    "---\n${base_prompt}\n")
     return path
 
 
-def _kimi_mcp_config(ws: pathlib.Path, mcp_servers: list[dict] | None) -> pathlib.Path | None:
-    """The standard `mcpServers` object, parsed by fastmcp's MCPConfig (kimi_cli/soul/toolset.py).
-    The same shape _qwen_settings writes, with ONE field difference: streamable HTTP is `url` here,
-    where gemini-cli's schema (which qwen inherited) calls it `httpUrl`.
+def _kimi_mcp_config(home: pathlib.Path, mcp_servers: list[dict] | None) -> pathlib.Path:
+    """$KIMI_CODE_HOME/mcp.json, the user-level file (the project-level one raises a trust prompt
+    for an untrusted folder). Written on EVERY turn, empty included, so a server removed from the
+    harness is gone from the next turn instead of lingering in the file.
 
-    A server that cannot start is FATAL on this CLI — `Unknown error: Failed to connect MCP
-    servers: {…}` on stdout and exit 1, verified live — rather than a degraded turn. That is the
-    opposite of hermes (which disables HTTP MCP with only a log line) and of goose (which warns on
-    stderr and continues); it satisfies UHP's visibility SHOULD loudly, at the cost of a flaky
-    third-party server taking the whole turn with it. Recorded in docs/support-matrix-notes.md."""
+    Shapes per the MCP reference, each measured on 2.0.0: a `command` entry is stdio (args, env and
+    cwd honoured, which is what a plugin launcher needs); a `url` entry with no transport is
+    streamable HTTP; a legacy SSE server says `transport: "sse"` explicitly. The harness's declared
+    transport decides, never the url's spelling."""
     servers: dict = {}
     for i, sv in enumerate(mcp_servers or []):
         if not isinstance(sv, dict):
@@ -3834,6 +3887,8 @@ def _kimi_mcp_config(ws: pathlib.Path, mcp_servers: list[dict] | None) -> pathli
         url = (sv.get("url") or "").strip()
         if url:
             entry: dict = {"url": url}
+            if str(sv.get("transport") or "").lower() == "sse":
+                entry["transport"] = "sse"
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -3845,13 +3900,13 @@ def _kimi_mcp_config(ws: pathlib.Path, mcp_servers: list[dict] | None) -> pathli
             envv = sv.get("env")
             if isinstance(envv, dict) and envv:
                 entry["env"] = {str(k): str(v) for k, v in envv.items()}
+            if sv.get("cwd"):
+                entry["cwd"] = str(sv["cwd"])
         else:
             continue
         servers[name] = entry
-    if not servers:
-        return None
-    path = ws / ".harness" / "kimi-mcp.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "mcp.json"
     path.write_text(json.dumps({"mcpServers": servers}, indent=2))
     return path
 
@@ -3860,77 +3915,58 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                 skills_dir: str | None = None, tools_disabled: list[str] | None = None,
                 max_turns: int | None = None) -> list[str]:
+    """Kimi Code CLI (MoonshotAI/kimi-code, 2.0.0), the successor its vendor moved Kimi CLI to.
+
+    The model is defined from the ENVIRONMENT alone: with KIMI_MODEL_NAME set the CLI synthesises a
+    provider in memory and persists nothing (env-vars reference), so no config file is written and
+    no credential exists at rest. Measured: after a full session the data home held no trace of the
+    key. Every turn rides the loopback relay, the qwen rationale unchanged: the real key never
+    enters the CLI's environment, request shapes strict endpoints refuse are repaired in flight,
+    and the provider's own "model" passes through for the served-model check."""
     pr = provider or "openai-api"
     if pr not in KIMI_PROVIDERS:
         raise HTTPException(400, f"unknown kimi provider '{pr}' (one of {sorted(KIMI_PROVIDERS)})")
     if not auth.base_url:
         raise HTTPException(400, "kimi needs a base_url (none configured)")
     if auth.api_key:
-        # EVERY kimi turn rides the loopback relay, the qwen rationale unchanged: the real key never
-        # enters the CLI's environment, and request shapes strict endpoints refuse are repaired in
-        # flight. kimi needs one repair of its own — it sends `reasoning_effort: null`, which
-        # Vercel's AI Gateway answers with HTTP 400 ("Invalid option: expected one of
-        # \"none\"|\"minimal\"|…", measured twice in one live turn) — handled for every backend in
-        # _set_reasoning_effort_none rather than here.
-        #
-        # Riding the relay is also what makes matrix rule 2 enforceable on this backend: kimi itself
-        # reports no served model anywhere in its stream, but the provider's own "model" passes the
-        # relay in the bytes and _relay_served_model stamps it onto the synthesised result.
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, drop_fields=_KIMI_DROP_FIELDS)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     ws = pathlib.Path(cwd)
-    share = ws / ".harness" / "home" / ".kimi"
-    share.mkdir(parents=True, exist_ok=True)
-    # KIMI_SHARE_DIR is a DEDICATED variable for config + sessions + logs, so unlike qwen (and every
-    # other backend that redirects HOME) this one never touches HOME at all. Verified after a full
-    # two-turn session: a fresh HOME stayed empty. It sits under .harness/ so sessions/ is
-    # checkpointed — resume has to survive a sandbox recycle (matrix scenario 5) — and is excluded
-    # from produced files.
-    env["KIMI_SHARE_DIR"] = str(share)
-    env["OPENAI_API_KEY"] = auth.api_key or ""
-    env["OPENAI_BASE_URL"] = auth.base_url
-    # kimi prints its error lines through `rich.print` (ui/print/__init__.py:27), which hard-wraps at
-    # the terminal width — 80 in a non-tty — and a wrapped `Error code: 400 - {…}` reaches errbuf as
-    # three unrelated-looking fragments. Measured: the same probe at COLUMNS=400 came back as one
-    # unbroken line, which is what _failure_reason needs to match a provider refusal in it.
-    env["COLUMNS"] = "400"
-    cfg = _kimi_config(ws, model)
-    cmd = ["kimi", "--config-file", str(cfg), "-w", cwd,
-           "--print", "--output-format", "stream-json",
-           # -m names the alias written into the config above, never a model id: kimi resolves it
-           # against config.models and raises KeyError on a miss rather than substituting, which is
-           # why checklist 2 is clean on this backend (no gemini-style resolveModel rewrite).
-           "-m", "hr",
-           # --print already implies auto-approval (cli/__init__.py:626 runtime_afk = ui == "print");
-           # --yolo is passed anyway for one deterministic path, qwen's rationale unchanged.
-           "--yolo"]
+    home = _kimi_home(ws)
+    home.mkdir(parents=True, exist_ok=True)
+    env["KIMI_CODE_HOME"] = str(home)
+    env["KIMI_DISABLE_TELEMETRY"] = "1"
+    # An agent that replaces its own binary mid-turn is not a pinned backend: the update preflight
+    # (check, background install, prompt) is switched off; the image decides the version.
+    env["KIMI_CODE_NO_AUTO_UPDATE"] = "1"
+    env["KIMI_MODEL_NAME"] = model
+    env["KIMI_MODEL_PROVIDER_TYPE"] = "openai"
+    env["KIMI_MODEL_BASE_URL"] = auth.base_url
+    env["KIMI_MODEL_API_KEY"] = auth.api_key or ""
+    env["KIMI_MODEL_MAX_CONTEXT_SIZE"] = str(KIMI_CONTEXT_WINDOW)
+    env["NO_COLOR"] = "1"
+    # The CLI retries a failing step up to ten times, a provider's flat 400 included: measured, a
+    # request a model refuses outright took 143 to 178 s to fail. Three total attempts still rides
+    # out a transient error and lets a real refusal reach the person in seconds.
+    env["KIMI_LOOP_MAX_ATTEMPTS_PER_STEP"] = "3"
     if max_turns:
-        # THE BUDGET, and without it a turn is bounded only by kimi's own default of 1000 steps
-        # (config.py max_steps_per_turn, raised 500 -> 1000 upstream). On a fast model that is
-        # invisible; on a slow reasoning one it is hours. Measured in the vercel column before this
-        # was wired: gpt-5.6-luna's switch ran 8,754s, gpt-5.5's artifact 7,418s and its switch
-        # 2,200s, while the same scenarios on other ids took 7-30s. The operator's step budget
-        # reaches every other backend (claude and goose take it as --max-turns); it was dropped here.
-        #
-        # Reaching the cap is VISIBLE on this CLI rather than silent: it raises MaxStepsReached,
-        # which arrives as its own stdout line and a non-zero exit, so a truncated turn reads as
-        # truncated. goose, by contrast, reports nothing at its cap.
-        cmd += ["--max-steps-per-turn", str(int(max_turns))]
-    # ALWAYS named, on every turn, first or not: kimi mints a session with whatever id it is given
-    # (cli/__init__.py:558-565 — find -> None -> create), so naming it on the first turn is what
-    # makes the SECOND turn able to continue it. Passing it only on a resume is what broke the
-    # recycle scenario on every row — the first turn wrote its history under a random id nobody
-    # could name again. _resume_lost reports a genuinely lost conversation by asking the store.
-    cmd += ["--session", resume_session_id or _KIMI_SESSION_NAME]
+        # THE BUDGET. Unset means unlimited on this CLI, and on a slow reasoning model that was
+        # hours on its predecessor. Reaching it is loud: exit 1 with loop.max_steps_exceeded.
+        env["KIMI_LOOP_MAX_STEPS_PER_TURN"] = str(int(max_turns))
+    _kimi_mcp_config(home, mcp_servers)
+    # -p runs one prompt without the TUI, with automatic permission (it refuses --yolo/--auto
+    # beside it); stream-json is one message per line. The process's cwd is the workspace.
+    cmd = ["kimi", "-p", prompt, "--output-format", "stream-json"]
+    if resume_session_id and _kimi_has_session(home, resume_session_id):
+        cmd += ["-r", resume_session_id]
+    else:
+        # The agent is bound when a session is created and restored on resume, and the CLI refuses
+        # --agent-file beside -r: the tool policy is set on the first turn of a conversation.
+        agent_file = _kimi_agent_file(ws, tools_disabled)
+        if agent_file is not None:
+            cmd += ["--agent-file", str(agent_file)]
     if skills_dir:
         cmd += ["--skills-dir", skills_dir]
-    agent_file = _kimi_agent_file(ws, tools_disabled)
-    if agent_file is not None:
-        cmd += ["--agent-file", str(agent_file)]
-    mcp_cfg = _kimi_mcp_config(ws, mcp_servers)
-    if mcp_cfg is not None:
-        cmd += ["--mcp-config-file", str(mcp_cfg)]
-    cmd += ["-p", prompt]
     return cmd
 
 
@@ -4055,6 +4091,8 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     return [AIDER_PYTHON, AIDER_DRIVER, json.dumps(job)]
 
 
+
+
 # Path A only (Gemini API Key / Google AI Studio). Unlike qwen, upstream gemini-cli speaks NO
 # OpenAI-compatible mode at all (that is a qwen-fork-only addition — see QWEN_PROVIDERS above),
 # so there is no loopback-relay trick that lets any generic OpenAI/Anthropic-shaped integration
@@ -4087,7 +4125,7 @@ GEMINI_HELPER_ALIASES = {
 # them; a served model that still differs fails the turn (see _gemini_to_claude).
 GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                  "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
-                 "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite")
+                 "gemini-3-flash-preview")
 
 
 def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "") -> None:
@@ -4537,6 +4575,10 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
                 "models": {model: {}},
             }
         },
+        # opencode's filesystem snapshots back the TUI's undo/revert; a fresh `run` per turn has
+        # no one to undo for, and HarnessRouter's checkpoint is the rollback here. Left on, it is
+        # a git repo of the workspace under $HOME — 699 MB of the 1.4 GB tarball in #193.
+        "snapshot": False,
     }
     mcp = _opencode_mcp(mcp_servers)
     if mcp:
@@ -5256,18 +5298,6 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
-# The conversation id the runner MINTS for kimi. kimi emits no session id of its own — nothing in
-# its stream carries one — so without minting one here every follow-up would silently start a new
-# conversation, which is exactly what the first version of this backend did: the support matrix's
-# recycle scenario failed on every kimi row while first/follow-up/switch passed, because those three
-# never ask the agent to remember anything.
-#
-# A constant name rather than a uuid, for goose's reason: it has to be reproducible from the
-# workspace alone after a sandbox recycle, and kimi accepts any id — `Session.find` misses and
-# `Session.create(work_dir, session_id)` makes it (cli/__init__.py:558-565).
-_KIMI_SESSION_NAME = "harness"
-
-
 # aider has NO conversation id of ANY kind — its continuation is the chat-history FILE — so the
 # runner announces a synthetic one. Without it the gateway never records a conversation id, never
 # treats a later turn as a follow-up, and every turn is a fresh thread: measured as the support
@@ -5370,41 +5400,28 @@ _aider_to_claude.eof = _aider_eof   # type: ignore[attr-defined]
 
 
 def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
-    """Map ONE `kimi --print --output-format stream-json` line to zero+ canonical claude events.
+    """Map ONE `kimi -p … --output-format stream-json` line to zero+ canonical claude events.
 
-    Shapes verified against the pinned 1.50.0 by reading its ONLY emitter,
-    kimi_cli/ui/print/visualize.py::JsonPrinter.feed, which matches StatusUpdate / StepBegin /
-    StepRetry / TurnBegin / TurnEnd and then falls through to `case _:  # ignore other messages`.
-    The flag name is claude's; the schema is not — it is one kosong `Message` per line:
+    Shapes captured live from Kimi Code CLI 2.0.0, one JSON object per line:
 
+        version           {"role":"meta","type":"system.version","version":"2.0.0"}
         assistant text    {"role":"assistant","content":"…"}
-        assistant call    {"role":"assistant","content":[…parts…],
-                           "tool_calls":[{"id",…,"function":{"name","arguments"}}]}
+        assistant call    {"role":"assistant","tool_calls":[{"id",…,"function":{"name","arguments"}}]}
         tool result       {"role":"tool","content":"…","tool_call_id":"…"}
-        notification      the Notification model — background-task notices
-        plan display      {"content":…,"file_path":…} — plan mode only
+        resume hint       {"role":"meta","type":"session.resume_hint","session_id":"session_<uuid>",…}
 
-    `content` is a PLAIN STRING on a text-only message and a LIST OF PARTS when the message carries
-    tool calls; both were captured live and both are handled.
-
-    THREE ABSENCES drive every design choice here, each verified in the emitter AND in a live
-    capture rather than inferred:
-      - no usage of any kind        -> the result event's usage is {} (see _kimi_eof)
-      - no session id               -> the runner MINTS one and announces it (_KIMI_SESSION_NAME)
-      - no terminal / result event  -> this normaliser carries an `eof`, the opencode precedent
-    """
+    The resume hint is the LAST line of a turn and the only place the session id appears, so the
+    conversation id is announced from it; the run loop records an init event whenever it arrives.
+    The stream carries no usage and no result event: usage is the relay's to stamp, and the process
+    exiting is the end of the turn (see _kimi_eof)."""
     role = obj.get("role")
-    pre: list[dict] = []
-    if not state.get("_kimi_init"):
-        # The turn's FIRST event carries the conversation id. _run_turn_bg records it only from a
-        # system/init event, and that recorded id is what the next turn resumes with — without it
-        # every follow-up starts a new conversation in the same workspace, and only a scenario that
-        # asks the agent to remember something notices.
-        state["_kimi_init"] = True
-        pre = [{"type": "system", "subtype": "init", "session_id": _KIMI_SESSION_NAME,
-                "model": state.get("model")}]
+    if role == "meta":
+        if obj.get("type") == "session.resume_hint" and obj.get("session_id"):
+            return [{"type": "system", "subtype": "init", "session_id": str(obj["session_id"]),
+                     "model": state.get("model")}]
+        return []
     if role == "assistant":
-        out: list[dict] = list(pre)
+        out: list[dict] = []
         content = obj.get("content")
         if isinstance(content, str):
             txt = content
@@ -5414,9 +5431,8 @@ def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
         else:
             txt = ""
         if txt.strip():
-            # The LAST assistant text is the turn's answer: kimi emits no terminal event, so there
-            # is nothing else to take it from, and a tool-carrying message has content [] (captured)
-            # and therefore never overwrites a real answer here.
+            # The LAST assistant text is the turn's answer: there is no result event to take it
+            # from, and a tool-carrying message has no content, so it never overwrites an answer.
             state["final"] = txt
             out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}})
         for call in obj.get("tool_calls") or []:
@@ -5426,9 +5442,8 @@ def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
             tuid = str(call.get("id") or "tool")
             args = fn.get("arguments")
             if isinstance(args, str):
-                # kimi sends arguments as a JSON STRING (OpenAI's shape), not an object. A model can
-                # emit one that does not parse; keep the raw text rather than dropping the call, so
-                # the trace still shows what was attempted.
+                # arguments arrive as a JSON STRING (OpenAI's shape). A model can emit one that
+                # does not parse; keep the raw text rather than dropping the call.
                 try:
                     args = json.loads(args)
                 except Exception:  # noqa: BLE001
@@ -5440,49 +5455,68 @@ def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
         return out
     if role == "tool":
         body = obj.get("content")
-        _ = pre
         text = body if isinstance(body, str) else json.dumps(body, default=str)
-        # is_error is NOT knowable from this line. kimi wraps both outcomes in <system>…</system>
-        # ("File successfully overwritten", and errors alike); the boolean lives on
-        # ToolResult.return_value.is_error in wire.jsonl, which this stream does not carry. Marking
-        # every result a success would be a lie only when it failed, and inventing a heuristic over
-        # the <system> prose is the guesswork this repo refuses — so the flag stays False and the
-        # text itself carries the outcome to the reader.
-        return pre + [{"type": "user", "message": {"content": [
+        # is_error is not on this line: the text itself carries the outcome to the reader.
+        return [{"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": str(obj.get("tool_call_id") or "tool"),
              "is_error": False, "content": text}]}}]
-    return pre
+    return []
 
 
 def _kimi_eof(state: dict, rc: int) -> list[dict]:
-    """Synthesize the turn's result at end of stream: kimi emits no terminal event, so the process
-    exiting IS the end of the turn.
-
-    THE EXIT CODE IS THE STATUS, and on this CLI that is stronger than any prose test. 1.50.0
-    classifies provider failures itself (`Print._classify_provider_error`,
-    kimi_cli/ui/print/__init__.py): 75 (EX_TEMPFAIL) for APIConnectionError / APITimeoutError /
-    APIEmptyResponseError and for status 429/500/502/503/504; 1 for every other APIStatusError and
-    for the catch-all. So unlike claude (`API Error: …`) and goose (`Ran into this error: …`) there
-    is no failure NARRATED AS ASSISTANT TEXT to recognise, and this backend needs no error regex —
-    registration point 6 is satisfied by the exit code instead. Pinned by
-    test_kimi_backend.py::test_failure_exit_codes_are_the_signal.
-
-    The failure SENTENCE is a bare non-JSON line on stdout (`Error code: 401 - {…}`,
-    `Connection error.`, `Unknown error: Failed to connect MCP servers: {…}`), which _run_turn_bg
-    has already collected into errbuf. Returning an EMPTY result here is deliberate and load-bearing:
-    _run_turn_bg fills an empty result event from that tail, and _failure_reason then prefers the
-    provider refusal it matches inside it. Putting a placeholder sentence here instead would shadow
-    the real reason, and putting the partial assistant text here would report a 401 as if the model
-    had answered. rec["result"] keeps that partial text either way, from state["final"].
-
-    usage is {} deliberately, not as an oversight: kimi's stream carries no token counts at all, and
-    per the 2026-09-13 decision no harness PR builds its own usage pipeline — `_relay_usage` stamps
-    these rows when it lands. goose's eof already emits {} for the same reason."""
+    """Synthesize the turn's result at end of stream: there is no terminal event, so the process
+    exiting IS the end of the turn, and THE EXIT CODE IS THE STATUS. Measured on 2.0.0: a provider
+    refusal, an unknown session, a spent step budget and an MCP failure all exit 1 with one line on
+    stderr, `error: failed to run prompt: <class>: <reason>` (provider.auth_error: 401 …,
+    loop.max_steps_exceeded: …), which the run loop has already collected. Returning an EMPTY
+    result on failure is deliberate: the run loop fills it from that line and _failure_reason
+    prefers a provider refusal it matches inside it; a placeholder here would shadow the real
+    reason. usage is {} because the stream carries none; the relay stamps it."""
     final = state.get("final", "")
+    pre: list[dict] = []
+    down = _kimi_mcp_unavailable(state)
+    if down:
+        pre = [{"type": "system", "subtype": "mcp_unavailable", "servers": down}]
     if rc == 0:
-        return [{"type": "result", "subtype": "success", "is_error": False,
-                 "result": final, "usage": {}}]
-    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+        return pre + [{"type": "result", "subtype": "success", "is_error": False,
+                       "result": final, "usage": {}}]
+    return pre + [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+
+
+_KIMI_MCP_DOWN = re.compile(
+    r'^(\S+) ERROR mcp server unavailable\s+server=(\S+)\s+transport=\S+\s+status=\S+(?:\s+reason="([^"]*)")?')
+
+
+def _kimi_mcp_unavailable(state: dict) -> list[dict]:
+    """The MCP servers this turn could not reach, read from the CLI's own log.
+
+    Kimi Code CLI runs the turn WITHOUT an unreachable server and says nothing about it: no stream
+    line, nothing on stderr, exit 0 (measured on 2.0.0 against a dead endpoint; its predecessor
+    failed the turn instead). The only trace is one line in $KIMI_CODE_HOME/logs/kimi-code.log,
+    `<iso time> ERROR mcp server unavailable  server=<name> transport=<t> status=failed reason="…"`.
+    A person whose tool silently was not there has no way to know why the agent never used it, so
+    the lines written since this turn began become a system event the gateway renders as a note."""
+    cwd = state.get("cwd")
+    if not cwd:
+        return []
+    log = _kimi_home(pathlib.Path(cwd)) / "logs" / "kimi-code.log"
+    try:
+        lines = log.read_text(errors="replace").splitlines()[-400:]
+    except OSError:
+        return []
+    since = float(state.get("started") or 0) - 2.0
+    out: dict[str, dict] = {}
+    for ln in lines:
+        m = _KIMI_MCP_DOWN.match(ln)
+        if not m:
+            continue
+        try:
+            ts = datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if ts >= since:
+            out[m.group(2)] = {"name": m.group(2), "reason": (m.group(3) or "")[:200]}
+    return list(out.values())
 
 
 _kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
@@ -5524,13 +5558,11 @@ BACKENDS = {
     # carries its own normaliser rather than sharing one — see _goose_to_claude's docstring.
     "goose": {"providers": sorted(GOOSE_PROVIDERS), "default_model": GOOSE_DEFAULT_MODEL,
               "normalize": _goose_to_claude},
-    # kimi's stream-json shares claude's FLAG NAME and nothing else: one kosong Message per line,
-    # no usage, no session id and no terminal event — so it carries its own normaliser and an eof,
-    # rather than the passthrough qwen's genuinely-claude-shaped stream can use.
+    # Kimi Code CLI's stream-json shares claude's FLAG NAME and nothing else: one message per line,
+    # no usage and no result event, the session id on the last line, so it carries its own
+    # normaliser and an eof rather than the passthrough qwen's claude-shaped stream can use.
     "kimi": {"providers": sorted(KIMI_PROVIDERS), "default_model": KIMI_DEFAULT_MODEL,
              "normalize": _kimi_to_claude},
-    # aider is driven in process by runner/aider_driver.py, which emits the NDJSON this normalises;
-    # the CLI itself has no machine-readable output at all. See _aider_to_claude's docstring.
     "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
               "normalize": _aider_to_claude},
 }
@@ -5607,7 +5639,7 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False) -> None:
     rec = _turns[turn_id]
-    state = {"model": model, "final": "", "partial": partial}
+    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time()}
     result_ev = None
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
@@ -5713,6 +5745,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
 _NO_DIAGNOSTIC_RE = re.compile(r"\w[\w-]* exited -?\d+ without reporting an error")
 
 
+_CLI_RESUME_HINT = re.compile(r"^(To resume this session:|See log: )")
+
+
 def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
     """The one line that explains a failed turn, in order of how much it says: the provider's
     refusal, the result event's own message, the CLI's last lines, the exit code. A normaliser's
@@ -5720,6 +5755,12 @@ def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
     lines win over it: goose's tokio panic ("Permission denied (os error 13) at path /tmp/...")
     sat in the stderr behind that sentence and the record never showed it (2026-09-13)."""
     ev_err = ev_err.strip()
+    # A CLI's notes to a person at its own terminal are not part of the reason: a "To resume this
+    # session: <cli> -r <id>" hint (Kimi CLI printed one after every failure) and Kimi Code CLI's
+    # "See log: <a path inside the sandbox>". The person reading the record has neither that CLI
+    # nor that path, and both name internals the product does not show. The sentence before them
+    # is the reason and stays.
+    tail = "\n".join(ln for ln in tail.splitlines() if not _CLI_RESUME_HINT.match(ln.strip())).strip()
     if tail and _NO_DIAGNOSTIC_RE.fullmatch(ev_err):
         ev_err = ""
     return (refusal or ev_err or tail or f"exit_code={rc}, no diagnostic output")[:2000]
@@ -6244,6 +6285,32 @@ def _ws_marker_get(identifier: str) -> str:
         return ""
 
 
+def _ws_marker_clear(identifier: str) -> None:
+    try:
+        _ws_marker_path(identifier).unlink()
+    except OSError:
+        pass
+
+
+def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
+    """Whether this session's workspace still holds checkpoint `sha`: the marker says so AND the
+    folder is there to back it. The marker lives outside the workspace on purpose (it has to
+    survive the wipe), which also lets it outlive the workspace: the folder deleted from the
+    volume by hand while the runner container was merely stopped and started, or removed by
+    DELETE /workspace before it learned to drop the marker. Either way the next probe answered
+    "held", the gateway skipped the restore, and the turn ran on an empty folder — the CLI found
+    no session to resume and the conversation started over (richard-epsilla, #194). A workspace
+    restored from a checkpoint always carries its .git (the tarball does, and _git_ensure runs
+    after every restore), so a folder without one holds nothing, whatever the marker says; the
+    marker that vouched for it is dropped so the full hydrate that follows starts clean."""
+    if _ws_marker_get(identifier) != sha:
+        return False
+    if (ws_path / ".git").is_dir():
+        return True
+    _ws_marker_clear(identifier)
+    return False
+
+
 @app.post("/hydrate")
 async def hydrate(request: Request, identifier: str = "") -> dict:
     """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
@@ -6281,7 +6348,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # answers yes — making follow-up turns start instantly instead of paying wipe + untar.
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
-            if _ws_marker_get(identifier) == probe:
+            if _ws_holds(identifier, ws_path, probe):
                 collab_url = request.query_params.get("collab_url", "")
                 room = request.query_params.get("room", "")
                 if collab_url and room:
@@ -6813,6 +6880,11 @@ async def delete_workspace(identifier: str = "") -> dict:
     ws = _ws(ident)
     if os.path.realpath(ws) in (os.path.realpath(WORKSPACE_ROOT), "/"):
         raise HTTPException(status_code=400, detail="refusing to remove the workspace root")
+    # Whether or not the folder is still there: after this call the session holds nothing on
+    # this box, and the marker is part of that. Cleared before the "no folder" answer below,
+    # since a folder already gone behind its marker is exactly the case in which a marker left
+    # behind would answer the next probe "held" (as the reaper does when it removes a folder).
+    _ws_marker_clear(ident)
     if not os.path.isdir(ws):
         return {"identifier": ident, "removed": False, "reason": "no folder"}
     uid = _session_uid(ws)

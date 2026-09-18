@@ -187,7 +187,7 @@ Run product tasks with built-in or custom harnesses as pluggable agent backends.
 
 Once your harness runs successfully in the Console:
 
-1. Open `/keys` on the same CE instance ([default local address](http://localhost:3000/keys)) and choose **Create API key**. Open this URL directly if API keys is not visible in the sidebar.
+1. Open **API Keys** in the Console sidebar of the same CE instance ([default local address](http://localhost:3000/keys)) and choose **Create API key**.
 2. Store the secret shown once as `HARNESSROUTER_API_KEY` in your product backend. Never expose it in browser code. This CE-issued key is separate from your Console password and provider key.
 3. Call the API with the Harness ID shown in the Console and a model served by your connected provider.
 
