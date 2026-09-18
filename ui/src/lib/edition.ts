@@ -27,8 +27,12 @@ export const LOCAL_MEMBER = 'local@localhost';
  *
  *  Integrations is here because bring-your-own-key IS the self-hosted product: without it the
  *  box has no credentials and every turn fails. Hosted it stays a platform-admin surface, since
- *  there the routing config is global. */
-export const SELF_HOSTED_NAV = ['/kits', '/harnesses', '/tasks', '/integrations'];
+ *  there the routing config is global.
+ *
+ *  API Keys is here because the box mints and serves them itself: /keys worked in every CE
+ *  release and only the entry was missing, so the README sent people to the URL by hand. The
+ *  key is how a product calls its own instance, which is the point of self-hosting. */
+export const SELF_HOSTED_NAV = ['/kits', '/harnesses', '/tasks', '/keys', '/integrations'];
 
 /** Orgs allowed to see platform-admin surfaces (global model routing).
  *
