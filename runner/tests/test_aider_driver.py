@@ -95,6 +95,22 @@ def test_a_failure_on_the_error_channel_is_not_rendered_as_the_answer():
     assert "AuthenticationError" in res["result"]
 
 
+def test_aiders_advice_about_its_own_chat_commands_is_cut_from_the_reason():
+    """show_exhausted_error ends with `- Use /tokens …`, `- Use /drop …`, `- Use /clear …`: in-chat
+    commands this product never shows. Same rule kimi's resume hint earned."""
+    state: dict = {"_aider_init": True}
+    text = ("Model openai/gpt-5.4 has hit a token limit!\n\nInput tokens: ~300,000 of 272,000 "
+            "-- possibly exhausted context window!\n\nTo reduce input tokens:\n"
+            "- Use /tokens to see token usage.\n- Use /drop to remove unneeded files from the chat "
+            "session.\n- Use /clear to clear the chat history.\n- Break your code into smaller source files.\n")
+    _aider_to_claude({"m": "error", "p": {"text": text}}, state)
+    reason = state["_aider_error"]
+    assert "Use /" not in reason
+    assert "hit a token limit" in reason and "Break your code into smaller source files." in reason
+    ev = _aider_to_claude({"m": "result", "p": {"ok": False, "final": ""}}, state)[0]
+    assert ev["is_error"] and "Use /" not in ev["result"]
+
+
 def test_prose_that_merely_mentions_an_error_still_succeeds():
     """The case an anchored stdout regex cannot get right, and the driver gets right for free."""
     out, _ = _norm([

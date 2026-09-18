@@ -5458,6 +5458,9 @@ _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 # matrix's recycle scenario failing on every aider row while first/follow-up/switch passed, because
 # those three never ask the agent to remember anything.
 _AIDER_SESSION_NAME = "harness"
+# aider's in-chat command advice in a failure message: the line, and the heading it sits under
+# when nothing else is left of that list.
+_AIDER_CHAT_ADVICE = re.compile(r"^[ \t]*-?[ \t]*Use /\w+[^\n]*\n?", re.M)
 
 
 # ── aider ────────────────────────────────────────────────────────────────────────
@@ -5495,8 +5498,12 @@ def _aider_event(obj: dict, state: dict, m, p) -> list[dict]:
         return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
     if m == "error":
         # Reached io.tool_error, which the model's prose cannot reach. Recorded, NOT rendered: it is
-        # the turn's failure reason, not part of its answer.
-        state["_aider_error"] = str(p.get("text") or "")
+        # the turn's failure reason, not part of its answer. aider's advice about its own in-chat
+        # commands (`- Use /drop …`, `- Use /clear …`, base_coder.py show_exhausted_error) is cut,
+        # the same rule kimi's "To resume this session:" line earned: this product has no such
+        # commands, and a reason that names them sends the user looking for a prompt that is not
+        # there.
+        state["_aider_error"] = _AIDER_CHAT_ADVICE.sub("", str(p.get("text") or "")).strip()
         return []
     if m == "warning":
         state.setdefault("_aider_warnings", []).append(str(p.get("text") or ""))
