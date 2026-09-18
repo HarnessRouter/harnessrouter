@@ -237,7 +237,7 @@ instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
 **Nothing runs until you do this.** There is no bundled model, no trial key, and no free tier
 hiding in the image.
 
-Open **Integrations** and press **Add Integration**. It asks three things: a name, the provider,
+Open **Bring Your Own Key** in the sidebar (the Integrations page) and press **Add Integration**. It asks three things: a name, the provider,
 and that provider's API key. This key authorizes model requests; it is not a HarnessRouter API key.
 
 ![Adding a provider on the Integrations page](images/05-add-integration.png)
