@@ -158,6 +158,17 @@ def tool_outcomes(trace_ndjson: str) -> dict:
     return {"trace_tool_calls": calls, "tool_results": results, "tool_failed": failed}
 
 
+PROVIDER_ERROR = re.compile(r"\b(?:40[1239]|429|5\d\d)\b|insufficient balance|rate ?limit|quota|overloaded|api key|unauthori[sz]ed|billing",
+                            re.I)
+
+
+def provider_failure(turn_error) -> str:
+    """The provider's refusal in a failed turn's error, or '' when the error is something else."""
+    msg = turn_error.get("message") if isinstance(turn_error, dict) else turn_error
+    msg = str(msg or "")
+    return msg[:160] if msg and PROVIDER_ERROR.search(msg) else ""
+
+
 def prompt_matches(stored: str, prompt: str) -> bool:
     """Whether a session's stored prompt is this prompt. The session list keeps the prompt's head
     (1500 characters, measured), sometimes behind an attachment line, so the stored head — whole,
@@ -252,6 +263,17 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
                assistant=(turn.get("assistant") or "")[:200])
     if rec.get("turn_error") is None and turn.get("error"):
         rec["turn_error"] = turn.get("error")
+    # A turn the provider refused before the agent did anything measures the account, not the
+    # harness: 150 records of "402 Insufficient Balance" arrived in eleven minutes once a key ran
+    # dry (2026-09-18). That is this runner's problem to re-run, never the harness's failure.
+    if not tools and rec.get("status") not in ("completed", "done") and provider_failure(rec.get("turn_error")):
+        rec["error"] = "provider failure, not a result: " + provider_failure(rec.get("turn_error"))
+        if os.environ.get("KEEP") != "1":
+            try:
+                api("DELETE", f"/v1/sessions/{sid}")
+            except Exception:  # noqa: BLE001
+                pass
+        return rec
     # tool outcomes come from the stored trace: each tool_use has its tool_result, and a result the
     # CLI flagged or a shell that exited non-zero is a failed call (the record's own count of calls
     # stays the turn record's)
@@ -317,8 +339,12 @@ def main() -> None:
     def key(rec):
         return f"{rec['provider']}|{rec['harness']}|{rec['model']}|{rec['pack']}|{rec['task']}"
 
+    halt = threading.Event()
+    streak = [0]
     for label, hid in harnesses:
         for model in models:
+            if halt.is_set():
+                break
             todo = []
             res = load()
             for t in tasks:
@@ -329,6 +355,8 @@ def main() -> None:
             log(f"HARNESS {label} ({hid}) x {model}: {len(todo)} of {len(tasks)} tasks to run")
 
             def one(t):
+                if halt.is_set():
+                    return
                 try:
                     rec = run_task(pack, root, t, label, hid, model, provider, workdir)
                 except Exception as e:  # noqa: BLE001 — this runner's own failure, re-run next launch
@@ -336,6 +364,13 @@ def main() -> None:
                            "pack": pack.NAME, "task": t["id"], "error": repr(e)[:300]}
                 if expect and rec.get("connection") and rec["connection"] != expect:
                     rec["foreign"] = rec["connection"]
+                # three provider refusals in a row: the account, the key or the provider is down,
+                # and every further task would only record the same line
+                with _lock:
+                    streak[0] = streak[0] + 1 if str(rec.get("error", "")).startswith("provider failure") else 0
+                    if streak[0] >= 3 and not halt.is_set():
+                        halt.set()
+                        log(f"HALT after three provider failures in a row: {rec['error'][:160]}")
                 save(rec)
                 verdict = ("ERROR " + rec["error"][:80]) if rec.get("error") else \
                     ("FINDING network" if rec.get("network") else "FINDING lookup" if rec.get("lookup") else
@@ -346,6 +381,9 @@ def main() -> None:
 
             with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
                 list(ex.map(one, todo))
+    if halt.is_set():
+        log("HALTED: fix the provider and relaunch; records carrying error are re-run")
+        sys.exit(2)
     log("DONE")
 
 

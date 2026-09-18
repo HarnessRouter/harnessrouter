@@ -59,6 +59,10 @@ Every task has a time cap, `TASK_CAP_S` (900 s by default): a turn still running
 cancelled through the API and graded as it stands, a failure, not a finding — the cap is part of
 the task. The row says how many runs hit it.
 
+A turn the provider refused before the agent did anything (a 401/402/429/5xx, a dry balance, a
+rate limit) measures the account, not the harness: it is recorded as this runner's error, re-run
+on the next launch, and three in a row halt the run rather than fill the table with the same line.
+
 ## Running it
 
 ```

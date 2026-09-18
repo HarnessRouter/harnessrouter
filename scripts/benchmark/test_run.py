@@ -10,7 +10,21 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render import render  # noqa: E402
-from run import lookup_use, network_use, prompt_matches, tool_outcomes, usage_of  # noqa: E402
+from run import lookup_use, network_use, prompt_matches, provider_failure, tool_outcomes, usage_of  # noqa: E402
+
+
+def test_a_providers_refusal_is_the_runners_problem_not_the_harnesss():
+    """Measured 2026-09-18: a key ran dry and 150 turns recorded '402 Insufficient Balance' in
+    eleven minutes, each one a failed task in the table until this told them apart."""
+    assert provider_failure({"type": "harness_error", "code": "turn_failed",
+                             "message": 'The turn failed: 402: {"message":"Insufficient Balance"}'})
+    assert provider_failure({"message": "The turn failed: Insufficient Balance"})
+    assert provider_failure("429 rate limit exceeded") and provider_failure("503 Service Unavailable")
+    assert provider_failure({"message": "Invalid API key"})
+    # the agent's own failure to finish is the harness's, and stays a scored fail
+    assert provider_failure({"message": "cline ended: max_iterations"}) == ""
+    assert provider_failure({"message": "The turn failed: exit_code=1, no diagnostic output"}) == ""
+    assert provider_failure(None) == ""
 
 
 def test_a_truncated_stored_prompt_still_identifies_its_session():
