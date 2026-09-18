@@ -406,7 +406,9 @@ def main() -> int:
     # stdout cannot give. num_error_outputs counts what reached io.tool_error this turn.
     failed = coder.usage_report is None or int(getattr(coder.io, "num_error_outputs", 0) or 0) > 0
     _emit("result", {
-        "final": coder.partial_response_content or "",
+        # The result's text is what the gateway stores as the answer, so it is stripped of the
+        # edit markup exactly as the text events were; the edits were reported as cards.
+        "final": strip_edit_blocks(coder.partial_response_content or ""),
         "ok": not failed,
         "edited": sorted(coder.aider_edited_files or []),
         "shell_calls": gate.calls,

@@ -245,6 +245,11 @@ def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards(
     assert [c["name"] for c in calls] == ["Edit", "Edit"]
     assert [c["input"]["file_path"] for c in calls] == ["hello.py", "b.txt"]
     assert [r["tool_use_id"] for r in results] == [c["id"] for c in calls]
+    # the result event's text is what the gateway stores as the answer: stripped there too, or
+    # the markup comes back through the other door (measured: the text event was clean and the
+    # stored answer still carried the block)
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert '"final": strip_edit_blocks(coder.partial_response_content or "")' in src
 
 
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():
