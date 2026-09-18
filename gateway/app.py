@@ -13354,14 +13354,16 @@ _BASE_CATALOG: dict[str, dict] = {
                           "task end to end."),
         # aider has no tool loop: the request body's keys are exactly
         # ['messages','model','temperature'] — no `tools`, no `functions`. Its tool SURFACE is the
-        # shell command the model proposes in a fenced block, which the driver's gate decides, plus
-        # the URL scrape it asks permission for. Those two are withholdable and are listed. "Edit"
-        # is aider's edit engine: it is what aider IS, it cannot be withheld, and it is therefore
-        # NOT listed — offering a switch that does nothing is the overstatement UHP §4.3 forbids.
-        # MCP tools reach the model through the `hr-mcp` bridge (runner/aider_mcp_bridge.py) and
-        # are gated by tool NAME in the same place; they are per-harness rather than catalog
-        # entries, so they are not listed here.
-        "tools": [("Shell", "Shell"), ("WebFetch", "Web Fetch")],
+        # shell command the model proposes in a fenced block, which the driver's gate decides; that
+        # one is withholdable and is listed. "Edit" is aider's edit engine: it is what aider IS, it
+        # cannot be withheld, and it is therefore NOT listed — offering a switch that does nothing
+        # is the overstatement UHP §4.3 forbids. aider's URL scrape is off in this harness
+        # (--no-detect-urls, set by the runner), so a "Web Fetch" switch would be that same
+        # overstatement; the web is reached through a shell command like everything else, and the
+        # Shell switch withholds it. MCP tools reach the model through the `hr-mcp` bridge
+        # (runner/aider_mcp_bridge.py) and are gated by tool NAME in the same place; they are
+        # per-harness rather than catalog entries, so they are not listed here.
+        "tools": [("Shell", "Shell")],
         # "hard", and measured rather than asserted: with Shell disabled the model's proposed
         # command is refused at the gate and the file it would have written does not appear; with an
         # MCP tool name disabled the `hr-mcp` call is refused by that tool's own name. Pinned by

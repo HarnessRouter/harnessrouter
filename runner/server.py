@@ -4227,8 +4227,7 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            "read_files": list(skills_read or []),
            # aider takes the budget as Coder.max_reflections, set in the driver: it has no CLI flag
            # for it, and only an in-process driver holds the object.
-           "max_turns": max_turns,
-           "detect_urls": False}
+           "max_turns": max_turns}
     return [AIDER_PYTHON, AIDER_DRIVER, json.dumps(job)]
 
 

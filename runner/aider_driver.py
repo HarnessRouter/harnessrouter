@@ -109,7 +109,7 @@ class _Gate:
         return True, "Shell", ""
 
 
-def _install(coder, gate: _Gate, web_disabled: bool) -> None:
+def _install(coder, gate: _Gate) -> None:
     """Replace the Coder's IO with one that reports on separate channels and gates confirmations."""
     io = coder.io
     orig_confirm = io.confirm_ask
@@ -164,13 +164,6 @@ def _install(coder, gate: _Gate, web_disabled: bool) -> None:
             _emit("shell_decision", {"command": command, "tool": name,
                                      "approved": approved, "reason": reason})
             return approved
-        # The URL-scrape confirmation (io.py's _check_for_urls path) is aider's web capability, and
-        # it IS withholdable: refusing here means the page is never fetched into the chat.
-        if web_disabled and subject and str(subject).startswith(("http://", "https://")):
-            _emit("shell_decision", {"command": str(subject), "tool": "WebFetch",
-                                     "approved": False,
-                                     "reason": "the harness disabled the tool 'WebFetch'"})
-            return False
         return orig_confirm(question, default=default, subject=subject,
                             explicit_yes_required=explicit_yes_required, group=group,
                             allow_never=allow_never)
@@ -352,8 +345,10 @@ def main() -> int:
     meta = _write_model_metadata(cwd, job["model"])
     if meta:
         argv += ["--model-metadata-file", meta]
-    if not job.get("detect_urls"):
-        argv += ["--no-detect-urls"]
+    # aider's URL scrape (a URL in the user's message is fetched into the chat after a
+    # confirmation) stays off: the web is reached through a shell command like everything else,
+    # under the one gate, and the catalog lists no separate Web Fetch tool for that reason.
+    argv += ["--no-detect-urls"]
     for path in job.get("read_files") or []:
         argv += ["--read", path]
 
@@ -373,8 +368,7 @@ def main() -> int:
 
     disabled = job.get("tools_disabled") or []
     gate = _Gate(disabled)
-    _install(coder, gate, web_disabled=any(d.lower() in ("webfetch", "web_fetch", "websearch")
-                                           for d in disabled))
+    _install(coder, gate)
     _run_shell_commands_reporting(coder, gate, reflect=bool(job.get("reflect_shell_output", True)))
 
     _emit("init", {"model": coder.main_model.name, "edit_format": coder.edit_format})

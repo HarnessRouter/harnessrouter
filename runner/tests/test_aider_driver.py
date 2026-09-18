@@ -609,7 +609,7 @@ def test_the_models_reasoning_is_not_rendered_as_its_answer():
     saved = {k: sys.modules.get(k) for k in ("aider", "aider.reasoning_tags")}
     sys.modules.update({"aider": pkg, "aider.reasoning_tags": mod})
     try:
-        aider_driver._install(coder, aider_driver._Gate([]), web_disabled=False)
+        aider_driver._install(coder, aider_driver._Gate([]))
         # what aider would hand it for a reasoning model
         coder.io.assistant_output(
             "--------------\n► **THINKING**\n\nwait, no, that is not how it works\n\n"
