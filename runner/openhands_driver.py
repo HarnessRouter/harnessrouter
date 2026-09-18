@@ -83,6 +83,12 @@ def _write_config(home: pathlib.Path, api_key: str) -> pathlib.Path:
         "workspace_path": str(home / "project"),
         "bash_events_dir": str(home / "bash_events"),
         "enable_vscode": False,
+        # Tool preloading is Chromium preloading — the service's own docstring is "Service which
+        # preloads chromium", and its start() constructs a BrowserToolExecutor. This image carries
+        # no Chromium and this backend offers no browser tool, so on every server start it does the
+        # work and then fails (`Error preloading … Exception: Chromium is …` in the server's log).
+        # One server per turn means paying for that failure once per turn.
+        "preload_tools": False,
         "allow_cors_origins": [],
     }
     path = home / "agent-server-config.json"
@@ -105,6 +111,16 @@ def _req(url: str, key: str, method: str = "GET", body: dict | None = None, time
     with urllib.request.urlopen(r, timeout=timeout) as resp:
         raw = resp.read().decode(errors="replace")
     return json.loads(raw) if raw.strip() else None
+
+
+def _log_tail(path: pathlib.Path, limit: int = 1200) -> str:
+    """The last of what the server wrote, for a failure that cannot explain itself otherwise."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return ""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return " | ".join(lines[-12:])[-limit:]
 
 
 def _wait_alive(port: int, proc: subprocess.Popen, deadline: float) -> bool:
@@ -332,11 +348,28 @@ def main() -> int:
     # The SDK prints a multi-line banner to STDOUT on import, which is this driver's NDJSON channel
     # for the server's own process; off by its own switch rather than by filtering lines.
     env["OPENHANDS_SUPPRESS_BANNER"] = "1"
+    # THE TURN DIES WITHOUT THIS, and the reason is a unix socket path limit rather than anything
+    # about agents. The terminal tool runs commands in tmux, and tmux's socket lives under
+    # TMUX_TMPDIR — which the server defaults to a directory INSIDE the working directory
+    # ("TMUX_TMPDIR not set; defaulting to per-server tmux directory", api.py). A workspace here is
+    # /data/workspaces/hsess<32 hex>, so the socket lands at
+    #   /data/workspaces/hsess…/tmp/openhands-agent-server-<pid>/tmux-<uid>/openhands
+    # at 106 characters, against the 108-byte sun_path limit — and tmux answers
+    # `LibTmuxException: new-session: error connecting to … (File name too long)`. The agent then
+    # retries the tool it cannot start, which is what turned a 10 s turn into 235 s and then into
+    # 4,000 s. Measured through the gateway; a driver run from a short cwd never sees it.
+    env["TMUX_TMPDIR"] = f"/tmp/oh{port}"
+    pathlib.Path(env["TMUX_TMPDIR"]).mkdir(parents=True, exist_ok=True)
 
     python = os.environ.get("HR_OPENHANDS_PYTHON", sys.executable)
+    # The server's own output goes to a FILE, not to a pipe and not to nothing. A pipe nobody
+    # drains fills its buffer and blocks the server mid-turn; DEVNULL throws away the one place a
+    # 500 explains itself. Kept under .harness/ so it is neither a produced file nor a thing the
+    # user sees, and its tail rides any failure this driver reports.
+    logf = home / "agent-server.log"
     proc = subprocess.Popen(
         [python, "-m", "openhands.agent_server", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=cwd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        cwd=cwd, env=env, stdout=logf.open("wb"), stderr=subprocess.STDOUT,
         start_new_session=False)
 
     base, ws_base = f"http://127.0.0.1:{port}", f"ws://127.0.0.1:{port}"
@@ -345,8 +378,7 @@ def main() -> int:
         global _STEP
         _STEP = "waiting for the agent-server to answer /alive"
         if not _wait_alive(port, proc, time.time() + 120):
-            err = (proc.stderr.read().decode(errors="replace")[-2000:] if proc.stderr else "")
-            _emit("error", {"text": f"agent-server did not start: {err.strip() or 'no output'}"})
+            _emit("error", {"text": f"agent-server did not start: {_log_tail(logf) or 'no output'}"})
             _emit("result", {"final": "", "ok": False, "seconds": round(time.time() - _T0, 2)})
             return 1
         _STEP = "opening the conversation"
@@ -356,7 +388,9 @@ def main() -> int:
         _run_turn(base, ws_base, key, cid, job["prompt"], state,
                   float(os.environ.get("HR_OPENHANDS_TURN_SECONDS", "1800")))
     except Exception as exc:  # noqa: BLE001 — the reason belongs in the record, not in a traceback
-        _emit("error", {"text": f"{type(exc).__name__}: {exc} (while {_STEP})"})
+        tail = _log_tail(logf)
+        _emit("error", {"text": f"{type(exc).__name__}: {exc} (while {_STEP})"
+                                + (f" — agent-server said: {tail}" if tail else "")})
     finally:
         with contextlib.suppress(Exception):
             proc.send_signal(signal.SIGTERM)
