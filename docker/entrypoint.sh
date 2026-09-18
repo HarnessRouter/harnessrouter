@@ -490,8 +490,20 @@ install_backends() {
   # OPT-IN, not in HR_BACKENDS by default: 666 MB of venv, the aider precedent and well above the
   # 300 MB line agreed 2026-09-13. Every fresh volume would otherwise pay for a backend most
   # operators will not pick.
-  if wanted openhands && [ ! -x "$(backend_bin openhands)" ]; then
-    echo "[harnessrouter] installing OpenHands agent-server ${HR_OPENHANDS_VERSION:-1.49.2} (MIT) — ~666 MB, this takes a minute…"
+  #
+  # THE GUARD COMPARES THE VERSION, not the file, for the reason dsh's venv already carries: the
+  # venv lives on the data volume and outlives the image. A volume first started by an earlier
+  # build of this branch held an `openhands-venv` whose python was perfectly executable and whose
+  # contents were the DEPRECATED CLI's stack — openhands 1.16.0 pinning openhands-sdk 1.21.0 — so
+  # an existence check skipped the install and every turn died on
+  # `No module named 'openhands.sdk.marketplace.registration'`. Caught by the first column, not by
+  # a test. A mismatch rebuilds the venv from scratch; conversations live in the workspace, not in
+  # it, so nothing of a session is lost.
+  OPENHANDS_PIN="${HR_OPENHANDS_VERSION:-1.49.2}"
+  oh_have="$("$(backend_bin openhands)" -c 'import importlib.metadata as m; print(m.version("openhands-agent-server"))' 2>/dev/null)"
+  if wanted openhands && [ "$oh_have" != "$OPENHANDS_PIN" ]; then
+    rm -rf "$TOOLS/openhands-venv"
+    echo "[harnessrouter] installing OpenHands agent-server $OPENHANDS_PIN (MIT) — ~666 MB, this takes a minute…"
     try_install "OpenHands" install_openhands || true
   fi
 
