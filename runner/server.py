@@ -1212,8 +1212,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # content VERBATIM into the system prompt: verified live, inside a
         # "<!-- From: .../AGENTS.md -->" fence, with a behavioural instruction in it obeyed.
         # aider has no instruction-file convention of its own (no AGENTS.md discovery, no
-        # CLAUDE.md): the file is written here and reaches it through --read as user-role context,
-        # which the base catalog entry says plainly rather than implying a system prompt.
+        # CLAUDE.md): the file is written here and the driver puts it into aider's system message.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
                                    "goose", "kimi", "aider")
         else "CLAUDE.md")
@@ -4210,7 +4209,7 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     shim.chmod(0o755)
     env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", os.environ.get("PATH", ""))
     # The notes and the MCP block are APPENDED to the agent doc the turn already wrote, which
-    # aider reads through --read. Without the block the bridge exists and the model is never told
+    # the driver puts into the system message. Without the block the bridge exists and the model is never told
     # it does — the defect this call site is here to prevent, caught because the block was
     # generated and never used.
     doc = _agent_doc_path(cwd, "aider")
@@ -4225,7 +4224,8 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # picker offered is the id the provider is asked for.
     job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
            "tools_disabled": list(tools_disabled or []),
-           "read_files": list(skills_read or []),
+           # the agent doc, which the driver puts into aider's system message
+           "system_files": list(skills_read or []),
            # aider takes the budget as Coder.max_reflections, set in the driver: it has no CLI flag
            # for it, and only an in-process driver holds the object.
            "max_turns": max_turns}
@@ -6944,9 +6944,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                           max_turns=req.max_turns)
     elif backend == "aider":
         model = model or AIDER_DEFAULT_MODEL
-        # aider has no skill loader and no instruction-file convention: --read is the ONLY door, and
-        # it puts the content in as user-role context rather than a system prompt (stated in the
-        # base entry, which must not imply otherwise). The agent doc alone goes through it. Its
+        # aider has no skill loader and no instruction-file convention: the driver puts the agent
+        # doc into aider's system message (the Model's system_prompt_prefix, aider's own hook). The
+        # agent doc alone goes through it. Its
         # skills block names each installed skill with its description and folder, and the model
         # reaches a skill's files ON DEMAND through the one tool surface it has, a shell command
         # (`cat <folder>/SKILL.md`), whose output the driver feeds back in the same turn, or by

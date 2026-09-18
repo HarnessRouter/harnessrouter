@@ -13346,9 +13346,9 @@ _BASE_CATALOG: dict[str, dict] = {
     },
     "aider": {
         "label": "Aider", "backend": "aider", "status": "ready",
-        # NOT delivered as a system prompt, and the console must not imply it is: aider composes its
-        # own system message from the edit format and accepts no override, so these instructions
-        # reach the model through --read, as USER-role context, alongside the harness's AGENTS.md.
+        # aider composes its own system message from the edit format; the runner's driver puts
+        # these instructions and the harness's AGENTS.md ahead of it, in the same system message,
+        # through the Model's own system_prompt_prefix hook.
         "system_prompt": ("You are Aider, an autonomous coding agent. You work on a real git "
                           "workspace, editing files and proposing shell commands to complete the "
                           "task end to end."),

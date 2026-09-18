@@ -372,13 +372,31 @@ def main() -> int:
     # confirmation) stays off: the web is reached through a shell command like everything else,
     # under the one gate, and the catalog lists no separate Web Fetch tool for that reason.
     argv += ["--no-detect-urls"]
-    for path in job.get("read_files") or []:
-        argv += ["--read", path]
-
     coder = aider_main(argv, input=None, output=None, return_coder=True)
     if not hasattr(coder, "run_stream"):
         _emit("error", {"text": f"aider did not return a coder (exit {coder!r})"})
         return 1
+
+    # THE HARNESS'S INSTRUCTIONS ARE SYSTEM-LEVEL, as on every other base. aider composes its own
+    # system message and its CLI offers no way in, but the Model object it built carries a
+    # `system_prompt_prefix` that format_chat_chunks puts ahead of that message (base_coder.py:1229,
+    # aider's own hook for "Formatting re-enabled." and "/no_think"). The agent doc goes there.
+    # The alternative, --read, sent the doc as a USER message ("Here are some READ ONLY files,
+    # provided for your reference") ahead of the conversation, so the model's first user message
+    # was aider's preamble: asked what the first message of the task said, gpt-5.4 answered
+    # "reference" (hr-test, 2026-09-18). With the doc in the system message the conversation holds
+    # the user's turns and nothing else before them (the repo map, when the workspace has files,
+    # is aider's own user-role message and stays).
+    prefix = []
+    for path in job.get("system_files") or []:
+        try:
+            prefix.append(pathlib.Path(path).read_text())
+        except OSError:
+            continue
+    if prefix:
+        coder.main_model.system_prompt_prefix = (
+            "\n\n".join(p.strip() for p in prefix if p.strip()) + "\n\n"
+            + (coder.main_model.system_prompt_prefix or ""))
 
     # THE OPERATOR'S STEP BUDGET. aider has no CLI flag for it: its loop is Coder.max_reflections,
     # a class attribute defaulting to 3, and the driver holds the object. Unlike kimi (1000 steps)
@@ -388,6 +406,16 @@ def main() -> int:
     budget = job.get("max_turns")
     if budget:
         coder.max_reflections = max(1, int(budget))
+
+    # THE CONVERSATION HOLDS ONLY WHAT THE USER SAID. aider's few-shot examples for the edit
+    # format are, by default for most ids, injected as REAL user/assistant turns ahead of the
+    # user's own, so the first user message the model sees is "Change get_factorial() to use
+    # math.factorial". Asked what the first message of the task asked for, the gpt-5 family
+    # answered "Change" (console matrix, hr-test 2026-09-18, once the history was kept intact).
+    # aider's own switch folds the examples into the system prompt instead (base_coder.py:1233);
+    # a per-model settings file would replace every other setting of the model with the class
+    # defaults, so the attribute is set on the object, which is what format_chat_chunks reads.
+    coder.main_model.examples_as_sys_msg = True
 
     disabled = job.get("tools_disabled") or []
     gate = _Gate(disabled)
