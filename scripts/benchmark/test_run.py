@@ -10,7 +10,18 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render import render  # noqa: E402
-from run import network_use, tool_outcomes, usage_of  # noqa: E402
+from run import network_use, prompt_matches, tool_outcomes, usage_of  # noqa: E402
+
+
+def test_a_truncated_stored_prompt_still_identifies_its_session():
+    """The session list keeps 1500 characters of the prompt (measured); the first recovery matched
+    on the prompt's tail and found nothing for a long instruction."""
+    boiler = "You are working in a workspace. " * 20
+    a = boiler + "### instruction\nSort column B by the helper column J " + "x" * 2000
+    b = boiler + "### instruction\nCombine the RANGES sheet into LISTS " + "y" * 2000
+    assert prompt_matches(a[:1500], a) and not prompt_matches(a[:1500], b)
+    assert prompt_matches("[Attached files saved in your working directory: input.xlsx]\n\n" + a[:1400], a)
+    assert not prompt_matches("", a)
 
 
 def test_a_web_tool_or_a_shell_that_reaches_out_is_network_use():

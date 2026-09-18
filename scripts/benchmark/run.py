@@ -139,6 +139,14 @@ def tool_outcomes(trace_ndjson: str) -> dict:
     return {"trace_tool_calls": calls, "tool_results": results, "tool_failed": failed}
 
 
+def prompt_matches(stored: str, prompt: str) -> bool:
+    """Whether a session's stored prompt is this prompt. The session list keeps the prompt's head
+    (1500 characters, measured), sometimes behind an attachment line, so the stored head — whole,
+    or after that line — must be found in the prompt sent; its tail is not there to compare."""
+    probes = [stored[:800]] + ([stored.split("\n\n", 1)[1][:600]] if "\n\n" in stored else [])
+    return any(p and p in prompt for p in probes)
+
+
 def recover_session(before: set[str], harness_id: str, prompt: str, t0: float, wait_s: int = 1800) -> dict | None:
     """The session this harness opened for this prompt since t0 that was not there before, once
     it has finished: an instance whose console proxy cuts a synchronous request at five minutes
@@ -146,11 +154,10 @@ def recover_session(before: set[str], harness_id: str, prompt: str, t0: float, w
     prompt tells the sessions apart; a session whose stored prompt cannot be read is taken only
     when it is the sole new one."""
     deadline = t0 + wait_s
-    mark = prompt.strip()[-160:]
     while time.time() < deadline:
         new = [s for s in api("GET", "/v1/sessions?limit=100").get("sessions", [])
                if s["session_id"] not in before and harness_id in (s.get("harness_id"), s.get("backend"))]
-        mine = [s for s in new if mark and mark in str(s.get("user_prompt") or "")]
+        mine = [s for s in new if prompt_matches(str(s.get("user_prompt") or ""), prompt)]
         if not mine and len(new) == 1:
             mine = new
         if not mine:
