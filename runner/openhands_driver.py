@@ -90,6 +90,13 @@ def _write_config(home: pathlib.Path, api_key: str) -> pathlib.Path:
     return path
 
 
+# The phase the driver is in, so a socket timeout says WHICH wait ended rather than just
+# `TimeoutError: timed out` — four calls here can raise that exact exception with that exact
+# message, and a reason that does not separate them is a reason nobody can act on. Measured on
+# vercel|openhands|claude-sonnet-4.6, whose recycle failed in 250 s saying only "timed out".
+_STEP = "starting"
+
+
 def _req(url: str, key: str, method: str = "GET", body: dict | None = None, timeout: float = 30.0):
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(url, data=data, method=method,
@@ -271,11 +278,15 @@ def _run_turn(base: str, ws_base: str, key: str, cid: str, prompt: str, state: d
     # with `sent 1011 (internal error) keepalive ping timeout` after 178 s with no answer. Nothing
     # here needs the client to prove the link: the server pushes, and this loop already has its own
     # deadline. A liveness check that ends healthy turns is worse than no liveness check.
+    global _STEP
+    _STEP = "opening the event socket"
     with connect(url, additional_headers={"X-Session-API-Key": key},
                  open_timeout=30, close_timeout=5, ping_interval=None) as ws:
+        _STEP = "sending the message"
         _req(f"{base}/api/conversations/{cid}/events", key, method="POST",
              body={"role": "user", "content": [{"type": "text", "text": prompt}], "run": True},
              timeout=60)
+        _STEP = "reading the conversation's events"
         deadline = time.time() + max_seconds
         while time.time() < deadline:
             try:
@@ -331,17 +342,21 @@ def main() -> int:
     base, ws_base = f"http://127.0.0.1:{port}", f"ws://127.0.0.1:{port}"
     state: dict = {}
     try:
+        global _STEP
+        _STEP = "waiting for the agent-server to answer /alive"
         if not _wait_alive(port, proc, time.time() + 120):
             err = (proc.stderr.read().decode(errors="replace")[-2000:] if proc.stderr else "")
             _emit("error", {"text": f"agent-server did not start: {err.strip() or 'no output'}"})
             _emit("result", {"final": "", "ok": False, "seconds": round(time.time() - _T0, 2)})
             return 1
+        _STEP = "opening the conversation"
         cid, resumed = _conversation(base, key, job, cwd)
         _emit("init", {"model": job["model"], "conversation_id": cid, "resumed": resumed})
+        _STEP = "running the turn"
         _run_turn(base, ws_base, key, cid, job["prompt"], state,
                   float(os.environ.get("HR_OPENHANDS_TURN_SECONDS", "1800")))
     except Exception as exc:  # noqa: BLE001 — the reason belongs in the record, not in a traceback
-        _emit("error", {"text": f"{type(exc).__name__}: {exc}"})
+        _emit("error", {"text": f"{type(exc).__name__}: {exc} (while {_STEP})"})
     finally:
         with contextlib.suppress(Exception):
             proc.send_signal(signal.SIGTERM)
