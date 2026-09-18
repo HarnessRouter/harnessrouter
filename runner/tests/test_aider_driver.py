@@ -466,6 +466,18 @@ def test_the_operators_step_budget_reaches_the_driver():
     assert "max_turns=req.max_turns" in dispatch
 
 
+def test_only_the_agent_doc_rides_read_and_skills_are_reached_on_demand():
+    """The PR passed every file of every installed skill bundle through --read on every turn:
+    27 files and 264 KB for the three built-in bundles on hr-test, 45,030 input tokens for a
+    one-line answer. The agent doc's skills block names the folders; the model reads a skill when
+    a task calls for it, through the shell command the driver feeds back or a file mention aider
+    adds itself."""
+    server_src = pathlib.Path(__file__).resolve().parents[1].joinpath("server.py").read_text()
+    dispatch = server_src[server_src.index('elif backend == "aider":'):]
+    dispatch = dispatch[:dispatch.index("elif backend ==", 10)]
+    assert "rglob" not in dispatch and "skills_read=aider_read" in dispatch
+
+
 def _stub_aider_models(info):
     """`from aider.models import model_info_manager` without aider installed."""
     pkg = types.ModuleType("aider")

@@ -6900,17 +6900,20 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         model = model or AIDER_DEFAULT_MODEL
         # aider has no skill loader and no instruction-file convention: --read is the ONLY door, and
         # it puts the content in as user-role context rather than a system prompt (stated in the
-        # base entry, which must not imply otherwise). Every file of every skill bundle is read, not
-        # just SKILL.md, because a bundle's script is where its content actually lives — reading the
-        # script is what lets the agent report what it contains, and running it is a separate claim
-        # the shell gate decides.
+        # base entry, which must not imply otherwise). The agent doc alone goes through it. Its
+        # skills block names each installed skill with its description and folder, and the model
+        # reaches a skill's files ON DEMAND through the one tool surface it has, a shell command
+        # (`cat <folder>/SKILL.md`), whose output the driver feeds back in the same turn, or by
+        # naming a tracked file, which aider adds to the chat itself. That is the door every base
+        # without a loader uses (dsh reads them with its file tools). The PR read EVERY file of every
+        # bundle on every turn: measured on hr-test 2026-09-18, the three built-in bundles are 27
+        # files and 264 KB, licences and a PNG among them, and "Reply with exactly: …" cost 45,030
+        # input tokens. A skill's content is loaded when a task calls for it, never as a tax on
+        # every turn.
         aider_read: list[str] = []
         doc = _agent_doc_path(cwd, backend)
         if doc.exists():
             aider_read.append(str(doc))
-        skdir = pathlib.Path(cwd) / ".harness" / "skills"
-        if installed_skills and skdir.is_dir():
-            aider_read += [str(f) for f in sorted(skdir.rglob("*")) if f.is_file()]
         cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
                            mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
                            skills_read=aider_read, max_turns=req.max_turns)
