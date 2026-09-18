@@ -675,12 +675,12 @@ driver can do. Verified after a full turn: the workspace root held `.git`, `.har
 own files, nothing else. Auto-commits are off so aider never interleaves commits with the
 checkpoint repo's, and `--no-gitignore` stops it appending to the `.gitignore` the runner owns.
 
-**Install is opt-in, and the whole path is verified in a real image.** `docker build` of this tree,
+**The install path is verified in a real image.** `docker build` of this tree,
 then a container with `HR_BACKENDS=aider`: the install completed, the container reported
 `backends available: aider`, and `aider.__version__` inside it is 0.86.2 with the MCP SDK importable
 beside it. **681 MB measured there** (`du -sh /data/agent-tools/aider-venv`) — a first estimate of
 735 MB came from a macOS venv — and the MCP bridge was run from inside the image against deepwiki,
-listing its tools with exit 0. So aider is not in the default `HR_BACKENDS` per the 300 MB line. Note the Python floor: 0.86.2
+listing its tools with exit 0. The PR proposed keeping aider out of the default `HR_BACKENDS` for its size; the review put it in (2026-09-18), because the console offers every base the catalogue lists and a listed base that is not installed fails on its first task. Note the Python floor: 0.86.2
 declares `Requires-Python <3.13,>=3.10`, and on an interpreter outside that range pip does not fail
 — it silently offers an older aider (0.82.3 on 3.9) with none of the behaviour above. The installer
 asserts the imported version to turn that into a hard failure. Installing the MCP SDK into the same

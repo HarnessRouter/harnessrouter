@@ -3170,6 +3170,77 @@ def _served_model_in(data: bytes) -> str:
 _FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
 
 
+def _usage_fields(u) -> dict:
+    """One provider usage object, in the runner's contract: {input_tokens (FRESH input only),
+    output_tokens, cache_read_tokens, cache_write_tokens}, only the fields the object carries.
+
+    Three shapes pass the relay. OpenAI chat: prompt_tokens is GROSS (cache hits included) with the
+    cached part under prompt_tokens_details.cached_tokens, so it is netted here the way
+    _norm_token_usage nets codex's. Anthropic messages: input_tokens is already net, the cache
+    counters are their own fields. Gemini's usageMetadata: promptTokenCount is gross with
+    cachedContentTokenCount the cached part."""
+    if not isinstance(u, dict):
+        return {}
+
+    def n(v) -> int:
+        try:
+            return max(int(v or 0), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    if "prompt_tokens" in u or "completion_tokens" in u:
+        det = u.get("prompt_tokens_details")
+        cached = n(det.get("cached_tokens")) if isinstance(det, dict) else 0
+        return {"input_tokens": max(n(u.get("prompt_tokens")) - cached, 0),
+                "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached}
+    if "input_tokens" in u or "output_tokens" in u:
+        out = {}
+        for src, dst in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
+                         ("cache_read_input_tokens", "cache_read_tokens"),
+                         ("cache_creation_input_tokens", "cache_write_tokens")):
+            if u.get(src) is not None:
+                out[dst] = n(u[src])
+        return out
+    if "promptTokenCount" in u or "candidatesTokenCount" in u:
+        cached = n(u.get("cachedContentTokenCount"))
+        return {"input_tokens": max(n(u.get("promptTokenCount")) - cached, 0),
+                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached}
+    return {}
+
+
+def _usage_in_doc(doc) -> dict:
+    """The usage a response document or stream event carries, if any. Anthropic's stream puts the
+    input side on message_start (under message.usage) and the output side on message_delta, so a
+    call's usage is the union of what its events said, later values replacing earlier ones."""
+    if not isinstance(doc, dict):
+        return {}
+    for u in (doc.get("usage"), doc.get("usageMetadata"),
+              (doc.get("message") or {}).get("usage") if isinstance(doc.get("message"), dict) else None):
+        got = _usage_fields(u)
+        if got:
+            return got
+    return {}
+
+
+def _usage_in_sse_line(line: bytes) -> dict:
+    """One SSE line as it passes the relay → the usage it carries, {} for anything else."""
+    if not line.startswith(b"data:") or b"sage" not in line:
+        return {}
+    try:
+        return _usage_in_doc(json.loads(line[5:].strip()))
+    except ValueError:
+        return {}
+
+
+def _usage_add(flags: dict, call_usage: dict) -> None:
+    """Fold one call's usage into the route's running total: a turn is many provider calls."""
+    if not call_usage:
+        return
+    total = flags.setdefault("usage", {})
+    for k, v in call_usage.items():
+        total[k] = int(total.get(k, 0)) + int(v)
+
+
 def _model_metadata_with_context_length(data: bytes) -> bytes:
     """A model listing (GET /models or /models/<id>) with the window also under `context_length`.
 
@@ -3228,6 +3299,24 @@ def _relay_served_model(env: dict) -> str:
             if route:
                 return str((route[2] or {}).get("served_model") or "")
     return ""
+
+
+def _relay_usage(env: dict) -> dict:
+    """The tokens the provider reported on this turn's route, summed over its calls; {} when the
+    turn did not ride the relay or nothing carried usage. Found by the placeholder bearer, exactly
+    as _relay_served_model finds the served model, and subject to the same one-route invariant.
+
+    This is the usage of every backend whose own stream reports none (kimi, aider): the provider's
+    statement of what it counted, read off the bytes as they pass, rather than a number the CLI
+    estimated or nothing at all. A backend that reports its own usage keeps it; this only fills a
+    result event that arrived empty."""
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            if route:
+                u = (route[2] or {}).get("usage")
+                return dict(u) if isinstance(u, dict) and u else {}
+    return {}
 
 
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
@@ -3384,6 +3473,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             pending = b""
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
+            call_usage: dict = {}   # what this call's events said about tokens, unioned
             while True:
                 chunk = resp.read(4096)
                 if not chunk:
@@ -3402,14 +3492,20 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 if fr:
                     flags["last_finish"] = fr
                 fcarry = chunk[-64:]
-                if sigs is not None:
-                    pending += chunk
-                    while b"\n" in pending:
-                        line, pending = pending.split(b"\n", 1)
-                        for cid, sig in _google_signatures_in_line(line.strip()):
+                # usage (and Google's tool-call signatures) live on whole SSE lines, so the
+                # stream is line-buffered as it passes; the bytes still go through untouched
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    line = line.strip()
+                    call_usage.update(_usage_in_sse_line(line))
+                    if sigs is not None:
+                        for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
                 self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                 self.wfile.flush()
+            call_usage.update(_usage_in_sse_line(pending.strip()))
+            _usage_add(flags, call_usage)
             self.wfile.write(b"0\r\n\r\n")
         else:
             data = resp.read()
@@ -3420,6 +3516,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fr = _finish_reason_in(data[-65536:])
             if fr:
                 flags["last_finish"] = fr
+            if body is not None and b"sage" in data:
+                try:
+                    _usage_add(flags, _usage_in_doc(json.loads(data)))
+                except ValueError:
+                    pass
             if body is None and "/models" in tail.split("?", 1)[0]:
                 data = _model_metadata_with_context_length(data)
             if sigs is not None and b"thought_signature" in data:
@@ -5705,6 +5806,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     served = _relay_served_model(env)
                     if served:
                         ev["model"] = served
+                if ev.get("type") == "result" and not ev.get("usage"):
+                    # Same for the tokens: the CLI reported none, the relay counted the provider's.
+                    ev["usage"] = _relay_usage(env)
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -5732,6 +5836,8 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 served = _relay_served_model(env)
                 if served:
                     ev["model"] = served
+            if ev.get("type") == "result" and not ev.get("usage"):
+                ev["usage"] = _relay_usage(env)
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
@@ -6807,7 +6913,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
             aider_read += [str(f) for f in sorted(skdir.rglob("*")) if f.is_file()]
         cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
                            mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
-                           skills_read=aider_read)
+                           skills_read=aider_read, max_turns=req.max_turns)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,

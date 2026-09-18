@@ -650,14 +650,12 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
-docker run -e HR_BACKENDS=claude,codex,aider ...                   # aider: opt-in, see below
 ```
 
-**aider is not in the default list and has to be asked for by name.** Its environment is ~735 MB
-(tree-sitter-language-pack 351 MB, scipy 100, numpy 57) and takes about ninety seconds to install,
-which every fresh volume would otherwise pay for a backend most operators will not pick.
+Aider is the largest of the set: its environment is about 735 MB and takes about ninety seconds to
+install on a fresh volume. Leave it out of `HR_BACKENDS` if you will not use it.
 
 A backend that fails to install is not fatal: the others still work, and the console offers what
 the gateway's catalogue lists, so an unavailable backend simply is not shown.

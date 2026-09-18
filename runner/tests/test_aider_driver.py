@@ -301,7 +301,26 @@ def test_a_url_server_resolves_to_its_url():
     assert aider_mcp_bridge._target(servers, "deepwiki") == "https://mcp.deepwiki.com/mcp"
 
 
-def test_the_declared_transport_decides_and_not_the_urls_spelling():
+def _stub_mcp_sdk(monkeypatch):
+    """The bridge runs under the aider venv's SDK (mcp 2.x with httpx2), not the runner's (1.x, no
+    httpx2): the transports it builds do not import here. Stub the three modules by name so the
+    test checks the bridge's choice of transport, which is what the declaration bug was about."""
+    sse = types.ModuleType("mcp.client.sse")
+    sse.sse_client = lambda url, headers=None: ("sse", url, headers)
+    sh = types.ModuleType("mcp.client.streamable_http")
+    sh.streamable_http_client = lambda url, http_client=None: ("http", url, http_client)
+    hx = types.ModuleType("httpx2")
+    hx.AsyncClient = lambda headers=None: ("client", headers)
+    client = types.ModuleType("mcp.client")
+    pkg = types.ModuleType("mcp")
+    pkg.client = client
+    for name, mod in (("mcp", pkg), ("mcp.client", client), ("mcp.client.sse", sse),
+                      ("mcp.client.streamable_http", sh), ("httpx2", hx)):
+        monkeypatch.setitem(sys.modules, name, mod)
+
+
+def test_the_declared_transport_decides_and_not_the_urls_spelling(monkeypatch):
+    _stub_mcp_sdk(monkeypatch)
     """MEASURED DEFECT this pins: `Client.__init__` sends a plain URL string to
     `streamable_http_client` unconditionally (mcp 2.2.0, client.py:393-394) — there is no inference
     and no SSE path — so a harness that declared `transport: sse` had its server dialled with the
@@ -309,16 +328,16 @@ def test_the_declared_transport_decides_and_not_the_urls_spelling():
     A string result here would be that defect returning."""
     sse = aider_mcp_bridge._target(
         {"events": {"url": "https://example.test/events", "transport": "sse"}}, "events")
-    assert not isinstance(sse, str), "an SSE server must not fall through to the streamable path"
-    assert type(sse).__name__ != "StdioServerParameters"
+    assert sse == ("sse", "https://example.test/events", None)
 
 
-def test_declared_headers_reach_the_server_rather_than_the_config_file():
+def test_declared_headers_reach_the_server_rather_than_the_config_file(monkeypatch):
     """They were written into the config and never read: the streamable path takes headers on an
     httpx client, not on the call, so a plain URL string dropped every one of them."""
+    _stub_mcp_sdk(monkeypatch)
     with_hdrs = aider_mcp_bridge._target(
         {"api": {"url": "https://example.test/mcp", "headers": {"X-K": "v"}}}, "api")
-    assert not isinstance(with_hdrs, str), "headers must not be dropped on the way to the server"
+    assert with_hdrs == ("http", "https://example.test/mcp", ("client", {"X-K": "v"}))
 
 
 def test_structured_content_wins_over_prose():
@@ -438,6 +457,13 @@ def test_the_operators_step_budget_reaches_the_driver():
     assert job["max_turns"] == 7
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
     assert "coder.max_reflections = max(1, int(budget))" in src
+    # The dispatch is the link that was missing: the builder accepted the budget and turn() never
+    # handed it over, so every aider turn ran on aider's own default no matter what the harness
+    # said. Read off the source, since turn() needs a live workspace and a provider to run.
+    server_src = pathlib.Path(__file__).resolve().parents[1].joinpath("server.py").read_text()
+    dispatch = server_src[server_src.index('elif backend == "aider":'):]
+    dispatch = dispatch[:dispatch.index("elif backend ==", 10)]
+    assert "max_turns=req.max_turns" in dispatch
 
 
 def _stub_aider_models(info):

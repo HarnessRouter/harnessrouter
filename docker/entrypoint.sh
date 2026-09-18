@@ -177,7 +177,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -244,8 +244,9 @@ install_opencode() {
 # Aider, Apache-2.0 (Aider-AI/aider), pinned to 0.86.2, plus the MCP bridge it needs.
 #
 # Its own venv, the dsh/hermes precedent: aider pins litellm and a large scientific stack, and must
-# not share the runner's interpreter. The wheel digests are pinned because PyPI serves them by
-# digest anyway and a pinned one fails closed if the release is ever re-uploaded.
+# not share the runner's interpreter. The version is pinned exactly and aider's own wheel pins every
+# dependency to a version, so the venv is the same one on every volume; there is no digest check
+# here, the release is trusted the way the other PyPI installs (dsh) are.
 #
 # NOTE the Python floor: aider 0.86.2 declares Requires-Python <3.13,>=3.10. On an interpreter
 # outside that range pip does not fail — it silently offers an OLDER aider (0.82.3 was the highest
@@ -487,9 +488,11 @@ install_backends() {
     try_install "Kimi Code CLI" install_kimi || true
   fi
 
-  # OPT-IN, not in HR_BACKENDS by default: 735 MB and ~90 s of install (tree-sitter-language-pack
-  # 351 MB, scipy 100, numpy 57), which every fresh volume would otherwise pay for a backend most
-  # operators will not pick. Above the 300 MB line agreed 2026-09-13.
+  # The largest install of the set: ~735 MB and about ninety seconds on a fresh volume
+  # (tree-sitter-language-pack 351 MB, scipy 100, numpy 57). In the default list all the same,
+  # because the console offers every base the gateway's catalogue lists and a base that is listed
+  # but not installed fails on its first task; an operator who does not want it leaves it out of
+  # HR_BACKENDS, the same switch every backend has.
   if wanted aider && [ ! -x "$(backend_bin aider)" ]; then
     echo "[harnessrouter] installing Aider (Apache-2.0) — ~735 MB, this takes a minute…"
     try_install "Aider" install_aider || true
