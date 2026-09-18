@@ -36,8 +36,8 @@ def render(records: list[dict]) -> str:
            "the pack's own grader decides; every number is read from the turn record.", ""]
     for (prov, pack), rows in sorted(by.items()):
         out += [f"## Provider: {prov} — pack: {pack}", "",
-                "| Harness | Model | Tasks | Resolved | Reward | Median wall | Median tool calls | Fresh in | Cached in | Output | Served by | Notes |",
-                "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+                "| Harness | Model | Tasks | Resolved | Reward | Wall (sum) | Median wall | Tool calls | Calls failed | Fresh in | Cached in | Output | Served by | Notes |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         findings, errors = [], []
         groups = collections.defaultdict(list)
         for r in rows:
@@ -67,16 +67,25 @@ def render(records: list[dict]) -> str:
             served = sorted({str(r.get("connection") or "").replace("integration:", "") for r in ran if r.get("connection")}) or ["?"]
             resolved = sum(1 for r in clean if r.get("resolved"))
             reward = statistics.mean(float(r.get("reward") or 0) for r in clean) if clean else None
+            wall_sum = sum(float(r.get("wall_s") or 0) for r in clean)
+            calls = sum(int(r.get("tool_calls") or 0) for r in clean)
+            # failed calls are known only for runs whose trace was read; the rate is over those
+            with_trace = [r for r in clean if r.get("tool_results") is not None]
+            results_n = sum(int(r.get("tool_results") or 0) for r in with_trace)
+            failed_n = sum(int(r.get("tool_failed") or 0) for r in with_trace)
+            if with_trace and len(with_trace) < len(clean):
+                notes.append(f"tool outcomes read on {len(with_trace)} of {len(clean)} runs")
+            failed_cell = f"{failed_n} ({100 * failed_n / results_n:.0f}%)" if results_n else "-"
             out.append(
                 f"| {h} | {m} | {len(clean)} | {resolved} ({100 * resolved / len(clean):.0f}%) | "
-                f"{'-' if reward is None else f'{reward:.2f}'} | {fmt_s(median(r.get('wall_s') for r in clean))} | "
-                f"{'-' if not clean else f'{median(r.get('tool_calls') for r in clean):.0f}'} | "
+                f"{'-' if reward is None else f'{reward:.2f}'} | {fmt_s(wall_sum)} | {fmt_s(median(r.get('wall_s') for r in clean))} | "
+                f"{calls} | {failed_cell} | "
                 f"{fmt_k(sum(x.get('fresh_input', 0) for x in u)) if u else '-'} | "
                 f"{fmt_k(sum(x.get('cached_input', 0) for x in u)) if u else '-'} | "
                 f"{fmt_k(sum(x.get('output', 0) for x in u)) if u else '-'} | {', '.join(served)} | "
                 f"{' ; '.join(notes).replace('|', '/')} |"
                 if clean else
-                f"| {h} | {m} | 0 | - | - | - | - | - | - | - | {', '.join(served)} | {' ; '.join(notes) or 'no counted runs'} |")
+                f"| {h} | {m} | 0 | - | - | - | - | - | - | - | - | - | {', '.join(served)} | {' ; '.join(notes) or 'no counted runs'} |")
         out.append("")
         if findings:
             out += ["Findings, runs served by another connection, as another model, or that reached the network — listed, not scored:", ""]

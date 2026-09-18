@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render import render  # noqa: E402
-from run import network_use, usage_of  # noqa: E402
+from run import network_use, tool_outcomes, usage_of  # noqa: E402
 
 
 def test_a_web_tool_or_a_shell_that_reaches_out_is_network_use():
@@ -46,10 +46,28 @@ def test_usage_keeps_fresh_cached_and_output_apart():
     assert usage_of(None)["prompt_total"] == 0
 
 
+def test_a_flagged_or_non_zero_tool_result_is_a_failed_call():
+    """The result shapes as the trace stores them: opencode returns a shell that died as an
+    ordinary result carrying "[exit code: 1]" with is_error false (measured 2026-09-18)."""
+    ok = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "1", "is_error": False,
+                                                    "content": "sheets: ['Sheet1'] dims A1:D53706"}]}}
+    died = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "2", "is_error": False,
+                                                      "content": "[stderr] Traceback (most recent call last):\n  ModuleNotFoundError: No module named 'openpyxl'\n[exit code: 1]"}]}}
+    flagged = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "3", "is_error": True, "content": "denied"}]}}
+    use = lambda i: {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": i, "name": "bash", "input": {}}]}}
+    trace = "\n".join(json.dumps(e) for e in [use("1"), ok, use("2"), died, use("3"), flagged,
+                                              {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "..."}]}}])
+    assert tool_outcomes(trace) == {"trace_tool_calls": 3, "tool_results": 3, "tool_failed": 2}
+    # a result that merely mentions an exit code of zero, or none, is a success
+    fine = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "4", "is_error": False, "content": "done [exit code: 0]"}]}}
+    assert tool_outcomes(json.dumps(use("4")) + "\n" + json.dumps(fine))["tool_failed"] == 0
+
+
 def _rec(**kw):
     base = {"provider": "deepseek", "pack": "spreadsheetbench", "harness": "opencode", "model": "m", "task": "t",
             "resolved": True, "reward": 1.0, "wall_s": 10.0, "tool_calls": 3, "connection": "integration:deepseek",
-            "served": "deepseek-flash", "usage": {"fresh_input": 100, "cached_input": 1000, "output": 10}}
+            "served": "deepseek-flash", "usage": {"fresh_input": 100, "cached_input": 1000, "output": 10},
+            "tool_results": 3, "tool_failed": 1}
     base.update(kw)
     return base
 
@@ -74,6 +92,16 @@ def test_tokens_are_reported_apart_never_summed():
     md = render([_rec(usage={"fresh_input": 1500, "cached_input": 2_000_000, "output": 700})])
     row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
     assert "| 2k | 2.00M | 1k |" in row, row
+
+
+def test_wall_is_summed_and_failed_calls_are_a_rate():
+    md = render([_rec(task="a", wall_s=10.0, tool_calls=3, tool_results=3, tool_failed=1),
+                 _rec(task="b", wall_s=30.0, tool_calls=5, tool_results=5, tool_failed=1)])
+    row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
+    assert "| 40 s | 20 s | 8 | 2 (25%) |" in row, row
+    md = render([_rec(task="a", tool_results=3, tool_failed=1), {**_rec(task="b"), "tool_results": None, "tool_failed": None}])
+    row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
+    assert "tool outcomes read on 1 of 2 runs" in row, row
 
 
 def test_a_runner_error_is_listed_as_an_error_not_a_fail():
