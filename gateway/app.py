@@ -42,7 +42,7 @@ import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 import backing               # pluggable graph/blob/secret stores (vg | local)
 import media_plane           # the media plane (capability catalog, provider adapters, ffmpeg)
@@ -330,6 +330,11 @@ PUBLIC_BASE_URL = os.environ.get("HARNESS_PUBLIC_BASE_URL", "").rstrip("/")
 # Default per-turn wall-clock cap when neither the request nor the harness sets one.
 # The runner's MAX_TURN_SECONDS (6h) remains the hard ceiling either way.
 DEFAULT_TIMEOUT_S = int(os.environ.get("HARNESS_DEFAULT_TIMEOUT_S", "7200"))
+# Default agent-step budget when neither the request nor the harness sets one. Both defaults are
+# served on /v1/bases as `runtimeDefaults`, so the console shows the number that will actually
+# apply instead of a guess of its own: a customer whose task ran away asked what the limit was and
+# the settings page answered with a grey placeholder (2026-09-17).
+DEFAULT_MAX_STEP = int(os.environ.get("HARNESS_DEFAULT_MAX_STEP", "400"))
 
 
 def _file_url(container_id: str, file_id: str) -> str:
@@ -7448,7 +7453,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         except (TypeError, ValueError):
             return None
     max_step = (_num(body.max_step) or _num(meta.get("max_step"))
-                or _num((hv or {}).get("max_step")) or 400)
+                or _num((hv or {}).get("max_step")) or DEFAULT_MAX_STEP)
     timeout_s = (_num(body.timeout_seconds) or _num(meta.get("timeout_seconds"))
                  or _num((hv or {}).get("timeout_seconds")) or DEFAULT_TIMEOUT_S)
     # Pin the backend to the harness's base (a custom harness always runs on its own backend);
@@ -13407,19 +13412,31 @@ def _require_supported_base(base: str) -> str:
     return b
 
 
+def _either(snake: str):
+    """A create/update field by its schema name (snake_case, HarnessCreate) OR the name the
+    harness object comes back with (camelCase, Harness). A client that mirrors what GET returned
+    sent `defaultModel` and the server stored nothing and said nothing: the request answered 200
+    with `"defaultModel": ""`, every task then had to carry a model, and the conformance suite
+    waited out its timeout per task (#199). A field the server understands under one spelling is
+    not an unknown field under the other."""
+    camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), snake)
+    return Field(default=None, validation_alias=AliasChoices(snake, camel))
+
+
 class HarnessBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     name: str
     base: str
-    base_label: str | None = None
-    default_model: str | None = None
-    system_prompt: str | None = None
-    mcp_servers: list | None = None
+    base_label: str | None = _either("base_label")
+    default_model: str | None = _either("default_model")
+    system_prompt: str | None = _either("system_prompt")
+    mcp_servers: list | None = _either("mcp_servers")
     skills: list | None = None
     plugins: list | None = None            # installed Agent Plugins packages (Plugins chapter)
-    disabled_tools: list | None = None     # inherited/built-in tool names the harness disabled
-    max_step: int | None = None            # default agent step budget for this harness's turns
-    timeout_seconds: int | None = None     # default per-turn wall-clock cap
-    additional_headers: list | None = None  # declared header NAMES callers may pass per request
+    disabled_tools: list | None = _either("disabled_tools")     # built-in tool names the harness disabled
+    max_step: int | None = _either("max_step")            # default agent step budget for this harness's turns
+    timeout_seconds: int | None = _either("timeout_seconds")     # default per-turn wall-clock cap
+    additional_headers: list | None = _either("additional_headers")  # header NAMES callers may pass per request
 
 
 def _harness_out(v: dict) -> dict:
@@ -15100,7 +15117,10 @@ async def list_bases(request: Request) -> dict:
                               for n, b2 in sorted(_builtin_skills().items())],
             "builtinSkillsEnumerable": False,
         })
-    return {"bases": out}
+    # The limits a turn gets when neither the request nor the harness sets one, so the console can
+    # show the number that will apply rather than a placeholder of its own.
+    return {"bases": out,
+            "runtimeDefaults": {"maxStep": DEFAULT_MAX_STEP, "timeoutSeconds": DEFAULT_TIMEOUT_S}}
 
 
 @app.get("/v1/models")
