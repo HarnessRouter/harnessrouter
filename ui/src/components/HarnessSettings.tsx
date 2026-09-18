@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation';
 import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, pluginSchemas,
   type CustomHarness, type OobHarness, type HarnessPlugin, getPluginFiles,
+  useRuntimeDefaults,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
@@ -142,6 +143,9 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   // Capabilities come from the server, never from the static table: it once advertised four
   // built-in skills that existed nowhere, with controls beside them that acted on nothing.
   const bases = useBases();
+  // The limits that apply when a field is left empty, from the server: shown as the field's value
+  // so a person sees the number that will actually stop a runaway task, not a grey example.
+  const limits = useRuntimeDefaults();
   const srvBase = bases?.[base?.id || draft?.base || ''] || null;
   const baseTools = srvBase?.tools || [];
   const models = oobModels(base);
@@ -456,14 +460,15 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
             <div className="field-stack">
               <div className="two-column-fields">
                 <div className="field"><label htmlFor="hsSteps">Max steps</label>
-                  <input id="hsSteps" type="number" min={1} placeholder="400" disabled={readOnly}
-                    value={draft?.maxStep ?? ''} onChange={(e) => upd({ maxStep: e.target.value ? Math.max(1, Number(e.target.value)) : null })} />
-                  <span className="field-help">Maximum agent steps before the Task stops.</span></div>
+                  <input id="hsSteps" type="number" min={1} disabled={readOnly}
+                    value={draft?.maxStep ?? limits?.maxStep ?? ''}
+                    onChange={(e) => upd({ maxStep: e.target.value ? Math.max(1, Number(e.target.value)) : null })} />
+                  <span className="field-help">Maximum agent steps before the Task stops.{limits ? ` Empty means the default, ${limits.maxStep}.` : ''}</span></div>
                 <div className="field"><label htmlFor="hsTimeout">Timeout (minutes)</label>
-                  <input id="hsTimeout" type="number" min={1} placeholder="120" disabled={readOnly}
-                    value={draft?.timeoutSeconds ? Math.round(draft.timeoutSeconds / 60) : ''}
+                  <input id="hsTimeout" type="number" min={1} disabled={readOnly}
+                    value={draft?.timeoutSeconds ? Math.round(draft.timeoutSeconds / 60) : (limits ? Math.round(limits.timeoutSeconds / 60) : '')}
                     onChange={(e) => upd({ timeoutSeconds: e.target.value ? Math.max(1, Number(e.target.value)) * 60 : null })} />
-                  <span className="field-help">Maximum wall-clock execution time.</span></div>
+                  <span className="field-help">Maximum wall-clock execution time.{limits ? ` Empty means the default, ${Math.round(limits.timeoutSeconds / 60)} minutes.` : ''}</span></div>
               </div>
             </div>
           </section>
