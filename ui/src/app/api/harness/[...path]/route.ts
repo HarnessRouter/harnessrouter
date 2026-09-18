@@ -16,6 +16,7 @@
 // UI's port is published), so it presents the key on its own and PINS org/member from server
 // constants — a request from the browser cannot claim an identity this box doesn't have.
 import type { NextRequest } from 'next/server';
+import { Agent } from 'undici';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
 import { AUTH_DISABLED, SESSION_COOKIE, sessionValid } from '@/lib/selfhost-auth';
 
@@ -26,6 +27,15 @@ const GATEWAY =
   process.env.HARNESS_GATEWAY_URL ||
   'https://api.harnessrouter.ai';
 const INTERNAL_KEY = process.env.HARNESS_INTERNAL_KEY || '';
+// maxDuration above is not what bounds the upstream call: Node's fetch gives the gateway 300 s to
+// answer with response HEADERS and 300 s between body chunks (undici's headersTimeout and
+// bodyTimeout defaults), then fails the request as "fetch failed". A synchronous
+// POST /v1/responses sends nothing until the turn ends, so a turn longer than five minutes came
+// back 502 "harness-gateway unreachable" while the runner finished it (measured: 301.0 s and
+// 300.3 s on turns the session store shows completing at 340 s and 354 s), and a streamed turn
+// silent for five minutes inside one tool call would end the same way. The gateway's own hop to
+// the runner reads for an hour on purpose; this hop now allows what it declares.
+const upstream = new Agent({ headersTimeout: maxDuration * 1000, bodyTimeout: maxDuration * 1000 });
 
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
@@ -80,12 +90,13 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     headers[lk] = v;
   });
 
-  const init: RequestInit = { method: req.method, headers, cache: 'no-store' };
+  const init: RequestInit & { dispatcher: Agent; duplex?: 'half' } =
+    { method: req.method, headers, cache: 'no-store', dispatcher: upstream };
   // STREAM the request body straight through (byte-exact, no buffering) so large uploads (up to GBs)
   // never get fully materialized in the BFF's memory. duplex:'half' is required by undici/fetch when
   // body is a ReadableStream. Falls back to arrayBuffer if the runtime didn't expose a body stream.
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    if (req.body) { init.body = req.body; (init as RequestInit & { duplex: 'half' }).duplex = 'half'; }
+    if (req.body) { init.body = req.body; init.duplex = 'half'; }
     else init.body = await req.arrayBuffer();
   }
 
