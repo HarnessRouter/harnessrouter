@@ -54,10 +54,15 @@ def render(records: list[dict]) -> str:
                     why.append(f"served as {r.get('served')}")
                 if r.get("network"):
                     why.append("reached the network: " + "; ".join(str(x) for x in r["network"])[:120])
+                if r.get("lookup"):
+                    why.append("looked for the task outside the workspace: " + "; ".join(str(x) for x in r["lookup"])[:120])
                 if why:
                     findings.append(f"{h} x {m} {r.get('task')}: " + ", ".join(why))
                 else:
                     clean.append(r)
+            capped = sum(1 for r in clean if r.get("capped"))
+            if capped:
+                notes.append(f"{capped} runs hit the time cap (counted as failures)")
             unreported = sum(1 for r in ran if r.get("served_unreported"))
             if unreported:
                 notes.append(f"served model unreported on {unreported} of {len(ran)} runs (rule 2 unverifiable there)")
@@ -88,7 +93,7 @@ def render(records: list[dict]) -> str:
                 f"| {h} | {m} | 0 | - | - | - | - | - | - | - | - | - | {', '.join(served)} | {' ; '.join(notes) or 'no counted runs'} |")
         out.append("")
         if findings:
-            out += ["Findings, runs served by another connection, as another model, or that reached the network — listed, not scored:", ""]
+            out += ["Findings, runs served by another connection, as another model, or that reached the network or looked for the task outside the workspace — listed, not scored:", ""]
             out += [f"- {f}" for f in findings] + [""]
         if errors:
             out += ["Runner errors (the run never produced a record to judge; re-run them):", ""] + [f"- {e}" for e in errors] + [""]
