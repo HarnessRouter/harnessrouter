@@ -10,8 +10,11 @@ already stores. The rules below decide a row; `test_run.py` pins them.
 For every harness and model named, each task of a pack runs in a fresh session: the pack stages
 the task's files and instruction as the first turn, the turn runs, the files it produced come back
 from the session, and the suite's own grader decides. A record carries the verdict (`resolved`,
-`reward` in [0, 1], the grader's reason), wall time, tool calls and tool names, fresh / cached /
-output tokens, the connection and the served model the turn record stamps, and the files.
+`reward` in [0, 1], the grader's reason), wall time, tool calls and tool names, how many of those
+calls failed (the CLI flagged the result, or a shell exited non-zero or raised — read from the
+stored trace), fresh / cached / output tokens, the connection and the served model the turn record
+stamps, and the files. The table sums wall time and tool calls per row and gives the failed calls
+as a rate.
 
 Packs live in `packs/`, one module each, and never re-implement a grader: the suite's data and
 grader stay outside this repository, at `PACK_ROOT`, under the suite's own licence.

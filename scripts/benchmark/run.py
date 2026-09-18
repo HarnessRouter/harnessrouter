@@ -101,6 +101,44 @@ def usage_of(u: dict | None) -> dict:
             "prompt_total": fresh + cached + written}
 
 
+# ── tool outcomes ─────────────────────────────────────────────────────────────────────────────────
+# The canonical stream pairs every tool_use with a tool_result. is_error is what the CLI flagged;
+# it is not the whole story: opencode returns a shell that died with "[exit code: 1]" and a
+# Traceback as an ordinary result (measured 2026-09-18), so a non-zero exit code or an interpreter
+# traceback in the result counts as a failed call too. What is counted is calls that did not do
+# what the agent asked, whatever the agent did next.
+FAILED_RESULT = re.compile(r"\[exit code:? [1-9]\d*\]|\bexit(?:ed with)? code[:=]? ?[1-9]\d*\b"
+                           r"|Traceback \(most recent call last\)|\bcommand not found\b", re.I)
+
+
+def tool_outcomes(trace_ndjson: str) -> dict:
+    calls = results = failed = 0
+    for line in trace_ndjson.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        m = e.get("message") if isinstance(e, dict) else None
+        content = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use":
+                calls += 1
+            elif b.get("type") == "tool_result":
+                results += 1
+                body = b.get("content")
+                text = body if isinstance(body, str) else json.dumps(body)[:4000]
+                if b.get("is_error") or FAILED_RESULT.search(text[:4000]):
+                    failed += 1
+    return {"trace_tool_calls": calls, "tool_results": results, "tool_failed": failed}
+
+
 def recover_session(before: set[str], harness_id: str, prompt: str, t0: float, wait_s: int = 1800) -> dict | None:
     """The session this harness opened for this prompt since t0 that was not there before, once
     it has finished: an instance whose console proxy cuts a synchronous request at five minutes
@@ -170,6 +208,14 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
                assistant=(turn.get("assistant") or "")[:200])
     if rec.get("turn_error") is None and turn.get("error"):
         rec["turn_error"] = turn.get("error")
+    # tool outcomes come from the stored trace: each tool_use has its tool_result, and a result the
+    # CLI flagged or a shell that exited non-zero is a failed call (the record's own count of calls
+    # stays the turn record's)
+    try:
+        trace = api("GET", f"/v1/traces/{sid}/all?org={os.environ.get('ORG', 'local')}", raw=True).decode("utf-8", "replace")
+        rec.update(tool_outcomes(trace))
+    except Exception as e:  # noqa: BLE001 — a trace that cannot be read leaves the outcome columns empty, noted
+        rec["trace_error"] = repr(e)[:120]
     # the produced files, downloaded from the session so the pack grades what was stored
     tdir = os.path.join(workdir, provider, label, model, pack.NAME, task["id"])
     os.makedirs(tdir, exist_ok=True)
