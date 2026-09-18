@@ -256,11 +256,16 @@ install_opencode() {
 # The official MCP SDK goes in beside it: upstream aider has no MCP client at all, so
 # runner/aider_mcp_bridge.py is what lets a declared MCP server be reached and, therefore, measured.
 # Installed in this venv rather than globally because no other backend uses it.
+AIDER_PIN="${HR_AIDER_VERSION:-0.86.2}"
 install_aider() {
   am_py="${HR_AIDER_BASE_PYTHON:-python3}"
+  # The venv lives on the data volume, so a pin bump in the image must reach a volume that
+  # already has one (the dsh precedent): aider-ready names the version the venv was built for,
+  # and a mismatch rebuilds it. Sessions keep nothing in the venv.
+  rm -rf "$TOOLS/aider-venv"
   "$am_py" -m venv "$TOOLS/aider-venv" || return 1
   "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
-    "aider-chat==${HR_AIDER_VERSION:-0.86.2}" || return 1
+    "aider-chat==$AIDER_PIN" || return 1
   # The driver imports aider in process; prove the pinned version is importable before declaring the
   # install good, so a resolver that quietly picked another one fails HERE and not on a live turn.
   "$TOOLS/aider-venv/bin/python" -c '
@@ -268,13 +273,17 @@ import sys, aider
 want = sys.argv[1]
 if aider.__version__ != want:
     sys.exit("aider %s installed, wanted %s" % (aider.__version__, want))
-' "${HR_AIDER_VERSION:-0.86.2}" || return 1
+'  "$AIDER_PIN" || return 1
   # aider's MCP client: the official MIT SDK, into the same venv. f/mcptools was the first choice
   # and is not usable here — it is a Go program that publishes NO binaries on any release (checked
   # through v0.7.1, every one has zero assets), so it would mean a Go toolchain in a python-slim
   # image for one command.
   "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
     "mcp==${HR_MCP_SDK_VERSION:-2.2.0}" || return 1
+  # Written LAST, after both installs and the version check proved the venv good: the marker is
+  # what the boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
+  printf '#!/bin/sh\necho %s\n' "$AIDER_PIN" > "$TOOLS/aider-venv/bin/aider-ready" \
+    && chmod +x "$TOOLS/aider-venv/bin/aider-ready"
 }
 
 # Kimi Code CLI, MIT (MoonshotAI/kimi-code), pinned to 2.0.0.
@@ -493,8 +502,8 @@ install_backends() {
   # because the console offers every base the gateway's catalogue lists and a base that is listed
   # but not installed fails on its first task; an operator who does not want it leaves it out of
   # HR_BACKENDS, the same switch every backend has.
-  if wanted aider && [ ! -x "$(backend_bin aider)" ]; then
-    echo "[harnessrouter] installing Aider (Apache-2.0) — ~735 MB, this takes a minute…"
+  if wanted aider && [ "$("$TOOLS/aider-venv/bin/aider-ready" 2>/dev/null)" != "$AIDER_PIN" ]; then
+    echo "[harnessrouter] installing Aider $AIDER_PIN (Apache-2.0) — ~735 MB, this takes a minute…"
     try_install "Aider" install_aider || true
   fi
 
