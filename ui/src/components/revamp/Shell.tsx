@@ -11,7 +11,7 @@ import { BookCallDialog } from '@/components/BookCallDialog';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { getSession, logout } from '@/lib/auth';
-import { PLATFORM_ADMIN_ORGS, SELF_HOSTED, SELF_HOSTED_NAV } from '@/lib/edition';
+import { SELF_HOSTED, SELF_HOSTED_NAV } from '@/lib/edition';
 import { useWorkspace } from '@/lib/workspace';
 import { listCustom, OOB } from '@/lib/harness';
 import { fetchTraceWindow, type TraceCard } from '@/lib/revamp-data';
@@ -68,17 +68,15 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
   ] },
   { label: 'Access', items: [
     { href: '/keys', icon: 'tabler:key', label: 'API Keys' },
+    // The Integrations page, named for what it is to the person configuring it: their own
+    // provider keys. Under Access beside API Keys, as the hosted console has it.
+    { href: '/integrations', icon: 'tabler:password-user', label: 'Bring Your Own Key' },
   ] },
 ]
   // Self-hosted keeps only the entries the box can actually serve (see lib/edition.ts), and a
   // group with nothing left in it disappears rather than showing a bare heading.
   .map((g) => ({ ...g, items: g.items.filter((n) => !SELF_HOSTED || (n.href && SELF_HOSTED_NAV.includes(n.href))) }))
   .filter((g) => g.items.length > 0);
-// Platform-org-only surfaces (the Integrations console configures GLOBAL model routing).
-// Self-hosted: your own keys, on your own box — bring-your-own-key IS the product there.
-const PLATFORM_NAV = [
-  { href: '/integrations', icon: 'tabler:plug-connected', label: 'Integrations', orgs: PLATFORM_ADMIN_ORGS },
-];
 
 export function Shell({ children, credits }: { children: React.ReactNode; credits?: number | null }) {
   const pathname = usePathname() || '';
@@ -450,21 +448,6 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
               <span className="v2-item-end">{credits != null ? credits.toLocaleString() : '—'}</span>
             </Link>
           </div>
-          )}
-          {PLATFORM_NAV.filter((n) => (SELF_HOSTED
-            ? SELF_HOSTED_NAV.includes(n.href)     // your own keys, on your own box
-            : n.orgs.includes(s?.orgId || ''))).length > 0 && (
-            <div className="v2-group">
-              <p className="v2-group-label">Platform</p>
-              {PLATFORM_NAV.filter((n) => (SELF_HOSTED
-                ? SELF_HOSTED_NAV.includes(n.href)
-                : n.orgs.includes(s?.orgId || ''))).map((n) => (
-                <Link key={n.href} className="v2-item" href={n.href} title={railed ? n.label : undefined}
-                  aria-current={isActive(n.href) ? 'page' : undefined}>
-                  <iconify-icon icon={n.icon}></iconify-icon><span>{n.label}</span>
-                </Link>
-              ))}
-            </div>
           )}
         </nav>
 
