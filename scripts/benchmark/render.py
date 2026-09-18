@@ -101,8 +101,20 @@ def render(records: list[dict]) -> str:
 
 
 if __name__ == "__main__":
+    # `--note "..."` (repeatable) records what the run ran on: the instance version, the date, the
+    # connection, anything a reader needs to reproduce the column. The document is generated, so
+    # this is where such a sentence lives.
     recs: list[dict] = []
-    for path in sys.argv[1:]:
-        data = json.load(open(path, encoding="utf-8"))
+    notes: list[str] = []
+    args = sys.argv[1:]
+    while args:
+        a = args.pop(0)
+        if a == "--note":
+            notes.append(args.pop(0))
+            continue
+        data = json.load(open(a, encoding="utf-8"))
         recs += list(data.values()) if isinstance(data, dict) else list(data)
-    print(render(recs))
+    md = render(recs)
+    if notes:
+        md += "\n## Run notes\n\n" + "\n".join(f"- {n}" for n in notes) + "\n"
+    print(md)
