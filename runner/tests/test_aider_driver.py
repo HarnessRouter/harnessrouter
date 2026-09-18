@@ -576,6 +576,24 @@ def test_the_record_is_handed_to_aider_on_the_command_line():
     assert 'argv += ["--model-metadata-file", meta]' in src
 
 
+def test_the_conversation_is_kept_verbatim_rather_than_summarised_at_aiders_cap():
+    """aider keeps at most 8k tokens of history (1k for an id litellm does not know) and
+    summarises the rest with a model call; after four short turns the fifth could not say what
+    the first asked (console matrix, hr-test 2026-09-18). Half the window when known, else a
+    budget that fits the catalog's smallest windows; and the flag reaches the command line."""
+    d = tempfile.mkdtemp()
+    meta = pathlib.Path(d, "meta.json")
+    meta.write_text(json.dumps({"openai/gpt-5.4": {"max_input_tokens": 400000}}))
+    assert aider_driver._history_budget(str(meta)) == 200000
+    meta.write_text(json.dumps({"openai/x": {"max_input_tokens": 8000}}))
+    assert aider_driver._history_budget(str(meta)) == 8192
+    assert aider_driver._history_budget(None) == 96000
+    meta.write_text("not json")
+    assert aider_driver._history_budget(str(meta)) == 96000
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert 'argv += ["--max-chat-history-tokens", str(_history_budget(meta))]' in src
+
+
 def test_the_models_reasoning_is_not_rendered_as_its_answer():
     """MEASURED FAILURE this pins (vercel|aider|grok-4.20, 2026-09-18): the transcript showed the
     model's chain of thought -- "(wait, no, that's not how it works)... So my response should be:"

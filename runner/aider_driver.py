@@ -291,6 +291,28 @@ def _write_model_metadata(cwd: str, model: str) -> str | None:
     return str(path)
 
 
+def _history_budget(meta_path: str | None) -> int:
+    """How much of the conversation aider keeps verbatim before summarising it away.
+
+    aider caps it at min(max(window/16, 1024), 8192) tokens (models.py:346), and 1024 for an id
+    litellm has no record of, which is most of this catalog. Past that cap the restored history is
+    SUMMARISED by a model call on every turn, and the summary is lossy: measured in the console
+    matrix (hr-test, 2026-09-18), after four short turns the fifth could no longer say what the
+    first message asked for, on ids that answered the same question one turn earlier. The other
+    bases keep the whole transcript until the window is near full; aider gets the same here.
+    Half the window when the record says it, else HR_AIDER_HISTORY_TOKENS, 96,000, which fits the
+    128k windows at the small end of the catalog with the map, the doc and a reply beside it."""
+    fallback = int(os.environ.get("HR_AIDER_HISTORY_TOKENS", "96000"))
+    if not meta_path:
+        return fallback
+    try:
+        record = next(iter(json.loads(pathlib.Path(meta_path).read_text()).values()))
+        window = int(record.get("max_input_tokens") or 0)
+    except (OSError, ValueError, StopIteration, AttributeError, TypeError):
+        return fallback
+    return max(window // 2, 8192) if window else fallback
+
+
 def main() -> int:
     job = json.loads(sys.argv[1])
     cwd = job.get("cwd") or os.getcwd()
@@ -345,6 +367,7 @@ def main() -> int:
     meta = _write_model_metadata(cwd, job["model"])
     if meta:
         argv += ["--model-metadata-file", meta]
+    argv += ["--max-chat-history-tokens", str(_history_budget(meta))]
     # aider's URL scrape (a URL in the user's message is fetched into the chat after a
     # confirmation) stays off: the web is reached through a shell command like everything else,
     # under the one gate, and the catalog lists no separate Web Fetch tool for that reason.
