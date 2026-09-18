@@ -44,8 +44,8 @@ def test_an_mcp_call_is_named_for_the_tool_it_invokes():
     measure `mcp_called` from a command that actually ran — aider itself has no MCP client at all
     (zero source hits across the 0.86.2 tree)."""
     g = aider_driver._Gate([])
-    assert g.mcp_tool_of("hr-mcp call deepwiki read_wiki_structure --params {}") == \
-        ("deepwiki", "read_wiki_structure")
+    assert g.mcp_calls_in("hr-mcp call deepwiki read_wiki_structure --params {}") == \
+        [("deepwiki", "read_wiki_structure")]
     approved, tool, _ = g.decide("hr-mcp call deepwiki read_wiki_structure --params {}")
     assert approved is True and tool == "deepwiki.read_wiki_structure"
 
@@ -57,18 +57,40 @@ def test_disabling_an_mcp_tool_refuses_it_by_its_own_name():
     assert "read_wiki_structure" in reason
 
 
+def test_a_disabled_tool_is_refused_wherever_the_call_stands_in_a_compound_command():
+    """gpt-5.4, with probe_sse disabled, proposed `hr-mcp tools probe && hr-mcp call probe
+    probe_sse` and a gate that read argv[0..3] saw a discovery and let the call through (hr-test,
+    2026-09-18). The whole command is scanned; the bridge refuses the same name itself."""
+    g = aider_driver._Gate(["probe_sse"])
+    assert g.decide("hr-mcp tools probe && hr-mcp call probe probe_sse --params '{}'")[0] is False
+    assert g.decide("cd x; .harness/bin/hr-mcp call probe probe_sse")[0] is False
+    assert g.decide("echo | hr-mcp call probe probe_sse")[0] is False
+    ok, name, _ = g.decide("hr-mcp call probe other_tool")
+    assert ok and name == "probe.other_tool"
+    # the bridge's own refusal, by bare name and by server.tool
+    cfg = {"mcpServers": {"probe": {"url": "https://x/sse"}}, "disabledTools": ["probe_sse"]}
+    assert aider_mcp_bridge._refused(cfg, "probe", "probe_sse").startswith("hr-mcp: the harness disabled")
+    assert aider_mcp_bridge._refused({"disabledTools": ["probe.probe_sse"]}, "probe", "probe_sse")
+    assert aider_mcp_bridge._refused(cfg, "probe", "other") == ""
+    # and the runner writes the names beside the servers
+    _, d, _, _ = _build(tools_disabled=["probe_sse"], mcp_servers=[{"name": "probe", "url": "https://x/sse", "transport": "sse"}])
+    doc = json.loads(pathlib.Path(d, ".harness", "aider-mcp.json").read_text())
+    assert doc["disabledTools"] == ["probe_sse"] and "probe" in doc["mcpServers"]
+
+
 def test_a_command_that_merely_mentions_hr_mcp_is_not_an_mcp_call():
     """`hr-mcp` in prose, or a bare `hr-mcp tools <server>` discovery call, is a shell command —
     only the four-part `call` form names a tool, and treating anything else as one would invent an
     MCP call in the turn record."""
     g = aider_driver._Gate([])
-    assert g.mcp_tool_of("echo hr-mcp call x y") == ("", "")
-    assert g.mcp_tool_of("hr-mcp tools deepwiki") == ("", "")
+    assert g.mcp_calls_in("echo hr-mcp call x y") == []
+    assert g.mcp_calls_in("hr-mcp tools deepwiki") == []
 
 
 def test_an_unparseable_command_does_not_crash_the_gate():
     g = aider_driver._Gate([])
-    assert g.mcp_tool_of('hr-mcp call "unclosed') == ("", "")
+    assert g.mcp_calls_in('hr-mcp call "unclosed') == []
+    assert g.decide('hr-mcp call "unclosed')[1] == "Shell"
 
 
 # ── the normalizer ───────────────────────────────────────────────────────────────
@@ -201,7 +223,7 @@ def test_the_bridge_actually_reaches_the_model_and_is_runnable():
                  "gpt-5.4", "do it", d, env,
                  mcp_servers=[{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp"}])
     cfg = json.loads(pathlib.Path(d, ".harness", "aider-mcp.json").read_text())
-    assert cfg == {"mcpServers": {"deepwiki": {"url": "https://mcp.deepwiki.com/mcp"}}}
+    assert cfg == {"mcpServers": {"deepwiki": {"url": "https://mcp.deepwiki.com/mcp"}}, "disabledTools": []}
     shim = pathlib.Path(d, ".harness", "bin", "hr-mcp")
     assert shim.is_file() and shim.stat().st_mode & 0o111       # executable
     assert str(shim.parent) in env["PATH"].split(":")

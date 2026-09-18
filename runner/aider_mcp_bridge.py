@@ -34,7 +34,19 @@ def _load(config: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         print(f"hr-mcp: cannot read its server list ({exc})", file=sys.stderr)
         raise SystemExit(2)
-    return data.get("mcpServers") or {}
+    return data
+
+
+def _refused(config: dict, server: str, tool: str) -> str:
+    """The harness's tool policy, enforced HERE, where the call executes: the driver's gate names
+    the call in the turn record, but a gate that reads a shell command can be walked around by
+    the shell (a compound command did, hr-test 2026-09-18), and the bridge is the only road to the
+    server. The disabled names travel in the same file as the servers."""
+    disabled = {str(d).strip().lower() for d in (config.get("disabledTools") or []) if str(d).strip()}
+    for name in (tool.lower(), f"{server}.{tool}".lower()):
+        if name in disabled:
+            return f"hr-mcp: the harness disabled the tool '{tool}'"
+    return ""
 
 
 def _target(servers: dict, name: str):
@@ -95,7 +107,13 @@ async def _run(args) -> int:
     # HTTP. `mode` here is the protocol-handshake era, not the HTTP transport.
     from mcp.client.client import Client
 
-    servers = _load(args.config)
+    config = _load(args.config)
+    servers = config.get("mcpServers") or {}
+    if args.command == "call":
+        refused = _refused(config, args.server, args.tool)
+        if refused:
+            print(refused, file=sys.stderr)
+            return 1
     target = _target(servers, args.server)
     async with Client(target, raise_exceptions=False) as client:
         if args.command == "tools":

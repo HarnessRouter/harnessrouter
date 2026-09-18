@@ -4202,7 +4202,10 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     bindir = pathlib.Path(cwd) / ".harness" / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
     cfg = pathlib.Path(cwd) / ".harness" / "aider-mcp.json"
-    cfg.write_text(json.dumps({"mcpServers": servers}, indent=2))
+    # The disabled names ride with the servers: the bridge refuses a disabled tool itself, where
+    # the call executes, so the policy holds whatever shell the model wraps the call in.
+    cfg.write_text(json.dumps({"mcpServers": servers,
+                               "disabledTools": [str(t) for t in (tools_disabled or [])]}, indent=2))
     shim = bindir / "hr-mcp"
     shim.write_text("#!/bin/sh\nexec %s %s --config %s \"$@\"\n"
                     % (shlex.quote(AIDER_PYTHON), shlex.quote(AIDER_MCP_BRIDGE), shlex.quote(str(cfg))))

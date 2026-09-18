@@ -37,7 +37,6 @@ import json
 import os
 import pathlib
 import re
-import shlex
 import sys
 import time
 
@@ -49,6 +48,14 @@ _T0 = time.time()
 # and the edit is reported as a card of its own; the prose around the block is the answer.
 _EDIT_BLOCK = re.compile(r"(?:^\S+\n)?```[^\n]*\n<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n```\n?",
                          re.S | re.M)
+
+
+# `hr-mcp call <server> <tool>` wherever it stands in COMMAND position: at the start of the line
+# or after &&, ||, ;, |, ( or a backtick, by its bare name or a path ending in it. Not after a
+# plain space, so `echo hr-mcp call x y` stays the prose it is. Server and tool are one shell
+# word each.
+_HR_MCP_CALL = re.compile(r"(?:^|[\n;&|(`])\s*(?:\S*/)?hr-mcp\s+call\s+([^\s;&|)`'\"]+)\s+([^\s;&|)`'\"]+)",
+                          re.M)
 
 
 def strip_edit_blocks(text: str) -> str:
@@ -81,29 +88,29 @@ class _Gate:
         self.disabled = {d.strip().lower() for d in (disabled or []) if d and d.strip()}
         self.calls: list[dict] = []
 
-    def mcp_tool_of(self, command: str) -> tuple[str, str]:
-        """('server', 'tool') when this command is an hr-mcp call, ('', '') otherwise."""
-        try:
-            parts = shlex.split(command)
-        except ValueError:
-            return "", ""
-        # hr-mcp call <server> <tool> [--params …] — the exact form the runner documents to the
-        # model in the bridge block, so recognising it here is reading our own contract back.
-        # `hr-mcp tools <server>` is discovery, not a tool call, and is deliberately NOT matched:
-        # recording it as one would invent an MCP call in the turn record.
-        if len(parts) >= 4 and os.path.basename(parts[0]) == "hr-mcp" and parts[1] == "call":
-            return parts[2], parts[3]
-        return "", ""
+    def mcp_calls_in(self, command: str) -> list[tuple[str, str]]:
+        """Every ('server', 'tool') an hr-mcp call in this command names, in order.
+
+        `hr-mcp call <server> <tool> [--params …]` is the form the runner documents to the model,
+        so recognising it is reading our own contract back; `hr-mcp tools <server>` is discovery,
+        not a call, and is deliberately not matched. The WHOLE command is scanned, not its first
+        words: with a tool disabled, gpt-5.4 proposed `hr-mcp tools probe && hr-mcp call probe
+        probe_sse` and a gate that read argv[0..3] saw a discovery and let the call through
+        (hr-test, 2026-09-18). The bridge refuses a disabled tool as well, by name, whatever the
+        shell around it looks like; this gate is what names the call in the turn record."""
+        return [(m.group(1), m.group(2)) for m in _HR_MCP_CALL.finditer(command)]
 
     def decide(self, command: str) -> tuple[bool, str, str]:
         """(approved, tool_name, reason). tool_name is what the turn record will call this."""
-        server, tool = self.mcp_tool_of(command)
-        if tool:
-            name = f"{server}.{tool}"
-            for d in (tool.lower(), name.lower()):
-                if d in self.disabled:
-                    return False, name, f"the harness disabled the tool '{tool}'"
-            return True, name, ""
+        calls = self.mcp_calls_in(command)
+        if calls:
+            for server, tool in calls:
+                name = f"{server}.{tool}"
+                for d in (tool.lower(), name.lower()):
+                    if d in self.disabled:
+                        return False, name, f"the harness disabled the tool '{tool}'"
+            server, tool = calls[0]
+            return True, f"{server}.{tool}", ""
         if "shell" in self.disabled or "bash" in self.disabled:
             return False, "Shell", "the harness disabled shell commands"
         return True, "Shell", ""
