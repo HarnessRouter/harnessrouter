@@ -37,7 +37,7 @@ anything that only inspects a schema.
 
 ## What it checks
 
-74 checks across three classes.
+75 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
@@ -64,6 +64,10 @@ A few of them are worth calling out, because they catch things a schema check ne
   own origin.
 - **X-08** — artifact ids do not traverse out of their container. Probes for `../` and its
   percent-encoded form.
+- **X-09** — `POST /v1/files` itself. X-05 sends its file inline, so a server whose upload
+  endpoint fails outright still passed the files chapter: HarnessRouter CE 0.17.3 answered every
+  upload with 500 and was green. X-09 uploads, holds the file object to the schema and to the byte
+  count it was sent, and references the id from a task.
 - **P-02/P-06** — a plugin package is derived, not copied, and a harness exports as a package
   that installs again. P-02 fails a server whose own `mcpServers` absorb a plugin's servers, the
   mistake that makes every read-then-write install them twice; P-06 fails an export that carries

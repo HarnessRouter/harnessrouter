@@ -669,6 +669,49 @@ def x08(ctx):
 # Full — harness lifecycle
 # ══════════════════════════════════════════════════════════════════════════════════════
 
+@check("X-09", "A file uploaded through POST /v1/files is accepted and can be sent as task input",
+       "extended", f"{SPEC}/files.md#12-by-upload")
+def x09(ctx):
+    """Files §1.2 is the other half of "a server MUST accept both forms". X-05 sends its file inline,
+    so it never reaches `POST /v1/files`: HarnessRouter CE 0.17.3 answered every upload with 500 and
+    passed the files chapter (#198). This check uploads, holds the file object to the schema, and
+    then references the id from a task the way a client would."""
+    d = ctx.state.get("discovery") or ctx.client.get("/v1/uhp", auth=False).json or {}
+    ctx.state["discovery"] = d
+    if (d.get("capabilities") or {}).get("files_input") is False:
+        raise Skip("this server reports files_input false, so Files §1 does not apply to it")
+    h = _harness(ctx)
+    token = f"uhp-{uuid.uuid4().hex[:8]}"
+    content = f"The secret token is {token}.\n".encode()
+    boundary = f"uhp{uuid.uuid4().hex}"
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nuser_data\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"token.txt\"\r\n"
+            f"Content-Type: text/plain\r\n\r\n").encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    r = ctx.client.post("/v1/files", raw=body, content_type=f"multipart/form-data; boundary={boundary}")
+    assert r.status == 200, (f"POST /v1/files returned HTTP {r.status}: {r.body[:200]!r} "
+                             f"(X-05 sends its file inline and never reaches this endpoint)")
+    f = r.json if isinstance(r.json, dict) else {}
+    ctx.validate(f, "File")
+    assert f.get("object") == "file", f"the upload answered object={f.get('object')!r}, not 'file'"
+    if "bytes" in f:   # optional in the schema; when reported it must be the whole file — a short
+        assert f["bytes"] == len(content), (   # count is the silent truncation §1.2 forbids
+            f"the upload reports {f['bytes']!r} bytes for a {len(content)}-byte file")
+    task = {"input": [{"role": "user", "content": [
+                {"type": "input_text", "text": "Reply with only the secret token from the attached file."},
+                {"type": "input_file", "file_id": f["id"]}]}],
+            "metadata": {"harness_id": h["id"]}, "stream": False}
+    if ctx.model:
+        task["model"] = ctx.model
+    r2 = ctx.client.post("/v1/responses", body=task)
+    assert r2.status == 200, (f"a task referencing the uploaded file returned HTTP {r2.status}: "
+                              f"{r2.body[:200]!r}")
+    ctx.validate(r2.json, "Response")
+    text = json.dumps(r2.json.get("output") or [])
+    return ("uploaded, referenced by id, and the harness echoed the token" if token in text
+            else "uploaded and accepted by id (the harness did not echo the token, which the protocol "
+                 "does not require)")
+
+
 @check("F-01", "A harness can be created, updated and deleted", "full",
        f"{SPEC}/harnesses.md#4-managing-harnesses")
 def f01(ctx):

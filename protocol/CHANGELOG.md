@@ -63,7 +63,14 @@ previous version stays published at its own address and a server SHOULD keep ser
   survival of an unrelated edit, export that installs again without credentials, skipped
   components recorded, `enabled: false` preserved, refusal of an unsupported manifest schema,
   refusal of duplicate plugin names. Each is proven against a defect stub carrying one mistake at
-  a time, the way the R-series is. The suite is now 74 checks.
+  a time, the way the R-series is. That made the suite 74 checks.
+
+- **X-09**, class Extended: a file uploaded through `POST /v1/files` is accepted and can be
+  sent as task input by id ([Files §1.2](versions/2026-09-12/files.md#12-by-upload)). X-05 sends
+  its file inline and never reaches the upload endpoint, so a server whose uploads all failed
+  passed the chapter (HarnessRouter CE 0.17.3, #198). Proven against a defect stub: an upload
+  that fails outright, one that answers without an id, and one that truncates each fail X-09
+  alone while X-05 stays green. The suite is now 75 checks.
 
 ## 2026-08-11, additive clarifications
 
