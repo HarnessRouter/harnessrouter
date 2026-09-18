@@ -200,8 +200,50 @@ def test_no_bridge_is_advertised_when_no_server_is_declared():
     doc = pathlib.Path(d, "AGENTS.md"); doc.write_text("# harness contract\n")
     _build_aider("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
                  "gpt-5.4", "do it", d, {}, mcp_servers=[])
-    assert doc.read_text() == "# harness contract\n"
+    text = doc.read_text()
+    assert text.startswith("# harness contract\n")
+    assert "hr-mcp" not in text and "## MCP servers" not in text
     assert _aider_mcp_block({}) == ""
+
+
+def test_the_doc_tells_the_model_how_this_workspace_works_and_names_the_skills_by_relative_path():
+    """aider's own prompt says the USER adds files and may run the suggested commands; here the
+    driver does both, and a model that was not told behaved as aider's prompt says (guessed a
+    skill's token, declared itself unable to run a tool, invented a result). The block names each
+    SKILL.md by the workspace-relative path aider's file-mention matcher accepts."""
+    d = tempfile.mkdtemp()
+    sk = pathlib.Path(d, ".harness", "skills", "plugin-probe"); sk.mkdir(parents=True)
+    sk.joinpath("SKILL.md").write_text("---\nname: plugin-probe\n---\n")
+    doc = pathlib.Path(d, "AGENTS.md"); doc.write_text("# harness contract\n")
+    _build_aider("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
+                 "gpt-5.4", "do it", d, {}, mcp_servers=[])
+    text = doc.read_text()
+    assert "## How this workspace works for you" in text
+    assert "- `.harness/skills/plugin-probe/SKILL.md`" in text
+    assert "```bash" in text and "Report only output you were actually given" in text
+    # written fresh each turn on top of the doc the turn wrote: no growth across turns
+    doc.write_text("# harness contract\n")
+    _build_aider("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
+                 "gpt-5.4", "do it", d, {}, mcp_servers=[])
+    assert doc.read_text().count("## How this workspace works for you") == 1
+
+
+def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards():
+    """The SEARCH/REPLACE markup is aider's wire format for an edit; the console showed it raw as
+    the reply ("hello.py ```python <<<<<<< SEARCH ======= print(...) >>>>>>> REPLACE ```",
+    hr-test 2026-09-18). The prose is the answer; each edited file is a card, as on every base."""
+    text = ("I will create the file.\n\nhello.py\n```python\n<<<<<<< SEARCH\n=======\n"
+            "print(\"aider\")\n>>>>>>> REPLACE\n```\n\nDONE-FILE")
+    assert aider_driver.strip_edit_blocks(text) == "I will create the file.\n\n\nDONE-FILE"
+    shell = "Run this:\n```bash\ncat SKILL.md\n```"
+    assert aider_driver.strip_edit_blocks(shell) == shell        # a command block is not an edit
+    state: dict = {"_aider_init": True}
+    evs = _aider_to_claude({"m": "edits", "p": {"files": ["hello.py", "b.txt"]}}, state)
+    calls = [c for e in evs for c in e["message"]["content"] if c["type"] == "tool_use"]
+    results = [c for e in evs for c in e["message"]["content"] if c["type"] == "tool_result"]
+    assert [c["name"] for c in calls] == ["Edit", "Edit"]
+    assert [c["input"]["file_path"] for c in calls] == ["hello.py", "b.txt"]
+    assert [r["tool_use_id"] for r in results] == [c["id"] for c in calls]
 
 
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():

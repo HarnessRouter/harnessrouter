@@ -4117,6 +4117,38 @@ def _aider_mcp_servers(mcp_servers: list[dict] | None) -> dict:
     return out
 
 
+def _aider_working_notes(cwd: str, servers: dict | None = None) -> str:
+    """How THIS workspace works, in the terms aider's own prompt uses.
+
+    aider's system prompt tells the model that the USER adds files to the chat and that the
+    user may run the shell commands it suggests. Here nobody sits at that keyboard: the driver
+    answers every confirmation, adds a file the model names, runs a command it proposes and hands
+    the output back in the same turn. Unless the model is told so it behaves as aider's prompt
+    says, measured 2026-09-18 on hr-test: asked to use a skill it guessed the token instead of
+    reading SKILL.md, asked to call an MCP tool it wrote "I'm constrained here to only return
+    SEARCH/REPLACE blocks", asked for a streamable-HTTP tool it invented the result. Every path
+    below is relative to the workspace, the spelling aider's file-mention matcher accepts; the
+    skills block above keeps its absolute folders for composing commands."""
+    skills = sorted(p.relative_to(cwd).as_posix()
+                    for p in (pathlib.Path(cwd) / ".harness" / "skills").glob("*/SKILL.md"))
+    lines = ["\n## How this workspace works for you\n",
+             "You cannot open files or run anything yourself; the harness does both for you "
+             "between messages, without asking anyone.\n",
+             "- To read a file that is not in the chat, write its workspace-relative path exactly "
+             "as listed, on its own, and end your reply. The file is added to the chat and you "
+             "continue from there."]
+    if skills:
+        lines.append("  The skills installed here are read the same way:")
+        lines += [f"  - `{rel}`" for rel in skills]
+    lines += ["- To run a command, put it in a ```bash fenced block. It is executed after your "
+              "reply and its output is given back to you in the next message. This is how a "
+              "skill's scripts run (cd into the skill's folder first)"
+              + (" and how MCP tools are called (`hr-mcp`, below)." if servers else "."),
+              "- Report only output you were actually given. Never write the result you expect "
+              "a command or a tool to produce; if you have not run it yet, run it first.\n"]
+    return "\n".join(lines)
+
+
 def _aider_mcp_block(servers: dict) -> str:
     """The bridge, in the context aider reads, in the exact form the driver's gate recognises.
 
@@ -4176,15 +4208,16 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
                     % (shlex.quote(AIDER_PYTHON), shlex.quote(AIDER_MCP_BRIDGE), shlex.quote(str(cfg))))
     shim.chmod(0o755)
     env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", os.environ.get("PATH", ""))
-    # The block is APPENDED to the agent doc the turn already wrote, which aider reads through
-    # --read. Without this the bridge exists and the model is never told it does — the defect this
-    # call site is here to prevent, caught because the block was generated and never used.
-    if servers:
-        doc = _agent_doc_path(cwd, "aider")
-        try:
-            doc.write_text((doc.read_text() if doc.exists() else "") + _aider_mcp_block(servers))
-        except OSError:
-            pass
+    # The notes and the MCP block are APPENDED to the agent doc the turn already wrote, which
+    # aider reads through --read. Without the block the bridge exists and the model is never told
+    # it does — the defect this call site is here to prevent, caught because the block was
+    # generated and never used.
+    doc = _agent_doc_path(cwd, "aider")
+    try:
+        doc.write_text((doc.read_text() if doc.exists() else "")
+                       + _aider_working_notes(cwd, servers) + _aider_mcp_block(servers))
+    except OSError:
+        pass
     # aider resolves a BARE id against its own MODEL_ALIASES table, which rewrites 21 of them —
     # `gemini-2.5-pro` among them, an id this product's catalog also serves. An `openai/` prefix
     # routes through litellm's openai provider verbatim and skips that table entirely, so the id the
@@ -5488,6 +5521,19 @@ def _aider_event(obj: dict, state: dict, m, p) -> list[dict]:
         return [{"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": tuid, "is_error": False,
              "content": str(p.get("output") or "")}]}}]
+    if m == "edits":
+        # Files aider's edit engine wrote this pass, one card each, the way every other base's
+        # file edits render. The SEARCH/REPLACE markup that produced them is aider's wire format,
+        # not the answer, and the driver strips it from the text.
+        out: list[dict] = []
+        for f in p.get("files") or []:
+            tuid = f"ed{len(state.setdefault('_aider_calls', []))}"
+            state["_aider_calls"].append(tuid)
+            out.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tuid, "name": "Edit", "input": {"file_path": str(f)}}]}})
+            out.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tuid, "is_error": False, "content": "edited"}]}})
+        return out
     if m == "result":
         err = state.get("_aider_error") or ""
         ok = bool(p.get("ok")) and not err

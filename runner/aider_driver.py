@@ -36,11 +36,23 @@ import contextlib
 import json
 import os
 import pathlib
+import re
 import shlex
 import sys
 import time
 
 _T0 = time.time()
+
+# A SEARCH/REPLACE block as aider's editblock format writes it: the file name alone on the line
+# before the fence, the fence (with or without a language), the three markers. The markers'
+# lengths follow editblock_coder.py (5 to 9 characters). This is aider's wire format for an edit,
+# and the edit is reported as a card of its own; the prose around the block is the answer.
+_EDIT_BLOCK = re.compile(r"(?:^\S+\n)?```[^\n]*\n<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n```\n?",
+                         re.S | re.M)
+
+
+def strip_edit_blocks(text: str) -> str:
+    return _EDIT_BLOCK.sub("", text or "").strip()
 
 
 def _emit(method: str, payload) -> None:
@@ -125,7 +137,7 @@ def _install(coder, gate: _Gate, web_disabled: bool) -> None:
                                             coder.reasoning_tag_name)
         except Exception:
             body = ""
-        _emit("text", {"text": body or str(message)})
+        _emit("text", {"text": strip_edit_blocks(body or str(message))})
         return orig_assistant(message, pretty)
 
     def tool_error(message="", strip=True):
@@ -216,9 +228,16 @@ def _run_turn(coder, prompt: str) -> None:
     coder.init_before_message()
     message = prompt
     reflections = 0
+    reported: set = set()
     while message:
         coder.reflected_message = None
         list(coder.send_message(message))
+        # aider_edited_files accumulates over the turn; what this pass added is reported now, so
+        # the cards sit beside the prose that produced them.
+        edited = sorted(set(coder.aider_edited_files or []) - reported)
+        if edited:
+            reported.update(edited)
+            _emit("edits", {"files": edited})
         if not coder.reflected_message:
             break
         if reflections >= coder.max_reflections:
