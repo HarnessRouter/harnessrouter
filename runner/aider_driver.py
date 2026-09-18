@@ -2,9 +2,13 @@
 
 Spawned per turn by server.py (the same one-process-per-turn contract as every other backend: the
 runner reads NDJSON off stdout, cancel is a process-group kill). Inside, aider is DRIVEN IN PROCESS
-through its own supported entry point — `aider.main.main(..., return_coder=True)` hands back the
-constructed Coder without running the interactive loop — rather than launched as a CLI whose printed
-text we would parse.
+through `aider.main.main(..., return_coder=True)`, which hands back the constructed Coder without
+running the interactive loop — rather than launched as a CLI whose printed text we would parse. That
+entry point is aider's own: its GUI calls it (`gui.py:71`) and its test suite covers it. It is NOT a
+supported API, and saying so would be a lie upstream has already contradicted — aider's scripting
+page states that "the python scripting API is not officially supported or documented, and could
+change in future releases without providing backwards compatibility". This is why the version is
+pinned EXACTLY and why install-time checks assert the symbols this driver reaches for.
 
 WHY THIS EXISTS AT ALL, measured on the pinned 0.86.2. Aider has no machine-readable output mode,
 and its stdout is ONE channel carrying both the model's prose and aider's own diagnostics. A stub
@@ -28,6 +32,7 @@ normalised by _aider_to_claude in server.py.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
@@ -101,7 +106,26 @@ def _install(coder, gate: _Gate, web_disabled: bool) -> None:
     orig_warning = io.tool_warning
 
     def assistant_output(message, pretty=None):
-        _emit("text", {"text": str(message)})
+        # WHAT ARRIVES HERE IS AIDER'S DISPLAY STRING, NOT THE MODEL'S ANSWER. For a reasoning
+        # model base_coder.py:1882-1890 prepends the chain of thought and rewrites its tags into
+        # terminal furniture (`► **THINKING**` ... `► **ANSWER**`, reasoning_tags.py:10-11) before
+        # handing it here. MEASURED on vercel|aider|grok-4.20 (2026-09-18, the column's only id
+        # whose provider returns a reasoning field): its cards carried the model deliberating --
+        # `...(wait, no, that's not how it works)... So my response should be: ► ANSWER ...` -- and
+        # were scored against text the model never addressed to the user.
+        #
+        # The answer is `partial_response_content`, set from the completion's own `content`
+        # (base_coder.py:1866) and never decorated; aider's own helper covers the other shape, a
+        # provider that inlines the tags in content instead of sending a separate field. The
+        # display string is the fallback only when there is no content, so a call site off the send
+        # path still reports something.
+        try:
+            from aider.reasoning_tags import remove_reasoning_content
+            body = remove_reasoning_content(coder.partial_response_content or "",
+                                            coder.reasoning_tag_name)
+        except Exception:
+            body = ""
+        _emit("text", {"text": body or str(message)})
         return orig_assistant(message, pretty)
 
     def tool_error(message="", strip=True):
@@ -204,6 +228,57 @@ def _run_turn(coder, prompt: str) -> None:
         message = coder.reflected_message
 
 
+def _write_model_metadata(cwd: str, model: str) -> str | None:
+    """Give aider back the model record that the `openai/` prefix hides from it.
+
+    server.py prefixes every id with `openai/` on purpose, so aider resolves it through litellm's
+    openai provider verbatim instead of through aider's MODEL_ALIASES table, which rewrites 21 ids.
+    The cost went unmeasured until the google column: litellm's lookup for a prefixed name only
+    falls back to the bare id when that id's own `litellm_provider` IS openai (models.py:228-231).
+    So `openai/gpt-5.6-sol` keeps its full 66-key record while EVERY gemini, claude, grok and qwen
+    id resolves to an empty dict.
+
+    Empty info is not cosmetic. aider reads its limits off that record, so a turn runs with
+    max_input_tokens and max_output_tokens of 0 and REPORTS them: measured on
+    google|aider|gemini-3-flash-preview (2026-09-16), a truncated answer died with
+    `Input tokens: ~45,356 of 0 -- possibly exhausted context window!`, an accusation about a
+    1,048,576-token model built entirely out of the absent record. base_coder.py:1492 reads
+    `supports_assistant_prefill` off the same dict to decide whether a `finish_reason: length` may
+    be continued by prefilling the assistant turn, and an empty dict always answers no.
+
+    The fix asks the info manager for the BARE id: the same lookup aider would have done without the
+    prefix, and no alias rewriting, because this queries the manager rather than constructing a
+    Model. Whatever litellm ships is what aider gets -- no limit is hardcoded here -- and an id
+    litellm does not know (claude-opus-4.8, grok-4.6, qwen3.8-max and kimi-k3 among them) writes
+    nothing and leaves the turn exactly as it behaves today.
+
+    WHAT THIS DOES NOT DO is change whether a turn passes, and the temptation to claim otherwise was
+    measured away. litellm records no `supports_assistant_prefill` for the gemini family either, so
+    the abandon-on-length path is identical with and without this file, and an A/B of that one pair
+    -- three runs each way, 2026-09-16 -- put every recycle in the same band whichever driver ran:
+    19.9s / 209.0s with it, 210.8s / 222.8s / 229.2s without, and the original 399.1s failure is the
+    tail of that same distribution rather than a defect this repaired. This makes the limits real
+    and the failure legible. Nothing more.
+    """
+    bare = model.split("/", 1)[1] if model.startswith("openai/") else model
+    try:
+        from aider.models import model_info_manager
+        # get_model_info prints to stdout on a failed cache refresh (models.py:203) and stdout is
+        # this driver's NDJSON channel, so the lookup is fenced off it.
+        with contextlib.redirect_stdout(sys.stderr):
+            info = model_info_manager.get_model_info(bare)
+    except Exception:
+        info = None
+    if not info:
+        return None
+    path = pathlib.Path(cwd, ".harness", "aider", "model-metadata.json")
+    try:
+        path.write_text(json.dumps({model: dict(info)}, default=str))
+    except OSError:
+        return None
+    return str(path)
+
+
 def main() -> int:
     job = json.loads(sys.argv[1])
     cwd = job.get("cwd") or os.getcwd()
@@ -255,6 +330,9 @@ def main() -> int:
         # sandbox recycle still know what was said. Without it every aider turn is a new thread.
         "--restore-chat-history",
     ]
+    meta = _write_model_metadata(cwd, job["model"])
+    if meta:
+        argv += ["--model-metadata-file", meta]
     if not job.get("detect_urls"):
         argv += ["--no-detect-urls"]
     for path in job.get("read_files") or []:

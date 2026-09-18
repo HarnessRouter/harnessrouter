@@ -6030,8 +6030,10 @@ _MODEL_CATALOG: dict[str, dict] = {
     # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
     # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
     # aider: same relay reach as the others (litellm's openai provider through the loopback relay).
-    # NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS BACKEND YET — no column has run; they are
-    # offered so the matrix can measure them here (the `pi` precedent). Ids are sent with an
+    # Measured: the vercel column ran all 52 runnable ids (235 ok / 21 FAIL) and the google column
+    # 11 (51 ok / 4 FAIL); every pair was served by the connection under test and, judged by
+    # samemodel.py, as the id it asked for. `llama-3.3-70b` is the one id no column reached.
+    # docs/support-matrix-notes.md carries the failures and what each is. Ids are sent with an
     # `openai/` prefix by the runner, which is load-bearing rather than cosmetic: a BARE id is
     # resolved against aider's own MODEL_ALIASES table, which rewrites 21 of them — `gemini-2.5-pro`
     # among them, an id this catalog also serves — and the prefix skips that table entirely.
@@ -13366,12 +13368,13 @@ _BASE_CATALOG: dict[str, dict] = {
         # the URL scrape it asks permission for. Those two are withholdable and are listed. "Edit"
         # is aider's edit engine: it is what aider IS, it cannot be withheld, and it is therefore
         # NOT listed — offering a switch that does nothing is the overstatement UHP §4.3 forbids.
-        # MCP tools reach the model through the mcptools bridge and are gated by tool NAME in the
-        # same place; they are per-harness rather than catalog entries, so they are not listed here.
+        # MCP tools reach the model through the `hr-mcp` bridge (runner/aider_mcp_bridge.py) and
+        # are gated by tool NAME in the same place; they are per-harness rather than catalog
+        # entries, so they are not listed here.
         "tools": [("Shell", "Shell"), ("WebFetch", "Web Fetch")],
         # "hard", and measured rather than asserted: with Shell disabled the model's proposed
         # command is refused at the gate and the file it would have written does not appear; with an
-        # MCP tool name disabled the mcptools call is refused by that tool's own name. Pinned by
+        # MCP tool name disabled the `hr-mcp` call is refused by that tool's own name. Pinned by
         # runner/tests/test_aider_driver.py.
         "tool_enforcement": "hard",
     },

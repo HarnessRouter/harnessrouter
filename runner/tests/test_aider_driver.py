@@ -17,6 +17,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import aider_driver  # noqa: E402
@@ -56,7 +57,7 @@ def test_disabling_an_mcp_tool_refuses_it_by_its_own_name():
     assert "read_wiki_structure" in reason
 
 
-def test_a_command_that_merely_mentions_mcptools_is_not_an_mcp_call():
+def test_a_command_that_merely_mentions_hr_mcp_is_not_an_mcp_call():
     """`hr-mcp` in prose, or a bare `hr-mcp tools <server>` discovery call, is a shell command —
     only the four-part `call` form names a tool, and treating anything else as one would invent an
     MCP call in the turn record."""
@@ -416,3 +417,107 @@ def test_the_operators_step_budget_reaches_the_driver():
     assert job["max_turns"] == 7
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
     assert "coder.max_reflections = max(1, int(budget))" in src
+
+
+def _stub_aider_models(info):
+    """`from aider.models import model_info_manager` without aider installed."""
+    pkg = types.ModuleType("aider")
+    mod = types.ModuleType("aider.models")
+    mod.model_info_manager = types.SimpleNamespace(get_model_info=lambda name: info(name))
+    pkg.models = mod
+    return {"aider": pkg, "aider.models": mod}
+
+
+def test_the_prefixed_id_is_given_back_the_record_the_prefix_hides():
+    """MEASURED FAILURE this pins: litellm falls back from `openai/<id>` to the bare id ONLY when
+    that id's own litellm_provider is openai (models.py:228-231). `openai/gpt-5.6-sol` keeps its
+    66-key record; every gemini, claude, grok and qwen id resolved to an EMPTY dict, and aider then
+    ran and REPORTED limits of 0 -- `Input tokens: ~45,356 of 0 -- possibly exhausted context
+    window!` about a 1,048,576-token model (google|aider|gemini-3-flash-preview, 2026-09-16).
+    The BARE id is what gets looked up, so aider's alias table is still never consulted."""
+    asked = []
+    stub = _stub_aider_models(lambda n: (asked.append(n), {"max_input_tokens": 1048576})[1])
+    with tempfile.TemporaryDirectory() as d:
+        pathlib.Path(d, ".harness", "aider").mkdir(parents=True)
+        saved = {k: sys.modules.get(k) for k in stub}
+        sys.modules.update(stub)
+        try:
+            out = aider_driver._write_model_metadata(d, "openai/gemini-3-flash-preview")
+        finally:
+            for k, v in saved.items():
+                sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
+        assert asked == ["gemini-3-flash-preview"]
+        written = json.loads(pathlib.Path(out).read_text())
+        # registered under the PREFIXED name: that is the key aider looks the running model up by
+        assert written == {"openai/gemini-3-flash-preview": {"max_input_tokens": 1048576}}
+
+
+def test_an_id_litellm_does_not_know_writes_nothing():
+    """claude-opus-4.8, grok-4.6, qwen3.8-max and kimi-k3 are absent from litellm's database even
+    bare, so there is nothing to hand over and the turn must run exactly as it does today."""
+    stub = _stub_aider_models(lambda n: {})
+    with tempfile.TemporaryDirectory() as d:
+        pathlib.Path(d, ".harness", "aider").mkdir(parents=True)
+        saved = {k: sys.modules.get(k) for k in stub}
+        sys.modules.update(stub)
+        try:
+            assert aider_driver._write_model_metadata(d, "openai/grok-4.6") is None
+        finally:
+            for k, v in saved.items():
+                sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
+        assert not pathlib.Path(d, ".harness", "aider", "model-metadata.json").exists()
+
+
+def test_the_record_is_handed_to_aider_on_the_command_line():
+    """A file written and never passed is the defect the MCP block already taught this backend."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert 'meta = _write_model_metadata(cwd, job["model"])' in src
+    assert 'argv += ["--model-metadata-file", meta]' in src
+
+
+def test_the_models_reasoning_is_not_rendered_as_its_answer():
+    """MEASURED FAILURE this pins (vercel|aider|grok-4.20, 2026-09-18): the transcript showed the
+    model's chain of thought -- "(wait, no, that's not how it works)... So my response should be:"
+    -- because io.assistant_output receives aider's DISPLAY string, which base_coder.py:1882-1890
+    builds by prepending the reasoning and rewriting its tags into `► **THINKING**`/`► **ANSWER**`
+    furniture. The answer is partial_response_content, which is never decorated."""
+    class _IO:
+        def __init__(self):
+            self.seen = []
+        def assistant_output(self, message, pretty=None): self.seen.append(message)
+        def confirm_ask(self, *a, **k): return True
+        def tool_error(self, *a, **k): pass
+        def tool_warning(self, *a, **k): pass
+    class _Coder:
+        def __init__(self):
+            self.io = _IO()
+            self.reasoning_tag_name = "thinking-content-7bbeb8e1441453ad999a0bbba8a46d4b"
+            self.partial_response_content = "M1-grok-4.20"
+            self.shell_commands = []
+    coder = _Coder()
+    emitted = []
+    real_emit = aider_driver._emit
+    aider_driver._emit = lambda m, p: emitted.append((m, p))
+    # the driver asks aider to strip, so aider is where the tag semantics stay; the suite runs
+    # without aider installed, so its helper stands in here
+    import re as _re
+    pkg = types.ModuleType("aider"); mod = types.ModuleType("aider.reasoning_tags")
+    mod.remove_reasoning_content = lambda res, tag: (
+        _re.sub(f"<{tag}>.*?</{tag}>", "", res, flags=_re.DOTALL).strip() if tag else res)
+    pkg.reasoning_tags = mod
+    saved = {k: sys.modules.get(k) for k in ("aider", "aider.reasoning_tags")}
+    sys.modules.update({"aider": pkg, "aider.reasoning_tags": mod})
+    try:
+        aider_driver._install(coder, aider_driver._Gate([]), web_disabled=False)
+        # what aider would hand it for a reasoning model
+        coder.io.assistant_output(
+            "--------------\n► **THINKING**\n\nwait, no, that is not how it works\n\n"
+            "------------\n► **ANSWER**\n\nM1-grok-4.20")
+    finally:
+        aider_driver._emit = real_emit
+        for k, v in saved.items():
+            sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
+    texts = [p["text"] for m, p in emitted if m == "text"]
+    assert texts == ["M1-grok-4.20"], texts
+    assert "THINKING" not in texts[0]
+

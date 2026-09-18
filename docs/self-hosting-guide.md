@@ -157,9 +157,11 @@ Wait for `ready on :3000`, then open the browser:
 [harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…
 [harnessrouter] installing Oh My Pi (MIT)…
 [harnessrouter] installing goose (Apache-2.0)…
+[harnessrouter] installing Kimi CLI (Apache-2.0)…
+[harnessrouter] installing Aider (Apache-2.0) — ~735 MB, this takes a minute…
 [harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…
 [harnessrouter] installing Hermes (check its upstream license before use)…
-[harnessrouter] data=/data  backends available: claude codex hermes pi dsh opencode qwen gemini cline omp goose kimi
+[harnessrouter] data=/data  backends available: claude codex hermes pi dsh opencode qwen gemini cline omp goose kimi aider
 [harnessrouter] ready on :3000
 ```
 
@@ -333,16 +335,16 @@ problem, because it only offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi CLI |
+| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI, Aider |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI, Aider |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI, Aider |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI, Aider |
+| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi CLI, Aider |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi CLI |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
-| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi CLI, Aider |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI, Aider |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI, Aider |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi CLI, Aider |
 
 </details>
 
@@ -650,7 +652,7 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
