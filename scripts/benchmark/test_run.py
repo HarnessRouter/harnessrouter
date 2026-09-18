@@ -10,7 +10,18 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render import render  # noqa: E402
-from run import lookup_use, network_use, prompt_matches, provider_failure, tool_outcomes, usage_of  # noqa: E402
+from run import lookup_use, network_use, prompt_matches, provider_failure, provider_streak, tool_outcomes, usage_of  # noqa: E402
+
+
+def test_three_provider_failures_in_a_row_trip_the_halt_and_a_result_resets_it():
+    """The first cut counted the streak under the same lock log() takes and deadlocked on the third
+    failure (measured 2026-09-18: three threads in futex wait, the run silent for half an hour)."""
+    bad = {"error": "provider failure, not a result: 402 Insufficient Balance"}
+    good = {"resolved": True}
+    assert not provider_streak(bad) and not provider_streak(bad) and provider_streak(bad)
+    assert not provider_streak(good)
+    assert not provider_streak(bad) and not provider_streak(bad)
+    assert not provider_streak({"error": "request failed and no session found: 502"})   # not the provider's
 
 
 def test_a_providers_refusal_is_the_runners_problem_not_the_harnesss():

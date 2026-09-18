@@ -162,6 +162,17 @@ PROVIDER_ERROR = re.compile(r"\b(?:40[1239]|429|5\d\d)\b|insufficient balance|ra
                             re.I)
 
 
+_streak = [0]
+_streak_lock = threading.Lock()   # its own lock: log() takes _lock, and a caller may hold this while logging
+
+
+def provider_streak(rec: dict, limit: int = 3) -> bool:
+    """True once `limit` provider failures have arrived in a row; any other record resets the count."""
+    with _streak_lock:
+        _streak[0] = _streak[0] + 1 if str(rec.get("error") or "").startswith("provider failure") else 0
+        return _streak[0] >= limit
+
+
 def provider_failure(turn_error) -> str:
     """The provider's refusal in a failed turn's error, or '' when the error is something else."""
     msg = turn_error.get("message") if isinstance(turn_error, dict) else turn_error
@@ -340,7 +351,6 @@ def main() -> None:
         return f"{rec['provider']}|{rec['harness']}|{rec['model']}|{rec['pack']}|{rec['task']}"
 
     halt = threading.Event()
-    streak = [0]
     for label, hid in harnesses:
         for model in models:
             if halt.is_set():
@@ -366,11 +376,9 @@ def main() -> None:
                     rec["foreign"] = rec["connection"]
                 # three provider refusals in a row: the account, the key or the provider is down,
                 # and every further task would only record the same line
-                with _lock:
-                    streak[0] = streak[0] + 1 if str(rec.get("error", "")).startswith("provider failure") else 0
-                    if streak[0] >= 3 and not halt.is_set():
-                        halt.set()
-                        log(f"HALT after three provider failures in a row: {rec['error'][:160]}")
+                if provider_streak(rec) and not halt.is_set():
+                    halt.set()
+                    log(f"HALT after three provider failures in a row: {rec['error'][:160]}")
                 save(rec)
                 verdict = ("ERROR " + rec["error"][:80]) if rec.get("error") else \
                     ("FINDING network" if rec.get("network") else "FINDING lookup" if rec.get("lookup") else
