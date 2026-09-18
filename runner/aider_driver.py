@@ -337,7 +337,14 @@ def main() -> int:
     from aider.main import main as aider_main
 
     hist = pathlib.Path(cwd, ".harness", "aider")
+    # The harness's own files stay out of aider's repo map: .harness/ holds the skill bundles
+    # (their scripts would otherwise be summarised into every request), aider's own state and the
+    # MCP shim, none of which is the user's project. The map then describes the task's files
+    # alone, and an empty workspace gets no map at all.
+    ignore = hist / "aiderignore"
+    ignore.write_text(".harness/\nAGENTS.md\n.gitignore\n")
     argv = [
+        "--aiderignore", str(ignore),
         "--model", job["model"],
         # The edit format decides whether a skill's script can run AT ALL: shell commands are
         # extracted in editblock_coder.get_edits(), and wholefile/udiff/patch never populate

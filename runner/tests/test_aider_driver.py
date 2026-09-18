@@ -660,6 +660,15 @@ def test_no_temperature_is_sent_since_a_provider_that_retired_the_field_refuses_
     assert "coder.main_model.use_temperature = False" in src
 
 
+def test_the_harness_own_files_stay_out_of_the_repo_map():
+    """.harness/ holds the skill bundles, aider's state and the MCP shim; summarised into the
+    repo map they rode every request as the user's project. The driver hands aider an ignore
+    file for them, so the map describes the task's files alone."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert 'ignore.write_text(".harness/\\nAGENTS.md\\n.gitignore\\n")' in src
+    assert '"--aiderignore", str(ignore),' in src
+
+
 def test_the_models_reasoning_is_not_rendered_as_its_answer():
     """MEASURED FAILURE this pins (vercel|aider|grok-4.20, 2026-09-18): the transcript showed the
     model's chain of thought -- "(wait, no, that's not how it works)... So my response should be:"
