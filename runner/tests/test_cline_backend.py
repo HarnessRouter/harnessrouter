@@ -127,6 +127,25 @@ def test_the_verified_tool_round_trip_normalizes():
     assert _cline_eof(state, 0) == [], "a healthy turn already has its result; eof must add nothing"
 
 
+def test_run_result_usage_nets_the_cached_read_out_of_input():
+    """Captured live on 3.0.60 through the openai-compatible provider against deepseek-flash: a
+    turn of eleven requests whose per-request usage cline stores as (inputTokens, outputTokens,
+    cacheReadTokens) 6236/227/0, 6999/62/6400, 7222/298/7040, ... 18226/299/18048 — inputTokens
+    grows with the conversation and always covers cacheReadTokens, i.e. it is the whole prompt,
+    and run_result reports their sums. The contract is fresh input only, so the cached part must
+    come out; passed through, the turn billed 135208 input tokens for 12584 fresh ones."""
+    state = {}
+    out = _ev('{"ts":"t","type":"run_result","finishReason":"completed","iterations":11,"usage":{"inputTokens":135208,"outputTokens":6597,"cacheReadTokens":122624,"cacheWriteTokens":0,"totalCost":0},"durationMs":63000,"text":"done","model":{"id":"deepseek-flash"}}', state)
+    assert out[-1]["usage"] == {"input_tokens": 135208 - 122624, "output_tokens": 6597,
+                                "cache_read_tokens": 122624, "cache_write_tokens": 0}
+    # A cache write is part of the gross prompt too, by cline's own cost formula.
+    out = _ev('{"ts":"t","type":"run_result","finishReason":"completed","iterations":1,"usage":{"inputTokens":1000,"outputTokens":10,"cacheReadTokens":600,"cacheWriteTokens":300},"text":"done","model":{"id":"m"}}', {})
+    assert out[-1]["usage"]["input_tokens"] == 100
+    # Never below zero if a provider ever reports net input with a cache count beside it.
+    out = _ev('{"ts":"t","type":"run_result","finishReason":"completed","iterations":1,"usage":{"inputTokens":50,"outputTokens":10,"cacheReadTokens":600},"text":"done","model":{"id":"m"}}', {})
+    assert out[-1]["usage"]["input_tokens"] == 0
+
+
 def test_the_verified_error_shape_fails_the_turn():
     """Captured live: a bad credential emits agent_event{type:error} and run_result
     finishReason 'error' whose text restates the message."""

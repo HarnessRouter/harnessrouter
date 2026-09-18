@@ -4222,7 +4222,8 @@ def _cline_to_claude(obj: dict, state: dict) -> list[dict]:
                    token-level — do not advertise token streaming); tool carries toolName,
                    toolCallId and full input on start, output on end.
       run_result   the terminal event: finishReason, text, usage {inputTokens, outputTokens,
-                   cacheReadTokens, cacheWriteTokens}.
+                   cacheReadTokens, cacheWriteTokens}. inputTokens is GROSS — the whole prompt,
+                   cached part included — see the run_result branch.
     """
     t = obj.get("type")
     pre: list[dict] = []
@@ -4265,10 +4266,22 @@ def _cline_to_claude(obj: dict, state: dict) -> list[dict]:
         return []
     if t == "run_result":
         u = obj.get("usage") or {}
-        usage = {"input_tokens": int(u.get("inputTokens") or 0),
+        cache_read = int(u.get("cacheReadTokens") or 0)
+        cache_write = int(u.get("cacheWriteTokens") or 0)
+        # cline's inputTokens is the whole prompt, cached part included: its own cost formula bills
+        # inputTokens - cacheReadTokens - cacheWriteTokens (sdk/packages/llms/src/providers/ai-sdk.ts,
+        # calculateCost), and on the openai-compatible provider every turn here runs through it is the
+        # sum of each request's prompt_tokens. Measured on 3.0.60 against deepseek-flash: eleven
+        # requests summing to inputTokens 135208 / cacheReadTokens 122624, the second of them
+        # 6999 / 6400 on a conversation of 6463 tokens so far. The contract is fresh input only
+        # (_opencode_usage_add, _pi_usage_add, _norm_token_usage for codex), so net the cached part
+        # out here as codex's path does; passed through, the biller charged the cached prefix at the
+        # full input rate on top of the cache rate, and cline read as 30x opencode's tokens on the
+        # same task.
+        usage = {"input_tokens": max(int(u.get("inputTokens") or 0) - cache_read - cache_write, 0),
                  "output_tokens": int(u.get("outputTokens") or 0),
-                 "cache_read_tokens": int(u.get("cacheReadTokens") or 0),
-                 "cache_write_tokens": int(u.get("cacheWriteTokens") or 0)}
+                 "cache_read_tokens": cache_read,
+                 "cache_write_tokens": cache_write}
         state["_cl_usage"] = usage
         state["_cl_done"] = True
         reason = str(obj.get("finishReason") or "")
