@@ -500,7 +500,13 @@ install_backends() {
   # a test. A mismatch rebuilds the venv from scratch; conversations live in the workspace, not in
   # it, so nothing of a session is lost.
   OPENHANDS_PIN="${HR_OPENHANDS_VERSION:-1.49.2}"
-  oh_have="$("$(backend_bin openhands)" -c 'import importlib.metadata as m; print(m.version("openhands-agent-server"))' 2>/dev/null)"
+  # Probed only when there IS something to probe: asking a path that does not exist for its version
+  # is a 127 that takes the whole entrypoint down with it, which is how this line first shipped.
+  oh_have=""
+  if [ -x "$(backend_bin openhands)" ]; then
+    oh_have="$("$(backend_bin openhands)" -c \
+      'import importlib.metadata as m; print(m.version("openhands-agent-server"))' 2>/dev/null || true)"
+  fi
   if wanted openhands && [ "$oh_have" != "$OPENHANDS_PIN" ]; then
     rm -rf "$TOOLS/openhands-venv"
     echo "[harnessrouter] installing OpenHands agent-server $OPENHANDS_PIN (MIT) — ~666 MB, this takes a minute…"
