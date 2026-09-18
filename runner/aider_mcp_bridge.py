@@ -38,6 +38,14 @@ def _load(config: str) -> dict:
 
 
 def _target(servers: dict, name: str):
+    """The SDK object that reaches this server, built from what the HARNESS declared.
+
+    The transport is never inferred. A URL handed to the SDK as a plain string is hard-wired to
+    streamable HTTP (`Client.__init__` -> `streamable_http_client(srv)`, client.py:393-394), and
+    that path takes no headers either — they are configured on an httpx client, not on the call. So
+    a declared SSE server would have been dialled with the wrong protocol and a declared header
+    would have been written to the config and never sent. Both are built explicitly here.
+    """
     entry = servers.get(name)
     if entry is None:
         known = ", ".join(sorted(servers)) or "none are configured"
@@ -45,6 +53,14 @@ def _target(servers: dict, name: str):
         raise SystemExit(2)
     url = (entry.get("url") or "").strip()
     if url:
+        headers = {str(k): str(v) for k, v in (entry.get("headers") or {}).items()}
+        if str(entry.get("transport") or "").lower() == "sse":
+            from mcp.client.sse import sse_client
+            return sse_client(url, headers=headers or None)
+        if headers:
+            import httpx2
+            from mcp.client.streamable_http import streamable_http_client
+            return streamable_http_client(url, http_client=httpx2.AsyncClient(headers=headers))
         return url
     cmd = entry.get("command")
     if cmd:
@@ -74,8 +90,9 @@ def _render(result) -> str:
 
 
 async def _run(args) -> int:
-    # The SDK's high-level Client takes a URL string or StdioServerParameters and picks the
-    # transport itself (mode="auto"), so streamable HTTP needs no special casing here.
+    # _target has already built the transport the harness declared; Client accepts a URL string,
+    # StdioServerParameters or a Transport, and only the string form is hard-wired to streamable
+    # HTTP. `mode` here is the protocol-handshake era, not the HTTP transport.
     from mcp.client.client import Client
 
     servers = _load(args.config)

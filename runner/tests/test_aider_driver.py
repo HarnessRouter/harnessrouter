@@ -296,8 +296,29 @@ def test_an_unknown_server_names_the_ones_that_exist():
 
 
 def test_a_url_server_resolves_to_its_url():
+    """No transport and no headers: the plain string, which the SDK dials as streamable HTTP."""
     servers = {"deepwiki": {"url": "https://mcp.deepwiki.com/mcp"}}
     assert aider_mcp_bridge._target(servers, "deepwiki") == "https://mcp.deepwiki.com/mcp"
+
+
+def test_the_declared_transport_decides_and_not_the_urls_spelling():
+    """MEASURED DEFECT this pins: `Client.__init__` sends a plain URL string to
+    `streamable_http_client` unconditionally (mcp 2.2.0, client.py:393-394) — there is no inference
+    and no SSE path — so a harness that declared `transport: sse` had its server dialled with the
+    wrong protocol. Same rule the maintainer set for kimi: the declaration decides, never the url.
+    A string result here would be that defect returning."""
+    sse = aider_mcp_bridge._target(
+        {"events": {"url": "https://example.test/events", "transport": "sse"}}, "events")
+    assert not isinstance(sse, str), "an SSE server must not fall through to the streamable path"
+    assert type(sse).__name__ != "StdioServerParameters"
+
+
+def test_declared_headers_reach_the_server_rather_than_the_config_file():
+    """They were written into the config and never read: the streamable path takes headers on an
+    httpx client, not on the call, so a plain URL string dropped every one of them."""
+    with_hdrs = aider_mcp_bridge._target(
+        {"api": {"url": "https://example.test/mcp", "headers": {"X-K": "v"}}}, "api")
+    assert not isinstance(with_hdrs, str), "headers must not be dropped on the way to the server"
 
 
 def test_structured_content_wins_over_prose():

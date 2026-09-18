@@ -3983,7 +3983,12 @@ AIDER_MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aid
 
 def _aider_mcp_servers(mcp_servers: list[dict] | None) -> dict:
     """The declared servers, keyed by the NAME the model will use. Named rather than URL'd so the
-    model cannot invent an endpoint: it says `hr-mcp call <name> …` and the mapping is ours."""
+    model cannot invent an endpoint: it says `hr-mcp call <name> …` and the mapping is ours.
+
+    THE DECLARED TRANSPORT TRAVELS, for the reason _kimi_mcp_config states: the harness's
+    declaration decides, never the url's spelling. It matters more here, because the bridge's SDK
+    does not guess at all — `Client(<str>)` is hard-wired to streamable HTTP (client.py:393-394) —
+    so an SSE server reached this backend as the wrong protocol and could not answer."""
     out: dict = {}
     for i, sv in enumerate(mcp_servers or []):
         if not isinstance(sv, dict):
@@ -3992,6 +3997,8 @@ def _aider_mcp_servers(mcp_servers: list[dict] | None) -> dict:
         url = (sv.get("url") or "").strip()
         if url:
             entry: dict = {"url": url}
+            if str(sv.get("transport") or "").lower() == "sse":
+                entry["transport"] = "sse"
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
