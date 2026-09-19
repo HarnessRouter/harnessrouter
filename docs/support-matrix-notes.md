@@ -1051,6 +1051,8 @@ an outline .md and stops, treating the file as the deliverable under aider's cod
 nemotron-3-super and claude-sonnet-4.6 built it every time on the hosted service (457 s and 428 s).
 Not a harness defect: the prompt is aider's, the choice is the model's, and the record says which.
 
+
+
 ## The openhands backend: OpenHands V1 through its agent-server (2026-09-18/19)
 
 PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
