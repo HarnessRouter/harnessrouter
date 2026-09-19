@@ -87,8 +87,26 @@ def test_usage_input_is_taken_as_cache_exclusive():
     _opencode_usage_add(state, {"total": 130, "input": 100, "output": 20, "reasoning": 5,
                                 "cache": {"read": 7, "write": 3}})
     _opencode_usage_add(state, {"input": 1, "output": 2, "cache": {"read": 3, "write": 4}})
-    assert state["_oc_usage"] == {"input_tokens": 101, "output_tokens": 22,
+    assert state["_oc_usage"] == {"input_tokens": 101, "output_tokens": 27,
                                   "cache_read_tokens": 10, "cache_write_tokens": 7}
+
+
+def test_usage_output_counts_the_reasoning_opencode_keeps_apart():
+    """opencode's `output` is the visible text only — getUsage subtracts reasoningTokens and
+    carries them as `reasoning`. Every other backend's output is the model's whole generation
+    (pi: completion_tokens; cline, dsh: outputTokens), so the two are added back together.
+    Measured on 1.18.31 / deepseek-flash: 22 requests, output 7445 + reasoning 10582, and the
+    turn record reported 7445 — 41% of what was generated and billed."""
+    state = {}
+    for tk in ({"input": 7290, "output": 87, "reasoning": 11, "cache": {"read": 1664, "write": 0}},
+               {"input": 350, "output": 78, "reasoning": 11, "cache": {"read": 8960, "write": 0}},
+               {"input": 234, "output": 223, "reasoning": 0, "cache": {"read": 9216, "write": 0}}):
+        _opencode_usage_add(state, tk)
+    assert state["_oc_usage"]["output_tokens"] == 87 + 11 + 78 + 11 + 223
+    # a step whose reasoning is absent or malformed still counts its text
+    _opencode_usage_add(state, {"output": 5, "reasoning": None})
+    _opencode_usage_add(state, {"output": 6, "reasoning": "many"})
+    assert state["_oc_usage"]["output_tokens"] == 410 + 11
 
 
 def test_usage_ignores_a_missing_or_malformed_payload():
