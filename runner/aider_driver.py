@@ -533,10 +533,19 @@ def main() -> int:
     # more of the model's work is not a failed turn: measured 2026-09-19, a restyled .pptx and an
     # edited hello.md were reported FAILED for a decode error twelve commands earlier.
     failed = coder.usage_report is None or gate.error_after_output
+    # The result's text is what the gateway stores as the answer, so it is stripped of the
+    # edit markup exactly as the text events were; the edits were reported as cards.
+    final = strip_edit_blocks(coder.partial_response_content or "")
+    if not final and gate.calls and not failed:
+        # A response that was commands and nothing else leaves no answer once the blocks are
+        # cards: the model's last word was a command, and aider gives it no further turn when
+        # that command printed nothing. Measured on the hosted service (an officecli that was
+        # not installed ran seven times and the task ended with no text and no file). Said as
+        # what happened, not as an answer the model gave.
+        final = ("The task ended without a written answer after running commands. The commands "
+                 "and their output are above.")
     _emit("result", {
-        # The result's text is what the gateway stores as the answer, so it is stripped of the
-        # edit markup exactly as the text events were; the edits were reported as cards.
-        "final": strip_edit_blocks(coder.partial_response_content or ""),
+        "final": final,
         "ok": not failed,
         "edited": sorted(coder.aider_edited_files or []),
         "shell_calls": gate.calls,

@@ -291,7 +291,17 @@ def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards(
     # the markup comes back through the other door (measured: the text event was clean and the
     # stored answer still carried the block)
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
-    assert '"final": strip_edit_blocks(coder.partial_response_content or "")' in src
+    assert 'final = strip_edit_blocks(coder.partial_response_content or "")' in src
+
+
+def test_a_turn_that_ended_on_a_command_says_so_rather_than_saying_nothing():
+    """A response that was commands and nothing else leaves no answer once the blocks are cards;
+    the record then read as an empty reply (hosted, 2026-09-19: seven officecli attempts, no text,
+    no file). The sentence states what happened; a turn with an answer, an edit-only turn (no
+    commands) and a failed turn keep their own text."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "if not final and gate.calls and not failed:" in src
+    assert "The task ended without a written answer after running commands." in src
 
 
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():
