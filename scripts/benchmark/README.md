@@ -51,9 +51,12 @@ finding's session is left on the instance; its trace is the evidence.
 
 **4. Tokens on one convention.** Fresh input, cached input and output are reported apart and
 never summed: a cached read is the same prompt read again, not new input. The runner's contract
-is `input_tokens` = fresh input (codex, gemini and, since #209, cline are netted to it); an
-instance older than #209 reports cline's input gross, and a cline column from one belongs in the
-run's notes, not in the table.
+is `input_tokens` = fresh input (codex, gemini and, since #209, cline are netted to it) and
+`output_tokens` = the whole generation, thinking included (since #216 for opencode, which keeps
+its reasoning apart from its text). A column from an instance older than either reports cline's
+input gross or opencode's output as its visible text alone, and belongs in the run's notes, not
+in the table: on one task the text was 41% of what the model generated, and the harness read as
+the cheapest of four by a factor it had not earned.
 
 **5. No judge.** A suite whose grading needs a model's opinion is not a pack. Findings and
 runner errors are listed under the table, not scored. A task the suite's own grader cannot
@@ -91,30 +94,32 @@ the runner finds the session it opened and grades from the record.
 
 Fifty tasks of SpreadsheetBench Verified (the first fifty of `dataset.json`), four harnesses with
 their web tools off, `deepseek-v4.1-flash` through one custom OpenAI-format connection, on a
-self-hosted CE: opencode, pi and dsh on 0.18.0 (2026-09-18), cline on 0.18.4 (2026-09-19) so that
-its usage is on the convention. Two hundred runs, two workers; the generated table with its
-findings is [docs/benchmark.md](../../docs/benchmark.md), the records
+self-hosted CE: pi and dsh on 0.18.0 (2026-09-18), cline on 0.18.4 (2026-09-19, with #209) and
+opencode on 0.18.4 with #216 applied (2026-09-19), so that every row's tokens are on the
+convention. Two hundred runs, two workers; the generated table with its findings is
+[docs/benchmark.md](../../docs/benchmark.md), the records
 [docs/benchmark-results.json](../../docs/benchmark-results.json). Two tasks fail their own grader
 and are left out; three lookups and one network fetch are findings, not scores.
 
 | Harness | Resolved | Wall (sum) | Median wall | Tool calls | Calls failed | Fresh in | Cached in | Output |
 |---|---|---|---|---|---|---|---|---|
 | pi | 40/47 (85%) | 3605 s | 48 s | 526 | 89 (17%) | 484k | 7.53M | 546k |
-| opencode | 37/48 (77%) | 6738 s | 98 s | 520 | 64 (12%) | 601k | 8.00M | 81k |
+| opencode | 39/48 (81%) | 5515 s | 75 s | 563 | 67 (12%) | 666k | 11.64M | 709k |
 | dsh | 36/46 (78%) | 6506 s | 100 s | 721 | 113 (16%) | 761k | 12.32M | 752k |
 | cline | 36/47 (77%) | 6882 s | 108 s | 736 | 121 (16%) | 1.20M | 19.74M | 1.21M |
 
-Of the 48 gradable tasks, 31 are resolved by all four harnesses and 7 by none; the other 10 split,
-and no harness resolves a task the others all fail. pi's seven failures are exactly the seven
-nobody resolves, in half the wall time of the rest; the other three lose three or four more,
-mostly different ones. The spread is in cost, on the same tasks and the same model: 2.5× in
-fresh input and 2.6× in cached between pi and cline, 15× in output between opencode and cline.
-Where a run fails it mostly fails outright: no workbook saved (15 runs), or the answer cells
-wrong (24); the one run that hit the time cap is also the one that reached the network.
+Of the 48 gradable tasks, 31 are resolved by all four harnesses and 6 by none; the other 11
+split, and only one of them is resolved by a single harness (opencode, 80-42). pi's seven
+failures are those six plus that one, in half the wall time of the rest; the other three lose two
+to four more, mostly different ones. The spread is in cost, on the same tasks and the same model:
+2.5× in fresh input, 2.6× in cached and 2.2× in output tokens between pi and cline, 1.9× in wall
+time. Where a run fails it mostly fails outright: the answer cells wrong (26 runs) or no workbook
+saved (11); the one run that hit the time cap is also the one that reached the network.
 
 Rule 2 could not be checked on cline or dsh: through a custom OpenAI-format connection their
 turn records carry no served model (opencode's do, pi's do). The instance's console proxy still
 cut synchronous turns at five minutes (#214 is open); 20 runs went past it and were recovered
-from the session list and graded from the record. An earlier cline column, on 0.18.0 before
-#209, resolved 36 of 50 with its input reported gross (18.87M) and is set aside; the rerun above
-is the one that counts.
+from the session list and graded from the record. Two earlier columns are set aside: cline on
+0.18.0 before #209 (36 of 50, input reported gross at 18.87M) and opencode before #216 (37 of
+48, output reported as 81k of visible text where the same tasks generate about 700k), the second
+being what found the bug — a 15× gap between two harnesses on one model was accounting.
