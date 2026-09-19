@@ -177,7 +177,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -561,9 +561,9 @@ install_backends() {
   # `kimi --version` prints the bare version on Kimi Code CLI ("2.0.0") and "kimi, version 1.50.0" on
   # its predecessor, so comparing it to the pin both installs a missing binary and replaces the old
   # product on a volume that was first started by 0.18.0.
-  # OPT-IN, not in HR_BACKENDS by default: 666 MB of venv, the aider precedent and well above the
-  # 300 MB line agreed 2026-09-13. Every fresh volume would otherwise pay for a backend most
-  # operators will not pick.
+  # In the default set, for the reason aider is: the console offers every base the gateway's
+  # catalogue lists, and a listed base that is not installed fails on its first task. An operator
+  # who does not want the 666 MB leaves it out of HR_BACKENDS, the switch every backend has.
   #
   # THE GUARD COMPARES THE VERSION, not the file, for the reason dsh's venv already carries: the
   # venv lives on the data volume and outlives the image. A volume first started by an earlier
