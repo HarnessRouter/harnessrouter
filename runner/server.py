@@ -5282,9 +5282,15 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
                             f"unknown openhands provider '{pr}' (one of {sorted(OPENHANDS_PROVIDERS)})")
     if not auth.base_url:
         raise HTTPException(400, "openhands needs a base_url (none configured)")
-    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+    # GUARDED ON THE KEY, as every other builder is. The relay holds the real credential and hands
+    # the turn a token in its place; with nothing to hold it registers a route whose upstream key
+    # is empty and the provider refuses the forwarded request — measured on the google integration,
+    # whose `Please pass a valid API key` came back through a relay that had none to send.
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
-           "base_url": relay_base, "api_key": relay_tok,
+           "base_url": auth.base_url, "api_key": auth.api_key,
            "tools_disabled": list(tools_disabled or []),
            # Declared MCP servers reach the agent itself; a parameter accepted and then dropped is
            # the defect aider's bridge already taught this repo, so the test suite pins the whole

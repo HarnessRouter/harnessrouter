@@ -26,6 +26,7 @@ import contextlib
 import json
 import os
 import pathlib
+import re
 import secrets
 import signal
 import socket
@@ -117,13 +118,55 @@ def _req(url: str, key: str, method: str = "GET", body: dict | None = None, time
     return json.loads(raw) if raw.strip() else None
 
 
+# `AttributeError: 'X' object has no attribute 'y'` — the shape of the one line worth keeping out
+# of a rich-framed traceback. Anchored at the start of the stripped line so a mention inside a log
+# message does not win over the exception itself.
+_EXC_LINE = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception)\b\s*:")
+# `[09/19/26 03:27:05] INFO …`, and the bare `INFO`/`ERROR` continuation rich writes under it: a
+# new record, never the wrapped remainder of an exception message.
+_LOG_LINE = re.compile(r"^\[\d\d/\d\d/\d\d |^(?:INFO|ERROR|WARNING|DEBUG)\s")
+
+
+def _exc_text(lines: list[str], i: int) -> str:
+    """One exception line plus the continuation of its message, and nothing after that.
+
+    rich wraps a long message onto the next lines and then draws the next frame or writes its next
+    record, so the stop condition is the box-drawing, the chaining sentence and a new log line.
+    Taking a fixed three lines instead put `The above exception was … ╭────` behind one reason and
+    the `SIGTERM … Shutting down` noise behind the other; both were caught by the tests below."""
+    out = [lines[i].strip()]
+    for ln in lines[i + 1:i + 4]:
+        t = ln.strip()
+        if (not t or t[0] in "╭╰│─" or _LOG_LINE.match(t) or _EXC_LINE.match(t)
+                or t.startswith(("The above exception", "During handling"))):
+            break
+        out.append(t)
+    return " ".join(out)
+
+
 def _log_tail(path: pathlib.Path, limit: int = 1200) -> str:
-    """The last of what the server wrote, for a failure that cannot explain itself otherwise."""
+    """Why the server failed, taken from what it wrote; its last lines only as a fallback.
+
+    THE LAST LINES ARE USUALLY THE WRONG ONES. A turn that dies at second 3 and is then retried to
+    exhaustion is terminated at second 190, so by the time this is read the tail of the file is
+    `Received signal SIGTERM … Shutting down … Application shutdown complete` and the sentence that
+    explains the failure is three minutes above it. Measured: the first version of this function
+    put exactly that shutdown noise into the record, which is worse than the silence it replaced,
+    because it reads like a reason. So the exception lines are looked for first."""
     try:
         text = path.read_text(errors="replace")
     except OSError:
         return ""
     lines = [ln for ln in text.splitlines() if ln.strip()]
+    # BOTH ENDS OF THE CHAIN, because neither alone is the answer. A chained traceback prints the
+    # root cause first and the exception that wrapped it last, so reading from the end returns
+    # `ConversationRunError: Conversation run failed for id=…` — true, and useless — while the
+    # sentence that names the defect is the first one. Reporting the pair costs one line and
+    # survives a chain in either direction.
+    found = [_exc_text(lines, i) for i, ln in enumerate(lines) if _EXC_LINE.match(ln.strip())]
+    if found:
+        out = found[0] if len(found) == 1 or found[-1] == found[0] else f"{found[0]} … {found[-1]}"
+        return out[:limit]
     return " | ".join(lines[-12:])[-limit:]
 
 
@@ -278,7 +321,17 @@ def _on_event(ev: dict, state: dict) -> None:
         _emit("tool_result", {"id": tuid, "output": ev.get("observation") or {}})
     elif kind in ("AgentErrorEvent", "ConversationErrorEvent"):
         # A REAL failure. Recorded, not rendered: it is the turn's reason, not part of its answer.
-        _emit("error", {"text": str(ev.get("error") or ev.get("message") or kind)})
+        #
+        # READ code AND detail. This event carries neither `error` nor `message` — its fields are
+        # `code` ("LLMServiceUnavailableError") and `detail`, which is where litellm puts the
+        # provider's own sentence — so an extraction that read only `error`/`message` fell through
+        # to the EVENT CLASS NAME and recorded that as the turn's reason. Three investigations here
+        # began by opening the server's log for a sentence the record should already have carried.
+        detail = str(ev.get("detail") or ev.get("error") or ev.get("message") or "")
+        code = str(ev.get("code") or "")
+        state["reported_error"] = True
+        _emit("error", {"text": (f"{code}: {detail}" if code and detail
+                                 else detail or code or kind)[:1500]})
     elif kind == "ConversationStateUpdateEvent":
         # The event is a generic key/value state update — `last_user_message_id` rides the same
         # shape — so the KEY has to be checked. Reading `value` alone once set the status to a
@@ -358,6 +411,11 @@ def main() -> int:
     # The SDK prints a multi-line banner to STDOUT on import, which is this driver's NDJSON channel
     # for the server's own process; off by its own switch rather than by filtering lines.
     env["OPENHANDS_SUPPRESS_BANNER"] = "1"
+    # The server logs through rich, which sizes itself to COLUMNS when it has no tty and defaults
+    # to 80 — and a traceback panel inside an 80-wide log line leaves a message column about 27
+    # characters across, so the one sentence worth reading arrives cut into six pieces. The tail
+    # this driver attaches to a reasonless failure is only worth attaching if it is legible.
+    env["COLUMNS"] = "200"
     # THE TURN DIES WITHOUT THIS, and the reason is a unix socket path limit rather than anything
     # about agents. The terminal tool runs commands in tmux, and tmux's socket lives under
     # TMUX_TMPDIR — which the server defaults to a directory INSIDE the working directory
@@ -410,6 +468,19 @@ def main() -> int:
 
     status = state.get("status") or ""
     ok = bool(state.get("final")) and status not in _FAILED and not state.get("timeout")
+    if not ok and not state.get("reported_error"):
+        # A FAILED TURN CAN CARRY NO REASON AT ALL, and that is the server's design rather than a
+        # gap here: event_service publishes an error event only for an exception that is NOT a
+        # ConversationRunError, on the assumption that run()/arun() already emitted its own — and an
+        # exception raised out of arun's error handling is precisely the case where nobody did. The
+        # status flips to error and the websocket carries nothing else. Measured on the google
+        # column, where every gemini follow-up died of `AttributeError:
+        # 'PromptTokensDetailsWrapper' object has no attribute 'cache_creation_tokens'`, a sentence
+        # that reached the server's log and no other place, leaving the record to say only "the
+        # turn ended error" for eleven scenarios across five models.
+        tail = _log_tail(logf)
+        if tail:
+            _emit("error", {"text": f"agent-server said: {tail}"})
     _emit("result", {"final": state.get("final") or "", "ok": ok, "status": status,
                      "seconds": round(time.time() - _T0, 2)})
     return 0

@@ -276,6 +276,23 @@ KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
 # reaches). The 1.34.0 set the OpenHands platform itself declares does not resolve at all
 # (`ResolutionImpossible`, lmnr against openhands-sdk), so 1.49.2 is the floor as well as the pin.
 #
+# THE FOURTH PIN IS litellm, HELD BELOW 1.95.0, and it decides whether a follow-up turn survives.
+# The SDK asks only for `litellm>=1.93.0`, so pip takes the newest — and from 1.95.0 litellm's
+# PromptTokensDetailsWrapper mirrors an assignment between `cache_write_tokens` and
+# `cache_creation_tokens`, which puts BOTH names into `model_fields_set` and then drops the unset
+# attribute from __dict__. The SDK's telemetry (llm/utils/telemetry.py, _cache_buckets) reads
+# `"cache_creation_tokens" in details.model_fields_set` as its existence test, so it asks for an
+# attribute that is no longer there: `AttributeError: 'PromptTokensDetailsWrapper' object has no
+# attribute 'cache_creation_tokens'`. Each side is self-consistent; together they are not, and
+# 1.49.2 is the newest SDK, so there is nothing to upgrade to.
+#
+# It only fires once a response carries prompt_tokens_details — a prompt-cache hit, which a FIRST
+# turn cannot have — so it reads as "follow-ups fail and first turns do not". The agent-server
+# publishes no error event for it (see the driver's fallback), tenacity retries it five times, and
+# the record shows a 150-200 s turn that ended for no stated reason. Measured on gemini-3-flash-preview,
+# same command and image, litellm the only difference: 1.101.0 gave first ok / follow-up FAIL 145 s /
+# switch ok / artifact FAIL 175 s / recycle FAIL 148 s, and 1.94.3 gave five of five in 10-14 s each.
+#
 # Own venv, the dsh/hermes precedent: it pins litellm, fastmcp, pydantic and a browser stack, and
 # must not share the runner's interpreter.
 install_openhands() {
@@ -284,10 +301,11 @@ install_openhands() {
   "$TOOLS/openhands-venv/bin/pip" install -q --disable-pip-version-check \
     "openhands-agent-server==${HR_OPENHANDS_VERSION:-1.49.2}" \
     "openhands-tools==${HR_OPENHANDS_VERSION:-1.49.2}" \
-    "openhands-sdk==${HR_OPENHANDS_VERSION:-1.49.2}" || return 1
-  # Prove the server can actually START before declaring the install good. Importing its api module
-  # is what catches the undeclared dependencies above: the failure they cause is an import error at
-  # the first live turn, not a pip error here.
+    "openhands-sdk==${HR_OPENHANDS_VERSION:-1.49.2}" \
+    "litellm==${HR_OPENHANDS_LITELLM_VERSION:-1.94.3}" || return 1
+  # Prove the server can actually START, and that the litellm pin still buys what it is for, before
+  # declaring the install good. Importing its api module is what catches the undeclared dependencies
+  # above: the failure they cause is an import error at the first live turn, not a pip error here.
   "$TOOLS/openhands-venv/bin/python" -c '
 import sys
 import libtmux  # noqa: F401 — undeclared by the server, brought by openhands-tools
@@ -297,6 +315,16 @@ want = sys.argv[1]
 have = md.version("openhands-agent-server")
 if have != want:
     sys.exit("openhands-agent-server %s installed, wanted %s" % (have, want))
+# The litellm pin is asserted by BEHAVIOUR, not by version, because the version is only how this
+# pair happens to be broken today: build the wrapper the way a cached prompt does and check that
+# the existence test the SDK uses still agrees with the attribute. A pin bumped past 1.95.0 fails the
+# image here instead of failing every follow-up turn on a provider that reports prompt caching.
+from litellm.types.utils import PromptTokensDetailsWrapper
+details = PromptTokensDetailsWrapper(cached_tokens=1)
+if "cache_creation_tokens" in details.model_fields_set and not hasattr(
+        details, "cache_creation_tokens"):
+    sys.exit("litellm %s and openhands-sdk %s disagree about cache_creation_tokens; "
+             "hold litellm below 1.95.0" % (md.version("litellm"), md.version("openhands-sdk")))
 ' "${HR_OPENHANDS_VERSION:-1.49.2}" || return 1
   command -v tmux >/dev/null 2>&1 || { echo "openhands: the tmux binary is missing"; return 1; }
 }
@@ -500,14 +528,19 @@ install_backends() {
   # a test. A mismatch rebuilds the venv from scratch; conversations live in the workspace, not in
   # it, so nothing of a session is lost.
   OPENHANDS_PIN="${HR_OPENHANDS_VERSION:-1.49.2}"
+  # BOTH pins are compared, because the venv outlives the image in the same way for each: a volume
+  # whose openhands-venv was built before litellm was pinned holds the right agent-server and the
+  # wrong litellm, and an agent-server-only comparison would skip the install and hand that volume
+  # back the follow-up failures the pin exists to remove.
+  OPENHANDS_LITELLM_PIN="${HR_OPENHANDS_LITELLM_VERSION:-1.94.3}"
   # Probed only when there IS something to probe: asking a path that does not exist for its version
   # is a 127 that takes the whole entrypoint down with it, which is how this line first shipped.
   oh_have=""
   if [ -x "$(backend_bin openhands)" ]; then
     oh_have="$("$(backend_bin openhands)" -c \
-      'import importlib.metadata as m; print(m.version("openhands-agent-server"))' 2>/dev/null || true)"
+      'import importlib.metadata as m; print(m.version("openhands-agent-server"), m.version("litellm"))' 2>/dev/null || true)"
   fi
-  if wanted openhands && [ "$oh_have" != "$OPENHANDS_PIN" ]; then
+  if wanted openhands && [ "$oh_have" != "$OPENHANDS_PIN $OPENHANDS_LITELLM_PIN" ]; then
     rm -rf "$TOOLS/openhands-venv"
     echo "[harnessrouter] installing OpenHands agent-server $OPENHANDS_PIN (MIT) — ~666 MB, this takes a minute…"
     try_install "OpenHands" install_openhands || true

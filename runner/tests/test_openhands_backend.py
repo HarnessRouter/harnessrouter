@@ -262,3 +262,76 @@ def test_declaring_a_server_is_a_different_agent():
     with_mcp = drv._conversation_id(["terminal"], {"deepwiki": {"url": "https://x/mcp"}})
     assert bare != with_mcp
     assert drv._conversation_id(["terminal"], {}) == bare
+
+
+# ── a failure the server did not publish still has to reach the record ──
+#
+# The agent-server publishes an error event only for an exception that is NOT a
+# ConversationRunError, on the assumption that run()/arun() already emitted its own; an exception
+# raised out of arun's error handling is exactly the case where nobody did. The status flips to
+# error, nothing else crosses the WebSocket, and the only copy of the reason is the server's log.
+# Measured on the google column: eleven scenarios recorded "the turn ended error" and nothing more.
+_CRASH_LOG = """\
+[09/19/26 03:24:11] INFO     Loaded 3 tools from spec                base.py:564
+[09/19/26 03:24:12] ERROR    Error during conversation run   event_service.py:1314
+╭───────────────────── Traceback (most recent call last) ─────────────────────╮
+│ /x/openhands/sdk/llm/utils/telemetry.py:259 in _cache_buckets               │
+╰─────────────────────────────────────────────────────────────────────────────╯
+AttributeError: 'PromptTokensDetailsWrapper' object has no attribute 'cache_creation_tokens'
+
+The above exception was the direct cause of the following exception:
+
+╭───────────────────── Traceback (most recent call last) ─────────────────────╮
+│ /x/openhands/agent_server/event_service.py:1310 in _run_and_publish         │
+╰─────────────────────────────────────────────────────────────────────────────╯
+ConversationRunError: Conversation run failed for id=2ec3e3d0
+[09/19/26 03:27:05] INFO     Event websocket disconnected          sockets.py:362
+[09/19/26 03:27:05] INFO     Received signal SIGTERM (15), shutting down... __main__.py:186
+[09/19/26 03:27:05] INFO     Shutting down                          server.py:282
+[09/19/26 03:27:05] INFO     Waiting for application shutdown.           on.py:67
+[09/19/26 03:27:05] INFO     Application shutdown complete.              on.py:76
+[09/19/26 03:27:05] INFO     Finished server process [5590]         server.py:113
+"""
+
+
+def test_the_reason_beats_the_shutdown_noise(tmp_path):
+    """MEASURED, and the first version of _log_tail got this wrong: the turn dies in seconds and is
+    then retried to exhaustion, so the file's last lines are the SIGTERM three minutes later. A
+    plain tail put that into the record, which reads like a reason and is worse than silence."""
+    log = tmp_path / "agent-server.log"
+    log.write_text(_CRASH_LOG)
+    out = drv._log_tail(log)
+    assert "cache_creation_tokens" in out
+    assert "SIGTERM" not in out and "Shutting down" not in out
+
+
+def test_both_ends_of_the_chain_are_reported(tmp_path):
+    """A chained traceback prints the root cause first and its wrapper last, so reading from either
+    end alone loses something: the wrapper names no defect, the root names no operation."""
+    log = tmp_path / "agent-server.log"
+    log.write_text(_CRASH_LOG)
+    out = drv._log_tail(log)
+    assert out.startswith("AttributeError:")
+    assert "ConversationRunError:" in out
+
+
+def test_the_frame_is_not_part_of_the_message(tmp_path):
+    """rich wraps a long message and then draws the next frame; taking a fixed number of lines put
+    `The above exception was … ╭────` behind every reason."""
+    log = tmp_path / "agent-server.log"
+    log.write_text(_CRASH_LOG)
+    out = drv._log_tail(log)
+    assert "The above exception" not in out
+    assert "╭" not in out and "│" not in out
+
+
+def test_a_log_with_no_exception_falls_back_to_its_tail(tmp_path):
+    """A server killed without ever raising still owes the record whatever it did say."""
+    log = tmp_path / "agent-server.log"
+    log.write_text("starting\nlistening on 127.0.0.1:9\nkilled\n")
+    assert "killed" in drv._log_tail(log)
+
+
+def test_a_missing_log_is_not_an_error(tmp_path):
+    """The fallback runs on a path the server may never have created."""
+    assert drv._log_tail(tmp_path / "nope.log") == ""

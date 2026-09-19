@@ -6063,12 +6063,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
     # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
-    # loopback relay), so the list is theirs. NOT ONE OF THESE IDS HAS BEEN MEASURED ON THIS
-    # BACKEND YET — no column has run; they are offered so the matrix can measure them here
-    # (the `pi` precedent). The id is sent with an `openai/` prefix by the runner, which is
-    # load-bearing: without an explicit provider litellm infers one from the base url, and a
-    # relay url inferred as Vercel produced `Missing credentials … VERCEL_AI_GATEWAY_API_KEY`
-    # on a resumed turn.
+    # loopback relay), so the list is theirs. Measured 2026-09-18/19: the Vercel column ran 49 of
+    # these ids (239 of 245 scenarios) and the Google column ran the eight gemini ids, so the list
+    # is a measured one rather than an offered one. The id is sent with an `openai/` prefix by the
+    # runner, which is load-bearing: without an explicit provider litellm infers one from the base
+    # url, and a relay url inferred as Vercel produced `Missing credentials …
+    # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn.
     "openhands": {"default": "gpt-5.4",
                   "models": [
                       "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
