@@ -32,3 +32,16 @@ to some models, which is how a single failing pair is reproduced with tracing on
 Rows that fail must carry the reproduced provider error text; a verified list is never inherited
 from another instance, since each reaches providers by its own path. Retest a bare `incomplete`
 before excluding a model.
+
+## The plugin matrix
+
+`plugins/run-matrix.py` proves the plugin path on every base, one base at a time: a harness is
+created with ONE Agent Plugins package (`plugins/fixture/`: a manifest, a skill whose token the
+model must repeat, a stdio MCP server that speaks the protocol by hand) and nothing on its
+direct lists, one real task runs per column (skill, stdio MCP, SSE MCP, streamable-HTTP MCP, the
+remote two against a public probe), and the answer is judged on the probe token alone.
+
+    python3 plugins/run-matrix.py --base-url https://your-instance/api/harness --api-key "$KEY" \
+        --bases aider --out plugin-results.json
+
+Kept in the repository since 2026-09-18 after the copy in a scratch folder was emptied mid-review.
