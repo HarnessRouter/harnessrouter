@@ -5650,6 +5650,15 @@ _aider_to_claude.eof = _aider_eof   # type: ignore[attr-defined]
 
 
 OPENHANDS_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+# A field litellm sends on its own initiative, the kimi precedent: for an id its registry knows as
+# Anthropic's (the provider-native `claude-haiku-4-5-20251001` a custom connection resolves to)
+# it puts BOTH `max_tokens` and `max_completion_tokens` on the request, the same 64,000 in each,
+# and Anthropic's OpenAI-compatible endpoint answers "Setting 'max_tokens' and
+# 'max_completion_tokens' at the same time is not supported" (captured with a sink in the venv
+# and against the live endpoint, 2026-09-19; every other id carries the second field alone, and
+# every provider on the matrix takes it). The harness never asked for either; the one every
+# provider takes stays.
+_OPENHANDS_DROP_FIELDS = ("max_tokens",)
 OPENHANDS_PYTHON = os.environ.get("HR_OPENHANDS_PYTHON",
                                   "/data/agent-tools/openhands-venv/bin/python")
 OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openhands_driver.py")
@@ -5732,7 +5741,8 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
     # is empty and the provider refuses the forwarded request — measured on the google integration,
     # whose `Please pass a valid API key` came back through a relay that had none to send.
     if auth.api_key:
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
+                                                    drop_fields=_OPENHANDS_DROP_FIELDS)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     # The relay token rides the turn's ENVIRONMENT as well as the job: _relay_served_model and
     # _relay_usage find the turn's route by the placeholder bearer in env, and a token that lived

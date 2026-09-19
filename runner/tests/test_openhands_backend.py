@@ -427,3 +427,15 @@ def test_the_tmux_socket_directory_is_the_turns_own():
     assert 'env["TMUX_TMPDIR"] = tempfile.mkdtemp(prefix="oh", dir="/tmp")' in src
     assert 'f"/tmp/oh{port}"' not in src
 
+
+def test_the_field_litellm_invents_for_a_known_claude_id_never_reaches_the_provider():
+    """For `openai/claude-haiku-4-5-20251001` litellm sends max_tokens AND max_completion_tokens
+    and Anthropic's OpenAI-compatible endpoint refuses the pair (400, 2026-09-19); the relay drops
+    the first on this backend's route, the kimi precedent."""
+    from server import Auth, _HERMES_RELAY, _build_openhands
+    d = tempfile.mkdtemp(); env: dict = {}
+    _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://api.anthropic.com"),
+                     "claude-haiku-4-5-20251001", "hi", d, env)
+    route = _HERMES_RELAY["routes"][env["OPENAI_API_KEY"]]
+    assert route[2]["drop_fields"] == ("max_tokens",)
+
