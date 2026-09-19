@@ -70,8 +70,32 @@ def _recalculate(path: str, workdir: str) -> bool:
     return True
 
 
+_GRADABLE: dict[str, str] = {}
+
+
+def _ungradable(task: dict, golden: str, compare_workbooks) -> str:
+    """Why the suite's grader cannot decide this task, or "": the golden workbook is graded
+    against itself first, and a task whose own answer does not pass is nobody's failure. Two of
+    the first fifty were such (measured 2026-09-18): a sheet name with commas in it, which the
+    grader splits the answer range on, and a whole-column range, A:G, it reads a row number from.
+    Every harness "failed" both until this told them apart."""
+    if task["id"] not in _GRADABLE:
+        try:
+            ok, detail = compare_workbooks(golden, golden, task["instruction_type"], task["answer_position"])
+            _GRADABLE[task["id"]] = "" if ok else f"the golden workbook fails its own grader: {detail}"
+        except Exception as e:  # noqa: BLE001
+            _GRADABLE[task["id"]] = f"the grader raises on the golden workbook: {e!r}"
+    return _GRADABLE[task["id"]]
+
+
 def grade(task: dict, root: str, produced: dict[str, str], workdir: str) -> dict:
     golden = os.path.join(root, "spreadsheet", task["id"], f"1_{task['id']}_golden.xlsx")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from evaluation import compare_workbooks  # the suite's grader, from the suite's own tree
+    why = _ungradable(task, golden, compare_workbooks)
+    if why:
+        return {"reward": None, "resolved": None, "detail": ("ungradable: " + why)[:300]}
     path = produced.get(OUTPUT)
     if path is None:
         # The agent may have saved under another name; one workbook that is not the input is it.
@@ -79,9 +103,6 @@ def grade(task: dict, root: str, produced: dict[str, str], workdir: str) -> dict
         path = others[0] if len(others) == 1 else None
     if path is None:
         return {"reward": 0.0, "resolved": False, "detail": "no workbook produced"}
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from evaluation import compare_workbooks  # the suite's grader, from the suite's own tree
     recalculated = _recalculate(path, workdir)
     try:
         ok, detail = compare_workbooks(golden, path, task["instruction_type"], task["answer_position"])
