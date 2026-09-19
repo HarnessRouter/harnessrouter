@@ -295,15 +295,12 @@ def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards(
     inside = ("Deck builder:\n```python\nbuild_sfo.py\n<<<<<<< SEARCH\n=======\nfrom pptx import "
               "Presentation\n>>>>>>> REPLACE\n```\nRun it with `python3 build_sfo.py`.")
     assert aider_driver.strip_edit_blocks(inside) == "Deck builder:\nRun it with `python3 build_sfo.py`."
-<<<<<<< HEAD
-=======
     # fences of four backticks, which aider's parser takes and gpt-5.4 writes: nothing is left
     # behind (a stripper that took exactly three left "`" as the whole answer, hosted 2026-09-19)
     four = ("````python\nbuild.py\n<<<<<<< SEARCH\n=======\nx = 1\n>>>>>>> REPLACE\n````\n"
             "````bash\npython3 build.py\n````\n")
     assert aider_driver.strip_edit_blocks(four) == ""
     assert aider_driver.strip_edit_blocks("````bash\nls\n````\nDone.") == "Done."
->>>>>>> origin/main
     shell = "Run this:\n```bash\ncat SKILL.md\n```"
     assert aider_driver.strip_edit_blocks(shell) == "Run this:"  # the command renders as a card
     # a fence the model closed and kept writing on ("```An improved…") closes the block for aider
