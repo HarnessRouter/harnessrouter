@@ -1,2012 +1,4 @@
 {
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|13-1": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "13-1",
-  "at": "2026-09-18T12:08:07Z",
-  "status": "completed",
-  "wall_s": 140.3,
-  "sid": "hsess75f0c0b3d0034f1198077107e3bdc3ca",
-  "usage": {
-   "fresh_input": 15152,
-   "cached_input": 115968,
-   "cache_write": 0,
-   "output": 1906,
-   "prompt_total": 131120
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 8,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "Now I'll compute the aggregations and populate the DATA and OPERATION sections.\n\ndone.",
-  "trace_tool_calls": 8,
-  "tool_results": 8,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|17-35": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "17-35",
-  "at": "2026-09-18T12:08:07Z",
-  "status": "completed",
-  "wall_s": 160.5,
-  "sid": "hsess4527b92c76ac49db8d4cd68621c20140",
-  "usage": {
-   "fresh_input": 12995,
-   "cached_input": 225792,
-   "cache_write": 0,
-   "output": 3515,
-   "prompt_total": 238787
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 16,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 16,
-  "tool_results": 16,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|23-24": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "23-24",
-  "at": "2026-09-18T12:10:51Z",
-  "status": "completed",
-  "wall_s": 85.6,
-  "sid": "hsess3e829b70ad4842f98dbef8d4dc4c7499",
-  "usage": {
-   "fresh_input": 10598,
-   "cached_input": 97920,
-   "cache_write": 0,
-   "output": 1818,
-   "prompt_total": 108518
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 8,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 8,
-  "tool_results": 8,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|22-47": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "22-47",
-  "at": "2026-09-18T12:10:33Z",
-  "status": "completed",
-  "recovered": "502 b'{\"detail\":\"harness-gateway unreachable: fetch failed\"}'",
-  "wall_s": 311.3,
-  "sid": "hsessd07db7a67bb74bd6bcc3f7432188f200",
-  "usage": {
-   "fresh_input": 0,
-   "cached_input": 0,
-   "cache_write": 0,
-   "output": 0,
-   "prompt_total": 0
-  },
-  "turn_error": null,
-  "capped": null,
-  "connection": "",
-  "served": "",
-  "substituted": false,
-  "served_unreported": true,
-  "tool_calls": 13,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [],
-  "assistant": "Let me analyze the workbook structure and compute the expected output.\n\nNow I'll write the output, sorting by the J helper priority (HASSAN, HAMAN, HAMMED) with source order preserved within groups, t",
-  "trace_tool_calls": 13,
-  "tool_results": 13,
-  "tool_failed": 2,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": "no workbook produced"
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|24-23": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "24-23",
-  "at": "2026-09-18T12:12:19Z",
-  "status": "completed",
-  "wall_s": 208.4,
-  "sid": "hsess4e25c01d66a24f40a9ad9fc17986eeab",
-  "usage": {
-   "fresh_input": 20173,
-   "cached_input": 218496,
-   "cache_write": 0,
-   "output": 1954,
-   "prompt_total": 238669
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 12,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 12,
-  "tool_results": 12,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|28-7": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "28-7",
-  "at": "2026-09-18T12:15:46Z",
-  "status": "completed",
-  "wall_s": 77.1,
-  "sid": "hsesse4293912a7b640dc8f3cd499f8c119f1",
-  "usage": {
-   "fresh_input": 10164,
-   "cached_input": 76288,
-   "cache_write": 0,
-   "output": 999,
-   "prompt_total": 86452
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 6,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 6,
-  "tool_results": 6,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|51-12": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "51-12",
-  "at": "2026-09-18T12:17:04Z",
-  "status": "completed",
-  "wall_s": 51.3,
-  "sid": "hsesscecb1698052a40a6aff7eb6da5d5932b",
-  "usage": {
-   "fresh_input": 8588,
-   "cached_input": 52864,
-   "cache_write": 0,
-   "output": 737,
-   "prompt_total": 61452
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 5,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 5,
-  "tool_results": 5,
-  "tool_failed": 1,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|60-7": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "60-7",
-  "at": "2026-09-18T12:17:57Z",
-  "status": "completed",
-  "wall_s": 96.3,
-  "sid": "hsesse154d0775b8740f0831a00d30b7c1e3e",
-  "usage": {
-   "fresh_input": 10346,
-   "cached_input": 78080,
-   "cache_write": 0,
-   "output": 1437,
-   "prompt_total": 88426
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 7,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 7,
-  "tool_results": 7,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|41-47": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "41-47",
-  "at": "2026-09-18T12:15:51Z",
-  "status": "completed",
-  "wall_s": 299.1,
-  "sid": "hsess06cb95b1e1df454bb01cef89db19a31c",
-  "usage": {
-   "fresh_input": 22107,
-   "cached_input": 707584,
-   "cache_write": 0,
-   "output": 8407,
-   "prompt_total": 729691
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 26,
-  "tools": [
-   "bash",
-   "write"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "Now I understand the structure. Let me verify the existing PUR PURCHASE ordering and build the solution.\n\ndone.",
-  "trace_tool_calls": 26,
-  "tool_results": 26,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|262-17": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "262-17",
-  "at": "2026-09-18T12:19:35Z",
-  "status": "completed",
-  "wall_s": 101.6,
-  "sid": "hsess32454c69b66b43368a9114063a1bb536",
-  "usage": {
-   "fresh_input": 11666,
-   "cached_input": 73984,
-   "cache_write": 0,
-   "output": 961,
-   "prompt_total": 85650
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 6,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 6,
-  "tool_results": 6,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|267-18": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "267-18",
-  "at": "2026-09-18T12:21:19Z",
-  "status": "completed",
-  "wall_s": 80.0,
-  "sid": "hsess833e9659f475406781214729b3653c22",
-  "usage": {
-   "fresh_input": 13064,
-   "cached_input": 103936,
-   "cache_write": 0,
-   "output": 1418,
-   "prompt_total": 117000
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 7,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "I can see the structure. Row 1 `G1` is green (`FF00B050`, style s=3), row 2 `G2` is yellow (`FFFFFF00`, style s=7). Only G2 is yellow, so only G2 gets the `//` prefix.\n\ndone.",
-  "trace_tool_calls": 7,
-  "tool_results": 7,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|267-21": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "267-21",
-  "at": "2026-09-18T12:22:40Z",
-  "status": "completed",
-  "wall_s": 38.7,
-  "sid": "hsessff1ccc7c74614b149cdd3a406eb69950",
-  "usage": {
-   "fresh_input": 8502,
-   "cached_input": 40192,
-   "cache_write": 0,
-   "output": 624,
-   "prompt_total": 48694
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 4,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 4,
-  "tool_results": 4,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|263-1": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "263-1",
-  "at": "2026-09-18T12:20:53Z",
-  "status": "completed",
-  "wall_s": 146.0,
-  "sid": "hsessee45f90c3f164848904e1a7948753017",
-  "usage": {
-   "fresh_input": 15901,
-   "cached_input": 322688,
-   "cache_write": 0,
-   "output": 3031,
-   "prompt_total": 338589
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 18,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "I'll examine the task: the example output block is G1:I5, with material totals in H. Given metal (H3=1660) and PVC (H4=2753), the remaining glass total belongs in H2. Let me verify and write it.\n\ndone",
-  "trace_tool_calls": 18,
-  "tool_results": 18,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|269-43": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "269-43",
-  "at": "2026-09-18T12:23:20Z",
-  "status": "completed",
-  "wall_s": 89.0,
-  "sid": "hsess9fb2c7df2d7b472c896ea98299b813a0",
-  "usage": {
-   "fresh_input": 9413,
-   "cached_input": 80128,
-   "cache_write": 0,
-   "output": 1100,
-   "prompt_total": 89541
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 6,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 6,
-  "tool_results": 6,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|279-23": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "279-23",
-  "at": "2026-09-18T12:24:50Z",
-  "status": "completed",
-  "wall_s": 49.7,
-  "sid": "hsess4206c7545f584d01850ea42cad4b9c0e",
-  "usage": {
-   "fresh_input": 9132,
-   "cached_input": 61696,
-   "cache_write": 0,
-   "output": 926,
-   "prompt_total": 70828
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 6,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 6,
-  "tool_results": 6,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|269-44": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "269-44",
-  "at": "2026-09-18T12:23:20Z",
-  "status": "completed",
-  "wall_s": 264.0,
-  "sid": "hsess7a39c71c938640b291e9d1345b8010e8",
-  "usage": {
-   "fresh_input": 26040,
-   "cached_input": 413952,
-   "cache_write": 0,
-   "output": 1583,
-   "prompt_total": 439992
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 12,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "I'll inspect the workbook structure first, then determine the expected answer.\n\nBased on the task, the resulting column A after the row deletions should have the two \"Chassis\" texts at A2 and A3 with ",
-  "trace_tool_calls": 12,
-  "tool_results": 12,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|280-17": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "280-17",
-  "at": "2026-09-18T12:25:41Z",
-  "status": "completed",
-  "wall_s": 155.4,
-  "sid": "hsess2aeaaac0cc6542f0a71e35d1d9775af3",
-  "usage": {
-   "fresh_input": 9671,
-   "cached_input": 120960,
-   "cache_write": 0,
-   "output": 1783,
-   "prompt_total": 130631
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 11,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "The input already highlights (in gold fill) exactly the rows to keep: B3, B6, B9, B10, B12 (the last occurrence of each value). I'll remove the other rows.\n\ndone.",
-  "trace_tool_calls": 11,
-  "tool_results": 11,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|283-32": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "283-32",
-  "at": "2026-09-18T12:27:46Z",
-  "status": "completed",
-  "wall_s": 80.6,
-  "sid": "hsess19d33aaff5a744c198ae0c6c06edd9db",
-  "usage": {
-   "fresh_input": 14312,
-   "cached_input": 151808,
-   "cache_write": 0,
-   "output": 1607,
-   "prompt_total": 166120
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 10,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 10,
-  "tool_results": 10,
-  "tool_failed": 2,
-  "reward": null,
-  "resolved": null,
-  "detail": "ungradable: the grader raises on the golden workbook: ValueError(\"invalid literal for int() with base 10: ''\")"
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|290-27": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "290-27",
-  "at": "2026-09-18T12:29:09Z",
-  "status": "completed",
-  "wall_s": 79.5,
-  "sid": "hsessf380dab767ad4832816663974840e30e",
-  "usage": {
-   "fresh_input": 12824,
-   "cached_input": 107904,
-   "cache_write": 0,
-   "output": 1326,
-   "prompt_total": 120728
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 8,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 8,
-  "tool_results": 8,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|290-1": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "290-1",
-  "at": "2026-09-18T12:28:19Z",
-  "status": "completed",
-  "wall_s": 240.8,
-  "sid": "hsess9d2da1dd8ede46c88e56ae2f2fd2eb94",
-  "usage": {
-   "fresh_input": 15080,
-   "cached_input": 278144,
-   "cache_write": 0,
-   "output": 2854,
-   "prompt_total": 293224
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 18,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "Now I understand the structure. Let me verify there's no data beyond row 23 and inspect the pattern fully.\n\nVerified: `output.xlsx` fills K2:U7 with all 22 transposed records in the same 4-per-row (in",
-  "trace_tool_calls": 18,
-  "tool_results": 18,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|297-42": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "297-42",
-  "at": "2026-09-18T12:30:30Z",
-  "status": "completed",
-  "wall_s": 110.9,
-  "sid": "hsessbf58796f6e65447b87ca0ec74f1ef7db",
-  "usage": {
-   "fresh_input": 9013,
-   "cached_input": 71936,
-   "cache_write": 0,
-   "output": 1100,
-   "prompt_total": 80949
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 8,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 8,
-  "tool_results": 8,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|333-29": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "333-29",
-  "at": "2026-09-18T12:32:26Z",
-  "status": "completed",
-  "wall_s": 63.7,
-  "sid": "hsessf98582c7e1f24789b4042d8d78def66f",
-  "usage": {
-   "fresh_input": 9308,
-   "cached_input": 77568,
-   "cache_write": 0,
-   "output": 1274,
-   "prompt_total": 86876
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 7,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 7,
-  "tool_results": 7,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|341-40": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "341-40",
-  "at": "2026-09-18T12:33:31Z",
-  "status": "completed",
-  "wall_s": 100.5,
-  "sid": "hsesse849e8acf834425a95344a6fea38c3d4",
-  "usage": {
-   "fresh_input": 9223,
-   "cached_input": 50688,
-   "cache_write": 0,
-   "output": 572,
-   "prompt_total": 59911
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 5,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 5,
-  "tool_results": 5,
-  "tool_failed": 1,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|384-4": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "384-4",
-  "at": "2026-09-18T12:35:14Z",
-  "status": "completed",
-  "wall_s": 44.8,
-  "sid": "hsess26c90adbbaa04f44b970f851db0db483",
-  "usage": {
-   "fresh_input": 7844,
-   "cached_input": 30336,
-   "cache_write": 0,
-   "output": 466,
-   "prompt_total": 38180
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 3,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 3,
-  "tool_results": 3,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|304-35": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "304-35",
-  "at": "2026-09-18T12:32:23Z",
-  "status": "completed",
-  "wall_s": 292.8,
-  "sid": "hsessf8cd6319951b4bf484a853d0d8a3dcbb",
-  "usage": {
-   "fresh_input": 13173,
-   "cached_input": 286080,
-   "cache_write": 0,
-   "output": 2905,
-   "prompt_total": 299253
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 17,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 17,
-  "tool_results": 17,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|433-47": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "433-47",
-  "at": "2026-09-18T12:37:21Z",
-  "status": "completed",
-  "wall_s": 120.1,
-  "sid": "hsess603b83291ee64a1e95e5d5959aab2dba",
-  "usage": {
-   "fresh_input": 13738,
-   "cached_input": 179328,
-   "cache_write": 0,
-   "output": 2041,
-   "prompt_total": 193066
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 11,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "I'll examine the workbook and implement the residual balancing, then save as output.xlsx.\n\nNow let me verify nothing outside the intended cells changed and inspect the final grid.\n\ndone.",
-  "trace_tool_calls": 11,
-  "tool_results": 11,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|408-5": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "408-5",
-  "at": "2026-09-18T12:36:00Z",
-  "status": "completed",
-  "wall_s": 213.5,
-  "sid": "hsess26e65bbf8f5943c8b2f3b5852aed62fc",
-  "usage": {
-   "fresh_input": 34132,
-   "cached_input": 389248,
-   "cache_write": 0,
-   "output": 2345,
-   "prompt_total": 423380
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 12,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "Now I'll perform the task. Sum of Column D where E=0 is exactly **-74.96**, and the 'BR1 Sales JUN' row is row 92.\n\ndone.",
-  "trace_tool_calls": 12,
-  "tool_results": 12,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|469-9": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "469-9",
-  "at": "2026-09-18T12:39:36Z",
-  "status": "completed",
-  "wall_s": 47.4,
-  "sid": "hsessb4c405576c144c81b477f3684b4c9814",
-  "usage": {
-   "fresh_input": 9314,
-   "cached_input": 40704,
-   "cache_write": 0,
-   "output": 617,
-   "prompt_total": 50018
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 4,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 4,
-  "tool_results": 4,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|472-15": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "472-15",
-  "at": "2026-09-18T12:40:25Z",
-  "status": "completed",
-  "wall_s": 40.7,
-  "sid": "hsess50ae8fbe060a472a835d42e26808f320",
-  "usage": {
-   "fresh_input": 8208,
-   "cached_input": 29696,
-   "cache_write": 0,
-   "output": 394,
-   "prompt_total": 37904
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 3,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 3,
-  "tool_results": 3,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|477-45": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "477-45",
-  "at": "2026-09-18T12:41:07Z",
-  "status": "completed",
-  "wall_s": 247.8,
-  "sid": "hsess2329c44313a34cf980fc8385edc46716",
-  "usage": {
-   "fresh_input": 16731,
-   "cached_input": 418816,
-   "cache_write": 0,
-   "output": 2660,
-   "prompt_total": 435547
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 19,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "I'll inspect the data fully and compute the merge/sum result.\n\ndone.",
-  "trace_tool_calls": 19,
-  "tool_results": 19,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|493-18": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "493-18",
-  "at": "2026-09-18T12:45:17Z",
-  "status": "completed",
-  "wall_s": 88.6,
-  "sid": "hsessd1f2dc4a0fb64c3981494cd87457c310",
-  "usage": {
-   "fresh_input": 8166,
-   "cached_input": 39808,
-   "cache_write": 0,
-   "output": 654,
-   "prompt_total": 47974
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 4,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 4,
-  "tool_results": 4,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|455-35": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "455-35",
-  "at": "2026-09-18T12:39:23Z",
-  "status": "completed",
-  "recovered": "502 b'{\"detail\":\"harness-gateway unreachable: fetch failed\"}'",
-  "wall_s": 664.4,
-  "sid": "hsess8e6d36c891144255a6b3b479522c9252",
-  "usage": {
-   "fresh_input": 0,
-   "cached_input": 0,
-   "cache_write": 0,
-   "output": 0,
-   "prompt_total": 0
-  },
-  "turn_error": null,
-  "capped": null,
-  "connection": "",
-  "served": "",
-  "substituted": false,
-  "served_unreported": true,
-  "tool_calls": 36,
-  "tools": [
-   "bash",
-   "read",
-   "write"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [],
-  "assistant": "I'll inspect the data and apply the operation. Let me check the header formatting first and test the deletion.\n\nBased on my analysis, I'll apply the operation described. Let me first verify my underst",
-  "trace_tool_calls": 36,
-  "tool_results": 36,
-  "tool_failed": 2,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": "no workbook produced"
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|547-18": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "547-18",
-  "at": "2026-09-18T12:46:48Z",
-  "status": "completed",
-  "wall_s": 235.3,
-  "sid": "hsess70c303580d584d3bbd36ecd66b17f84d",
-  "usage": {
-   "fresh_input": 13301,
-   "cached_input": 374656,
-   "cache_write": 0,
-   "output": 1978,
-   "prompt_total": 387957
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 14,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "Let me examine the temporary artifact to understand the harness (not the answer) and confirm my approach.\n\nI've analyzed the data. Now let me build the result: copy the header and rows whose column A ",
-  "trace_tool_calls": 14,
-  "tool_results": 14,
-  "tool_failed": 2,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|66-24": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "66-24",
-  "at": "2026-09-18T12:50:45Z",
-  "status": "completed",
-  "wall_s": 76.9,
-  "sid": "hsessd1c296cfc14f47f186cbe38faafbdb69",
-  "usage": {
-   "fresh_input": 12991,
-   "cached_input": 95360,
-   "cache_write": 0,
-   "output": 1353,
-   "prompt_total": 108351
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 7,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 7,
-  "tool_results": 7,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|73-45": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "73-45",
-  "at": "2026-09-18T12:52:03Z",
-  "status": "completed",
-  "wall_s": 187.0,
-  "sid": "hsessc1d51507fc4847a2999b02288fe70058",
-  "usage": {
-   "fresh_input": 25946,
-   "cached_input": 671232,
-   "cache_write": 0,
-   "output": 5872,
-   "prompt_total": 697178
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 31,
-  "tools": [
-   "bash",
-   "write"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 31,
-  "tool_results": 31,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|61-4": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "61-4",
-  "at": "2026-09-18T12:50:30Z",
-  "status": "completed",
-  "recovered": "502 b'{\"detail\":\"harness-gateway unreachable: fetch failed\"}'",
-  "wall_s": 311.1,
-  "sid": "hsess9ede0c69615a489387662875cd849496",
-  "usage": {
-   "fresh_input": 0,
-   "cached_input": 0,
-   "cache_write": 0,
-   "output": 0,
-   "prompt_total": 0
-  },
-  "turn_error": null,
-  "capped": null,
-  "connection": "",
-  "served": "",
-  "substituted": false,
-  "served_unreported": true,
-  "tool_calls": 15,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [],
-  "assistant": "I have a clear picture now. Let me verify my understanding against the K:Q reference, then write the summarized result.\n\nComputed output matches the K:Q reference exactly (11 summarized rows). Now I'l",
-  "trace_tool_calls": 15,
-  "tool_results": 15,
-  "tool_failed": 2,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": "no workbook produced"
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|79-7": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "79-7",
-  "at": "2026-09-18T12:55:12Z",
-  "status": "completed",
-  "wall_s": 37.0,
-  "sid": "hsess383342e9d36b46178283fa6a91d55400",
-  "usage": {
-   "fresh_input": 8286,
-   "cached_input": 38784,
-   "cache_write": 0,
-   "output": 478,
-   "prompt_total": 47070
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 4,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 4,
-  "tool_results": 4,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|82-30": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "82-30",
-  "at": "2026-09-18T12:55:50Z",
-  "status": "completed",
-  "wall_s": 114.2,
-  "sid": "hsessc663418efe1e4e60bd1d366d46ebdf06",
-  "usage": {
-   "fresh_input": 11540,
-   "cached_input": 84096,
-   "cache_write": 0,
-   "output": 1260,
-   "prompt_total": 95636
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 7,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 7,
-  "tool_results": 7,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|82-38": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "82-38",
-  "at": "2026-09-18T12:57:47Z",
-  "status": "completed",
-  "wall_s": 57.3,
-  "sid": "hsess6395ffdab76145389b481dcab32e6e04",
-  "usage": {
-   "fresh_input": 13402,
-   "cached_input": 100480,
-   "cache_write": 0,
-   "output": 1678,
-   "prompt_total": 113882
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 8,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "The FAKE sheet appears to show the intended result. Let me verify my understanding by computing the mapping and comparing.\n\nConfirmed — matches the FAKE reference exactly. Writing the result to `outpu",
-  "trace_tool_calls": 8,
-  "tool_results": 8,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|84-40": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "84-40",
-  "at": "2026-09-18T12:58:46Z",
-  "status": "failed",
-  "wall_s": 41.7,
-  "sid": "hsess4591879ce3aa405a9ae1a0229f11ea62",
-  "usage": {
-   "fresh_input": 10115,
-   "cached_input": 30208,
-   "cache_write": 0,
-   "output": 637,
-   "prompt_total": 40323
-  },
-  "turn_error": {
-   "type": "harness_error",
-   "code": "turn_failed",
-   "message": "The turn failed: Insufficient Balance"
-  },
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 8,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [],
-  "assistant": "Insufficient Balance",
-  "trace_tool_calls": 8,
-  "tool_results": 8,
-  "tool_failed": 2,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": "no workbook produced"
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|80-42": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "80-42",
-  "at": "2026-09-18T12:55:42Z",
-  "status": "failed",
-  "wall_s": 228.5,
-  "sid": "hsess8be3913031504dd7adc55a74c7e6b31a",
-  "usage": {
-   "fresh_input": 22358,
-   "cached_input": 517760,
-   "cache_write": 0,
-   "output": 4398,
-   "prompt_total": 540118
-  },
-  "turn_error": {
-   "type": "harness_error",
-   "code": "turn_failed",
-   "message": "The turn failed: Insufficient Balance"
-  },
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 24,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [],
-  "assistant": "Insufficient Balance",
-  "trace_tool_calls": 24,
-  "tool_results": 24,
-  "tool_failed": 2,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": "no workbook produced"
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|91-34": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "91-34",
-  "at": "2026-09-18T13:24:03Z",
-  "status": "completed",
-  "wall_s": 71.6,
-  "sid": "hsess2edd327ef8434cc39daaaf4ea247125d",
-  "usage": {
-   "fresh_input": 12663,
-   "cached_input": 72320,
-   "cache_write": 0,
-   "output": 996,
-   "prompt_total": 84983
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 6,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 6,
-  "tool_results": 6,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|97-36": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "97-36",
-  "at": "2026-09-18T13:24:03Z",
-  "status": "completed",
-  "wall_s": 44.6,
-  "sid": "hsess65f9b287dacf44afaed480ae8d8b82bc",
-  "usage": {
-   "fresh_input": 8866,
-   "cached_input": 57984,
-   "cache_write": 0,
-   "output": 849,
-   "prompt_total": 66850
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 5,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 5,
-  "tool_results": 5,
-  "tool_failed": 1,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|105-24": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "105-24",
-  "at": "2026-09-18T13:24:50Z",
-  "status": "completed",
-  "wall_s": 60.3,
-  "sid": "hsess52b516fad07f4550b4596f4702723ff1",
-  "usage": {
-   "fresh_input": 13177,
-   "cached_input": 104576,
-   "cache_write": 0,
-   "output": 1112,
-   "prompt_total": 117753
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 7,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 7,
-  "tool_results": 7,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|109-21": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "109-21",
-  "at": "2026-09-18T13:25:16Z",
-  "status": "completed",
-  "wall_s": 96.5,
-  "sid": "hsess6de3409b76774bd0ac6afa3d36052515",
-  "usage": {
-   "fresh_input": 11659,
-   "cached_input": 171776,
-   "cache_write": 0,
-   "output": 1497,
-   "prompt_total": 183435
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 10,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 10,
-  "tool_results": 10,
-  "tool_failed": 1,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|118-50": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "118-50",
-  "at": "2026-09-18T13:25:52Z",
-  "status": "completed",
-  "wall_s": 197.7,
-  "sid": "hsessdee3839fc2d2413badd0cc5ff20a4145",
-  "usage": {
-   "fresh_input": 17021,
-   "cached_input": 400768,
-   "cache_write": 0,
-   "output": 2631,
-   "prompt_total": 417789
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 15,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 15,
-  "tool_results": 15,
-  "tool_failed": 2,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|130-9": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "130-9",
-  "at": "2026-09-18T13:26:54Z",
-  "status": "completed",
-  "wall_s": 68.3,
-  "sid": "hsess6b089b0b25bc4f2590a80cee8244309c",
-  "usage": {
-   "fresh_input": 14677,
-   "cached_input": 156544,
-   "cache_write": 0,
-   "output": 1925,
-   "prompt_total": 171221
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 11,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "Now I understand: the `Expected` sheet contains the target result. Let me verify the mapping against `cdnr` and check for anything else (comments, hidden rows, images).\n\ndone.",
-  "trace_tool_calls": 11,
-  "tool_results": 11,
-  "tool_failed": 1,
-  "reward": null,
-  "resolved": null,
-  "detail": "ungradable: the grader raises on the golden workbook: ValueError('b2b is not a valid coordinate or range')"
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|142-19": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "142-19",
-  "at": "2026-09-18T13:28:05Z",
-  "status": "completed",
-  "wall_s": 128.2,
-  "sid": "hsess884af98039bf4224b419880de0186099",
-  "usage": {
-   "fresh_input": 16924,
-   "cached_input": 210816,
-   "cache_write": 0,
-   "output": 1955,
-   "prompt_total": 227740
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 12,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 12,
-  "tool_results": 12,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|146-49": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "146-49",
-  "at": "2026-09-18T13:29:11Z",
-  "status": "completed",
-  "wall_s": 89.5,
-  "sid": "hsessd1068ba692e946c7ba3bd6b65404033d",
-  "usage": {
-   "fresh_input": 11059,
-   "cached_input": 146048,
-   "cache_write": 0,
-   "output": 1944,
-   "prompt_total": 157107
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 10,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 10,
-  "tool_results": 10,
-  "tool_failed": 1,
-  "reward": 0.0,
-  "resolved": false,
-  "detail": ""
- },
- "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|147-48": {
-  "provider": "deepseek",
-  "harness": "opencode",
-  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
-  "model": "deepseek-v4.1-flash",
-  "pack": "spreadsheetbench",
-  "task": "147-48",
-  "at": "2026-09-18T13:30:14Z",
-  "status": "completed",
-  "wall_s": 51.0,
-  "sid": "hsess32b8bb2da04c4c8c8b47eabdb96fde85",
-  "usage": {
-   "fresh_input": 11235,
-   "cached_input": 131456,
-   "cache_write": 0,
-   "output": 1450,
-   "prompt_total": 142691
-  },
-  "turn_error": null,
-  "connection": "integration:deepseek",
-  "served": "deepseek-flash",
-  "substituted": false,
-  "served_unreported": false,
-  "tool_calls": 11,
-  "tools": [
-   "bash"
-  ],
-  "network": [],
-  "lookup": [],
-  "files": [
-   "output.xlsx"
-  ],
-  "assistant": "done.",
-  "trace_tool_calls": 11,
-  "tool_results": 11,
-  "tool_failed": 2,
-  "reward": 1.0,
-  "resolved": true,
-  "detail": ""
- },
  "deepseek|pi|deepseek-v4.1-flash|spreadsheetbench|17-35": {
   "provider": "deepseek",
   "harness": "pi",
@@ -2438,7 +430,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the input workbook.\n\nThe task: aggregate width×height per material. The example already provides metal=1660 and PVC=2753; the remaining cell in H2:H4 is H2 for glass. My comput",
+  "assistant": "I'll start by examining the input workbook.\n\nThe task: aggregate width\u00d7height per material. The example already provides metal=1660 and PVC=2753; the remaining cell in H2:H4 is H2 for glass. My comput",
   "trace_tool_calls": 8,
   "tool_results": 8,
   "tool_failed": 2,
@@ -2718,7 +710,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the workbook.\n\nNow I understand the data. Comparing Sheet1 and Sheet2 (data rows 9-32), the only differences are:\n- Sheet1 row for Particulars **C** (Vch 042, Credit 908010) — ",
+  "assistant": "I'll start by examining the workbook.\n\nNow I understand the data. Comparing Sheet1 and Sheet2 (data rows 9-32), the only differences are:\n- Sheet1 row for Particulars **C** (Vch 042, Credit 908010) \u2014 ",
   "trace_tool_calls": 10,
   "tool_results": 10,
   "tool_failed": 1,
@@ -3239,7 +1231,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the input workbook.\n\nThe input has headers already at G1:J1 (ID, Brand, type, Total), and columns A–D hold 999 rows with only 3 distinct A/B/C combinations. Let me verify the a",
+  "assistant": "I'll start by examining the input workbook.\n\nThe input has headers already at G1:J1 (ID, Brand, type, Total), and columns A\u2013D hold 999 rows with only 3 distinct A/B/C combinations. Let me verify the a",
   "trace_tool_calls": 9,
   "tool_results": 9,
   "tool_failed": 2,
@@ -4125,7 +2117,7 @@
   "network": [],
   "lookup": [],
   "files": [],
-  "assistant": "I'll start by inspecting the workbook to understand its structure and the data in the relevant columns.\n\nLet me inspect the workbook more deeply — formulas, styles, merged cells, and the second sheet ",
+  "assistant": "I'll start by inspecting the workbook to understand its structure and the data in the relevant columns.\n\nLet me inspect the workbook more deeply \u2014 formulas, styles, merged cells, and the second sheet ",
   "trace_tool_calls": 20,
   "tool_results": 20,
   "tool_failed": 4,
@@ -4490,7 +2482,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "Now I understand the file. Let me look at the key details:\n\n- **Row 1**: `G1` has fill `#00B050` (green) — NOT yellow.\n- **Row 2**: entire row (`A2:J2`, including `G2`) has fill `#FFFF00` (yellow).\n- ",
+  "assistant": "Now I understand the file. Let me look at the key details:\n\n- **Row 1**: `G1` has fill `#00B050` (green) \u2014 NOT yellow.\n- **Row 2**: entire row (`A2:J2`, including `G2`) has fill `#FFFF00` (yellow).\n- ",
   "trace_tool_calls": 13,
   "tool_results": 13,
   "tool_failed": 2,
@@ -4571,7 +2563,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "Found the key detail: the H cells in rows 4 and 7 aren't truly blank — they (and much of row 7) hold empty strings (`<t/>` shared-string index 3), which is why an `IsEmpty`-based macro fails. Let me n",
+  "assistant": "Found the key detail: the H cells in rows 4 and 7 aren't truly blank \u2014 they (and much of row 7) hold empty strings (`<t/>` shared-string index 3), which is why an `IsEmpty`-based macro fails. Let me n",
   "trace_tool_calls": 15,
   "tool_results": 15,
   "tool_failed": 3,
@@ -4615,7 +2607,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I've analyzed the workbook thoroughly. Let me record my plan and examine the exact data layout before writing.\n\nLet me verify the macro logic carefully — a backward loop that re-encounters a \"Chassis\"",
+  "assistant": "I've analyzed the workbook thoroughly. Let me record my plan and examine the exact data layout before writing.\n\nLet me verify the macro logic carefully \u2014 a backward loop that re-encounters a \"Chassis\"",
   "trace_tool_calls": 19,
   "tool_results": 19,
   "tool_failed": 2,
@@ -4815,7 +2807,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the workspace and the input spreadsheet.\n\nLet me inspect the workbook more deeply — formats, styles, merged cells, and the exact structure.\n\nLet me examine the raw XLSX package",
+  "assistant": "I'll start by examining the workspace and the input spreadsheet.\n\nLet me inspect the workbook more deeply \u2014 formats, styles, merged cells, and the exact structure.\n\nLet me examine the raw XLSX package",
   "trace_tool_calls": 18,
   "tool_results": 18,
   "tool_failed": 2,
@@ -4896,7 +2888,7 @@
    "output.xlsx",
    "transform.py"
   ],
-  "assistant": "I've examined the workbook. It has a single sheet `start` with data in rows 1–36: row 2 is a header, row 29 is an identical repeated header, and rows 3–36 are grouped records where column A holds an i",
+  "assistant": "I've examined the workbook. It has a single sheet `start` with data in rows 1\u201336: row 2 is a header, row 29 is an identical repeated header, and rows 3\u201336 are grouped records where column A holds an i",
   "trace_tool_calls": 16,
   "tool_results": 16,
   "tool_failed": 2,
@@ -5097,7 +3089,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "Now I'll implement the balancing. The natural reading: a positive residual is **added** to units in order unit1→unit5, a negative residual is **subtracted** in order unit5→unit1, keeping each unit wit",
+  "assistant": "Now I'll implement the balancing. The natural reading: a positive residual is **added** to units in order unit1\u2192unit5, a negative residual is **subtracted** in order unit5\u2192unit1, keeping each unit wit",
   "trace_tool_calls": 14,
   "tool_results": 14,
   "tool_failed": 4,
@@ -5422,7 +3414,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I have the data. Let me analyze: max date in Imported Data column E is 2023-08-25; rows more than 30 days older (before 2023-07-26) — let me compute and build the output.\n\nA1:I2 is correct. Now let me",
+  "assistant": "I have the data. Let me analyze: max date in Imported Data column E is 2023-08-25; rows more than 30 days older (before 2023-07-26) \u2014 let me compute and build the output.\n\nA1:I2 is correct. Now let me",
   "trace_tool_calls": 16,
   "tool_results": 16,
   "tool_failed": 3,
@@ -5710,7 +3702,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "Now I understand the task. The input has a realistic URL dataset (with \"domestic\" at A19), and the answer — a VBA macro — goes into `Sheet1!A1:A22`. Let me write the code and preserve all other packag",
+  "assistant": "Now I understand the task. The input has a realistic URL dataset (with \"domestic\" at A19), and the answer \u2014 a VBA macro \u2014 goes into `Sheet1!A1:A22`. Let me write the code and preserve all other packag",
   "trace_tool_calls": 8,
   "tool_results": 8,
   "tool_failed": 2,
@@ -5791,7 +3783,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "The workbook is simple (no macros/drawings). Now I'll build the ID→Name lookup from `Productivity` and replace the IDs in `Open` column C. I'll respect the stated answer range `'Open'!C2:C23` exactly,",
+  "assistant": "The workbook is simple (no macros/drawings). Now I'll build the ID\u2192Name lookup from `Productivity` and replace the IDs in `Open` column C. I'll respect the stated answer range `'Open'!C2:C23` exactly,",
   "trace_tool_calls": 10,
   "tool_results": 10,
   "tool_failed": 1,
@@ -5954,7 +3946,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "Now I understand the data. There are 4 contiguous blocks, each with a bold header row (`Number`/`Name`), separated by blank rows. The task is to sort each block's data rows A→Z by Column A, keeping Co",
+  "assistant": "Now I understand the data. There are 4 contiguous blocks, each with a bold header row (`Number`/`Name`), separated by blank rows. The task is to sort each block's data rows A\u2192Z by Column A, keeping Co",
   "trace_tool_calls": 16,
   "tool_results": 16,
   "tool_failed": 2,
@@ -5994,7 +3986,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I have the full picture. The input has groups in column A separated by blank rows; groups 1–2 are already transposed to C1:E2 as the manual example. I need to transpose the remaining groups into rows ",
+  "assistant": "I have the full picture. The input has groups in column A separated by blank rows; groups 1\u20132 are already transposed to C1:E2 as the manual example. I need to transpose the remaining groups into rows ",
   "trace_tool_calls": 9,
   "tool_results": 9,
   "tool_failed": 3,
@@ -6159,7 +4151,7 @@
   "network": [],
   "lookup": [],
   "files": [],
-  "assistant": "I'll start by exploring the workspace and understanding the spreadsheet structure.\n\nNow I understand the setup. Key findings:\n\n- **Column A** (rows 1–1102): words with associated details in B (flag), ",
+  "assistant": "I'll start by exploring the workspace and understanding the spreadsheet structure.\n\nNow I understand the setup. Key findings:\n\n- **Column A** (rows 1\u20131102): words with associated details in B (flag), ",
   "trace_tool_calls": 11,
   "tool_results": 11,
   "tool_failed": 2,
@@ -6240,7 +4232,7 @@
    "output.xlsx",
    "solve.py"
   ],
-  "assistant": "I'll start by examining the workspace and the spreadsheet contents.\n\nLet me inspect the workbook thoroughly — all cells (including D–I), merged cells, styles, and the raw XML — to understand exactly w",
+  "assistant": "I'll start by examining the workspace and the spreadsheet contents.\n\nLet me inspect the workbook thoroughly \u2014 all cells (including D\u2013I), merged cells, styles, and the raw XML \u2014 to understand exactly w",
   "trace_tool_calls": 7,
   "tool_results": 7,
   "tool_failed": 1,
@@ -6363,7 +4355,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the workbook structure.\n\nData is clear. Now I'll compute the net rows (Existing + Additions − Retired) and write them to A3:E11.\n\nNow I'll verify the output: confirm A3:E11 con",
+  "assistant": "I'll start by examining the workbook structure.\n\nData is clear. Now I'll compute the net rows (Existing + Additions \u2212 Retired) and write them to A3:E11.\n\nNow I'll verify the output: confirm A3:E11 con",
   "trace_tool_calls": 6,
   "tool_results": 6,
   "tool_failed": 2,
@@ -6734,7 +4726,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I've inspected the input. Key findings:\n\n- `input.xlsx` has a single sheet `Sheet1`, used range **A1:B12**.\n- A: `DATA 1`…`DATA 12`; B: `1,1,1,2,2,2,3,3,3,4,5,5`.\n- Cells **B3, B6, B9, B10, B12** are ",
+  "assistant": "I've inspected the input. Key findings:\n\n- `input.xlsx` has a single sheet `Sheet1`, used range **A1:B12**.\n- A: `DATA 1`\u2026`DATA 12`; B: `1,1,1,2,2,2,3,3,3,4,5,5`.\n- Cells **B3, B6, B9, B10, B12** are ",
   "trace_tool_calls": 14,
   "tool_results": 14,
   "tool_failed": 3,
@@ -6857,7 +4849,7 @@
    "combine_sheets.py",
    "output.xlsx"
   ],
-  "assistant": "I'll start by exploring the workspace and examining the input spreadsheet.\n\nAll four sheets share the same header, with 323+159+175+164 = 821 data rows — exactly matching A2:O822. I'll write a script ",
+  "assistant": "I'll start by exploring the workspace and examining the input spreadsheet.\n\nAll four sheets share the same header, with 323+159+175+164 = 821 data rows \u2014 exactly matching A2:O822. I'll write a script ",
   "trace_tool_calls": 9,
   "tool_results": 9,
   "tool_failed": 2,
@@ -7608,7 +5600,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the workbook to understand its structure and contents.\n\nThe rule matches: whole numbers from columns A–F read column-by-column, with the duplicated value (18, present in both c",
+  "assistant": "I'll start by examining the workbook to understand its structure and contents.\n\nThe rule matches: whole numbers from columns A\u2013F read column-by-column, with the duplicated value (18, present in both c",
   "trace_tool_calls": 15,
   "tool_results": 15,
   "tool_failed": 3,
@@ -7771,7 +5763,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the workbook to understand its structure and the data.\n\nLet me inspect the workbook contents.\n\nLet me examine the workbook fully — all sheets, all columns, and metadata.\n\nNow I",
+  "assistant": "I'll start by examining the workbook to understand its structure and the data.\n\nLet me inspect the workbook contents.\n\nLet me examine the workbook fully \u2014 all sheets, all columns, and metadata.\n\nNow I",
   "trace_tool_calls": 13,
   "tool_results": 13,
   "tool_failed": 1,
@@ -7854,7 +5846,7 @@
   "files": [
    "output.xlsx"
   ],
-  "assistant": "I'll start by examining the workbook structure.\n\nNo openpyxl yet — installing it and inspecting the workbook.\n\nLet me examine the full workbook content and workspace for any additional context.\n\nLet m",
+  "assistant": "I'll start by examining the workbook structure.\n\nNo openpyxl yet \u2014 installing it and inspecting the workbook.\n\nLet me examine the full workbook content and workspace for any additional context.\n\nLet m",
   "trace_tool_calls": 11,
   "tool_results": 11,
   "tool_failed": 2,
@@ -8109,5 +6101,2014 @@
   "reward": 0.0,
   "resolved": false,
   "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|17-35": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "17-35",
+  "at": "2026-09-19T04:22:45Z",
+  "status": "completed",
+  "wall_s": 82.5,
+  "sid": "hsessc8d6495332234baf9c42ee1662fb2b41",
+  "usage": {
+   "fresh_input": 12805,
+   "cached_input": 136960,
+   "cache_write": 0,
+   "output": 3713,
+   "prompt_total": 149765
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 11,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "Done.",
+  "trace_tool_calls": 11,
+  "tool_results": 11,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|13-1": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "13-1",
+  "at": "2026-09-19T04:22:45Z",
+  "status": "completed",
+  "wall_s": 118.0,
+  "sid": "hsessce5e490ace204034b8782d14668e7039",
+  "usage": {
+   "fresh_input": 15429,
+   "cached_input": 242560,
+   "cache_write": 0,
+   "output": 12389,
+   "prompt_total": 257989
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 14,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 14,
+  "tool_results": 14,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|23-24": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "23-24",
+  "at": "2026-09-19T04:24:45Z",
+  "status": "completed",
+  "wall_s": 58.1,
+  "sid": "hsess27261c4a4c7e4698b292b6abcea10807",
+  "usage": {
+   "fresh_input": 13509,
+   "cached_input": 147840,
+   "cache_write": 0,
+   "output": 6220,
+   "prompt_total": 161349
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 11,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "Data table is A1:E1102 with words in A and a reference word list in column I (3707 words). Let me compute the filtered result.\n\ndone.",
+  "trace_tool_calls": 11,
+  "tool_results": 11,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|24-23": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "24-23",
+  "at": "2026-09-19T04:25:45Z",
+  "status": "completed",
+  "wall_s": 111.5,
+  "sid": "hsessc65ae9b5ab594a9da85a533fcf8aaf60",
+  "usage": {
+   "fresh_input": 10717,
+   "cached_input": 230016,
+   "cache_write": 0,
+   "output": 13293,
+   "prompt_total": 240733
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 15,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 15,
+  "tool_results": 15,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|28-7": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "28-7",
+  "at": "2026-09-19T04:27:39Z",
+  "status": "completed",
+  "wall_s": 117.6,
+  "sid": "hsess26bec3c64a7a43638bf1b5be073c26a5",
+  "usage": {
+   "fresh_input": 14013,
+   "cached_input": 238336,
+   "cache_write": 0,
+   "output": 21685,
+   "prompt_total": 252349
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 12,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I found a key clue: the input has a merged cell `E6:I17` containing \"Remove these rows\", marking rows 6\u201317 (from the `400-...-A` part at A6 up to, but not including, the next `400-` part at A18). Let ",
+  "trace_tool_calls": 12,
+  "tool_results": 12,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|22-47": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "22-47",
+  "at": "2026-09-19T04:24:11Z",
+  "status": "completed",
+  "recovered": "502 b'{\"detail\":\"harness-gateway unreachable: fetch failed\"}'",
+  "wall_s": 372.5,
+  "sid": "hsess271f522b6b1948aa8aaaa4ba3ad05163",
+  "usage": {
+   "fresh_input": 23704,
+   "cached_input": 772736,
+   "cache_write": 0,
+   "output": 80130,
+   "prompt_total": 796440
+  },
+  "turn_error": null,
+  "capped": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 19,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I'll examine the task carefully. Let me analyze the data structure and requirements.\n\nLet me verify the output file and confirm nothing else changed.\n\nThe output has been written. Here's what I did:\n\n",
+  "trace_tool_calls": 19,
+  "tool_results": 19,
+  "tool_failed": 2,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|51-12": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "51-12",
+  "at": "2026-09-19T04:30:34Z",
+  "status": "completed",
+  "wall_s": 39.8,
+  "sid": "hsessd3f6a4de4fc14c22b6f46247b9260207",
+  "usage": {
+   "fresh_input": 8549,
+   "cached_input": 76416,
+   "cache_write": 0,
+   "output": 4151,
+   "prompt_total": 84965
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 7,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 7,
+  "tool_results": 7,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|60-7": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "60-7",
+  "at": "2026-09-19T04:31:15Z",
+  "status": "completed",
+  "wall_s": 49.0,
+  "sid": "hsess32349a8171fb4e338e18fc908eabb462",
+  "usage": {
+   "fresh_input": 8884,
+   "cached_input": 49536,
+   "cache_write": 0,
+   "output": 1109,
+   "prompt_total": 58420
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 5,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 5,
+  "tool_results": 5,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|262-17": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "262-17",
+  "at": "2026-09-19T04:32:06Z",
+  "status": "completed",
+  "wall_s": 33.6,
+  "sid": "hsess7745a95d25004291ab7f886e02e94128",
+  "usage": {
+   "fresh_input": 12401,
+   "cached_input": 48128,
+   "cache_write": 0,
+   "output": 3526,
+   "prompt_total": 60529
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 4,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 4,
+  "tool_results": 4,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|41-47": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "41-47",
+  "at": "2026-09-19T04:29:38Z",
+  "status": "completed",
+  "wall_s": 223.3,
+  "sid": "hsess29584c9b55f64b578e2f99d794e0b427",
+  "usage": {
+   "fresh_input": 23445,
+   "cached_input": 814336,
+   "cache_write": 0,
+   "output": 29520,
+   "prompt_total": 837781
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 25,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 25,
+  "tool_results": 25,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|263-1": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "263-1",
+  "at": "2026-09-19T04:32:41Z",
+  "status": "completed",
+  "wall_s": 83.1,
+  "sid": "hsessd6b12d9931c847b1bc92b5fd24ac84bd",
+  "usage": {
+   "fresh_input": 14908,
+   "cached_input": 152960,
+   "cache_write": 0,
+   "output": 7255,
+   "prompt_total": 167868
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 10,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 10,
+  "tool_results": 10,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|267-21": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "267-21",
+  "at": "2026-09-19T04:34:05Z",
+  "status": "completed",
+  "wall_s": 47.8,
+  "sid": "hsess08dd84c8776745428a23538c5041c219",
+  "usage": {
+   "fresh_input": 8588,
+   "cached_input": 50048,
+   "cache_write": 0,
+   "output": 1363,
+   "prompt_total": 58636
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 6,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 6,
+  "tool_results": 6,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|267-18": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "267-18",
+  "at": "2026-09-19T04:33:24Z",
+  "status": "completed",
+  "wall_s": 92.7,
+  "sid": "hsess3188533de8da4b779de02a54d69901da",
+  "usage": {
+   "fresh_input": 12197,
+   "cached_input": 228992,
+   "cache_write": 0,
+   "output": 14784,
+   "prompt_total": 241189
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 14,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I have the full picture. Row 1 is green (`FF00B050`), row 2 is yellow (`FFFFFF00`), so only G2 gets the `//` prefix. I'll edit the sheet XML directly to preserve formatting and cached values.\n\ndone.",
+  "trace_tool_calls": 14,
+  "tool_results": 14,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|269-43": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "269-43",
+  "at": "2026-09-19T04:34:55Z",
+  "status": "completed",
+  "wall_s": 75.0,
+  "sid": "hsessc77d02a6d128440e9d6f2a1751724e7d",
+  "usage": {
+   "fresh_input": 12950,
+   "cached_input": 157824,
+   "cache_write": 0,
+   "output": 10213,
+   "prompt_total": 170774
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 11,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I'll inspect the data structure and the condition. Rows 4 and 7 have a value in column I but blank column H (they're subtotal/total rows). Let me delete those rows.\n\ndone.",
+  "trace_tool_calls": 11,
+  "tool_results": 11,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|279-23": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "279-23",
+  "at": "2026-09-19T04:36:11Z",
+  "status": "completed",
+  "wall_s": 26.2,
+  "sid": "hsess29c40ecbafb94b4cbb94c4b9c2710d5f",
+  "usage": {
+   "fresh_input": 8089,
+   "cached_input": 39424,
+   "cache_write": 0,
+   "output": 2064,
+   "prompt_total": 47513
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 4,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "The data shows B3:B12 contain text like `(tig) this is good`, and B17:B26 already hold the expected extracted values (`tig`/`tib`). I'll extract the parenthesized content in column B, leaving blanks b",
+  "trace_tool_calls": 4,
+  "tool_results": 4,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|280-17": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "280-17",
+  "at": "2026-09-19T04:36:39Z",
+  "status": "completed",
+  "wall_s": 62.1,
+  "sid": "hsess80a01195f4f14aaf9324d3ec9580411b",
+  "usage": {
+   "fresh_input": 8290,
+   "cached_input": 61568,
+   "cache_write": 0,
+   "output": 3134,
+   "prompt_total": 69858
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 6,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 6,
+  "tool_results": 6,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|283-32": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "283-32",
+  "at": "2026-09-19T04:37:42Z",
+  "status": "completed",
+  "wall_s": 60.8,
+  "sid": "hsess4ac9e75a271240f2b57a297ee39c46b1",
+  "usage": {
+   "fresh_input": 10897,
+   "cached_input": 81536,
+   "cache_write": 0,
+   "output": 2042,
+   "prompt_total": 92433
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 7,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 7,
+  "tool_results": 7,
+  "tool_failed": 1,
+  "reward": null,
+  "resolved": null,
+  "detail": "ungradable: the grader raises on the golden workbook: ValueError(\"invalid literal for int() with base 10: ''\")"
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|269-44": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "269-44",
+  "at": "2026-09-19T04:34:58Z",
+  "status": "completed",
+  "wall_s": 293.8,
+  "sid": "hsess9d7cde48404046e9839fb1e353ca2f4f",
+  "usage": {
+   "fresh_input": 11080,
+   "cached_input": 369408,
+   "cache_write": 0,
+   "output": 62204,
+   "prompt_total": 380488
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 14,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I'll inspect the task context first, then decide the required output.\n\nI've reviewed the workbook. It contains a single sheet `Sheet1` with the sample column A data (Chassis at A6 and A15). The task's",
+  "trace_tool_calls": 14,
+  "tool_results": 14,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|290-27": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "290-27",
+  "at": "2026-09-19T04:39:53Z",
+  "status": "completed",
+  "wall_s": 77.6,
+  "sid": "hsess8d2ff4ffea1242f9890f6913db7cfbb2",
+  "usage": {
+   "fresh_input": 12221,
+   "cached_input": 125824,
+   "cache_write": 0,
+   "output": 11385,
+   "prompt_total": 138045
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 8,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 8,
+  "tool_results": 8,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|290-1": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "290-1",
+  "at": "2026-09-19T04:38:44Z",
+  "status": "completed",
+  "wall_s": 175.2,
+  "sid": "hsessa231cf1e750248119e350e6ad1d2ffda",
+  "usage": {
+   "fresh_input": 25215,
+   "cached_input": 626944,
+   "cache_write": 0,
+   "output": 31050,
+   "prompt_total": 652159
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 19,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I've analyzed the workbook. Let me verify the transposition pattern against the given examples before writing.\n\nPattern confirmed: records are `(column I index, column H key)` laid out 4 per row at K/",
+  "trace_tool_calls": 19,
+  "tool_results": 19,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|297-42": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "297-42",
+  "at": "2026-09-19T04:41:12Z",
+  "status": "completed",
+  "wall_s": 73.6,
+  "sid": "hsess4357ffeaade84906b70620f78c3231ad",
+  "usage": {
+   "fresh_input": 10116,
+   "cached_input": 109568,
+   "cache_write": 0,
+   "output": 2383,
+   "prompt_total": 119684
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 10,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 10,
+  "tool_results": 10,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|333-29": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "333-29",
+  "at": "2026-09-19T04:42:30Z",
+  "status": "completed",
+  "wall_s": 64.2,
+  "sid": "hsessfb36d940cb434f65b715c898f33f3c3a",
+  "usage": {
+   "fresh_input": 18079,
+   "cached_input": 199168,
+   "cache_write": 0,
+   "output": 8599,
+   "prompt_total": 217247
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 14,
+  "tools": [
+   "bash",
+   "read"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I have the data. Let me analyze the task logic:\n\n- Sheet A, column P: first `Yes`/`NA` \u2192 **P9 = \"Yes\"**\n- Column L above row 9: L3=100, L5=100. The target (sheet B header = \"Last 100 Date\") is the mos",
+  "trace_tool_calls": 14,
+  "tool_results": 14,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|341-40": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "341-40",
+  "at": "2026-09-19T04:43:35Z",
+  "status": "completed",
+  "wall_s": 25.0,
+  "sid": "hsessae882bc424f04ccf8a858de848d97899",
+  "usage": {
+   "fresh_input": 8676,
+   "cached_input": 50048,
+   "cache_write": 0,
+   "output": 1139,
+   "prompt_total": 58724
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 6,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 6,
+  "tool_results": 6,
+  "tool_failed": 2,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|304-35": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "304-35",
+  "at": "2026-09-19T04:41:41Z",
+  "status": "completed",
+  "wall_s": 138.5,
+  "sid": "hsess77a013dee6a344e5b2f1e510d92f48eb",
+  "usage": {
+   "fresh_input": 17455,
+   "cached_input": 356736,
+   "cache_write": 0,
+   "output": 19021,
+   "prompt_total": 374191
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 18,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "Now I understand the data. Let me examine the structure and apply the two transformations.\n\noutput.xlsx is saved with all and only the intended changes inside A3:F36 (F cleared on rows where E is blan",
+  "trace_tool_calls": 18,
+  "tool_results": 18,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|408-5": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "408-5",
+  "at": "2026-09-19T04:44:05Z",
+  "status": "completed",
+  "wall_s": 158.7,
+  "sid": "hsessf0170e1ffa2b4ca2a3ce09c95a9eb137",
+  "usage": {
+   "fresh_input": 21933,
+   "cached_input": 299648,
+   "cache_write": 0,
+   "output": 30124,
+   "prompt_total": 321581
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 11,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I'll compute the sum and apply the transformation literally, then inspect the result.\n\nI decided to preserve the pre-existing \"Total Zero\" row (its E is blank, not zero, and it is not a blank row) and",
+  "trace_tool_calls": 11,
+  "tool_results": 11,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|384-4": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "384-4",
+  "at": "2026-09-19T04:44:04Z",
+  "status": "completed",
+  "wall_s": 214.2,
+  "sid": "hsess7d158e37820c4c8b87f68ba6644471cc",
+  "usage": {
+   "fresh_input": 20594,
+   "cached_input": 345600,
+   "cache_write": 0,
+   "output": 43107,
+   "prompt_total": 366194
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 11,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I'll inspect the workbook data more, then decide the result set.\n\nBased on the data: Source values are `[1,2,2,3,3,4,5]`, Source2 is `[1,2,3,3]`. The qualifying values are `2` (shared, included once),",
+  "trace_tool_calls": 11,
+  "tool_results": 11,
+  "tool_failed": 3,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|433-47": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "433-47",
+  "at": "2026-09-19T04:46:45Z",
+  "status": "completed",
+  "wall_s": 138.8,
+  "sid": "hsess1f965bfb640e4ad3bf60549920cfd4b6",
+  "usage": {
+   "fresh_input": 17226,
+   "cached_input": 200192,
+   "cache_write": 0,
+   "output": 19219,
+   "prompt_total": 217418
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 10,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 10,
+  "tool_results": 10,
+  "tool_failed": 1,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|469-9": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "469-9",
+  "at": "2026-09-19T04:49:06Z",
+  "status": "completed",
+  "wall_s": 25.1,
+  "sid": "hsess74836b0a621b443fbc2f8fbdcb8899ef",
+  "usage": {
+   "fresh_input": 8373,
+   "cached_input": 49024,
+   "cache_write": 0,
+   "output": 1095,
+   "prompt_total": 57397
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 5,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 5,
+  "tool_results": 5,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|472-15": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "472-15",
+  "at": "2026-09-19T04:49:32Z",
+  "status": "completed",
+  "wall_s": 20.2,
+  "sid": "hsessba4ddb26846a4eafa5e92e127f54514e",
+  "usage": {
+   "fresh_input": 7675,
+   "cached_input": 28672,
+   "cache_write": 0,
+   "output": 642,
+   "prompt_total": 36347
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 3,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 3,
+  "tool_results": 3,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|477-45": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "477-45",
+  "at": "2026-09-19T04:49:53Z",
+  "status": "completed",
+  "wall_s": 74.6,
+  "sid": "hsess3de83005a610409681abd6f6867b8927",
+  "usage": {
+   "fresh_input": 8999,
+   "cached_input": 80128,
+   "cache_write": 0,
+   "output": 4730,
+   "prompt_total": 89127
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 7,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 7,
+  "tool_results": 7,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|493-18": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "493-18",
+  "at": "2026-09-19T04:51:10Z",
+  "status": "completed",
+  "wall_s": 30.0,
+  "sid": "hsess6c68273c1c614ccc9b595051eef5b863",
+  "usage": {
+   "fresh_input": 8161,
+   "cached_input": 49536,
+   "cache_write": 0,
+   "output": 1615,
+   "prompt_total": 57697
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 6,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 6,
+  "tool_results": 6,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|455-35": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "455-35",
+  "at": "2026-09-19T04:47:40Z",
+  "status": "completed",
+  "wall_s": 294.2,
+  "sid": "hsess58e283cdcee94672bfbd01d01f81ffe9",
+  "usage": {
+   "fresh_input": 17296,
+   "cached_input": 750080,
+   "cache_write": 0,
+   "output": 45199,
+   "prompt_total": 767376
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 29,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I'll inspect the workspace and workbook structure a bit more before deciding how to encode the answer.\n\nI have enough context. The task is a VBA debugging question, and the deliverable must live insid",
+  "trace_tool_calls": 29,
+  "tool_results": 29,
+  "tool_failed": 1,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|547-18": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "547-18",
+  "at": "2026-09-19T04:51:41Z",
+  "status": "completed",
+  "wall_s": 201.9,
+  "sid": "hsess9b4c9aaf8077482a92191dbdf4b38ebc",
+  "usage": {
+   "fresh_input": 29258,
+   "cached_input": 515456,
+   "cache_write": 0,
+   "output": 39192,
+   "prompt_total": 544714
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 14,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I'll inspect the workbook structure, then build the output. Let me decide the destination layout based on the specified answer range `A1:D7`.\n\nI have the data. The `**` rows are rows 6 and 7. Since th",
+  "trace_tool_calls": 14,
+  "tool_results": 14,
+  "tool_failed": 1,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|61-4": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "61-4",
+  "at": "2026-09-19T04:52:40Z",
+  "status": "completed",
+  "wall_s": 151.7,
+  "sid": "hsessfb5b6851c08b40f68085fcd95763328b",
+  "usage": {
+   "fresh_input": 20170,
+   "cached_input": 425984,
+   "cache_write": 0,
+   "output": 23022,
+   "prompt_total": 446154
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 17,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "Now I understand the structure. Let me verify my grouping logic against the illustration in columns K:Q before writing.\n\nAll 11 merged rows match the illustration in K:Q exactly. Now writing them comp",
+  "trace_tool_calls": 17,
+  "tool_results": 17,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|66-24": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "66-24",
+  "at": "2026-09-19T04:55:05Z",
+  "status": "completed",
+  "wall_s": 68.7,
+  "sid": "hsess41df7dfa2d064e2784e36a450534a104",
+  "usage": {
+   "fresh_input": 9285,
+   "cached_input": 77696,
+   "cache_write": 0,
+   "output": 3860,
+   "prompt_total": 86981
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 8,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 8,
+  "tool_results": 8,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|79-7": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "79-7",
+  "at": "2026-09-19T04:56:15Z",
+  "status": "completed",
+  "wall_s": 25.2,
+  "sid": "hsess307832a62b46448e98e4f850e9be0cb2",
+  "usage": {
+   "fresh_input": 8032,
+   "cached_input": 47744,
+   "cache_write": 0,
+   "output": 1280,
+   "prompt_total": 55776
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 7,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.\n\nThe VBA fix: loop over all columns/cells instead of just column A, e.g.\n\n```vba\nDim ws As Worksheet, rng As Range\nSet ws = ActiveSheet\nFor Each rng In ws.UsedRange\n    If VarType(rng.Value) = v",
+  "trace_tool_calls": 7,
+  "tool_results": 7,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|73-45": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "73-45",
+  "at": "2026-09-19T04:55:14Z",
+  "status": "completed",
+  "wall_s": 243.3,
+  "sid": "hsess28c2b274abd3437baf789c3d1c9ff016",
+  "usage": {
+   "fresh_input": 27651,
+   "cached_input": 1024512,
+   "cache_write": 0,
+   "output": 41639,
+   "prompt_total": 1052163
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 32,
+  "tools": [
+   "bash",
+   "read",
+   "write"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "build_answer.py",
+   "output.xlsx"
+  ],
+  "assistant": "I've explored the workbook. Only column A (ID) and column BD (text) hold data; there is no partial/runs formatting in the file. This is a \"how do I write the macro\" question, so the answer content bel",
+  "trace_tool_calls": 32,
+  "tool_results": 32,
+  "tool_failed": 4,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|82-30": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "82-30",
+  "at": "2026-09-19T04:59:18Z",
+  "status": "completed",
+  "wall_s": 33.7,
+  "sid": "hsess9a8b97459cc242acaae810c7d177eb4f",
+  "usage": {
+   "fresh_input": 10833,
+   "cached_input": 82304,
+   "cache_write": 0,
+   "output": 3372,
+   "prompt_total": 93137
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 8,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "The Manual Result shows the ordering is column-major (all of column A top-to-bottom, then B, C, ...), keeping only whole numbers, then wrapped 6 per row. Let me verify and generate.\n\nMatches. Now writ",
+  "trace_tool_calls": 8,
+  "tool_results": 8,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|82-38": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "82-38",
+  "at": "2026-09-19T04:59:53Z",
+  "status": "completed",
+  "wall_s": 38.5,
+  "sid": "hsessa02596ddaf8648378bb05545f2d58c4c",
+  "usage": {
+   "fresh_input": 12515,
+   "cached_input": 63232,
+   "cache_write": 0,
+   "output": 4177,
+   "prompt_total": 75747
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 5,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "I've explored the workbook. Let me verify my understanding of the mapping against the decoy `FAKE` sheet and then produce `output.xlsx`.\n\nDone. `output.xlsx` saved with `DATA!D2:D20` filled: SH1-match",
+  "trace_tool_calls": 5,
+  "tool_results": 5,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|84-40": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "84-40",
+  "at": "2026-09-19T05:00:33Z",
+  "status": "completed",
+  "wall_s": 30.1,
+  "sid": "hsessc3c728be777344a6996ecfbaff1a360a",
+  "usage": {
+   "fresh_input": 9655,
+   "cached_input": 63616,
+   "cache_write": 0,
+   "output": 1810,
+   "prompt_total": 73271
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 6,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 6,
+  "tool_results": 6,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|91-34": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "91-34",
+  "at": "2026-09-19T05:01:05Z",
+  "status": "completed",
+  "wall_s": 87.6,
+  "sid": "hsess1a40fafa504544b4b60c32fed6d6510c",
+  "usage": {
+   "fresh_input": 13212,
+   "cached_input": 115840,
+   "cache_write": 0,
+   "output": 8417,
+   "prompt_total": 129052
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 8,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 8,
+  "tool_results": 8,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|97-36": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "97-36",
+  "at": "2026-09-19T05:02:34Z",
+  "status": "completed",
+  "wall_s": 35.2,
+  "sid": "hsessff02495849ac423791853238950e2e31",
+  "usage": {
+   "fresh_input": 8817,
+   "cached_input": 65664,
+   "cache_write": 0,
+   "output": 3597,
+   "prompt_total": 74481
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 6,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 6,
+  "tool_results": 6,
+  "tool_failed": 1,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|80-42": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "80-42",
+  "at": "2026-09-19T04:56:41Z",
+  "status": "completed",
+  "recovered": "502 b'{\"detail\":\"harness-gateway unreachable: fetch failed\"}'",
+  "wall_s": 380.8,
+  "sid": "hsess21270612533f4f74a542d7f123b7ad35",
+  "usage": {
+   "fresh_input": 28659,
+   "cached_input": 1504896,
+   "cache_write": 0,
+   "output": 49870,
+   "prompt_total": 1533555
+  },
+  "turn_error": null,
+  "capped": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 40,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "Let me investigate the workbook structure further to understand the exact task requirements.\n\nI'll examine the fill details and decide the consolidation approach. Let me look at the structure once mor",
+  "trace_tool_calls": 40,
+  "tool_results": 40,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|109-21": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "109-21",
+  "at": "2026-09-19T05:03:23Z",
+  "status": "completed",
+  "wall_s": 32.6,
+  "sid": "hsesscc717cd216bd46fbb4721446f4f341ff",
+  "usage": {
+   "fresh_input": 15107,
+   "cached_input": 66304,
+   "cache_write": 0,
+   "output": 2831,
+   "prompt_total": 81411
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 5,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "Now I understand the structure. Groups are contiguous blocks of non-empty rows (separated by blank rows), scores in column K. Let me verify the blocks and compute.\n\ndone.",
+  "trace_tool_calls": 5,
+  "tool_results": 5,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|105-24": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "105-24",
+  "at": "2026-09-19T05:03:11Z",
+  "status": "completed",
+  "wall_s": 75.6,
+  "sid": "hsess57463b03cc5b4adfa7d5f0faf6e57abd",
+  "usage": {
+   "fresh_input": 13280,
+   "cached_input": 135296,
+   "cache_write": 0,
+   "output": 10744,
+   "prompt_total": 148576
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 8,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "Now let me inspect the exact structure and check for merged cells/images:\n\nOnly column C rows 4\u201323 will be replaced (C2 is \"Last Extract:\", C3 is the header \"Author\"). I'll build the ID\u2192Name map from ",
+  "trace_tool_calls": 8,
+  "tool_results": 8,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|130-9": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "130-9",
+  "at": "2026-09-19T05:04:29Z",
+  "status": "completed",
+  "wall_s": 83.7,
+  "sid": "hsesseba01d65c025477fb76f465bb9b4677d",
+  "usage": {
+   "fresh_input": 16966,
+   "cached_input": 207360,
+   "cache_write": 0,
+   "output": 10834,
+   "prompt_total": 224326
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 12,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 12,
+  "tool_results": 12,
+  "tool_failed": 2,
+  "reward": null,
+  "resolved": null,
+  "detail": "ungradable: the grader raises on the golden workbook: ValueError('b2b is not a valid coordinate or range')"
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|142-19": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "142-19",
+  "at": "2026-09-19T05:05:53Z",
+  "status": "completed",
+  "wall_s": 76.2,
+  "sid": "hsess588a01c4cc6344f0a19bb29554777c6d",
+  "usage": {
+   "fresh_input": 19230,
+   "cached_input": 208512,
+   "cache_write": 0,
+   "output": 11255,
+   "prompt_total": 227742
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 12,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 12,
+  "tool_results": 12,
+  "tool_failed": 2,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|146-49": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "146-49",
+  "at": "2026-09-19T05:07:11Z",
+  "status": "completed",
+  "wall_s": 49.4,
+  "sid": "hsess94c349c9a1314c9981575ba3ae35f6e2",
+  "usage": {
+   "fresh_input": 9854,
+   "cached_input": 90112,
+   "cache_write": 0,
+   "output": 4899,
+   "prompt_total": 99966
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 8,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 8,
+  "tool_results": 8,
+  "tool_failed": 1,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|147-48": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "147-48",
+  "at": "2026-09-19T05:08:04Z",
+  "status": "completed",
+  "wall_s": 36.1,
+  "sid": "hsessa1be0cccee8042ec997301ec20f27d05",
+  "usage": {
+   "fresh_input": 8566,
+   "cached_input": 64640,
+   "cache_write": 0,
+   "output": 3280,
+   "prompt_total": 73206
+  },
+  "turn_error": null,
+  "connection": "integration:deepseek",
+  "served": "deepseek-flash",
+  "substituted": false,
+  "served_unreported": false,
+  "tool_calls": 6,
+  "tools": [
+   "bash"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [
+   "output.xlsx"
+  ],
+  "assistant": "done.",
+  "trace_tool_calls": 6,
+  "tool_results": 6,
+  "tool_failed": 1,
+  "reward": 1.0,
+  "resolved": true,
+  "detail": ""
+ },
+ "deepseek|opencode|deepseek-v4.1-flash|spreadsheetbench|118-50": {
+  "provider": "deepseek",
+  "harness": "opencode",
+  "harness_id": "chrn_f4e3f47982c446babf26f4b01d4a4878",
+  "model": "deepseek-v4.1-flash",
+  "pack": "spreadsheetbench",
+  "task": "118-50",
+  "at": "2026-09-19T05:03:57Z",
+  "status": "completed",
+  "recovered": "502 b'{\"detail\":\"harness-gateway unreachable: fetch failed\"}'",
+  "wall_s": 552.1,
+  "sid": "hsesse7c91f0533934a698f50e3be61917581",
+  "usage": {
+   "fresh_input": 0,
+   "cached_input": 0,
+   "cache_write": 0,
+   "output": 0,
+   "prompt_total": 0
+  },
+  "turn_error": null,
+  "capped": null,
+  "connection": "",
+  "served": "",
+  "substituted": false,
+  "served_unreported": true,
+  "tool_calls": 28,
+  "tools": [
+   "bash",
+   "read"
+  ],
+  "network": [],
+  "lookup": [],
+  "files": [],
+  "assistant": "I've analyzed the workbook. Let me now write the output.\n\nOpenpyxl altered column widths, which violates the \"leave everything else unchanged\" rule. Let me do a byte-preserving ZIP edit instead.\n\ndone",
+  "trace_tool_calls": 28,
+  "tool_results": 28,
+  "tool_failed": 1,
+  "reward": 0.0,
+  "resolved": false,
+  "detail": "no workbook produced"
  }
 }
