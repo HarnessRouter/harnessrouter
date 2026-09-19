@@ -415,8 +415,13 @@ def _on_event(ev: dict, state: dict) -> None:
         # The console's names for the tools, the ones the catalog lists and the policy is written
         # in; the SDK's registry names (terminal, file_editor, task_tracker) are the wire.
         name = str(ev.get("tool_name") or "Tool")
-        _emit("tool_call", {"id": tuid, "name": _CONSOLE_NAMES.get(name, name),
-                            "input": _action_input(ev.get("action") or {})})
+        action = ev.get("action") or {}
+        card = _CONSOLE_NAMES.get(name, name)
+        # the file editor's `view` is a read, not an edit: the console counts Edit cards as
+        # files edited ("Edited 3 files" for one file created and two looked at)
+        if name == "file_editor" and str(action.get("command") or "") == "view":
+            card = "Read"
+        _emit("tool_call", {"id": tuid, "name": card, "input": _action_input(action)})
     elif kind == "ObservationEvent":
         obs = ev.get("observation") or {}
         if str(obs.get("kind") or "") == "FinishObservation":

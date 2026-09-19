@@ -464,3 +464,14 @@ def test_the_servers_verdict_is_the_reason_and_the_log_is_read_before_the_stop()
     assert src.index("tail_before_stop = _log_tail(logf)", fin) < src.index("proc.send_signal(signal.SIGTERM)", fin)
     assert 'f"the agent-server marked the conversation {status}"' in src
 
+
+def test_a_file_editor_view_is_a_read_card():
+    """The console counts Edit cards as files edited: one file created and two looked at read
+    "Edited 3 files". A view is a read."""
+    call, _ = _collect({"kind": "ActionEvent", "tool_call_id": "v1", "tool_name": "file_editor",
+                        "action": {"kind": "FileEditorAction", "command": "view", "path": "/w/a.md"}}, {})
+    assert call[0][1]["name"] == "Read" and call[0][1]["input"] == {"command": "view", "path": "/w/a.md"}
+    call, _ = _collect({"kind": "ActionEvent", "tool_call_id": "v2", "tool_name": "file_editor",
+                        "action": {"kind": "FileEditorAction", "command": "create", "path": "/w/a.md", "file_text": "x"}}, {})
+    assert call[0][1]["name"] == "Edit"
+
