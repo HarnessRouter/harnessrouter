@@ -227,7 +227,15 @@ def _agent_spec(job: dict) -> dict:
     spec: dict = {"llm": {"model": job["model"], "base_url": None, "usage_id": "harness",
                           "num_retries": 2, "retry_min_wait": 2, "retry_max_wait": 8,
                           "retry_multiplier": 2},
-                  "tools": tools}
+                  "tools": tools,
+                  # THE AGENT DOC IS CONTEXT, NOT A FILE THE MODEL MAY OR MAY NOT OPEN. The SDK
+                  # loads the workspace's AGENTS.md (and .agents/skills/) as repo skills only when
+                  # asked (AgentContext.load_project_skills, False by default), and it reads them
+                  # afresh on each server's first run, so every turn sees the harness's current
+                  # instructions, workspace contract and skills block. Without this the doc reached
+                  # the model only when it chose to `cat AGENTS.md` (it did in the smoke turns; a
+                  # model that does not never learns where deliverables go or which skills exist).
+                  "agent_context": {"load_project_skills": True}}
     # The declared MCP servers ride the agent itself — the SDK dials them, so this base needs no
     # bridge of its own. Sent only when there ARE servers: the agent is frozen at creation, and an
     # empty mcp_config is not the same statement as none.

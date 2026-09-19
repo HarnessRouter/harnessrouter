@@ -446,3 +446,11 @@ def test_provider_retries_are_bounded_in_seconds():
     llm = drv._agent_spec({"model": "m"})["llm"]
     assert (llm["num_retries"], llm["retry_min_wait"], llm["retry_max_wait"], llm["retry_multiplier"]) == (2, 2, 8, 2)
 
+
+def test_the_agent_doc_is_loaded_as_context_on_every_turn():
+    """The SDK reads the workspace's AGENTS.md as a repo skill only when load_project_skills is
+    set, afresh on each server's first run; without it the doc reached the model only when it
+    chose to cat the file."""
+    spec = drv._agent_spec({"model": "m"})
+    assert spec["agent_context"] == {"load_project_skills": True}
+
