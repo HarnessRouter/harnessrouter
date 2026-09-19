@@ -28,6 +28,7 @@ import os
 import pathlib
 import re
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -541,6 +542,12 @@ def main() -> int:
             proc.wait(timeout=10)
         with contextlib.suppress(Exception):
             proc.kill()
+        # the turn's tmux socket directory, on the normal path; a killed turn's is removed by
+        # the runner's sweep, which finds it through the marker the tmux server carries
+        with contextlib.suppress(Exception):
+            subprocess.run(["tmux", "-L", "openhands", "kill-server"], env=env, timeout=5,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        shutil.rmtree(env["TMUX_TMPDIR"], ignore_errors=True)
 
     status = state.get("status") or ""
     ok = (bool(state.get("final")) and status not in _FAILED and not state.get("timeout")
