@@ -36,6 +36,10 @@ def _run(*args, cwd):
 
 @pytest.fixture(scope="module")
 def distributions(tmp_path_factory):
+    # The build tools are not part of the package's own dependencies: without them these two
+    # tests say so and step aside, and the byte-for-byte test above still runs everywhere.
+    for tool in ("build", "setuptools", "wheel"):
+        pytest.importorskip(tool, reason=f"{tool} is not installed; pip install build setuptools wheel")
     root = tmp_path_factory.mktemp("conformance-dist")
     source = root / "source"
     shutil.copytree(

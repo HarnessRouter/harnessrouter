@@ -67,7 +67,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: protocol/conformance/pyproject.toml
-      - run: pip install -e protocol/conformance pytest build "setuptools>=68" wheel
+      - run: pip install -e protocol/conformance pytest
       - run: python -m pytest protocol/conformance/tests -q
 
   console:

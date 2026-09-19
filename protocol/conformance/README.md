@@ -272,6 +272,9 @@ pip install -e protocol/conformance pytest build "setuptools>=68" wheel
 python -m pytest protocol/conformance/tests -q
 ```
 
+Without `build`, `setuptools` and `wheel` the two distribution tests skip and say why; the rest of
+the suite, the byte-for-byte schema comparison included, runs with the package alone.
+
 The schema in `protocol/schema/` is the source of truth. The package carries an exact copy of the
 version named by `UHP_VERSION` in `uhp_conformance/uhp-<version>.schema.json`; copy it again whenever
 that schema changes. A byte-for-byte comparison in the tests prevents the packaged copy from
