@@ -439,3 +439,10 @@ def test_the_field_litellm_invents_for_a_known_claude_id_never_reaches_the_provi
     route = _HERMES_RELAY["routes"][env["OPENAI_API_KEY"]]
     assert route[2]["drop_fields"] == ("max_tokens",)
 
+
+def test_provider_retries_are_bounded_in_seconds():
+    """The SDK's defaults turned a provider that answered the same 503 every time into a 270 s
+    turn before the reason was reported; every other base fails in seconds."""
+    llm = drv._agent_spec({"model": "m"})["llm"]
+    assert (llm["num_retries"], llm["retry_min_wait"], llm["retry_max_wait"], llm["retry_multiplier"]) == (2, 2, 8, 2)
+

@@ -219,7 +219,14 @@ def _agent_spec(job: dict) -> dict:
     # 127.0.0.1:39265` (hr-test, 2026-09-19, the first turn after a deploy). litellm reads
     # OPENAI_BASE_URL from the environment when the spec carries none, and the driver sets it for
     # this turn's server the way it sets the key, so every turn dials the relay it was given.
-    spec: dict = {"llm": {"model": job["model"], "base_url": None, "usage_id": "harness"},
+    # RETRIES BOUNDED IN SECONDS, NOT MINUTES. The SDK's defaults (5 retries, 8 s minimum wait,
+    # 64 s maximum, multiplier 8) turn a provider that answers the same 503 every time into a
+    # 270-310 s turn before the reason is reported (three switch scenarios, hr-test 2026-09-19);
+    # every other base surfaces the same refusal in seconds. Two retries a few seconds apart
+    # still cover a blip. Persisted with the agent like the rest of the spec.
+    spec: dict = {"llm": {"model": job["model"], "base_url": None, "usage_id": "harness",
+                          "num_retries": 2, "retry_min_wait": 2, "retry_max_wait": 8,
+                          "retry_multiplier": 2},
                   "tools": tools}
     # The declared MCP servers ride the agent itself — the SDK dials them, so this base needs no
     # bridge of its own. Sent only when there ARE servers: the agent is frozen at creation, and an
