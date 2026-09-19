@@ -295,6 +295,28 @@ def _tools(job: dict) -> list[str]:
     return [t for t in _TOOLS if t not in off]
 
 
+def _set_turn_model(home: pathlib.Path, cid: str, model: str) -> bool:
+    """The turn's model, written into the persisted agent before the server loads it.
+
+    The agent is frozen at the conversation's creation, its LLM spec included, and the server
+    offers no way to change it: a task that switched models kept calling the first one, the
+    record saying claude-sonnet-5 while the relay served gpt-5.4 (hr-test, 2026-09-19). The
+    conversation's store is a JSON file in this workspace that the server reads on first access,
+    so the model rides the same door the conversation id does: the file is patched, then the
+    server is asked. Only the model field changes; nothing else of the agent is touched."""
+    path = home / "conversations" / cid.replace("-", "") / "base_state.json"
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    llm = (doc.get("agent") or {}).get("llm")
+    if not isinstance(llm, dict) or llm.get("model") == model:
+        return False
+    llm["model"] = model
+    path.write_text(json.dumps(doc))
+    return True
+
+
 def _conversation(base: str, key: str, job: dict, cwd: str) -> tuple[str, bool]:
     """This turn's conversation: the minted id if the store already holds it, else created with it.
 
@@ -302,6 +324,8 @@ def _conversation(base: str, key: str, job: dict, cwd: str) -> tuple[str, bool]:
     the conversation is there, and the harness never infers it from its own argv.
     """
     cid = _conversation_id(_tools(job), job.get("mcp_config") or {}, _withheld_mcp(job))
+    # before the server is asked, since it loads the conversation on first access
+    _set_turn_model(pathlib.Path(cwd, ".harness", "openhands"), cid, job["model"])
     try:
         info = _req(f"{base}/api/conversations/{cid}", key)
         if info and info.get("id"):

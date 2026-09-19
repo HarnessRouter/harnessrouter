@@ -398,3 +398,24 @@ def test_a_disabled_mcp_tool_is_withheld_by_the_sdks_own_filter():
     b = drv._conversation_id(["file_editor"], {"probe": {}}, [])
     assert a != b
 
+
+def test_a_model_switch_reaches_a_resumed_conversation(tmp_path):
+    """The agent is frozen at creation, LLM spec included; a task that switched models kept
+    calling the first one, the record saying claude-sonnet-5 while the relay served gpt-5.4
+    (hr-test 2026-09-19). The turn's model is written into the persisted state before the server
+    loads it; nothing else of the agent changes; a missing store is left alone."""
+    home = tmp_path / ".harness" / "openhands"
+    cid = "2ec3e3d0-d5ac-57bb-8f39-5285cc427a6d"
+    d = home / "conversations" / cid.replace("-", ""); d.mkdir(parents=True)
+    state = {"id": cid, "agent": {"llm": {"model": "openai/gpt-5.4", "usage_id": "harness", "base_url": None},
+                                   "tools": [{"name": "terminal"}], "kind": "Agent"}, "max_iterations": 400}
+    (d / "base_state.json").write_text(json.dumps(state))
+    assert drv._set_turn_model(home, cid, "openai/claude-sonnet-5") is True
+    after = json.loads((d / "base_state.json").read_text())
+    assert after["agent"]["llm"]["model"] == "openai/claude-sonnet-5"
+    assert after["agent"]["tools"] == [{"name": "terminal"}] and after["max_iterations"] == 400
+    assert drv._set_turn_model(home, cid, "openai/claude-sonnet-5") is False   # already that model
+    assert drv._set_turn_model(home, "no-such-conversation", "m") is False
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("openhands_driver.py").read_text()
+    assert '_set_turn_model(pathlib.Path(cwd, ".harness", "openhands"), cid, job["model"])' in src
+
