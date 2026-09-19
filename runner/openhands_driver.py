@@ -558,6 +558,7 @@ def main() -> int:
 
     base, ws_base = f"http://127.0.0.1:{port}", f"ws://127.0.0.1:{port}"
     state: dict = {}
+    tail_before_stop = ""
     try:
         global _STEP
         _STEP = "waiting for the agent-server to answer /alive"
@@ -581,6 +582,11 @@ def main() -> int:
         _emit("error", {"text": f"{type(exc).__name__}: {exc} (while {_STEP})"
                                 + (f" — agent-server said: {tail}" if tail else "")})
     finally:
+        # THE LOG IS READ BEFORE THE SERVER IS STOPPED. Read after, its last lines are the
+        # shutdown (`Received signal SIGTERM … shutting down`), which the reasonless-failure
+        # fallback below then reported as the reason (llama-3.3-70b, hr-test 2026-09-19: a
+        # conversation the server marked stuck was recorded as "websocket disconnected … SIGTERM").
+        tail_before_stop = _log_tail(logf)
         with contextlib.suppress(Exception):
             proc.send_signal(signal.SIGTERM)
             proc.wait(timeout=10)
@@ -597,7 +603,15 @@ def main() -> int:
     ok = (bool(state.get("final")) and status not in _FAILED and not state.get("timeout")
           and not state.get("server_died"))
     if state.get("server_died") and not state.get("reported_error"):
-        _emit("error", {"text": "agent-server exited mid-turn: " + (_log_tail(logf) or "no output")})
+        _emit("error", {"text": "agent-server exited mid-turn: " + (tail_before_stop or "no output")})
+        state["reported_error"] = True
+    if status in _FAILED and not state.get("reported_error"):
+        # The server's own verdict on the conversation is the reason, in its word: `stuck` is
+        # the agent repeating itself past the server's detector, `error` a run that ended in one.
+        # The log's exception line rides along when there is one; the shutdown noise never.
+        exc_line = tail_before_stop if _EXC_LINE.match((tail_before_stop or "").strip()) else ""
+        _emit("error", {"text": f"the agent-server marked the conversation {status}"
+                                + (f": {exc_line}" if exc_line else "")})
         state["reported_error"] = True
     if not ok and not state.get("reported_error"):
         # A FAILED TURN CAN CARRY NO REASON AT ALL, and that is the server's design rather than a
@@ -609,9 +623,8 @@ def main() -> int:
         # 'PromptTokensDetailsWrapper' object has no attribute 'cache_creation_tokens'`, a sentence
         # that reached the server's log and no other place, leaving the record to say only "the
         # turn ended error" for eleven scenarios across five models.
-        tail = _log_tail(logf)
-        if tail:
-            _emit("error", {"text": f"agent-server said: {tail}"})
+        if tail_before_stop:
+            _emit("error", {"text": f"agent-server said: {tail_before_stop}"})
     _emit("result", {"final": state.get("final") or "", "ok": ok, "status": status,
                      "seconds": round(time.time() - _T0, 2)})
     return 0

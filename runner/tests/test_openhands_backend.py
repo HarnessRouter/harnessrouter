@@ -454,3 +454,13 @@ def test_the_agent_doc_is_loaded_as_context_on_every_turn():
     spec = drv._agent_spec({"model": "m"})
     assert spec["agent_context"] == {"load_project_skills": True}
 
+
+def test_the_servers_verdict_is_the_reason_and_the_log_is_read_before_the_stop():
+    """A conversation the server marked stuck was recorded as "websocket disconnected … SIGTERM":
+    the log was read after the driver stopped the server, so its last lines were the shutdown.
+    The tail is read first, and a failed status is reported in the server's own word."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("openhands_driver.py").read_text()
+    fin = src.index("    finally:\n        # THE LOG IS READ BEFORE THE SERVER IS STOPPED")
+    assert src.index("tail_before_stop = _log_tail(logf)", fin) < src.index("proc.send_signal(signal.SIGTERM)", fin)
+    assert 'f"the agent-server marked the conversation {status}"' in src
+
