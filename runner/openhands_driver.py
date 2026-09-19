@@ -38,7 +38,7 @@ import uuid
 
 _T0 = time.time()
 
-def _conversation_id(tools: list[str]) -> str:
+def _conversation_id(tools: list[str], mcp: dict | None = None) -> str:
     """The conversation id the runner MINTS, for aider's and goose's reason: it has to be
     reproducible from the workspace alone after a sandbox recycle. The API takes `conversation_id`
     on the create call (a request field, not a server-assigned one), so a uuid5 is all it takes — a
@@ -52,9 +52,13 @@ def _conversation_id(tools: list[str]) -> str:
     conversation, created with the tools it asks for. The cost is that changing the policy starts a
     new thread; the alternative is running with a tool the operator has since disabled, which is the
     overstatement UHP 4.3 forbids and the direction this must never fail in.
+
+    The declared MCP servers are in the key for the same reason: they are part of the agent, and an
+    agent that cannot be updated cannot learn about a server added after it was made.
     """
     return str(uuid.uuid5(uuid.NAMESPACE_URL,
-                          "https://harnessrouter.dev/openhands/harness?tools=" + ",".join(tools)))
+                          "https://harnessrouter.dev/openhands/harness?tools=" + ",".join(tools)
+                          + "&mcp=" + ",".join(sorted(mcp or {}))))
 
 
 def _emit(method: str, payload) -> None:
@@ -154,9 +158,15 @@ def _agent_spec(job: dict) -> dict:
     and is not sent to the provider.
     """
     tools = [{"name": n} for n in _tools(job)]
-    return {"llm": {"model": job["model"], "base_url": job.get("base_url") or None,
-                    "usage_id": "harness"},
-            "tools": tools}
+    spec: dict = {"llm": {"model": job["model"], "base_url": job.get("base_url") or None,
+                          "usage_id": "harness"},
+                  "tools": tools}
+    # The declared MCP servers ride the agent itself — the SDK dials them, so this base needs no
+    # bridge of its own. Sent only when there ARE servers: the agent is frozen at creation, and an
+    # empty mcp_config is not the same statement as none.
+    if job.get("mcp_config"):
+        spec["mcp_config"] = job["mcp_config"]
+    return spec
 
 
 # The tools this base gives the agent, by the names openhands-tools registers. An agent created
@@ -185,7 +195,7 @@ def _conversation(base: str, key: str, job: dict, cwd: str) -> tuple[str, bool]:
     Asking first is the goose lesson the 2026-09-13 decision generalised — the store answers whether
     the conversation is there, and the harness never infers it from its own argv.
     """
-    cid = _conversation_id(_tools(job))
+    cid = _conversation_id(_tools(job), job.get("mcp_config") or {})
     try:
         info = _req(f"{base}/api/conversations/{cid}", key)
         if info and info.get("id"):

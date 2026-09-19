@@ -2798,6 +2798,36 @@ def _stringify_tool_content(body: bytes) -> bytes:
     return body
 
 
+def _stringify_assistant_content(body: bytes) -> bytes:
+    """Assistant-role message content: array-of-parts -> plain string, in one chat-completions body.
+
+    The tool-role twin above, one role over. OpenAI accepts both shapes and the OpenHands SDK sends
+    the array form for every assistant turn it replays, which Vercel's mistral endpoint refuses —
+    and refuses MISLEADINGLY: `400 Assistant message must have either content or tool_calls, but
+    not none.` about a message whose content is right there. Isolated against the live endpoint
+    (2026-09-18): the identical request answers 200 with `content: "M1"` and 400 with
+    `content: [{"type": "text", "text": "M1"}]`.
+
+    It only bites once a conversation HAS an assistant turn, so a first turn passes and every one
+    after it fails — which is exactly how it presented, four of five scenarios on
+    vercel|openhands|mistral-medium-3.5. Text parts are all an assistant message carries here, so
+    the flatten is lossless; applied only after a provider says exactly that."""
+    try:
+        obj = json.loads(body)
+        changed = False
+        for m in obj.get("messages") or []:
+            if (isinstance(m, dict) and m.get("role") == "assistant"
+                    and isinstance(m.get("content"), list)):
+                m["content"] = "".join(p.get("text", "") for p in m["content"]
+                                       if isinstance(p, dict))
+                changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 def _set_reasoning_effort_none(body: bytes) -> bytes:
     """Set `reasoning_effort: "none"` in one chat-completions body.
 
@@ -3268,6 +3298,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
                 body = _stringify_tool_content(body)
+            if flags.get("stringify_assistant_content"):
+                body = _stringify_assistant_content(body)
             if flags.get("drop_stream_options"):
                 body = _drop_stream_options(body)
             if flags.get(f"reasoning_effort_none:{_body_model}"):
@@ -3311,6 +3343,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         and stringified is not None and stringified != body):
                     flags["stringify_tool_content"] = True
                     body = stringified
+                    headers["content-length"] = str(len(body))
+                    continue
+                assistant = _stringify_assistant_content(body) if body is not None else None
+                if (attempt < 2 and e.code == 400
+                        and b"Assistant message must have either content" in data
+                        and assistant is not None and assistant != body):
+                    flags["stringify_assistant_content"] = True
+                    body = assistant
                     headers["content-length"] = str(len(body))
                     continue
                 effort = _set_reasoning_effort_none(body) if body is not None else None
@@ -5170,6 +5210,52 @@ OPENHANDS_PYTHON = os.environ.get("HR_OPENHANDS_PYTHON",
 OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openhands_driver.py")
 
 
+def _openhands_mcp_config(mcp_servers: list[dict] | None) -> dict:
+    """The declared servers as the SDK's `Agent.mcp_config`: {name: MCPServer}.
+
+    This base needs no bridge — unlike aider, which ships no MCP client at all — because the agent
+    server's own SDK takes the servers on the agent and dials them itself. Its MCPServer accepts
+    `url`/`transport`/`headers` and the stdio trio `command`/`args`/`env`, so the harness's
+    declaration maps across one field at a time and nothing is invented here.
+
+    THE DECLARED TRANSPORT TRAVELS, the rule #191's review set for kimi: the harness says what a
+    server speaks and the url's spelling decides nothing. The SDK's own values are
+    stdio / http / streamable-http / sse, and anything else is dropped rather than guessed at —
+    a server dialled with the wrong protocol cannot answer, and a config the SDK rejects would
+    fail the whole turn rather than the one server.
+    """
+    out: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        entry: dict = {}
+        if url:
+            entry["url"] = url
+            transport = str(sv.get("transport") or "").lower()
+            if transport in ("stdio", "http", "streamable-http", "sse"):
+                entry["transport"] = transport
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry["transport"] = "stdio"
+            entry["command"] = argv[0]
+            entry["args"] = [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+            if sv.get("cwd"):
+                entry["cwd"] = str(sv["cwd"])
+        else:
+            continue
+        out[name] = entry
+    return out
+
+
 def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                      resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                      tools_disabled: list[str] | None = None,
@@ -5200,6 +5286,10 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
     job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
            "base_url": relay_base, "api_key": relay_tok,
            "tools_disabled": list(tools_disabled or []),
+           # Declared MCP servers reach the agent itself; a parameter accepted and then dropped is
+           # the defect aider's bridge already taught this repo, so the test suite pins the whole
+           # chain rather than this line.
+           "mcp_config": _openhands_mcp_config(mcp_servers),
            # the server's own default is 500 iterations per run; an operator's budget that the
            # backend drops is the quiet lie kimi shipped at 1000 steps
            "max_turns": max_turns}
