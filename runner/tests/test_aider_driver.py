@@ -538,7 +538,6 @@ def test_the_chat_history_is_restored_on_every_turn():
     """aider's only continuation mechanism. It travels in the checkpoint under .harness/, which is
     what lets a follow-up after a sandbox recycle still know what was said; on a first turn the file
     does not exist and aider starts fresh."""
-    import json as _json
     _, _, _, job = _build()
     # the driver owns the argv; assert the flag it builds
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
