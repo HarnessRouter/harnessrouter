@@ -657,8 +657,9 @@ docker run -e HR_BACKENDS=opencode ...                             # lean
 Aider and OpenHands are the largest of the set: each environment is about 700 MB and takes a minute
 or two to install on a fresh volume. Leave either out of `HR_BACKENDS` if you will not use it.
 
-A backend that fails to install is not fatal: the others still work, and the console offers what
-the gateway's catalogue lists, so an unavailable backend simply is not shown.
+A backend that fails to install is not fatal: the others still work. The console offers every
+base the gateway's catalogue lists, so a task on a backend that did not install fails on its
+first turn; the container's log names the install that failed.
 
 Chromium is genuinely an image layer, so it stays a build flag:
 
