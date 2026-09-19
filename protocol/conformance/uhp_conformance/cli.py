@@ -49,16 +49,26 @@ def main(argv=None) -> int:
     ctx = Context(client=Client(a.base_url, a.api_key, headers=extra), harness_id=a.harness_id,
                   model=a.model, task_timeout=a.task_timeout)
 
-    # A harness with no default model and no --model runs every task with whatever the server
-    # falls back to, which on a self-hosted instance may be an id its provider does not serve: each
-    # task then waits out --task-timeout and a full run takes half an hour to say nothing (#199).
-    # Say it before the first task instead.
-    if a.harness_id and not a.model:
+    # The harness the tasks run on is resolved BEFORE the first task, and named. A --harness-id
+    # that matches nothing (a harness name given for an id, a typo) once fell back silently to
+    # the first harness listed, and two runs against different ids produced byte-identical
+    # reports (#203). A harness with no default model and no --model runs every task with
+    # whatever the server falls back to, which on a self-hosted instance may be an id its
+    # provider does not serve: each task then waits out --task-timeout and a full run takes half
+    # an hour to say nothing (#199). Both are said here, in one line, before anything runs.
+    if a.harness_id:
         r = ctx.client.get(f"/v1/harnesses/{a.harness_id}")
-        if r.status == 200 and not str((r.json or {}).get("defaultModel") or "").strip():
+        if r.status != 200 or not isinstance(r.json, dict):
+            print(f"no harness with id {a.harness_id!r} on this server (HTTP {r.status}); pass the "
+                  "harness's id, not its name, or omit --harness-id to use the first listed",
+                  file=sys.stderr)
+            return 2
+        if not a.model and not str(r.json.get("defaultModel") or "").strip():
             print(f"harness {a.harness_id} has no default model; pass --model <id> so the tasks "
                   "run on a model this server serves", file=sys.stderr)
             return 2
+        print(f"tasks run on harness {a.harness_id} ({r.json.get('name') or 'unnamed'}), model "
+              f"{a.model or r.json.get('defaultModel')}", file=sys.stderr)
 
     selected = checks_for(a.cls)
     if a.only:

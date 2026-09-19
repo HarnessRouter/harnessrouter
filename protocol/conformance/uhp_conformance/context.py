@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import json
-import pathlib
 from dataclasses import dataclass, field
+from importlib import resources
 
 try:
     import jsonschema
 except ImportError:  # pragma: no cover
     jsonschema = None
 
+from . import UHP_VERSION
 from .client import Client
 
-SCHEMA_PATH = (pathlib.Path(__file__).resolve().parents[2]
-               / "schema" / "uhp-2026-09-12.schema.json")
+SCHEMA_RESOURCE = resources.files("uhp_conformance").joinpath(f"uhp-{UHP_VERSION}.schema.json")
 
 
 @dataclass
@@ -26,18 +26,24 @@ class Context:
     _schema: dict | None = None
 
     def validate(self, instance, definition: str) -> None:
-        """Validate `instance` against a `$defs` entry, or skip loudly if that is impossible.
+        """Validate `instance` against a `$defs` entry, or fail the check if that is impossible.
 
-        A missing validator must never look like a pass, so this raises Skip rather than returning
-        quietly — an unrunnable check is reported as unrun.
+        A missing validator must never look like a pass, and it must not look like "not applicable"
+        either: the schema ships inside this package and jsonschema is a declared dependency, so
+        their absence is a broken installation of the suite, and the check reports ERROR (the
+        suite could not run) rather than SKIP (the server offered nothing to check). Thirty
+        checks once skipped this way on a pip install that lacked the schema (#203), and a report
+        with thirty skips read as a partial server rather than a partial suite.
         """
-        from .registry import Skip
         if jsonschema is None:
-            raise Skip("jsonschema is not installed, so schema validation cannot run")
+            raise RuntimeError("jsonschema is not installed; the suite needs it to validate "
+                               "responses (pip install jsonschema)")
         if self._schema is None:
-            if not SCHEMA_PATH.exists():
-                raise Skip(f"schema not found at {SCHEMA_PATH}")
-            self._schema = json.loads(SCHEMA_PATH.read_text())
+            if not SCHEMA_RESOURCE.is_file():
+                raise RuntimeError(f"the UHP {UHP_VERSION} schema is missing from this installation "
+                                   f"of uhp-conformance (expected {SCHEMA_RESOURCE}); reinstall the "
+                                   "package")
+            self._schema = json.loads(SCHEMA_RESOURCE.read_text(encoding="utf-8"))
         doc = {**self._schema, "$ref": f"#/$defs/{definition}"}
         errors = sorted(jsonschema.Draft202012Validator(doc).iter_errors(instance),
                         key=lambda e: list(e.path))

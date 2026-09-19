@@ -7,7 +7,7 @@ over HTTP, and anyone can run it against anyone's implementation.
 ## Running it
 
 ```bash
-pip install -e protocol/conformance
+pip install "git+https://github.com/HarnessRouter/harnessrouter.git#subdirectory=protocol/conformance"
 
 uhp-conformance \
   --base-url https://your-uhp-server \
@@ -15,6 +15,16 @@ uhp-conformance \
   --class full \
   --json report.json
 ```
+
+The installed package includes the schema for its UHP version; it can validate responses without
+a repository checkout, and a package that has somehow lost it reports every schema-backed check as
+an error of the suite rather than a skip. For development, run `pip install -e protocol/conformance`
+from the repository root instead.
+
+`--harness-id` takes the harness's id (`chrn_…` on HarnessRouter), never its name: an id that
+matches nothing ends the run before the first task, as does a named harness with no default model
+when `--model` is not given. The harness and model the tasks run on are printed before the first
+check.
 
 | Option | Meaning |
 |---|---|
@@ -252,3 +262,22 @@ Rules for a good check:
 
 Per [GOVERNANCE.md](../GOVERNANCE.md), a specification change is not complete until a check enforces
 it — a rule nothing tests is a wish.
+
+## Testing the package
+
+From the repository root:
+
+```bash
+pip install -e protocol/conformance pytest build "setuptools>=68" wheel
+python -m pytest protocol/conformance/tests -q
+```
+
+Without `build`, `setuptools` and `wheel` the two distribution tests skip and say why; the rest of
+the suite, the byte-for-byte schema comparison included, runs with the package alone.
+
+The schema in `protocol/schema/` is the source of truth. The package carries an exact copy of the
+version named by `UHP_VERSION` in `uhp_conformance/uhp-<version>.schema.json`; copy it again whenever
+that schema changes. A byte-for-byte comparison in the tests prevents the packaged copy from
+drifting. The distribution tests also build both a wheel and a source distribution, install each
+outside the checkout, and check that valid data passes and invalid data fails schema validation.
+They use the installed build dependencies and do not fetch packages or call an agent server.
