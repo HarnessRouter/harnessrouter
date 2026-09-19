@@ -1159,3 +1159,65 @@ out a probabilistic cache-hit crash. It is ruled out by the probe instead: asked
 1.101.0 on the real streaming path, vercel/mistral-medium-3.5 answers `hasattr=True`, so that turn
 never reaches the missing attribute. The four failures were the assistant-content refusal Vercel
 named in its own bytes, as first recorded.
+
+## openhands, the review of PR #215 on hr-test (2026-09-19)
+
+Reviewed on a derived image of the PR branch merged with main (0.19.0 plus #214 and #216), tmux
+added to the image, every built-in skill installed as a fresh volume installs them. What the
+review changed, each with the measurement that made it a defect.
+
+**No served model and no usage on any turn.** The relay token lived only in the driver's argv;
+`_relay_served_model` and `_relay_usage` find the turn's route by the placeholder bearer in the
+turn's environment, so the record carried neither. The token now rides the environment as well.
+
+**A conversation died after every deploy.** The agent's persisted spec carried the relay's
+`base_url`, and the loopback relay binds a fresh port on every runner start: the first turn after
+a restart dialled the old port (`Cannot connect to host 127.0.0.1:39265`). The base url rides the
+environment like the key; measured across a swap, the follow-up answered from the history.
+
+**A model switch was ignored.** The agent is frozen at the conversation's creation, its LLM spec
+included, and the server offers no way to change it: a turn that asked for claude-sonnet-5 was
+served gpt-5.4, the record naming the first and the relay the second. The turn's model is written
+into the persisted state before the server loads the conversation, the same door the conversation
+id uses; measured gpt-5.4, then claude-sonnet-5, then gpt-5.4 again, each served as asked. The
+three muse switch failures in the first column (270-310 s of retries against a route that could
+not serve the persisted id) were this.
+
+**A disabled MCP tool was called.** The built-ins are withheld by omission from the spec; an MCP
+tool is loaded from the server at agent start and was called all the same (`probe_sse` disabled,
+its token in the answer). The SDK's own `filter_tools_regex` runs over every tool name after the
+MCP tools are added; the disabled names are excluded there and are part of the conversation's
+identity. Re-probed, the tool was not offered; the model then wrote its own SSE client in the
+shell and dialled the public probe, which is the shell reaching a URL, the same reach `curl` has
+on every base. The policy holds at the tool surface, as it does on kimi (Shell withheld, the
+boot id read with the file tool) and here (Edit withheld, the file written with printf).
+
+**A cancelled turn left its command running.** The terminal tool runs commands in tmux, whose
+server daemonises with setsid, so the runner's process-group kill left the tmux server and the
+agent's `sleep 240` alive and every turn's `/tmp/oh<port>` directory behind it (84 after an
+hour). Every process a turn starts now carries `HR_TURN_ID` in its environment and the runner
+sweeps what still carries it after the group kill, tmux directory included; the driver removes
+its own on the normal path. And the directory is the turn's own (mkdtemp), not the port's: ports
+are reused and turns run as different uids, and a directory left by an earlier turn answered
+`Permission denied` on the next.
+
+**litellm's own `max_tokens`.** For an id its registry knows as Anthropic's, the provider-native
+`claude-haiku-4-5-20251001` a custom Anthropic connection resolves to, litellm sends both
+`max_tokens` and `max_completion_tokens` (64,000 each) and Anthropic's OpenAI-compatible endpoint
+refuses the pair. Captured with a sink inside the venv and against the live endpoint; every
+other id carries the second field alone and every provider on the matrix takes it. The relay
+drops the first on this backend's route, the kimi precedent.
+
+**Retries in seconds.** The SDK's defaults (5 retries, 8 to 64 s waits) made a provider that
+answered the same 503 every time a 270-310 s turn before the reason was reported. Two retries a
+few seconds apart now, persisted with the agent.
+
+**The driver's own ceiling.** An 1800 s deadline of the driver's own sat below the harness's
+timeout (7200 s by default); it is the runner's global ceiling now, and a server that dies
+mid-turn is noticed by asking the process rather than waiting it out.
+
+**Cards.** The tool cards carried the SDK's registry names (`terminal`, `file_editor`,
+`task_tracker`) and the raw observation record as JSON; they carry the catalog's names (Shell,
+Edit, Todo), the action's arguments as the input and the observation's text as the output.
+
+**In the default set**, for the reason aider is; the icon is OpenHands' own (MIT).
