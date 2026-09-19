@@ -14,6 +14,7 @@ Source anchors (all 0.86.2):
   TAGS_CACHE_DIR, no CLI flag        aider/repomap.py:43
 """
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -275,7 +276,10 @@ def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards(
             "print(\"aider\")\n>>>>>>> REPLACE\n```\n\nDONE-FILE")
     assert aider_driver.strip_edit_blocks(text) == "I will create the file.\n\n\nDONE-FILE"
     shell = "Run this:\n```bash\ncat SKILL.md\n```"
-    assert aider_driver.strip_edit_blocks(shell) == shell        # a command block is not an edit
+    assert aider_driver.strip_edit_blocks(shell) == "Run this:"  # the command renders as a card
+    # a fence the model closed and kept writing on ("```An improved…") closes the block for aider
+    # (editblock_coder.py:478) and the sentence is prose
+    assert aider_driver.strip_edit_blocks("```bash\nofficecli view a.pptx\n```An improved style.\nDone.") == "An improved style.\nDone."
     state: dict = {"_aider_init": True}
     evs = _aider_to_claude({"m": "edits", "p": {"files": ["hello.py", "b.txt"]}}, state)
     calls = [c for e in evs for c in e["message"]["content"] if c["type"] == "tool_use"]
@@ -667,6 +671,58 @@ def test_the_harness_own_files_stay_out_of_the_repo_map():
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
     assert 'ignore.write_text(".harness/\\nAGENTS.md\\n.gitignore\\n")' in src
     assert '"--aiderignore", str(ignore),' in src
+
+
+def test_a_binary_file_the_model_names_is_refused_at_aiders_add_prompt():
+    """Asked to restyle hello.pptx (hr-test, 2026-09-19), the model named it, aider added it, the
+    UTF-8 read failed ("Use --encoding…"), the file was dropped and added again on the next
+    mention: an error and a reflection each time, twelve commands, fifteen minutes. A binary
+    file is refused at aider's own "Add file to the chat?" prompt, which puts it on
+    ignore_mentions; text files still go in."""
+    d = tempfile.mkdtemp()
+    pathlib.Path(d, "deck.pptx").write_bytes(b"PK\x03\x04\xf7\x00binary")
+    pathlib.Path(d, "notes.md").write_text("# notes\n")
+    assert aider_driver.is_text_file(os.path.join(d, "deck.pptx")) is False
+    assert aider_driver.is_text_file(os.path.join(d, "notes.md")) is True
+    asked = []
+    io = types.SimpleNamespace(confirm_ask=lambda q, default="y", subject=None, explicit_yes_required=False, group=None, allow_never=False: asked.append(subject) or True,
+                               assistant_output=lambda m, p=None: None, tool_error=lambda m="", strip=True: None,
+                               tool_warning=lambda m="", strip=True: None)
+    coder = types.SimpleNamespace(io=io, root=d, partial_response_content="", reasoning_tag_name="think",
+                                  reflected_message=None)
+    gate = aider_driver._Gate([])
+    aider_driver._install(coder, gate)
+    assert io.confirm_ask("Add file to the chat?", subject="deck.pptx") is False
+    assert io.confirm_ask("Add file to the chat?", subject="notes.md") is True
+    assert asked == ["notes.md"]                       # the binary never reached aider's prompt
+    # nobody is at aider's prompt to say what to do instead, so the turn is told and goes on
+    assert "`deck.pptx` is a binary file" in coder.reflected_message and "```bash" in coder.reflected_message
+
+
+def test_the_turn_fails_only_when_an_error_was_the_last_thing_that_happened():
+    """The restyled .pptx and the edited hello.md were reported FAILED for a decode error twelve
+    commands earlier. An error followed by more of the model's work is a recovered error; an
+    error with nothing after it (a provider refusal) is the failure."""
+    io = types.SimpleNamespace(confirm_ask=lambda *a, **k: True, assistant_output=lambda m, p=None: None,
+                               tool_error=lambda m="", strip=True: None, tool_warning=lambda m="", strip=True: None)
+    coder = types.SimpleNamespace(io=io, root="/tmp", partial_response_content="", reasoning_tag_name="think",
+                                  reflected_message=None)
+    gate = aider_driver._Gate([])
+    aider_driver._install(coder, gate)
+    assert gate.error_after_output is False
+    io.tool_error("x: 'utf-8' codec can't decode"); assert gate.error_after_output is True
+    io.assistant_output("I restyled the deck."); assert gate.error_after_output is False
+    io.tool_error("litellm.AuthenticationError"); assert gate.error_after_output is True
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "failed = coder.usage_report is None or gate.error_after_output" in src
+
+
+def test_each_text_pass_ends_with_a_paragraph_break():
+    """The console joins consecutive text blocks as they come; a closing fence ran straight into
+    the next pass's first sentence and the rest of the turn rendered inside a code block."""
+    state: dict = {"_aider_init": True}
+    ev = _aider_to_claude({"m": "text", "p": {"text": "First pass.\n"}}, state)[0]
+    assert ev["message"]["content"][0]["text"] == "First pass.\n\n"
 
 
 def test_the_models_reasoning_is_not_rendered_as_its_answer():

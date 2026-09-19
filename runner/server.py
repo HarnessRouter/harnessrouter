@@ -4144,6 +4144,11 @@ def _aider_working_notes(cwd: str, servers: dict | None = None) -> str:
         lines += [f"  - `cat {rel}`" for rel in skills]
     lines += ["- A skill's scripts run the same way (cd into the skill's folder first)"
               + (", and so do MCP tool calls (`hr-mcp`, below)." if servers else "."),
+              "- Each line of a bash block runs as its own command. A program that needs more "
+              "than one line goes into a file first (a SEARCH/REPLACE block creates it), then "
+              "one line runs it.",
+              "- Binary files (documents, decks, spreadsheets, images, PDFs) cannot be added to "
+              "the chat or edited with SEARCH/REPLACE; inspect and change them with commands.",
               "- Report only output you were actually given. Never write the result you expect "
               "a command or a tool to produce; if you have not run it yet, run it first.\n"]
     return "\n".join(lines)
@@ -5498,7 +5503,11 @@ def _aider_event(obj: dict, state: dict, m, p) -> list[dict]:
         if not txt.strip():
             return []
         state["final"] = txt
-        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+        # One event per response, a whole response each, and the console joins consecutive
+        # text blocks as they come: without the blank line a closing fence ran into the next
+        # response's first sentence and the rest of the turn rendered inside a code block
+        # (2026-09-19). A paragraph break keeps each response its own markdown.
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt.rstrip() + "\n\n"}]}}]
     if m == "error":
         # Reached io.tool_error, which the model's prose cannot reach. Recorded, NOT rendered: it is
         # the turn's failure reason, not part of its answer. aider's advice about its own in-chat

@@ -58,8 +58,61 @@ _HR_MCP_CALL = re.compile(r"(?:^|[\n;&|(`])\s*(?:\S*/)?hr-mcp\s+call\s+([^\s;&|)
                           re.M)
 
 
+# The fences editblock_coder.py:452 extracts shell commands from. Every such block becomes a
+# shell_decision card (approved or refused), so the prose does not repeat it.
+_SHELL_FENCES = ("```bash", "```sh", "```shell", "```cmd", "```batch", "```powershell", "```ps1",
+                 "```zsh", "```fish", "```ksh", "```csh", "```tcsh")
+
+
+def _strip_shell_blocks(text: str) -> str:
+    """Drop the shell blocks the way aider reads them: a block opens on a shell fence and closes on
+    the next line that STARTS with a fence, whatever follows on that line (a model that writes
+    "```An improved style…" has closed the block and started a sentence; aider treats it so,
+    editblock_coder.py:478, and the sentence is kept here)."""
+    out, lines, i = [], (text or "").splitlines(), 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() in _SHELL_FENCES or any(line.strip().startswith(f + " ") for f in _SHELL_FENCES):
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                i += 1
+            if i < len(lines):
+                rest = lines[i].strip()[3:].strip()
+                if rest:
+                    out.append(rest)
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
 def strip_edit_blocks(text: str) -> str:
-    return _EDIT_BLOCK.sub("", text or "").strip()
+    return _strip_shell_blocks(_EDIT_BLOCK.sub("", text or "")).strip()
+
+
+def is_text_file(path: str, sniff: int = 65536) -> bool:
+    """Whether aider could read this file as text. aider adds a file the model names and reads it
+    as UTF-8; a binary one (a .pptx the model was asked to restyle, 2026-09-19 on hr-test) fails
+    with "Use --encoding to set the unicode encoding.", is dropped, and is added again on the next
+    mention, an error and a reflection each time. Refusing the add up front is what aider itself
+    does when the operator answers no: the name goes on ignore_mentions and is not asked again."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(sniff)
+    except OSError:
+        return False
+    if b"\x00" in head:
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError:
+        # a cut inside a multi-byte sequence at the sniff boundary is not a binary file
+        try:
+            head[:-4].decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+    return True
 
 
 def _emit(method: str, payload) -> None:
@@ -87,6 +140,9 @@ class _Gate:
     def __init__(self, disabled: list[str]) -> None:
         self.disabled = {d.strip().lower() for d in (disabled or []) if d and d.strip()}
         self.calls: list[dict] = []
+        # True while the last thing that happened was an error: set by tool_error, cleared by the
+        # next assistant output. What decides whether the turn failed (see main).
+        self.error_after_output = False
 
     def mcp_calls_in(self, command: str) -> list[tuple[str, str]]:
         """Every ('server', 'tool') an hr-mcp call in this command names, in order.
@@ -144,12 +200,14 @@ def _install(coder, gate: _Gate) -> None:
                                             coder.reasoning_tag_name)
         except Exception:
             body = ""
+        gate.error_after_output = False
         _emit("text", {"text": strip_edit_blocks(body or str(message))})
         return orig_assistant(message, pretty)
 
     def tool_error(message="", strip=True):
         # A REAL failure lands here and nowhere else. This is the whole reason the driver exists:
         # on stdout this text and the model's own prose are the same bytes.
+        gate.error_after_output = True
         _emit("error", {"text": str(message)})
         return orig_error(message, strip)
 
@@ -171,6 +229,24 @@ def _install(coder, gate: _Gate) -> None:
             _emit("shell_decision", {"command": command, "tool": name,
                                      "approved": approved, "reason": reason})
             return approved
+        # A file the model named, which aider offers to add to the chat (base_coder.py:1773).
+        # Binary files are refused: aider reads a chat file as UTF-8 text, and a .pptx or an
+        # image fails that read every time it is mentioned. The model works on such files with
+        # commands, as the doc says.
+        if question == "Add file to the chat?" and subject:
+            path = str(subject) if os.path.isabs(str(subject)) else os.path.join(coder.root, str(subject))
+            if not is_text_file(path):
+                _emit("warning", {"text": f"{subject} is not a text file and stays out of the chat"})
+                # aider's prompt tells the model to ask the user for the file and stop; when the
+                # user says no, a person types what to do instead. Nobody is at that prompt here,
+                # so the answer goes back as a reflection and the turn goes on (measured: without
+                # it, "improve the ppt style" ended on "Please add this file to the chat").
+                note = (f"`{subject}` is a binary file: it cannot be added to the chat or edited "
+                        "with a SEARCH/REPLACE block. Inspect and change it with shell commands in "
+                        "a ```bash block (the installed skills cover documents, decks, "
+                        "spreadsheets and PDFs), then report what you did.")
+                coder.reflected_message = ((coder.reflected_message + "\n\n") if coder.reflected_message else "") + note
+                return False
         return orig_confirm(question, default=default, subject=subject,
                             explicit_yes_required=explicit_yes_required, group=group,
                             allow_never=allow_never)
@@ -451,8 +527,12 @@ def main() -> int:
         return 1
 
     # usage_report is None when no completion came back — the in-process failure signal that
-    # stdout cannot give. num_error_outputs counts what reached io.tool_error this turn.
-    failed = coder.usage_report is None or int(getattr(coder.io, "num_error_outputs", 0) or 0) > 0
+    # stdout cannot give. Otherwise the turn failed when an error was the LAST thing that
+    # happened: a provider refusal ends the turn on io.tool_error with nothing after it. An error
+    # the turn recovered from (a file it could not read, an edit block it retried) followed by
+    # more of the model's work is not a failed turn: measured 2026-09-19, a restyled .pptx and an
+    # edited hello.md were reported FAILED for a decode error twelve commands earlier.
+    failed = coder.usage_report is None or gate.error_after_output
     _emit("result", {
         # The result's text is what the gateway stores as the answer, so it is stripped of the
         # edit markup exactly as the text events were; the edits were reported as cards.
