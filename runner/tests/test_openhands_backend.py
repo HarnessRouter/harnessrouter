@@ -419,3 +419,11 @@ def test_a_model_switch_reaches_a_resumed_conversation(tmp_path):
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("openhands_driver.py").read_text()
     assert '_set_turn_model(pathlib.Path(cwd, ".harness", "openhands"), cid, job["model"])' in src
 
+
+def test_the_tmux_socket_directory_is_the_turns_own():
+    """Ports are reused and turns run as different uids: a directory named for the port and left
+    by an earlier turn answered Permission denied on the next (hr-test 2026-09-19)."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("openhands_driver.py").read_text()
+    assert 'env["TMUX_TMPDIR"] = tempfile.mkdtemp(prefix="oh", dir="/tmp")' in src
+    assert 'f"/tmp/oh{port}"' not in src
+

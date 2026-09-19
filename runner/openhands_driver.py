@@ -33,6 +33,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -522,8 +523,12 @@ def main() -> int:
     # `LibTmuxException: new-session: error connecting to … (File name too long)`. The agent then
     # retries the tool it cannot start, which is what turned a 10 s turn into 235 s and then into
     # 4,000 s. Measured through the gateway; a driver run from a short cwd never sees it.
-    env["TMUX_TMPDIR"] = f"/tmp/oh{port}"
-    pathlib.Path(env["TMUX_TMPDIR"]).mkdir(parents=True, exist_ok=True)
+    # A directory of THIS turn's own, not one named for the port: ports are reused, turns run
+    # as different uids, and a directory left by an earlier turn on the same port answered
+    # `couldn't create directory /tmp/oh58657/tmux-20167 (Permission denied)` (hr-test,
+    # 2026-09-19). mkdtemp makes a fresh one owned by this uid; the name stays short for the
+    # socket path limit above, and starts with /tmp/oh so the runner's sweep recognises it.
+    env["TMUX_TMPDIR"] = tempfile.mkdtemp(prefix="oh", dir="/tmp")
 
     python = os.environ.get("HR_OPENHANDS_PYTHON", sys.executable)
     # The server's own output goes to a FILE, not to a pipe and not to nothing. A pipe nobody
