@@ -46,7 +46,10 @@ _T0 = time.time()
 # before the fence, the fence (with or without a language), the three markers. The markers'
 # lengths follow editblock_coder.py (5 to 9 characters). This is aider's wire format for an edit,
 # and the edit is reported as a card of its own; the prose around the block is the answer.
-_EDIT_BLOCK = re.compile(r"(?:^\S+\n)?```[^\n]*\n<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n```\n?",
+# The file name sits on the line before the fence or on the first line inside it; aider's
+# parser takes both (editblock_coder.find_filename), and gpt-5.5 writes the second
+# ("```python\nbuild_sfo_one_pager.py\n<<<<<<< SEARCH", hr-test 2026-09-19).
+_EDIT_BLOCK = re.compile(r"(?:^\S+\n)?```[^\n]*\n(?:\S+\n)?<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n```\n?",
                          re.S | re.M)
 
 
@@ -293,20 +296,45 @@ def _run_shell_commands_reporting(coder, gate: _Gate, reflect: bool = True):
     coder.run_shell_commands = wrapped
 
 
-def _run_turn(coder, prompt: str) -> None:
+# A reply that announces work instead of doing it: "I'll create…", "Let me…", "Sure, I will…".
+# Anchored at the start, after an optional acknowledgement, so an answer that happens to contain
+# the words ("The file I'll need is…") is not one.
+_ANNOUNCES = re.compile(
+    r"^\s*(?:(?:ok(?:ay)?|sure|certainly|got it|understood|alright|right)[,.!:]?\s*)?"
+    r"(?:i(?:'ll| will| am going to|'m going to| can go ahead)|let me|first,? i(?:'ll| will)|"
+    r"here(?:'s| is) (?:the|my) plan)\b", re.I)
+NUDGE = ("Nothing was run or edited. If the task needs files or commands, produce them now in "
+         "this reply; otherwise give your final answer.")
+
+
+def _announces_without_acting(text: str) -> bool:
+    return bool(_ANNOUNCES.match(text or ""))
+
+
+def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     """aider's own reflection loop (Coder.run_one), driven directly.
 
     run_stream is run_one without the loop: it sends ONE message and stops. Reproducing the loop
     here is what lets a reflection — aider's mechanism for "there is more to do before this turn
     ends", used by its lint and test paths — carry a shell command's output back to the model in the
-    SAME turn. The bound is aider's own max_reflections, not one invented here."""
+    SAME turn. The bound is aider's own max_reflections, not one invented here.
+
+    ONE NUDGE when a pass announced work and did none. aider reflects only on something to feed
+    back (a command's output, a lint result); a reply that says "I'll create a one-page deck" and
+    proposes neither an edit nor a command ends the turn with nothing done, because at a terminal
+    the person would type "go ahead" (gpt-5.5 on the hosted service, 2026-09-19: that sentence
+    and zero commands; gpt-5.4 twice ended after one message). The nudge is that "go ahead", once
+    per turn, only when the reply reads as an announcement, so a plain answer never pays for a
+    second call. Counted against aider's max_reflections like any reflection."""
     coder.io.user_input(prompt)
     coder.init_before_message()
     message = prompt
     reflections = 0
     reported: set = set()
+    nudged = False
     while message:
         coder.reflected_message = None
+        calls_before = len(gate.calls) if gate is not None else 0
         list(coder.send_message(message))
         # aider_edited_files accumulates over the turn; what this pass added is reported now, so
         # the cards sit beside the prose that produced them.
@@ -314,6 +342,11 @@ def _run_turn(coder, prompt: str) -> None:
         if edited:
             reported.update(edited)
             _emit("edits", {"files": edited})
+        acted = bool(edited) or (gate is not None and len(gate.calls) > calls_before)
+        if (not coder.reflected_message and not nudged and not acted
+                and _announces_without_acting(coder.partial_response_content or "")):
+            nudged = True
+            coder.reflected_message = NUDGE
         if not coder.reflected_message:
             break
         if reflections >= coder.max_reflections:
@@ -520,7 +553,7 @@ def main() -> int:
 
     _emit("init", {"model": coder.main_model.name, "edit_format": coder.edit_format})
     try:
-        _run_turn(coder, job["prompt"])
+        _run_turn(coder, job["prompt"], gate)
     except Exception as exc:  # noqa: BLE001 — the turn's failure is the product here, not a crash
         _emit("error", {"text": f"{type(exc).__name__}: {exc}"})
         _emit("result", {"final": "", "ok": False, "edited": [], "reason": str(exc)[:500]})
@@ -536,14 +569,17 @@ def main() -> int:
     # The result's text is what the gateway stores as the answer, so it is stripped of the
     # edit markup exactly as the text events were; the edits were reported as cards.
     final = strip_edit_blocks(coder.partial_response_content or "")
-    if not final and gate.calls and not failed:
-        # A response that was commands and nothing else leaves no answer once the blocks are
-        # cards: the model's last word was a command, and aider gives it no further turn when
-        # that command printed nothing. Measured on the hosted service (an officecli that was
-        # not installed ran seven times and the task ended with no text and no file). Said as
-        # what happened, not as an answer the model gave.
+    if not final.strip() and not failed and (gate.calls or coder.aider_edited_files):
+        # A response that was commands or edit blocks and nothing else leaves no answer once the
+        # blocks are cards: the model's last word was a command or an edit, and aider gives it no
+        # further turn when that printed nothing. Measured on the hosted service (an officecli
+        # that was not installed ran seven times and the task ended with no text and no file;
+        # gpt-5.4 ended after one edit block). Said as what happened, not as an answer the model
+        # gave. The same two sentences on the hosted service.
         final = ("The task ended without a written answer after running commands. The commands "
-                 "and their output are above.")
+                 "and their output are above." if gate.calls else
+                 "The task ended without a written answer after editing files. What it did is "
+                 "shown above.")
     _emit("result", {
         "final": final,
         "ok": not failed,

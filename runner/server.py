@@ -4147,6 +4147,9 @@ def _aider_working_notes(cwd: str, servers: dict | None = None) -> str:
               "- Each line of a bash block runs as its own command. A program that needs more "
               "than one line goes into a file first (a SEARCH/REPLACE block creates it), then "
               "one line runs it.",
+              "- Name a file in a SEARCH/REPLACE block by its path relative to this workspace "
+              "(`deck.md`, `src/app.py`), never by an absolute path: a leading slash is refused "
+              "and the workspace's own path repeated under it makes a nested copy.",
               "- Binary files (documents, decks, spreadsheets, images, PDFs) cannot be added to "
               "the chat or edited with SEARCH/REPLACE; inspect and change them with commands.",
               "- Report only output you were actually given. Never write the result you expect "
@@ -5563,8 +5566,13 @@ def _aider_event(obj: dict, state: dict, m, p) -> list[dict]:
                 {"type": "tool_result", "tool_use_id": tuid, "is_error": False, "content": "edited"}]}})
         return out
     if m == "result":
+        # THE DRIVER'S VERDICT IS THE VERDICT. It holds the Coder and knows whether an error was
+        # the last thing that happened or one the turn recovered from; this side only sees that
+        # an error event passed. Failing here on any recorded error re-failed the recovered turns
+        # (gpt-5.4 wrote an edit aider refused, was told, wrote it again, aider applied it, and
+        # the record said "did not conform to the edit format", hr-test 2026-09-19).
         err = state.get("_aider_error") or ""
-        ok = bool(p.get("ok")) and not err
+        ok = bool(p.get("ok"))
         final = str(p.get("final") or state.get("final") or "")
         if ok:
             state["final"] = final
