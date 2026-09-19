@@ -201,8 +201,13 @@ def _agent_spec(job: dict) -> dict:
     and is not sent to the provider.
     """
     tools = [{"name": n} for n in _tools(job)]
-    spec: dict = {"llm": {"model": job["model"], "base_url": job.get("base_url") or None,
-                          "usage_id": "harness"},
+    # NO BASE URL IN IT EITHER. The spec is persisted with the conversation, and the base url is
+    # the loopback relay's, which binds a fresh port on every runner start: a conversation created
+    # before a restart dialled the old port on its next turn and died on `Cannot connect to host
+    # 127.0.0.1:39265` (hr-test, 2026-09-19, the first turn after a deploy). litellm reads
+    # OPENAI_BASE_URL from the environment when the spec carries none, and the driver sets it for
+    # this turn's server the way it sets the key, so every turn dials the relay it was given.
+    spec: dict = {"llm": {"model": job["model"], "base_url": None, "usage_id": "harness"},
                   "tools": tools}
     # The declared MCP servers ride the agent itself — the SDK dials them, so this base needs no
     # bridge of its own. Sent only when there ARE servers: the agent is frozen at creation, and an

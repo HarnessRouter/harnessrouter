@@ -69,13 +69,16 @@ def test_disabling_one_tool_leaves_the_others():
 
 
 # ── the credential never rides in the conversation ──
-def test_the_agent_spec_carries_no_key():
+def test_the_agent_spec_carries_no_key_and_no_base_url():
     """MEASURED: base_state.json persists model, base_url, retries and timeouts, and `api_key:
-    None`. A key passed here reaches the first turn and nothing after it."""
+    None`. A key passed here reaches the first turn and nothing after it. The base url is the
+    loopback relay's, which binds a fresh port on every runner start: persisted, a conversation
+    created before a restart dialled the old port on its next turn (`Cannot connect to host
+    127.0.0.1:39265`, hr-test 2026-09-19). Both ride the environment of each turn's server."""
     spec = drv._agent_spec({"model": "openai/gpt-5.4", "base_url": "http://relay/v1",
                             "api_key": "sk-secret"})
     assert "sk-secret" not in json.dumps(spec)
-    assert spec["llm"]["base_url"] == "http://relay/v1"
+    assert "http://relay/v1" not in json.dumps(spec) and spec["llm"]["base_url"] is None
 
 
 def test_the_agent_spec_carries_the_tools():
