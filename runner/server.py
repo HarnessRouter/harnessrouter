@@ -4846,13 +4846,22 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
 def _opencode_usage_add(state: dict, tk: dict | None) -> None:
     """step-finish carries Session.getUsage()'s `tokens`:
     {total, input, output, reasoning, cache:{read,write}}. `input` is ALREADY cache-exclusive
-    (opencode subtracts read+write itself), which is the canonical contract — no adjustment."""
+    (opencode subtracts read+write itself), which is the canonical contract — no adjustment.
+    `output` is the visible text ONLY: getUsage (session/session.ts) sets
+    `output: outputTokens - reasoningTokens` and carries the reasoning beside it, and bills both
+    at the output rate. The contract here is output_tokens = everything the model generated,
+    thinking included (pi's `output` is completion_tokens, "already includes reasoning_tokens";
+    cline's and dsh's outputTokens are completion_tokens too), so the two are added back
+    together. Measured on 1.18.31 against deepseek-flash, one task of 22 requests: opencode's
+    rows summed output 7445 / reasoning 10582; the turn record said 7445, and beside pi's 11530
+    for the same task the harness read as the cheapest by a factor it had not earned."""
     if not isinstance(tk, dict):
         return
     tot = state.setdefault("_oc_usage", {"input_tokens": 0, "output_tokens": 0,
                                          "cache_read_tokens": 0, "cache_write_tokens": 0})
     cache = tk.get("cache") if isinstance(tk.get("cache"), dict) else {}
     for v, dst in ((tk.get("input"), "input_tokens"), (tk.get("output"), "output_tokens"),
+                   (tk.get("reasoning"), "output_tokens"),
                    (cache.get("read"), "cache_read_tokens"), (cache.get("write"), "cache_write_tokens")):
         if isinstance(v, (int, float)):
             tot[dst] += int(v)
