@@ -1014,3 +1014,19 @@ Conformance, run alone against an aider harness on gpt-5.4: 75/75 at full. A pro
 (a custom connection with a bogus key): the task fails with "The API provider is not able to
 authenticate you. Check your API key." and nothing of aider's around it. Fresh volume on the final
 image: healthy after 150 s, 687 MB venv, `aider-ready` reads 0.86.2.
+
+**Richard's first manual task, and what it found (2026-09-19, `pr211-a30c77d`).** "improve the ppt
+style" on a one-slide deck, gemini-3.8-flash: the model named `hello.pptx`, aider added it to the
+chat, the UTF-8 read failed ("Use --encoding to set the unicode encoding"), the file was dropped
+and added again on the next mention, an error and a reflection each time. Twelve commands and
+fifteen minutes later the deck WAS restyled through officecli and `hello.md` edited, and the turn
+read FAILED with the decode error, because any error had failed a turn; and the transcript showed
+prose inside a code block, because each response's text was joined to the next without a break
+and a closing fence ran into the next sentence. Fixed on the branch: a binary file is refused at
+aider's own "Add file to the chat?" prompt (aider's ignore_mentions then holds it), and since
+nobody is at that prompt to say what to do instead, the answer goes back as a reflection and the
+turn goes on; the turn fails when an error was the LAST thing that happened; each response ends
+with a paragraph break and its shell blocks render as cards only. Re-run of the same two turns:
+the deck restyled in 53 s, DONE, five tool cards, no markup. The doc also says now that each line
+of a bash block runs on its own (a multi-line `python3 -c "…"` ran line by line) and that binary
+files are worked on with commands.
