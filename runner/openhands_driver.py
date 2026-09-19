@@ -371,7 +371,7 @@ def _on_event(ev: dict, state: dict) -> None:
 
 
 def _run_turn(base: str, ws_base: str, key: str, cid: str, prompt: str, state: dict,
-              max_seconds: float) -> None:
+              max_seconds: float, proc: subprocess.Popen | None = None) -> None:
     """Send the message and read the conversation's events until the turn ends.
 
     The WebSocket is opened BEFORE the message is sent: the run starts the moment the POST lands,
@@ -399,6 +399,11 @@ def _run_turn(base: str, ws_base: str, key: str, cid: str, prompt: str, state: d
             try:
                 raw = ws.recv(timeout=max(1.0, min(30.0, deadline - time.time())))
             except TimeoutError:
+                # a server that died leaves the socket silent, not closed; asking the process is
+                # what tells a dead server from a long tool call
+                if proc is not None and proc.poll() is not None:
+                    state["server_died"] = True
+                    return
                 continue
             try:
                 ev = json.loads(raw)
@@ -481,8 +486,13 @@ def main() -> int:
         cid, resumed = _conversation(base, key, job, cwd)
         _emit("init", {"model": job["model"], "conversation_id": cid, "resumed": resumed})
         _STEP = "running the turn"
+        # No cap of this driver's own below the runner's: the runner kills the turn at the
+        # harness's timeout (7200 s by default, up to MAX_TURN_SECONDS), and a second, lower
+        # ceiling here ended a legitimate long turn as "timed out" while the operator's setting
+        # said otherwise. The value is the runner's global ceiling, so this loop only ends what
+        # the runner would have ended anyway.
         _run_turn(base, ws_base, key, cid, job["prompt"], state,
-                  float(os.environ.get("HR_OPENHANDS_TURN_SECONDS", "1800")))
+                  float(os.environ.get("HR_OPENHANDS_TURN_SECONDS", "21600")), proc=proc)
     except Exception as exc:  # noqa: BLE001 — the reason belongs in the record, not in a traceback
         tail = _log_tail(logf)
         _emit("error", {"text": f"{type(exc).__name__}: {exc} (while {_STEP})"
@@ -495,7 +505,11 @@ def main() -> int:
             proc.kill()
 
     status = state.get("status") or ""
-    ok = bool(state.get("final")) and status not in _FAILED and not state.get("timeout")
+    ok = (bool(state.get("final")) and status not in _FAILED and not state.get("timeout")
+          and not state.get("server_died"))
+    if state.get("server_died") and not state.get("reported_error"):
+        _emit("error", {"text": "agent-server exited mid-turn: " + (_log_tail(logf) or "no output")})
+        state["reported_error"] = True
     if not ok and not state.get("reported_error"):
         # A FAILED TURN CAN CARRY NO REASON AT ALL, and that is the server's design rather than a
         # gap here: event_service publishes an error event only for an exception that is NOT a

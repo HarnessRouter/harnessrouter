@@ -366,3 +366,14 @@ def test_a_log_with_no_exception_falls_back_to_its_tail(tmp_path):
 def test_a_missing_log_is_not_an_error(tmp_path):
     """The fallback runs on a path the server may never have created."""
     assert drv._log_tail(tmp_path / "nope.log") == ""
+
+
+def test_the_driver_has_no_ceiling_of_its_own_below_the_runners():
+    """The runner kills a turn at the harness's timeout (7200 s by default); a second, lower
+    ceiling in the driver (1800 s) ended a legitimate long turn as timed out while the operator's
+    setting said otherwise. The default is the runner's global ceiling, and a server that dies
+    mid-turn is noticed by asking the process rather than waiting the ceiling out."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("openhands_driver.py").read_text()
+    assert 'os.environ.get("HR_OPENHANDS_TURN_SECONDS", "21600")' in src
+    assert 'if proc is not None and proc.poll() is not None:' in src
+
