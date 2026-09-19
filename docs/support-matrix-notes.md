@@ -1221,3 +1221,26 @@ mid-turn is noticed by asking the process rather than waiting it out.
 Edit, Todo), the action's arguments as the input and the observation's text as the output.
 
 **In the default set**, for the reason aider is; the icon is OpenHands' own (MIT).
+
+**The columns on the review image (`cand-a14761d`, hr-test, 2026-09-19).** Console scenario matrix,
+50 ids × first / follow-up / switch / artifact / recycle, connections as the console routes them
+(TokenRouter 38, Vercel 6, Anthropic 2, Custom OpenAI 2, Azure 1, OpenRouter 1):
+
+```
+first 50/50   follow-up 50/50   switch 49/50   artifact 49/50   recycle 49/50   = 247/250
+```
+
+The three: `gpt-5.4` on the switch to gpt-5.6-sol, TokenRouter's multi-account gpt-5 route
+refusing a replayed encrypted reasoning item (the sentence the gateway already has for it);
+`llama-3.3-70b` on the artifact after a switch, the server marking the conversation stuck once in
+two runs (by hand it wrote the file in 24 s); `qwen3.8-27b` on the recycle recall, the model. The
+first pass, on the branch as submitted plus the early fixes, was 237/246, and every miss between
+the two was one of the defects above: the persisted model on the three muse switches, litellm's
+`max_tokens` pair on claude-haiku through the Anthropic connection.
+
+Plugin matrix 4/4 twice; `custom-harness.mjs` 4 of 5 (the miss the same encrypted-reasoning
+refusal); conformance 75/75 alone against an openhands harness on gpt-5.4; fresh volume with
+fourteen backends: the OpenHands venv installs in about a minute beside aider's. Cancel: nothing
+of the turn survives the sweep. The agent doc reaches the model as context: asked, with no tool
+allowed, for a secret word in the harness's instructions and the installed skills, it answered
+both from the doc.
