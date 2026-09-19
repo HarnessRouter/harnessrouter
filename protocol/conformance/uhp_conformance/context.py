@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import json
-import pathlib
 from dataclasses import dataclass, field
+from importlib import resources
 
 try:
     import jsonschema
 except ImportError:  # pragma: no cover
     jsonschema = None
 
+from . import UHP_VERSION
 from .client import Client
 
-SCHEMA_PATH = (pathlib.Path(__file__).resolve().parents[2]
-               / "schema" / "uhp-2026-09-12.schema.json")
+SCHEMA_RESOURCE = resources.files("uhp_conformance").joinpath(f"uhp-{UHP_VERSION}.schema.json")
 
 
 @dataclass
@@ -35,9 +35,9 @@ class Context:
         if jsonschema is None:
             raise Skip("jsonschema is not installed, so schema validation cannot run")
         if self._schema is None:
-            if not SCHEMA_PATH.exists():
-                raise Skip(f"schema not found at {SCHEMA_PATH}")
-            self._schema = json.loads(SCHEMA_PATH.read_text())
+            if not SCHEMA_RESOURCE.is_file():
+                raise Skip(f"schema not found at {SCHEMA_RESOURCE}")
+            self._schema = json.loads(SCHEMA_RESOURCE.read_text(encoding="utf-8"))
         doc = {**self._schema, "$ref": f"#/$defs/{definition}"}
         errors = sorted(jsonschema.Draft202012Validator(doc).iter_errors(instance),
                         key=lambda e: list(e.path))

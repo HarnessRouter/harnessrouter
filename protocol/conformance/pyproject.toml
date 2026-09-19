@@ -16,3 +16,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["uhp_conformance"]
+
+[tool.setuptools.package-data]
+uhp_conformance = ["uhp-*.schema.json"]
