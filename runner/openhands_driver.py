@@ -226,6 +226,30 @@ _TOOLS = ("terminal", "file_editor", "task_tracker")
 _TOOL_NAMES = {"Shell": "terminal", "Edit": "file_editor", "Todo": "task_tracker"}
 
 
+_CONSOLE_NAMES = {v: k for k, v in _TOOL_NAMES.items()}
+
+
+def _action_input(action: dict) -> dict:
+    """The action's arguments as the card's input: the SDK's `kind` and bookkeeping fields dropped,
+    a terminal action's command under `command` as every other base's shell card carries it."""
+    return {k: v for k, v in action.items()
+            if k not in ("kind", "thought", "security_risk", "summary") and v not in (None, "", [], {})}
+
+
+def _observation_text(obs: dict) -> str:
+    """What the tool returned, as text: the observation's text blocks joined, the way the SDK's own
+    visualiser reads them. The raw observation is a typed record (kind, content blocks with
+    cache flags, the command, exit codes); rendered whole it put JSON on every result card."""
+    parts = []
+    for block in obs.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text") or ""))
+    text = "\n".join(p for p in parts if p)
+    if text:
+        return text
+    return json.dumps({k: v for k, v in obs.items() if k != "content"}, default=str)
+
+
 def _tools(job: dict) -> list[str]:
     off = {str(x) for x in (job.get("tools_disabled") or [])}
     off |= {_TOOL_NAMES[x] for x in off if x in _TOOL_NAMES}
@@ -309,8 +333,11 @@ def _on_event(ev: dict, state: dict) -> None:
         tuid = str(ev.get("tool_call_id") or ev.get("id") or len(state.setdefault("calls", [])))
         state.setdefault("calls", []).append(tuid)
         state["last_call"] = tuid
-        _emit("tool_call", {"id": tuid, "name": str(ev.get("tool_name") or "Tool"),
-                            "input": ev.get("action") or {}})
+        # The console's names for the tools, the ones the catalog lists and the policy is written
+        # in; the SDK's registry names (terminal, file_editor, task_tracker) are the wire.
+        name = str(ev.get("tool_name") or "Tool")
+        _emit("tool_call", {"id": tuid, "name": _CONSOLE_NAMES.get(name, name),
+                            "input": _action_input(ev.get("action") or {})})
     elif kind == "ObservationEvent":
         obs = ev.get("observation") or {}
         if str(obs.get("kind") or "") == "FinishObservation":
@@ -318,7 +345,8 @@ def _on_event(ev: dict, state: dict) -> None:
             # under a call id the transcript never showed. Measured in a real artifact turn.
             return
         tuid = str(ev.get("tool_call_id") or state.get("last_call") or "t0")
-        _emit("tool_result", {"id": tuid, "output": ev.get("observation") or {}})
+        _emit("tool_result", {"id": tuid, "output": _observation_text(obs),
+                              "is_error": bool(obs.get("is_error"))})
     elif kind in ("AgentErrorEvent", "ConversationErrorEvent"):
         # A REAL failure. Recorded, not rendered: it is the turn's reason, not part of its answer.
         #

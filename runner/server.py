@@ -5734,6 +5734,12 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
     if auth.api_key:
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    # The relay token rides the turn's ENVIRONMENT as well as the job: _relay_served_model and
+    # _relay_usage find the turn's route by the placeholder bearer in env, and a token that lived
+    # only in the driver's argv left every openhands turn with no served model and no usage
+    # (measured: usage None on three turns whose provider calls the relay had counted).
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["OPENAI_BASE_URL"] = auth.base_url
     job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
            "base_url": auth.base_url, "api_key": auth.api_key,
            "tools_disabled": list(tools_disabled or []),
@@ -5911,7 +5917,7 @@ def _openhands_event(obj: dict, state: dict, m, p) -> list[dict]:
         return [{"type": "user", "message": {"content": [
             {"type": "tool_result",
              "tool_use_id": str(p.get("id") or state.get("_oh_last_call") or "t0"),
-             "is_error": bool(isinstance(out, dict) and out.get("is_error")),
+             "is_error": bool(p.get("is_error")) or bool(isinstance(out, dict) and out.get("is_error")),
              "content": json.dumps(out, default=str) if not isinstance(out, str) else out}]}}]
     if m == "error":
         # Reached the conversation's error channel, which the model's prose cannot reach. Recorded,

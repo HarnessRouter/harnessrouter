@@ -12,6 +12,7 @@ reading of its docs. The four that decided the design:
       that wrote a file under the full tool list produced no file and no tool call at all
 """
 import json
+import tempfile
 import pathlib
 import sys
 import types
@@ -144,8 +145,38 @@ def test_a_real_tool_call_and_its_result_are_a_pair():
                         "action": {"kind": "TerminalAction", "command": "echo hi"}}, state)
     res, _ = _collect({"kind": "ObservationEvent", "tool_call_id": "c9",
                        "observation": {"kind": "TerminalObservation", "exit_code": 0}}, state)
-    assert call[0][0] == "tool_call" and call[0][1]["name"] == "terminal"
+    # the console's name for the tool (the catalog lists Shell, Edit, Todo; the SDK's registry
+    # names are the wire), and the action's arguments as the card's input
+    assert call[0][0] == "tool_call" and call[0][1]["name"] == "Shell"
+    assert call[0][1]["input"] == {"command": "echo hi"}
     assert res[0][0] == "tool_result" and res[0][1]["id"] == call[0][1]["id"] == "c9"
+
+
+def test_the_result_card_carries_the_observations_text_not_its_record():
+    """The raw observation is a typed record (kind, content blocks with cache flags, exit codes);
+    rendered whole it put JSON on every result card. The text blocks are what the tool said."""
+    obs = {"kind": "TerminalObservation", "exit_code": 0, "command": "python hello.py",
+           "content": [{"cache_prompt": False, "type": "text", "text": "openhands\n"}], "is_error": False}
+    res, _ = _collect({"kind": "ObservationEvent", "tool_call_id": "c1", "observation": obs}, {})
+    assert res[0][1]["output"] == "openhands\n" and res[0][1]["is_error"] is False
+    # no text blocks at all: the record minus the empty content, so nothing is lost
+    res, _ = _collect({"kind": "ObservationEvent", "tool_call_id": "c2",
+                       "observation": {"kind": "X", "exit_code": 1, "content": [], "is_error": True}}, {})
+    assert json.loads(res[0][1]["output"]) == {"kind": "X", "exit_code": 1, "is_error": True}
+    assert res[0][1]["is_error"] is True
+
+
+def test_the_relay_token_rides_the_turns_environment_so_the_served_model_and_usage_are_found():
+    """_relay_served_model and _relay_usage find the turn's route by the placeholder bearer in
+    env; a token that lived only in the driver's argv left every turn with no served model and
+    no usage (measured: usage None on three turns the relay had counted)."""
+    from server import Auth, _build_openhands
+    d = tempfile.mkdtemp(); env: dict = {}
+    cmd = _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"),
+                           "gpt-5.4", "hi", d, env)
+    job = json.loads(cmd[-1])
+    assert env["OPENAI_API_KEY"].startswith("hr-relay-") and env["OPENAI_API_KEY"] == job["api_key"]
+    assert env["OPENAI_BASE_URL"] == job["base_url"]
 
 
 def test_only_the_execution_status_update_sets_the_status():
