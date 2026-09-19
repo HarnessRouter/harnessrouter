@@ -49,7 +49,10 @@ _T0 = time.time()
 # The file name sits on the line before the fence or on the first line inside it; aider's
 # parser takes both (editblock_coder.find_filename), and gpt-5.5 writes the second
 # ("```python\nbuild_sfo_one_pager.py\n<<<<<<< SEARCH", hr-test 2026-09-19).
-_EDIT_BLOCK = re.compile(r"(?:^\S+\n)?```[^\n]*\n(?:\S+\n)?<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n```\n?",
+# Fences are three OR MORE backticks: aider's own parser takes any length (a block whose content
+# holds ``` is fenced with ````), and gpt-5.4 closes with four. A stripper that took exactly three
+# left the fourth behind as the whole answer (an answer card reading "`", hosted 2026-09-19).
+_EDIT_BLOCK = re.compile(r"(?:^\S+\n)?`{3,}[^\n]*\n(?:\S+\n)?<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n`{3,}[ \t]*\n?",
                          re.S | re.M)
 
 
@@ -75,12 +78,13 @@ def _strip_shell_blocks(text: str) -> str:
     out, lines, i = [], (text or "").splitlines(), 0
     while i < len(lines):
         line = lines[i]
-        if line.strip() in _SHELL_FENCES or any(line.strip().startswith(f + " ") for f in _SHELL_FENCES):
+        opener = "```" + line.strip().lstrip("`")     # a fence of any length, read as three
+        if opener.strip() in _SHELL_FENCES or any(opener.startswith(f + " ") for f in _SHELL_FENCES):
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 i += 1
             if i < len(lines):
-                rest = lines[i].strip()[3:].strip()
+                rest = lines[i].strip().lstrip("`").strip()
                 if rest:
                     out.append(rest)
                 i += 1
