@@ -380,3 +380,21 @@ def test_the_driver_has_no_ceiling_of_its_own_below_the_runners():
     assert 'os.environ.get("HR_OPENHANDS_TURN_SECONDS", "21600")' in src
     assert 'if proc is not None and proc.poll() is not None:' in src
 
+
+def test_a_disabled_mcp_tool_is_withheld_by_the_sdks_own_filter():
+    """The built-ins are withheld by omission from the spec; an MCP tool is loaded from the server
+    at agent start and was called all the same when disabled (probe_sse, hr-test 2026-09-19, its
+    token in the answer). Agent.filter_tools_regex runs over every tool name after the MCP tools
+    are added; the disabled names, bare and under a client's server_tool spelling, are excluded,
+    and they are part of the conversation's identity like the tool list."""
+    import re
+    spec = drv._agent_spec({"model": "m", "tools_disabled": ["Shell", "probe_sse"],
+                            "mcp_config": {"probe": {"url": "u"}}})
+    rx = re.compile(spec["filter_tools_regex"])
+    assert not rx.match("probe_sse") and not rx.match("probe_probe_sse") and not rx.match("probe.probe_sse")
+    assert rx.match("other_tool") and rx.match("probe_sse_2")
+    assert "filter_tools_regex" not in drv._agent_spec({"model": "m", "tools_disabled": ["Shell"]})
+    a = drv._conversation_id(["file_editor"], {"probe": {}}, ["probe_sse"])
+    b = drv._conversation_id(["file_editor"], {"probe": {}}, [])
+    assert a != b
+

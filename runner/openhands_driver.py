@@ -39,7 +39,7 @@ import uuid
 
 _T0 = time.time()
 
-def _conversation_id(tools: list[str], mcp: dict | None = None) -> str:
+def _conversation_id(tools: list[str], mcp: dict | None = None, withheld: list[str] | None = None) -> str:
     """The conversation id the runner MINTS, for aider's and goose's reason: it has to be
     reproducible from the workspace alone after a sandbox recycle. The API takes `conversation_id`
     on the create call (a request field, not a server-assigned one), so a uuid5 is all it takes — a
@@ -57,9 +57,12 @@ def _conversation_id(tools: list[str], mcp: dict | None = None) -> str:
     The declared MCP servers are in the key for the same reason: they are part of the agent, and an
     agent that cannot be updated cannot learn about a server added after it was made.
     """
+    # The withheld MCP tool names are part of the identity for the same reason the tool list is:
+    # the filter is a property of the frozen agent.
     return str(uuid.uuid5(uuid.NAMESPACE_URL,
                           "https://harnessrouter.dev/openhands/harness?tools=" + ",".join(tools)
-                          + "&mcp=" + ",".join(sorted(mcp or {}))))
+                          + "&mcp=" + ",".join(sorted(mcp or {}))
+                          + "&withheld=" + ",".join(sorted(withheld or []))))
 
 
 def _emit(method: str, payload) -> None:
@@ -201,6 +204,13 @@ def _agent_spec(job: dict) -> dict:
     and is not sent to the provider.
     """
     tools = [{"name": n} for n in _tools(job)]
+    # MCP TOOLS ARE WITHHELD BY NAME TOO. The built-ins are omitted from the spec above; an MCP
+    # tool is loaded from the server at agent start and is not in that list, so a disabled one
+    # was called all the same (measured: probe_sse disabled, called, its token in the answer).
+    # The SDK's own filter is a regex over every tool name after the MCP tools are added
+    # (Agent.filter_tools_regex, base.py:153); a negative lookahead over the disabled names, the
+    # bare name and the `server_tool` spelling a client may expose, is that filter.
+    filter_regex = _filter_regex(_withheld_mcp(job))
     # NO BASE URL IN IT EITHER. The spec is persisted with the conversation, and the base url is
     # the loopback relay's, which binds a fresh port on every runner start: a conversation created
     # before a restart dialled the old port on its next turn and died on `Cannot connect to host
@@ -214,7 +224,30 @@ def _agent_spec(job: dict) -> dict:
     # empty mcp_config is not the same statement as none.
     if job.get("mcp_config"):
         spec["mcp_config"] = job["mcp_config"]
+    if filter_regex:
+        spec["filter_tools_regex"] = filter_regex
     return spec
+
+
+def _withheld_mcp(job: dict) -> list[str]:
+    """The disabled names that are not built-in tools: MCP tools, withheld by the SDK's filter."""
+    return sorted({str(x) for x in (job.get("tools_disabled") or [])
+                   if str(x) not in _TOOL_NAMES and str(x) not in _TOOLS})
+
+
+def _filter_regex(disabled: list[str]) -> str:
+    """A regex that admits every tool name except the disabled ones: the bare name, and the
+    `<server>_<name>` and `<server>.<name>` spellings under which a client may expose an MCP
+    tool. Empty when nothing is disabled, so the spec carries no filter at all."""
+    names = [d.strip() for d in disabled if d and d.strip()]
+    if not names:
+        return ""
+    alts = []
+    for n in names:
+        e = re.escape(n)
+        alts.append(f"{e}$")
+        alts.append(f"[^\\s]+[._]{e}$")
+    return "^(?!(?:" + "|".join(alts) + "))"
 
 
 # The tools this base gives the agent, by the names openhands-tools registers. An agent created
@@ -267,7 +300,7 @@ def _conversation(base: str, key: str, job: dict, cwd: str) -> tuple[str, bool]:
     Asking first is the goose lesson the 2026-09-13 decision generalised — the store answers whether
     the conversation is there, and the harness never infers it from its own argv.
     """
-    cid = _conversation_id(_tools(job), job.get("mcp_config") or {})
+    cid = _conversation_id(_tools(job), job.get("mcp_config") or {}, _withheld_mcp(job))
     try:
         info = _req(f"{base}/api/conversations/{cid}", key)
         if info and info.get("id"):
