@@ -6052,11 +6052,53 @@ _turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retrie
 _turns_lock = threading.Lock()
 
 
-def _kill_proc_tree(proc: subprocess.Popen) -> None:
+# Every process a turn starts carries the turn's id in its environment (set on the CLI's env
+# and inherited by everything below it), so what the process group misses can still be found.
+_TURN_MARK = "HR_TURN_ID"
+
+
+def _sweep_turn_processes(turn_id: str) -> int:
+    """Kill every process still carrying this turn's marker, and remove the tmux socket
+    directory such a process names. The group kill misses a process that put itself in a new
+    session: openhands' terminal tool runs commands in tmux, whose server daemonises with
+    setsid, so a cancelled or timed-out turn left the tmux server AND the agent's command
+    running (`sleep 240` alive after cancel, hr-test 2026-09-19), and every turn's
+    /tmp/oh<port> directory behind it. The marker is what makes the turn's processes findable
+    whatever they did to their process group; /proc is read as the runner, which is root here."""
+    if not turn_id:
+        return 0
+    want = f"{_TURN_MARK}={turn_id}".encode()
+    killed = 0
+    dirs: set[str] = set()
+    me = os.getpid()
+    for entry in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            environ = pathlib.Path("/proc", entry, "environ").read_bytes()
+        except OSError:
+            continue
+        if want not in environ.split(b"\0"):
+            continue
+        for kv in environ.split(b"\0"):
+            if kv.startswith(b"TMUX_TMPDIR="):
+                dirs.add(kv.split(b"=", 1)[1].decode(errors="replace"))
+        try:
+            os.kill(int(entry), signal.SIGKILL)
+            killed += 1
+        except OSError:
+            pass
+    for d in dirs:
+        if d.startswith("/tmp/oh"):
+            shutil.rmtree(d, ignore_errors=True)
+    return killed
+
+
+def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
     """SIGKILL the CLI's whole process GROUP (Popen uses start_new_session). Killing only
     the CLI leaves its shell children (e.g. a `sleep`) holding the inherited stdout pipe,
     which keeps the reader loop blocked until the child exits — a cancel/timeout then
-    appears to hang for the child's full duration."""
+    appears to hang for the child's full duration. Then the stragglers by marker."""
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001
@@ -6064,18 +6106,25 @@ def _kill_proc_tree(proc: subprocess.Popen) -> None:
             proc.kill()
         except Exception:  # noqa: BLE001
             pass
+    if turn_id:
+        try:
+            _sweep_turn_processes(turn_id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
     rec["capped"] = True
-    _kill_proc_tree(proc)
+    _kill_proc_tree(proc, str(rec.get("turn_id") or ""))
 
 
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False) -> None:
     rec = _turns[turn_id]
+    rec["turn_id"] = turn_id
     state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time()}
     result_ev = None
+    env = {**env, _TURN_MARK: turn_id}
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
@@ -6088,7 +6137,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     rec["pid"] = proc.pid
     rec["proc"] = proc   # live handle so POST /turn/{id}/cancel can kill on demand
     if rec.get("cancelled"):
-        _kill_proc_tree(proc)   # Stop raced the spawn — kill immediately, not at pipe EOF
+        _kill_proc_tree(proc, turn_id)   # Stop raced the spawn — kill immediately, not at pipe EOF
     # Hard wall-clock cap — the caller's timeout_seconds (harness config / request override),
     # bounded by the global MAX_TURN_SECONDS ceiling (resource abuse backstop).
     cap = min(timeout_seconds, MAX_TURN_SECONDS) if timeout_seconds else MAX_TURN_SECONDS
@@ -7360,7 +7409,7 @@ def cancel_turn(turn_id: str) -> dict:
     rec["cancelled"] = True
     proc = rec.get("proc")
     if proc is not None:
-        _kill_proc_tree(proc)
+        _kill_proc_tree(proc, turn_id)
     return {"turn_id": turn_id, "status": "cancelling", "cancelled": True}
 
 
