@@ -1,6 +1,6 @@
 [project]
 name = "uhp-conformance"
-version = "2026.9.12"
+version = "2026.9.12.post1"
 description = "Conformance suite for the Unified Harness Protocol (UHP)"
 readme = "README.md"
 requires-python = ">=3.10"

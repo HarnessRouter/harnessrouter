@@ -17,8 +17,14 @@ uhp-conformance \
 ```
 
 The installed package includes the schema for its UHP version; it can validate responses without
-a repository checkout. For development, run `pip install -e protocol/conformance` from the repository
-root instead.
+a repository checkout, and a package that has somehow lost it reports every schema-backed check as
+an error of the suite rather than a skip. For development, run `pip install -e protocol/conformance`
+from the repository root instead.
+
+`--harness-id` takes the harness's id (`chrn_…` on HarnessRouter), never its name: an id that
+matches nothing ends the run before the first task, as does a named harness with no default model
+when `--model` is not given. The harness and model the tasks run on are printed before the first
+check.
 
 | Option | Meaning |
 |---|---|
