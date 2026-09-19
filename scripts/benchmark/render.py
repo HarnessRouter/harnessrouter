@@ -45,7 +45,7 @@ def render(records: list[dict]) -> str:
         for (h, m), rs in sorted(groups.items()):
             ran = [r for r in rs if not r.get("error")]
             errors += [f"{h} x {m} {r.get('task')}: {r['error'][:120]}" for r in rs if r.get("error")]
-            clean, notes = [], []
+            clean, notes, ungraded = [], [], 0
             for r in ran:
                 why = []
                 if r.get("foreign"):
@@ -58,16 +58,20 @@ def render(records: list[dict]) -> str:
                     why.append("looked for the task outside the workspace: " + "; ".join(str(x) for x in r["lookup"])[:120])
                 if why:
                     findings.append(f"{h} x {m} {r.get('task')}: " + ", ".join(why))
+                elif r.get("resolved") is None:
+                    ungraded += 1   # the pack could not grade it: noted, never a failure
                 else:
                     clean.append(r)
+            if ungraded:
+                notes.append(f"{ungraded} runs the pack could not grade (the task fails its own grader), left out")
             capped = sum(1 for r in clean if r.get("capped"))
             if capped:
                 notes.append(f"{capped} runs hit the time cap (counted as failures)")
             unreported = sum(1 for r in ran if r.get("served_unreported"))
             if unreported:
                 notes.append(f"served model unreported on {unreported} of {len(ran)} runs (rule 2 unverifiable there)")
-            if len(clean) < len(ran):
-                notes.append(f"{len(ran) - len(clean)} runs are findings, not counted")
+            if len(clean) + ungraded < len(ran):
+                notes.append(f"{len(ran) - len(clean) - ungraded} runs are findings, not counted")
             u = [r.get("usage") or {} for r in clean]
             served = sorted({str(r.get("connection") or "").replace("integration:", "") for r in ran if r.get("connection")}) or ["?"]
             resolved = sum(1 for r in clean if r.get("resolved"))

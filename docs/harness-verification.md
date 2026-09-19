@@ -201,8 +201,8 @@ different model fails rather than quietly succeeding.
 The matrix asks whether a harness works. `scripts/benchmark` asks how well a harness × model
 does the same work, on public task suites whose grading is deterministic, one task per session,
 every number read from the turn record. Its rules are the matrix's rules 1 and 2 plus three of
-its own (a run that reached the network is a finding, tokens on one convention, no judge), stated
-and pinned in [scripts/benchmark/README.md](../scripts/benchmark/README.md).
+its own (a run that reached the network or searched the machine for the task is a finding, tokens
+on one convention, no judge), stated and pinned in [scripts/benchmark/README.md](../scripts/benchmark/README.md).
 
 ## Console changes
 

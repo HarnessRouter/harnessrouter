@@ -12,7 +12,8 @@ MODELS (comma), PROVIDER (a label for the column), EXPECT_CONNECTION (the connec
 integration:<name>; any other one is a finding), TASKS (first:N, or a comma list of ids; default
 all), RESULTS (json path), LOG (append log), WORKDIR (produced files), WORKERS (parallel tasks per
 harness, default 1), KEEP=1 to leave sessions on the instance (they are deleted once graded, as
-the support matrix does, since a pack's worth of workspaces fills a disk).
+the support matrix does, since a pack's worth of workspaces fills a disk; a finding's session is
+kept either way, its trace being the evidence).
 """
 import json
 import os
@@ -89,12 +90,27 @@ def _command_of(t: dict) -> str:
     return args if isinstance(args, str) else ""
 
 
+def _target_of(t: dict) -> str:
+    """What a web tool was pointed at, so the finding carries its evidence after the session is
+    gone: a run that fetched twice under a time cap left only the tool's name once its session
+    was deleted (measured 2026-09-19)."""
+    args = t.get("arguments") or ""
+    if isinstance(args, str) and args.startswith("{"):
+        try:
+            d = json.loads(args)
+            return str(d.get("url") or d.get("query") or d.get("prompt") or "")
+        except ValueError:
+            return args
+    return args if isinstance(args, str) else ""
+
+
 def network_use(tools: list[dict]) -> list[str]:
     hits = []
     for t in tools or []:
         name = str(t.get("name") or "")
         if WEB_TOOL.search(name):
-            hits.append(name)
+            target = _target_of(t)
+            hits.append(f"{name}: {target[:120]}" if target else name)
             continue
         cmd = _command_of(t)
         if NET_IN_SHELL.search(cmd):
@@ -306,10 +322,13 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
             fh.write(api("GET", f["download_url"], raw=True))
         produced[name] = path
     g = pack.grade(task, root, produced, tdir)
-    rec.update(reward=g["reward"], resolved=bool(g["resolved"]), detail=g.get("detail", ""))
-    if rec.get("capped") and not rec["resolved"]:
+    rec.update(reward=g["reward"], resolved=None if g["resolved"] is None else bool(g["resolved"]), detail=g.get("detail", ""))
+    if rec.get("capped") and rec["resolved"] is False:
         rec["detail"] = f"time cap {rec['capped']} s; " + rec["detail"]
-    if os.environ.get("KEEP") != "1":
+    # a finding's session stays on the instance, its trace being the evidence; the rest go
+    if rec.get("network") or rec.get("lookup") or rec.get("foreign") or rec.get("substituted"):
+        rec["kept"] = True
+    elif os.environ.get("KEEP") != "1":
         try:
             api("DELETE", f"/v1/sessions/{sid}")
         except Exception as e:  # noqa: BLE001
@@ -383,7 +402,8 @@ def main() -> None:
                 verdict = ("ERROR " + rec["error"][:80]) if rec.get("error") else \
                     ("FINDING network" if rec.get("network") else "FINDING lookup" if rec.get("lookup") else
                      "FINDING foreign" if rec.get("foreign") else "FINDING substituted" if rec.get("substituted") else
-                     ("pass" if rec.get("resolved") else f"FAIL {rec.get('detail', '')[:60]}"))
+                     ("pass" if rec.get("resolved") else f"UNGRADED {rec.get('detail', '')[:60]}" if rec.get("resolved") is None
+                      else f"FAIL {rec.get('detail', '')[:60]}"))
                 log(f"TASK {label} x {model} {t['id']}: {verdict} {rec.get('wall_s', '?')}s tools={rec.get('tool_calls', '?')} "
                     f"served={rec.get('served') or 'unreported'} tokens={json.dumps(rec.get('usage') or {})}")
 

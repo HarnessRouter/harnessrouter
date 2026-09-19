@@ -50,8 +50,11 @@ def test_a_truncated_stored_prompt_still_identifies_its_session():
 
 
 def test_a_web_tool_or_a_shell_that_reaches_out_is_network_use():
-    assert network_use([{"name": "webfetch", "arguments": '{"url": "https://x"}'}]) == ["webfetch"]
+    """The finding names what the tool was pointed at: the session is the evidence, and one run's
+    was gone with only the tool's name kept (measured 2026-09-19)."""
+    assert network_use([{"name": "webfetch", "arguments": '{"url": "https://x"}'}]) == ["webfetch: https://x"]
     assert network_use([{"name": "WebSearch", "arguments": "{}"}]) == ["WebSearch"]
+    assert network_use([{"name": "fetch_web_content", "arguments": '{"query": "transpose rows"}'}]) == ["fetch_web_content: transpose rows"]
     hits = network_use([{"name": "bash", "arguments": json.dumps({"command": "curl -s https://example.com/answer.json"})}])
     assert hits and hits[0].startswith("bash: curl")
     assert network_use([{"name": "bash", "arguments": json.dumps({"command": "wget http://h/x"})}])
@@ -139,6 +142,15 @@ def test_a_capped_run_is_a_failure_and_the_row_says_how_many():
     md = render([_rec(task="a"), _rec(task="b", resolved=False, reward=0.0, capped=900, detail="time cap 900 s; no workbook produced")])
     row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
     assert "| 2 | 1 (50%) |" in row and "1 runs hit the time cap (counted as failures)" in row, row
+
+
+def test_a_task_the_grader_cannot_decide_is_left_out_not_failed():
+    """Two of the first fifty SpreadsheetBench tasks fail their own grader (a sheet name with
+    commas, a whole-column range); every harness lost both until they were told apart."""
+    md = render([_rec(task="a"), _rec(task="b", resolved=None, reward=None, detail="ungradable: the grader raises on the golden workbook: ValueError('b2b is not a valid coordinate or range')")])
+    row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
+    assert "| 1 | 1 (100%) |" in row, row
+    assert "1 runs the pack could not grade (the task fails its own grader), left out" in row and "findings" not in row
 
 
 def test_an_unreported_served_model_is_noted_not_scored_against():

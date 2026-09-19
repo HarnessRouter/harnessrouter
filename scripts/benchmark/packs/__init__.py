@@ -12,6 +12,9 @@ A pack module exposes three functions and one string:
   grade(task, root, produced, workdir) -> {"reward": float in [0, 1], "resolved": bool,
                         "detail": str}; "produced" maps each file the turn produced to its local
                         path. The suite's own grader decides; a pack never re-implements one.
+                        A task the grader cannot decide at all (its own golden answer fails it)
+                        is {"reward": None, "resolved": None, "detail": "ungradable: ..."}: left
+                        out of the row, never a failure of the harness.
 """
 from importlib import import_module
 
