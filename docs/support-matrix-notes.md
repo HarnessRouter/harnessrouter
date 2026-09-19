@@ -581,6 +581,456 @@ ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN 
 never whether it answers: too large lets a thread overflow the real window (the provider then
 errors), too small compacts early and wastes tokens.
 
+## The aider backend (Aider 0.86.2) — behaviour measured before any column ran
+
+Everything in THIS section was measured against the pinned 0.86.2 — its source, and a stub that
+answers as a provider would, at no API cost — before a single paid turn. The google column has since
+run; its results and what they overturned are a section of their own below.
+`docs/support-matrix.md` is rendered from the results file and is untouched.
+
+**aider is driven IN PROCESS, and that is a correctness requirement rather than a preference.** It
+has no machine-readable output mode, and its stdout carries the model's prose and aider's own
+diagnostics on one channel. A stub was made to return model prose whose second line began
+`litellm.AuthenticationError:`; on stdout it was byte-identical to a real 401 on the same stream,
+same exit code 0, no colour under `--no-pretty`. No anchored regex separates those, so a
+text-parsing normaliser would report ordinary answers as provider failures. In process they are
+never mixed: failures reach `io.tool_error`, prose reaches `io.assistant_output`, and
+`coder.usage_report` is None exactly when no completion came back. `runner/aider_driver.py` uses
+aider's own entry point, `main(..., return_coder=True)` — the one its GUI uses (`gui.py:71`) and its
+tests cover. Upstream supports NO python API: its scripting page says the python scripting API "is
+not officially supported or documented, and could change in future releases without providing
+backwards compatibility". Hence the exact pin and the install-time symbol checks.
+
+**Upstream refuses shell commands under `--yes-always` by design, and HarnessRouter approves them
+through a policy gate.** State this plainly to anyone who knows aider, because they will assume the
+opposite. `confirm_ask` returns `"n"` for the one call site that sets `explicit_yes_required`
+(`handle_shell_commands`) — so out of the box a skill's bundled script can be read but never run.
+The driver wraps that single gate: it receives the exact command the model proposed, refuses it if
+the harness disabled the matching tool (with the policy as the reason, which is what the reader
+sees), and otherwise approves it to run in the workspace under the session's uid. The model chooses
+the command; the harness never injects one. Measured both ways: with `Shell` disabled the proposed
+command is refused and the file it would have written does not appear; with it enabled the script
+runs and its output is reported.
+
+**MCP reaches aider through a bridge, because aider has no MCP client at all** — zero source hits
+for MCP across the whole tree. The bridge (`runner/aider_mcp_bridge.py`) is built on the official MCP
+Python SDK (`mcp`, MIT), installed into aider's own venv, and exposed to the model as `hr-mcp`: the
+declared servers are listed by NAME in the context aider reads — so the model cannot invent an
+endpoint — and the gate recognises `hr-mcp call <server> <tool>` and records it under the MCP tool's
+own name. `mcp_called` is therefore measured from a command that actually ran.
+
+f/mcptools was the first choice and is not usable here: it is a Go program that publishes **no
+binaries on any release** (checked every release through v0.7.1 — all have zero assets), so it would
+have meant adding a Go toolchain to a `python:3.12-slim` image for one command. The official SDK is
+also the more defensible component — the protocol's own reference implementation rather than a third
+party's wrapper around it.
+
+Measured live against public servers, at no cost: `hr-mcp tools context7` lists both of its tools
+with their schemas (exit 0); a correct `call` returns the server's content (exit 0); a call with the
+wrong parameters relays the server's own validation error and **exits 1**, so the agent sees a failed
+command rather than an answer-shaped one; an unknown server name exits 2 and names the ones that
+exist. **deepwiki works through this bridge** — worth recording because goose cannot handshake with
+it, so aider's custom-harness row needs no `MCP_URL` override.
+
+Two field-name traps were found by running it rather than reading about it: the 2.2.0 SDK is
+snake_case (`input_schema`, `structured_content`, `is_error`), not the camelCase of older releases,
+and a wrong name raised inside anyio's TaskGroup and surfaced as the useless sentence "unhandled
+errors in a TaskGroup (1 sub-exception)". The bridge unwraps ExceptionGroups so an MCP failure
+reaches the agent as a real message.
+
+**The edit format is pinned to `diff`, and it is load-bearing.** Shell commands are extracted in
+`editblock_coder.get_edits()`; `wholefile`, `udiff` and `patch` never populate `shell_commands`, so
+a ```bash block is inert on those formats and a skill's script could not run at all.
+
+**Shell output is fed back through aider's own reflection path, and this is the measured
+experiment the backend was asked to run.** Stock aider stashes the output in `cur_messages` for the
+NEXT user message and sets no reflection (`base_coder.py:1609-1614`), unlike its lint and test
+paths — so within one turn the model never sees what its command printed, and cannot report a token
+the script produced. Setting `reflected_message` gives aider the same in-turn loop every other
+backend has. Measured against the stub: reflection on, two provider round trips and the answer
+carries the script's output; reflection off, one round trip and the answer is the ```bash block
+itself. One hazard found and fixed while measuring it: `init_before_message()` empties
+`shell_commands` once per TURN, not per reflection, so the first version re-ran every executed
+command on each pass — one command ran four times, four round trips instead of two, side effects
+repeated. The driver now clears the list after running it, pinned by a test.
+
+The cost ceiling is aider's own: `Coder.max_reflections` is 3, so a model that keeps proposing the
+same command after seeing its output costs at most three extra round trips and three executions,
+not an unbounded loop. Observed with a stub that answers identically every time.
+
+**Model ids are sent with an `openai/` prefix.** A bare id is resolved against aider's own
+`MODEL_ALIASES` (`models.py:87-111`), which rewrites 21 of them including `gemini-2.5-pro`, an id
+this catalog also serves. The prefix skips that table, so the id the picker offered is the id the
+provider is asked for. The same class of silent substitution that pruned the gemini catalog.
+
+**Streaming is off (`--no-stream`), and that is about billing honesty.** With streaming, aider
+reports `usage_present: false` and substitutes a **tiktoken estimate** through the same field names
+(587 against a true 595, measured live) because it never sends `stream_options`. Its own numbers are
+not used either way: result events carry `usage: {}` and `_relay_usage` will supply them.
+
+**Nothing of aider's lands in the workspace root.** Its chat and input histories are relocated under
+`.harness/aider/`, and the repo-map tags cache — `Path(root)/".aider.tags.cache.v4"`, with no CLI
+flag — is moved there by setting `RepoMap.TAGS_CACHE_DIR` in the driver, which only an in-process
+driver can do. Verified after a full turn: the workspace root held `.git`, `.harness` and the task's
+own files, nothing else. Auto-commits are off so aider never interleaves commits with the
+checkpoint repo's, and `--no-gitignore` stops it appending to the `.gitignore` the runner owns.
+
+**The install path is verified in a real image.** `docker build` of this tree,
+then a container with `HR_BACKENDS=aider`: the install completed, the container reported
+`backends available: aider`, and `aider.__version__` inside it is 0.86.2 with the MCP SDK importable
+beside it. **681 MB measured there** (`du -sh /data/agent-tools/aider-venv`) — a first estimate of
+735 MB came from a macOS venv — and the MCP bridge was run from inside the image against deepwiki,
+listing its tools with exit 0. The PR proposed keeping aider out of the default `HR_BACKENDS` for its size; the review put it in (2026-09-18), because the console offers every base the catalogue lists and a listed base that is not installed fails on its first task. Note the Python floor: 0.86.2
+declares `Requires-Python <3.13,>=3.10`, and on an interpreter outside that range pip does not fail
+— it silently offers an older aider (0.82.3 on 3.9) with none of the behaviour above. The installer
+asserts the imported version to turn that into a hard failure. Installing the MCP SDK into the same
+venv bumps `idna` past aider's own `idna==3.11` pin; aider was re-verified running end to end
+afterwards, so that pin is advisory here — but it is why the SDK goes in aider's venv and not the
+runner's, where the same class of bump breaks FastAPI outright.
+
+**Known limitation: no tool loop, so the custom-harness dimension's disabled tool is not aider's.**
+The request body's keys are exactly `['messages','model','temperature']` — no `tools`, no
+`functions`. aider's withholdable surface is the shell command and the URL scrape, which the gate
+really does refuse; but `custom-harness.mjs` disables the fixed id `WebSearch`, which matches
+nothing on this harness — so `disabled_tool_unused` would pass VACUOUSLY, as it already does for
+qwen, gemini and cline, whose catalogs carry no `WebSearch` either. The enforcement here is real and
+demonstrable; what is missing is a dimension that disables a tool the base under test actually
+lists.
+
+
+## aider × Google, the first paid column (2026-09-16)
+
+11 pairs, **51 ok / 4 FAIL**, every pair served by `integration:google` on every turn and every
+`served_model` matching the id the pair asked for. The two questions the column was run to answer
+both came back:
+
+**`--timeout` holds.** `gemini-2.5-flash-lite` had burned 27,360s in a single vercel scenario before
+the flag was pinned. Here the whole pair ran green, its slowest scenario 25.69s. No scenario in the
+column waited without a bound.
+
+**The artifact failure is not a gpt-5 phenomenon.** One turned up here too — but for a different
+reason than the gpt-5 family's, so the earlier `diff`-edit-format hypothesis explains neither.
+
+### Three symptoms, one cause: the reminder is glued to the user's message
+
+`base_coder.py:1322`. When `main_model.reminder == "user"` — the default (`models.py:125`), and what
+every id in this catalog resolves to — aider appends its whole `system_reminder` to the FINAL user
+message rather than sending it as its own turn. Reproduced against the real package: the matrix's
+39-character `Reply with exactly: M2-<id>` becomes a **3,080-character** user message whose last
+3,041 characters are SEARCH/REPLACE rules and shell-command examples. The instruction is 1.3% of
+what the model is handed, and it is at the top.
+
+Three of the four failures are that message, failing in three different ways:
+
+  * **FOLLOWUP, `gemini-3.5-flash` and `gemini-3-flash-preview`** — the model continues the tail
+    instead of obeying the head. The answer ends `...suggest the command to install them. Etc.`,
+    byte-identical to the end of the appended block. 31.8s and 37.9s against 7.6s for a healthy
+    followup, because it is reciting 3 KB.
+  * **ARTIFACT, `gemini-3.5-flash-lite`** — "Please add hello-aider.txt to the chat so I can propose
+    the edit", about a file that does not exist yet. The system prompt says `You can create new
+    files without asking!` and then, in the next sentence, that edits to files not in the chat
+    `*MUST*` be refused until the user adds them. The weaker model took the second sentence.
+  * **An unhandled crash, `gemini-3-flash-preview`** — `The turn failed: list index out of range`,
+    seen once in six re-runs. Asked to echo one word, the model emitted a headerless SEARCH/REPLACE
+    block whose only content was that same word. Fed to the real parser, aider reads the word as the
+    FILENAME: `[('M1-gemini-3-flash-preview', '', 'M1-gemini-3-flash-preview\n')]`. Then
+    `strip_quoted_wrapping` (`editblock_coder.py:349-354`) drops the one line because it endswith
+    the filename and immediately indexes `res[0]` on the now-empty list. **An upstream defect in
+    0.86.2**, reproducible in three lines with no model and no network; this product only supplies
+    the conditions.
+
+`--no-suggest-shell-commands` would remove the shell half of that block, and is NOT taken: shell
+commands are how a skill's script runs at all, which is the custom-harness dimension.
+
+### The fourth failure was not repaired, and the A/B says so
+
+`RECYCLE gemini-3-flash-preview FAIL 399.14s`, reported as
+`Input tokens: ~45,356 of 0 -- possibly exhausted context window!`. The `0` is real and is a defect
+of ours — see `_write_model_metadata` — but it is a defect of REPORTING. Six re-runs of that one
+pair, three with the metadata file and three on the committed driver, put every recycle in the same
+band regardless: **19.9s / 209.0s with it, 210.8s / 222.8s / 229.2s without**, all passing. The
+399.1s failure is the tail of that distribution, not something the metadata fix cured. Recorded here
+because the first re-run passed at 19.9s and reading that one sample as a fix would have been wrong.
+
+`gemini-3-flash-preview` is the unstable id on this harness: across six full runs it produced one
+upstream crash, four followup failures, and recycles ranging over an order of magnitude.
+
+### aider's custom-harness row: the capability is real, the row never passed (2026-09-18)
+
+Measured on the vercel integration, nine runs of `custom-harness.mjs` with `BASES=aider`:
+
+```
+skill_reached  9/9      script_ran  2/9      mcp_called  2/9      row ok  0/9
+```
+
+The harness itself is stored correctly every time — `skill_stored`, `tool_disabled_stored` and
+`mcp_stored` are all true — and the MCP capability demonstrably WORKS. A harness declaring only the
+deepwiki server, asked to read a wiki structure, produced this record:
+
+```
+tools: ["Shell", "deepwiki.read_wiki_structure"]
+assistant:
+  ```bash
+  hr-mcp tools deepwiki
+  ```
+  ```bash
+  hr-mcp call deepwiki read_wiki_structure --params '{"repoName":"modelcontextprotocol/servers"}'
+  ```
+```
+
+The model listed the server's tools and then called one, against the real public server, through
+`runner/aider_mcp_bridge.py`. The block that tells it how is in the workspace's AGENTS.md on every
+turn, verified on disk under `## MCP servers` with the declared server named.
+
+**What fails is not the wiring but the choice, and both halves of this row turn on the same choice.**
+Every other backend gives a skill's script and an MCP tool their own call channel: the model emits a
+tool call and the runtime executes it. aider has no such channel at all — a "tool call" here is the
+model writing a ```bash block into its prose, which `editblock_coder.get_edits()` then extracts. So
+`script_ran` and `mcp_called` are not two independent measurements; they are one question asked
+twice: did the model choose to emit a fenced bash block this turn. Against a prompt built to make it
+emit SEARCH/REPLACE blocks — and with 3,041 characters of those rules appended to the user's own
+message (see the reminder finding above) — it chose to twice out of nine, and never twice in the
+same run.
+
+The first turn shows the pull plainly: asked for the skill's build stamp, the model usually reads the
+token out of `stamp.py` and answers with it instead of running the script. That answer is correct,
+and it is not what the row measures.
+
+Recorded as measured: the row is **FAIL**, and the reason is aider's, not the bridge's. Anyone
+re-running it should expect a different mix of the same two flips rather than a stable result.
+
+## aider × Vercel, the full column (2026-09-18)
+
+52 pairs, **235 ok / 21 FAIL**. Every pair `connection=integration:vercel` on every turn, no
+foreign connection anywhere. The log flags `SUBSTITUTED=` on 51 of 52 pairs and NONE of them is
+one: `run.mjs:177` compares the served id to the asked id as raw strings, and this channel stamps a
+vendor prefix (`openai/gpt-5.6-sol`, `nvidia/nemotron-3-super-120b-a12b`). Judged by the comparator
+that owns the question, `scripts/support-matrix/samemodel.py`, **0 of the 51 is a real
+substitution**. The google column flagged none because that channel stamps the bare id. Read the
+flag as raw pre-canonicalisation data, not as a finding.
+
+```
+first     ok=51  FAIL=1
+followup  ok=49  FAIL=2
+switch    ok=51  FAIL=0
+artifact  ok=47  FAIL=4
+recycle   ok=37  FAIL=14      <- two thirds of every failure in the column
+```
+
+### The `--timeout` pin holds on the channel that produced the hangs
+
+The 3,621s / 6,040s / 16,071s / 27,360s scenarios were all measured HERE. The slowest scenario in
+this column is 477s (`gemini-3-flash-preview`'s recycle) and nothing waited without a bound.
+
+### The artifact failure is a small-model behaviour, not a gpt-5 one
+
+Four artifact failures: `gpt-5.4-mini`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`,
+`grok-4.20`. Three of the four are the mini/lite variant of a family whose full-size sibling passed,
+across three vendors and (with the google column's `gemini-3.5-flash-lite`) two providers. The gpt-5
+family passed 5 of 6. **The earlier hypothesis -- that this was the gpt-5 family meeting the `diff`
+edit format -- is dead.** What these models do is obey the system prompt's `*MUST* tell the user
+their full path names and ask them to *add the files to the chat*` for a file that does not exist
+yet, ignoring the sentence above it that says new files need no permission.
+
+### Recycle, by family
+
+```
+claude   8/8    deepseek 3/3   kimi 2/2   glm 2/2   step 1/1
+gemini  10/11   grok     4/5   qwen  4/5
+muse     2/4
+gpt-5    1/6
+nemotron 0/2    mistral  0/1   hunyuan 0/1
+```
+
+### aider puts a user message the user never sent at the head of every conversation
+
+`editblock_prompts.py:31`. aider teaches the SEARCH/REPLACE format by example, and with
+`examples_as_sys_msg` false -- the default (`models.py:126`), and what every id in this catalog
+resolves to, because aider's per-model overrides match legacy substrings (`gpt-4.1`, `3.5-sonnet`,
+`deepseek`+`v3`, `qwq`+`32b`) that no 2026 id contains -- those examples are injected as REAL
+`user`/`assistant` turns. The first user message in the model's context is therefore
+`Change get_factorial() to use math.factorial`.
+
+The recycle scenario asks what word was requested `in my very first message of this task`. In the
+column five models answered out of that synthetic turn: `math.factorial` (gpt-5.6-terra, gpt-5.6-luna),
+`Change` (gpt-5.4, muse-glimmer-30b), and qwen3.8-max quoting it back as a sentence. They are not
+wrong about what they were shown. This is not only a test artefact: any feature that asks a model
+about its own history inherits a turn attributed to a user who never wrote it.
+
+### Setting `examples_as_sys_msg` closes that trap and changes nothing (2026-09-18)
+
+aider supports the fix: `--model-settings-file` (`main.py:757`) with `examples_as_sys_msg: true`
+folds the examples into the system prompt under `# Example conversations:` instead of sending them
+as turns. Measured on the six ids that had failed recycle, one variable changed and every other
+ModelSettings field left at the default already in effect, against a CONTROL of the same six pairs
+on the same image in the same hour:
+
+```
+              control (as shipped)      with examples_as_sys_msg
+              ok=25  FAIL=5             ok=25  FAIL=5
+```
+
+Identical. The mechanism is real -- under the setting NO answer cites the example text, while the
+control still produced `math.factorial` -- but closing it does not buy a single scenario: the models
+that stopped answering `math.factorial` answered `HELLO`, or `Ok`, or "the first message of this
+task did not ask me to reply with any specific word" instead. **Not taken.** Fitting the harness's
+prompt to this matrix without a measurement that supports it is the trade this repo does not make.
+
+### The column's recycle number is a single sample, and it is not stable
+
+The same six pairs re-run on the same image failed recycle three times, where the column failed them
+five times and voided a sixth. `gpt-5.2`'s `FIRST FAIL 171.62s -- The LLM did not conform to the
+edit format`, which voided its whole pair in the column, did not reproduce at all: both arms ran it
+4/5. Quote `recycle ok=37/51` as what this run measured, never as aider's rate.
+
+### The model's reasoning was being rendered as its answer (fixed)
+
+`grok-4.20` is the only id in the column whose provider returns a separate reasoning field, and its
+cards carried the chain of thought: `...(wait, no, that is not how it works) The instruction is to
+tell which files need changes and stop. So my response should be:... ► ANSWER hello-aider.txt`. That
+`► ANSWER` is aider's own terminal banner (`reasoning_tags.py:11`), reaching a browser transcript.
+The driver hooked `io.assistant_output`, which `base_coder.py:1882-1890` feeds the DISPLAY string --
+reasoning prepended to the answer -- rather than `partial_response_content`, which carries the answer
+alone. Fixed in `_install`; re-measured on a rebuilt image, the same cards now read
+`AIDER No files in the repo need to be changed for this request.` with no banner. **Both verdicts
+stayed FAIL**: the artifact row is judged on the file card, and the recall answer never contained
+the word either way. The leak reached the transcript only -- aider writes `partial_response_content`
+to the chat history (`base_coder.py:1828`), so no later turn was fed the reasoning.
+
+## aider, the review of PR #211 on hr-test (2026-09-18)
+
+Reviewed on a derived image of the PR branch merged with main, on the 0.18.4 base, with every
+built-in skill installed as a fresh volume installs them. What the review changed, each with the
+measurement that made it a defect, and then what the columns say on the image that carries the
+changes.
+
+**Every turn carried the whole skill library.** The PR passed every file of every installed
+skill bundle through `--read` on every turn: on hr-test that is 27 files and 264 KB for the three
+built-in bundles, two licences and a PNG among them, and `Reply with exactly: AIDER-SMOKE-OK` cost
+**45,030 input tokens**. The same turn on the review image costs 3,039. The agent doc alone
+reaches the model; a skill is read when a task calls for it, as on every base without a loader.
+
+**The agent doc is the system message.** `--read` delivered it as a USER message ("Here are some
+READ ONLY files, provided for your reference") ahead of the conversation, and aider's few-shot
+examples for the edit format went in as user/assistant turns ahead of that. So the first user
+message the model saw was never the user's: asked what the first message of the task asked for,
+the gpt-5 family answered `Change` (aider's `Change get_factorial()` example) and, once the
+examples were folded away, `reference` (the read-only preamble). The doc now rides aider's own
+`Model.system_prompt_prefix` hook, ahead of the system message aider composes, and the examples
+fold into that message through aider's own `examples_as_sys_msg`, set on the object because a
+settings-file entry replaces every other setting of the model with class defaults. The PR's A/B
+of that switch (above) was run with the history cap still in place, which is why it could not
+move a verdict: the first message was being summarised away regardless.
+
+**The conversation was summarised away after four short turns.** aider keeps at most
+`min(max(window/16, 1k), 8k)` tokens of chat history, and 1k for an id litellm has no record of,
+which is most of this catalog; past that it summarises the history with a model call on every
+turn. Measured in the console matrix: after first, follow-up, switch and artifact, the recycle
+question could not be answered on ids that had answered the follow-up one turn earlier. The
+driver passes `--max-chat-history-tokens` as half the window when the record says it, else
+96,000, which fits the catalog's smallest windows; the other bases keep the whole transcript the
+same way.
+
+**The model was never told how this workspace works.** aider's prompt tells it the USER adds
+files and may run the commands it suggests. Here the driver does both, and a model that was not
+told behaved as aider's prompt says: asked to use a skill it guessed the token instead of reading
+SKILL.md; asked for an MCP tool it wrote "I'm constrained here to only return SEARCH/REPLACE
+blocks"; asked for a streamable-HTTP tool it invented the result. The doc now carries a block
+that says what happens between messages, names each installed SKILL.md as a `cat` the model can
+run on any turn (aider's own file-mention route adds only files git already tracks, and on a
+session's first turn the skill files are not committed yet, measured), and forbids reporting
+output that was never received. Plugin matrix before: 1 of 4 columns (skills guessed, stdio
+refused, http invented). After, run twice: **4 of 4 both times**. `custom-harness.mjs`, which the
+PR ran nine times without a pass: **3 of 3**, `skill_reached`, `script_ran`, `mcp_called` all
+true each time.
+
+**The operator's step budget never reached the driver.** The builder accepted `max_turns` and
+`turn()` did not pass it; the test that claimed to pin the dispatch pinned the builder. Fixed and
+pinned on the dispatch.
+
+**Usage was empty on every kimi and aider turn.** Both normalisers wrote `usage: {}` on the
+promise that "the relay stamps it", and nothing in this tree did: the console showed no tokens for
+either base. The relay now reads the provider's usage off the bytes as they pass, the way it
+already reads the served model (OpenAI `prompt_tokens` netted to fresh input by the cached part,
+Anthropic's counters as they are, Gemini's `usageMetadata`, streamed or not), sums it over the
+turn's calls and stamps it on a result event that arrived empty. Measured after: aider
+`input 3,039 / output 9`, then `input 2,710 / cache_read 2,176` on the follow-up; kimi
+`input 7,487 / cache_read 13,312`.
+
+**`temperature` refused by a provider.** aider sends `temperature: 0` for every id its settings do
+not know; `claude-fable-5-1` on TokenRouter answered "`temperature` is deprecated for this model"
+and the turn died after 171 s of retries. No other base sets one; aider's own `use_temperature`
+switch leaves it out.
+
+**Edit markup rendered as the answer.** A file-writing task's reply card read
+`hello.py ```python <<<<<<< SEARCH ======= print("aider") >>>>>>> REPLACE ``` `. That is aider's
+wire format for an edit; the driver strips it from the text (the text event AND the result event,
+since the gateway stores the latter as the answer) and reports each edited file as an `Edit` card,
+as file edits render on every other base.
+
+**Two claims removed.** The catalog listed `Web Fetch` as a withholdable tool while the runner
+always ran aider with `--no-detect-urls`, so the switch withheld something that never happened;
+the web is reached through a shell command like everything else, under the one gate. And the
+install was opt-in "per the 300 MB line", but the console offers every base the gateway's
+catalogue lists, so on a default install Aider was a base that failed on its first task; it is in
+the default `HR_BACKENDS` (fresh volume: healthy after 147 s against 114 s without it, 687 MB),
+and an operator who does not want it leaves it out.
+
+**Smaller:** a failure reason no longer names aider's in-chat commands (`- Use /drop …`); the two
+bridge tests that imported the aider venv's SDK (mcp 2.x, httpx2) under the runner's 1.x
+environment, which is why the PR's runner job was red, stub those modules by name; aider's own
+app icon is in the harness list.
+
+**Verified unchanged:** the hard tool policy (Shell withheld: the model's `cat
+/proc/sys/kernel/random/boot_id` was refused at the gate with the policy as its result and no
+UUID in the answer; allowed: the UUID came back); cancel (a 60-function module task cancelled
+mid-flight: `runner_killed: true`, no driver process left, session `cancelled`); the console at
+1440 and 390 (settings page, task page with the edit card and the file card, no markup, no
+overflow, no page errors).
+
+**The columns on the review image (`pr211-a9e7a51`, hr-test, 2026-09-18).** Console scenario
+matrix, 50 ids × first / follow-up / switch / artifact / recycle, connections as the console
+routes them (TokenRouter for most, Vercel 6, Anthropic 2, Custom OpenAI 2, OpenRouter 1, Azure 1):
+
+```
+first 50/50   follow-up 47/50   switch 50/50   artifact 47/50   recycle 47/50   = 241/250
+```
+
+The nine: `claude-opus-5` three times, the provider's `finish_reason content_filter` on the
+scenario's own words (the same id tripped the same way in the kimi review); `gemini-3.5-flash` and
+`gemini-3.6-flash` on the follow-up, the reminder tail continued (upstream's, above);
+`gpt-5.2` and `llama-3.3-70b` on the recycle recall, answering with a later word; `gpt-5.4` and
+`gpt-5.4-mini` on the artifact after three literal-reply turns, answering `DONE` with no edit
+block (the same prompt on a fresh session writes the file; measured twice). Two of these were
+re-run three times and flipped both ways, so read them as what this run measured.
+
+A pattern worth knowing about the base itself: aider answers with ONE response per turn, and a
+reflection follows only when aider has something to feed back (a command's output, a file it
+added). "Create the file, then run wc on it and tell me the count" therefore often ends after
+the edit: the model writes the block, aider applies it, and no second pass happens unless the
+model also proposed the command in the same response. Every other base loops on tool calls.
+
+Conformance, run alone against an aider harness on gpt-5.4: 75/75 at full. A provider refusal
+(a custom connection with a bogus key): the task fails with "The API provider is not able to
+authenticate you. Check your API key." and nothing of aider's around it. Fresh volume on the final
+image: healthy after 150 s, 687 MB venv, `aider-ready` reads 0.86.2.
+
+**Richard's first manual task, and what it found (2026-09-19, `pr211-a30c77d`).** "improve the ppt
+style" on a one-slide deck, gemini-3.8-flash: the model named `hello.pptx`, aider added it to the
+chat, the UTF-8 read failed ("Use --encoding to set the unicode encoding"), the file was dropped
+and added again on the next mention, an error and a reflection each time. Twelve commands and
+fifteen minutes later the deck WAS restyled through officecli and `hello.md` edited, and the turn
+read FAILED with the decode error, because any error had failed a turn; and the transcript showed
+prose inside a code block, because each response's text was joined to the next without a break
+and a closing fence ran into the next sentence. Fixed on the branch: a binary file is refused at
+aider's own "Add file to the chat?" prompt (aider's ignore_mentions then holds it), and since
+nobody is at that prompt to say what to do instead, the answer goes back as a reflection and the
+turn goes on; the turn fails when an error was the LAST thing that happened; each response ends
+with a paragraph break and its shell blocks render as cards only. Re-run of the same two turns:
+the deck restyled in 53 s, DONE, five tool cards, no markup. The doc also says now that each line
+of a bash block runs on its own (a multi-line `python3 -c "…"` ran line by line) and that binary
+files are worked on with commands.
+
 ## The openhands backend: OpenHands V1 through its agent-server (2026-09-18/19)
 
 PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer

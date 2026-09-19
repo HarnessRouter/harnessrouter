@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "plugin-probe",
+  "version": "1.0.0",
+  "description": "A probe package for the support matrix: one skill and one stdio MCP server."
+}

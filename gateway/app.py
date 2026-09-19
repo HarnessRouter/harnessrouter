@@ -1068,6 +1068,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "opencode"): "tokenrouter",
     # kimi reaches every provider the same way qwen does — one OpenAI-compatible surface through
     # the loopback relay — so these rows are qwen's, verbatim, with the backend renamed.
+    ("anthropic", "aider"): "anthropic",       ("openai", "aider"): "openai",
+    ("azure-foundry", "aider"): "azure",
+    ("openrouter", "aider"): "openai-api",
+    ("tokenrouter", "aider"): "tokenrouter",   ("vercel", "aider"): "tokenrouter",
+    ("llmtr", "aider"): "tokenrouter",
+    ("custom", "aider"): "openai-api",
+    ("google", "aider"): "openai-api",
     ("anthropic", "kimi"): "anthropic",        ("openai", "kimi"): "openai",
     ("azure-foundry", "kimi"): "azure",
     ("openrouter", "kimi"): "openai-api",
@@ -1147,6 +1154,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
     ("harnessrouter", "kimi"): "tokenrouter",
+    ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "openhands"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
@@ -4613,7 +4621,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
     # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
     # until it is — the picker greys out what the router cannot actually run.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
+    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
                "openhands"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -6041,6 +6049,32 @@ _MODEL_CATALOG: dict[str, dict] = {
     # its text turns answer but its first tool turn is refused on every channel (TokenRouter
     # "404 This model is not supported in the v1/chat/completions endpoint", Azure "400 The
     # requested operation is unsupported"). Same rule cline earned for it on 2026-08-30.
+    # aider: same relay reach as the others (litellm's openai provider through the loopback relay).
+    # Measured: the vercel column ran all 52 runnable ids (235 ok / 21 FAIL) and the google column
+    # 11 (51 ok / 4 FAIL); every pair was served by the connection under test and, judged by
+    # samemodel.py, as the id it asked for. Three of the ids those columns measured were the Gemini
+    # 2.5 family, retired from this catalog since (#196); `llama-3.3-70b` is the one listed id no
+    # column reached. docs/support-matrix-notes.md carries the failures and what each is.
+    #
+    # Ids are sent with an `openai/` prefix by the runner, which is load-bearing rather than
+    # cosmetic: a BARE id is resolved against aider's own MODEL_ALIASES table, which rewrites 20 of
+    # them to a DIFFERENT model on a DIFFERENT provider. No id this catalog serves is in that table
+    # today — `gemini-2.5-pro` was, and left with #196 — but the overlap is upstream's to change in
+    # any release, and the prefix skips the table entirely rather than tracking it.
+    "aider": {"default": "gpt-5.4",
+              "models": [
+                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5",
+                  "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
+                  "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
+                  "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
+                  "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
+                  "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
+                  "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash",
+                  "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # kimi (Kimi Code CLI): the same relay reach as qwen and cline (OpenAI chat/completions through the
     # loopback relay), so the list is qwen's, reordered to put the kimi family first as its home family.
     #
@@ -6222,10 +6256,9 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # kimi speaks chat/completions only: the runner defines its model with provider type `openai`
 # through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
 # sets), so a Responses-API-only id would be a picker row that fails on send.
-# openhands speaks chat/completions: its LLM is litellm's openai provider through the relay
-# (the id is sent `openai/<id>`), so a Responses-API-only id would be a picker row that fails
-# on send.
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "openhands")
+# aider and openhands speak chat/completions through litellm's openai provider (the id is sent
+# `openai/<id>`), so a Responses-API-only id would be a picker row that fails on send.
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -13342,6 +13375,32 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
         # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
+        "tool_enforcement": "hard",
+    },
+    "aider": {
+        "label": "Aider", "backend": "aider", "status": "ready",
+        # aider composes its own system message from the edit format; the runner's driver puts
+        # these instructions and the harness's AGENTS.md ahead of it, in the same system message,
+        # through the Model's own system_prompt_prefix hook.
+        "system_prompt": ("You are Aider, an autonomous coding agent. You work on a real git "
+                          "workspace, editing files and proposing shell commands to complete the "
+                          "task end to end."),
+        # aider has no tool loop: the request body's keys are exactly ['messages','model'] — no
+        # `tools`, no `functions` (and no temperature, see the driver). Its tool SURFACE is the
+        # shell command the model proposes in a fenced block, which the driver's gate decides; that
+        # one is withholdable and is listed. "Edit" is aider's edit engine: it is what aider IS, it
+        # cannot be withheld, and it is therefore NOT listed — offering a switch that does nothing
+        # is the overstatement UHP §4.3 forbids. aider's URL scrape is off in this harness
+        # (--no-detect-urls, set by the runner), so a "Web Fetch" switch would be that same
+        # overstatement; the web is reached through a shell command like everything else, and the
+        # Shell switch withholds it. MCP tools reach the model through the `hr-mcp` bridge
+        # (runner/aider_mcp_bridge.py) and are gated by tool NAME in the same place; they are
+        # per-harness rather than catalog entries, so they are not listed here.
+        "tools": [("Shell", "Shell")],
+        # "hard", and measured rather than asserted: with Shell disabled the model's proposed
+        # command is refused at the gate and the file it would have written does not appear; with an
+        # MCP tool name disabled the `hr-mcp` call is refused by that tool's own name. Pinned by
+        # runner/tests/test_aider_driver.py.
         "tool_enforcement": "hard",
     },
     "kimi": {

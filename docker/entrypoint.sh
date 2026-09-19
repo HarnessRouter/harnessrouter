@@ -177,7 +177,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -197,6 +197,7 @@ backend_bin() {
     omp)    echo "$TOOLS/bin/omp" ;;
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
+    aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
   esac
 }
@@ -241,6 +242,51 @@ install_opencode() {
 # download has to go unverified: the digests are pinned HERE instead, computed from the v1.50.0
 # release assets (each archive holds exactly ./goose). That is strictly stronger than the tag
 # alone, which can be moved and whose asset can be re-uploaded.
+# Aider, Apache-2.0 (Aider-AI/aider), pinned to 0.86.2, plus the MCP bridge it needs.
+#
+# Its own venv, the dsh/hermes precedent: aider pins litellm and a large scientific stack, and must
+# not share the runner's interpreter. The version is pinned exactly and aider's own wheel pins every
+# dependency to a version, so the venv is the same one on every volume; there is no digest check
+# here, the release is trusted the way the other PyPI installs (dsh) are.
+#
+# NOTE the Python floor: aider 0.86.2 declares Requires-Python <3.13,>=3.10. On an interpreter
+# outside that range pip does not fail — it silently offers an OLDER aider (0.82.3 was the highest
+# on 3.9), and every behaviour runner/aider_driver.py was written against would be absent without a
+# single error. The explicit version pin below is what turns that into a hard failure.
+#
+# The official MCP SDK goes in beside it: upstream aider has no MCP client at all, so
+# runner/aider_mcp_bridge.py is what lets a declared MCP server be reached and, therefore, measured.
+# Installed in this venv rather than globally because no other backend uses it.
+AIDER_PIN="${HR_AIDER_VERSION:-0.86.2}"
+install_aider() {
+  am_py="${HR_AIDER_BASE_PYTHON:-python3}"
+  # The venv lives on the data volume, so a pin bump in the image must reach a volume that
+  # already has one (the dsh precedent): aider-ready names the version the venv was built for,
+  # and a mismatch rebuilds it. Sessions keep nothing in the venv.
+  rm -rf "$TOOLS/aider-venv"
+  "$am_py" -m venv "$TOOLS/aider-venv" || return 1
+  "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
+    "aider-chat==$AIDER_PIN" || return 1
+  # The driver imports aider in process; prove the pinned version is importable before declaring the
+  # install good, so a resolver that quietly picked another one fails HERE and not on a live turn.
+  "$TOOLS/aider-venv/bin/python" -c '
+import sys, aider
+want = sys.argv[1]
+if aider.__version__ != want:
+    sys.exit("aider %s installed, wanted %s" % (aider.__version__, want))
+'  "$AIDER_PIN" || return 1
+  # aider's MCP client: the official MIT SDK, into the same venv. f/mcptools was the first choice
+  # and is not usable here — it is a Go program that publishes NO binaries on any release (checked
+  # through v0.7.1, every one has zero assets), so it would mean a Go toolchain in a python-slim
+  # image for one command.
+  "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
+    "mcp==${HR_MCP_SDK_VERSION:-2.2.0}" || return 1
+  # Written LAST, after both installs and the version check proved the venv good: the marker is
+  # what the boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
+  printf '#!/bin/sh\necho %s\n' "$AIDER_PIN" > "$TOOLS/aider-venv/bin/aider-ready" \
+    && chmod +x "$TOOLS/aider-venv/bin/aider-ready"
+}
+
 # Kimi Code CLI, MIT (MoonshotAI/kimi-code), pinned to 2.0.0.
 #
 # THIS IS THE SUCCESSOR, NOT Kimi CLI. 0.18.0 shipped MoonshotAI/kimi-cli 1.50.0, the Python
@@ -549,6 +595,16 @@ install_backends() {
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
     try_install "Kimi Code CLI" install_kimi || true
+  fi
+
+  # The largest install of the set: ~735 MB and about ninety seconds on a fresh volume
+  # (tree-sitter-language-pack 351 MB, scipy 100, numpy 57). In the default list all the same,
+  # because the console offers every base the gateway's catalogue lists and a base that is listed
+  # but not installed fails on its first task; an operator who does not want it leaves it out of
+  # HR_BACKENDS, the same switch every backend has.
+  if wanted aider && [ "$("$TOOLS/aider-venv/bin/aider-ready" 2>/dev/null)" != "$AIDER_PIN" ]; then
+    echo "[harnessrouter] installing Aider $AIDER_PIN (Apache-2.0) — ~735 MB, this takes a minute…"
+    try_install "Aider" install_aider || true
   fi
 
   # The dsh venv lives on the data volume, so a pin bump in the image must reach a volume that
