@@ -18,11 +18,14 @@ import server as rs  # noqa: E402
 def test_a_process_that_left_the_group_is_still_found_by_the_turns_marker(tmp_path):
     marker = "turn-sweep-" + str(os.getpid())
     tmux_dir = tmp_path / "ohsock"; tmux_dir.mkdir()
-    # a child that puts itself in a NEW session (as tmux's server does) and sleeps on
+    # a child spawned in THIS group that then puts itself in a new session, as tmux's server does
+    # (not start_new_session=True: a session leader's own setsid() is EPERM, and the child died
+    # before the sweep looked, which is how the first version of this test failed in CI)
     child = subprocess.Popen([sys.executable, "-c", "import os,time; os.setsid(); time.sleep(60)"],
-                             env={**os.environ, rs._TURN_MARK: marker, "TMUX_TMPDIR": str(tmux_dir)},
-                             start_new_session=True)
+                             env={**os.environ, rs._TURN_MARK: marker, "TMUX_TMPDIR": str(tmux_dir)})
     time.sleep(0.5)
+    assert child.poll() is None, "the child must be alive and in its own session when the sweep runs"
+    assert os.getsid(child.pid) == child.pid
     other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                              env={**os.environ, rs._TURN_MARK: "another-turn"}, start_new_session=True)
     try:
