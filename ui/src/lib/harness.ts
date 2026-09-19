@@ -256,6 +256,10 @@ export interface BaseInfo {
 
 let _bases: Record<string, BaseInfo> | null = null;
 let _basesInflight: Promise<Record<string, BaseInfo>> | null = null;
+/** The limits a turn gets when neither the request nor the harness sets one, from the server's
+ *  bases document. null until it lands: the settings page shows nothing rather than a guess. */
+export interface RuntimeDefaults { maxStep: number; timeoutSeconds: number }
+let _runtimeDefaults: RuntimeDefaults | null = null;
 
 async function fetchBases(): Promise<Record<string, BaseInfo>> {
   if (_bases) return _bases;
@@ -267,12 +271,27 @@ async function fetchBases(): Promise<Record<string, BaseInfo>> {
       const doc = await r.json();
       const map: Record<string, BaseInfo> = {};
       for (const b of doc.bases || []) map[b.id] = b as BaseInfo;
+      const rd = doc.runtimeDefaults;
+      if (rd && Number(rd.maxStep) > 0 && Number(rd.timeoutSeconds) > 0) {
+        _runtimeDefaults = { maxStep: Number(rd.maxStep), timeoutSeconds: Number(rd.timeoutSeconds) };
+      }
       _bases = map;
       return map;
     } catch { return {}; }
     finally { _basesInflight = null; }
   })();
   return _basesInflight;
+}
+
+/** The server's runtime defaults, once the bases document has landed. */
+export function useRuntimeDefaults(): RuntimeDefaults | null {
+  const [d, setD] = useState<RuntimeDefaults | null>(_runtimeDefaults);
+  useEffect(() => {
+    let alive = true;
+    fetchBases().then(() => { if (alive && _runtimeDefaults) setD(_runtimeDefaults); });
+    return () => { alive = false; };
+  }, []);
+  return d;
 }
 
 /** Server-described bases. null until loaded — a caller shows nothing rather than a guess. */

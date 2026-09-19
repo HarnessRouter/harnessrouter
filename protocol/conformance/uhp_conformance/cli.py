@@ -49,6 +49,17 @@ def main(argv=None) -> int:
     ctx = Context(client=Client(a.base_url, a.api_key, headers=extra), harness_id=a.harness_id,
                   model=a.model, task_timeout=a.task_timeout)
 
+    # A harness with no default model and no --model runs every task with whatever the server
+    # falls back to, which on a self-hosted instance may be an id its provider does not serve: each
+    # task then waits out --task-timeout and a full run takes half an hour to say nothing (#199).
+    # Say it before the first task instead.
+    if a.harness_id and not a.model:
+        r = ctx.client.get(f"/v1/harnesses/{a.harness_id}")
+        if r.status == 200 and not str((r.json or {}).get("defaultModel") or "").strip():
+            print(f"harness {a.harness_id} has no default model; pass --model <id> so the tasks "
+                  "run on a model this server serves", file=sys.stderr)
+            return 2
+
     selected = checks_for(a.cls)
     if a.only:
         want = {s.strip().upper() for s in a.only.split(",") if s.strip()}
