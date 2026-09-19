@@ -177,7 +177,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -198,6 +198,7 @@ backend_bin() {
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
     aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
+    openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
   esac
 }
 
@@ -306,6 +307,74 @@ if aider.__version__ != want:
 # from KIMI_MODEL_* alone, -r refusing an unknown session, agent files matching tool NAMES,
 # $KIMI_CODE_HOME/mcp.json, the exit-1 failure line) was measured on THIS version.
 KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
+# OpenHands V1, MIT (OpenHands/agent-sdk), pinned to 1.49.2 — the AGENT SERVER, not the CLI.
+#
+# PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
+# actively maintained" and whose last release is 1.16.0 of 2026-05-08. This is the interface its
+# vendor does maintain: `openhands-agent-server`, released 1.49.2 on 2026-09-17.
+#
+# THE THREE PINS GO IN ONE pip INVOCATION, and that is not cosmetic. `openhands-agent-server`
+# imports `openhands.tools` and `libtmux` at module level and declares NEITHER; `openhands-tools`
+# is what brings both. Installed one at a time, pip resolves each call on its own and lands on
+# browser-use 0.13.10, which pins `openai==2.26.0` against the server's own `openai>=2.33.0` — a
+# set `pip check` refuses. Given all three at once it backtracks to browser-use 0.11.13 and the
+# environment is consistent (verified: `No broken requirements found`, and the same resolution uv
+# reaches). The 1.34.0 set the OpenHands platform itself declares does not resolve at all
+# (`ResolutionImpossible`, lmnr against openhands-sdk), so 1.49.2 is the floor as well as the pin.
+#
+# THE FOURTH PIN IS litellm, HELD BELOW 1.95.0, and it decides whether a follow-up turn survives.
+# The SDK asks only for `litellm>=1.93.0`, so pip takes the newest — and from 1.95.0 litellm's
+# PromptTokensDetailsWrapper mirrors an assignment between `cache_write_tokens` and
+# `cache_creation_tokens`, which puts BOTH names into `model_fields_set` and then drops the unset
+# attribute from __dict__. The SDK's telemetry (llm/utils/telemetry.py, _cache_buckets) reads
+# `"cache_creation_tokens" in details.model_fields_set` as its existence test, so it asks for an
+# attribute that is no longer there: `AttributeError: 'PromptTokensDetailsWrapper' object has no
+# attribute 'cache_creation_tokens'`. Each side is self-consistent; together they are not, and
+# 1.49.2 is the newest SDK, so there is nothing to upgrade to.
+#
+# It only fires once a response carries prompt_tokens_details — a prompt-cache hit, which a FIRST
+# turn cannot have — so it reads as "follow-ups fail and first turns do not". The agent-server
+# publishes no error event for it (see the driver's fallback), tenacity retries it five times, and
+# the record shows a 150-200 s turn that ended for no stated reason. Measured on gemini-3-flash-preview,
+# same command and image, litellm the only difference: 1.101.0 gave first ok / follow-up FAIL 145 s /
+# switch ok / artifact FAIL 175 s / recycle FAIL 148 s, and 1.94.3 gave five of five in 10-14 s each.
+#
+# Own venv, the dsh/hermes precedent: it pins litellm, fastmcp, pydantic and a browser stack, and
+# must not share the runner's interpreter.
+install_openhands() {
+  oh_py="${HR_OPENHANDS_BASE_PYTHON:-python3}"
+  "$oh_py" -m venv "$TOOLS/openhands-venv" || return 1
+  "$TOOLS/openhands-venv/bin/pip" install -q --disable-pip-version-check \
+    "openhands-agent-server==${HR_OPENHANDS_VERSION:-1.49.2}" \
+    "openhands-tools==${HR_OPENHANDS_VERSION:-1.49.2}" \
+    "openhands-sdk==${HR_OPENHANDS_VERSION:-1.49.2}" \
+    "litellm==${HR_OPENHANDS_LITELLM_VERSION:-1.94.3}" || return 1
+  # Prove the server can actually START, and that the litellm pin still buys what it is for, before
+  # declaring the install good. Importing its api module is what catches the undeclared dependencies
+  # above: the failure they cause is an import error at the first live turn, not a pip error here.
+  "$TOOLS/openhands-venv/bin/python" -c '
+import sys
+import libtmux  # noqa: F401 — undeclared by the server, brought by openhands-tools
+import openhands.agent_server.api  # noqa: F401 — the module the server boots from
+import importlib.metadata as md
+want = sys.argv[1]
+have = md.version("openhands-agent-server")
+if have != want:
+    sys.exit("openhands-agent-server %s installed, wanted %s" % (have, want))
+# The litellm pin is asserted by BEHAVIOUR, not by version, because the version is only how this
+# pair happens to be broken today: build the wrapper the way a cached prompt does and check that
+# the existence test the SDK uses still agrees with the attribute. A pin bumped past 1.95.0 fails the
+# image here instead of failing every follow-up turn on a provider that reports prompt caching.
+from litellm.types.utils import PromptTokensDetailsWrapper
+details = PromptTokensDetailsWrapper(cached_tokens=1)
+if "cache_creation_tokens" in details.model_fields_set and not hasattr(
+        details, "cache_creation_tokens"):
+    sys.exit("litellm %s and openhands-sdk %s disagree about cache_creation_tokens; "
+             "hold litellm below 1.95.0" % (md.version("litellm"), md.version("openhands-sdk")))
+' "${HR_OPENHANDS_VERSION:-1.49.2}" || return 1
+  command -v tmux >/dev/null 2>&1 || { echo "openhands: the tmux binary is missing"; return 1; }
+}
+
 install_kimi() {
   case "$(uname -m)" in
     x86_64)        km_arch="x64";   km_sha="ebc1ad504e458d66f0cc57d4e9d709a2060647f5b89d4e21026903b96204c3ed" ;;
@@ -492,6 +561,37 @@ install_backends() {
   # `kimi --version` prints the bare version on Kimi Code CLI ("2.0.0") and "kimi, version 1.50.0" on
   # its predecessor, so comparing it to the pin both installs a missing binary and replaces the old
   # product on a volume that was first started by 0.18.0.
+  # In the default set, for the reason aider is: the console offers every base the gateway's
+  # catalogue lists, and a listed base that is not installed fails on its first task. An operator
+  # who does not want the 666 MB leaves it out of HR_BACKENDS, the switch every backend has.
+  #
+  # THE GUARD COMPARES THE VERSION, not the file, for the reason dsh's venv already carries: the
+  # venv lives on the data volume and outlives the image. A volume first started by an earlier
+  # build of this branch held an `openhands-venv` whose python was perfectly executable and whose
+  # contents were the DEPRECATED CLI's stack — openhands 1.16.0 pinning openhands-sdk 1.21.0 — so
+  # an existence check skipped the install and every turn died on
+  # `No module named 'openhands.sdk.marketplace.registration'`. Caught by the first column, not by
+  # a test. A mismatch rebuilds the venv from scratch; conversations live in the workspace, not in
+  # it, so nothing of a session is lost.
+  OPENHANDS_PIN="${HR_OPENHANDS_VERSION:-1.49.2}"
+  # BOTH pins are compared, because the venv outlives the image in the same way for each: a volume
+  # whose openhands-venv was built before litellm was pinned holds the right agent-server and the
+  # wrong litellm, and an agent-server-only comparison would skip the install and hand that volume
+  # back the follow-up failures the pin exists to remove.
+  OPENHANDS_LITELLM_PIN="${HR_OPENHANDS_LITELLM_VERSION:-1.94.3}"
+  # Probed only when there IS something to probe: asking a path that does not exist for its version
+  # is a 127 that takes the whole entrypoint down with it, which is how this line first shipped.
+  oh_have=""
+  if [ -x "$(backend_bin openhands)" ]; then
+    oh_have="$("$(backend_bin openhands)" -c \
+      'import importlib.metadata as m; print(m.version("openhands-agent-server"), m.version("litellm"))' 2>/dev/null || true)"
+  fi
+  if wanted openhands && [ "$oh_have" != "$OPENHANDS_PIN $OPENHANDS_LITELLM_PIN" ]; then
+    rm -rf "$TOOLS/openhands-venv"
+    echo "[harnessrouter] installing OpenHands agent-server $OPENHANDS_PIN (MIT) — ~666 MB, this takes a minute…"
+    try_install "OpenHands" install_openhands || true
+  fi
+
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
     try_install "Kimi Code CLI" install_kimi || true

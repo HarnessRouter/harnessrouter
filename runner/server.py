@@ -286,12 +286,26 @@ def _goose_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
 #
 # A backend absent from this table cannot lose a session, or has not been measured — either way it
 # never reports one lost. Adding a backend here is registration point 5.
+def _openhands_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask the agent-server's own store whether this conversation is there.
+
+    It cannot be read off argv: the driver mints the id and passes it whatever the store holds, and
+    the server creates a conversation for an id it does not know. The store is a directory named for
+    the id with the dashes removed, holding base_state.json and an events log — the shape the driver
+    read back after killing one server and querying another."""
+    home = pathlib.Path(cwd) / ".harness" / "openhands" / "conversations"
+    if not home.is_dir():
+        return False
+    return any((d / "base_state.json").is_file() for d in home.iterdir() if d.is_dir())
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
     "aider": _aider_session_present,
+    "openhands": _openhands_session_present,
 }
 
 
@@ -459,6 +473,7 @@ OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
 AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
+OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -1214,7 +1229,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # aider has no instruction-file convention of its own (no AGENTS.md discovery, no
         # CLAUDE.md): the file is written here and the driver puts it into aider's system message.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi", "aider")
+                                   "goose", "kimi", "aider", "openhands")
         else "CLAUDE.md")
 
 
@@ -2811,6 +2826,36 @@ def _stringify_tool_content(body: bytes) -> bytes:
     return body
 
 
+def _stringify_assistant_content(body: bytes) -> bytes:
+    """Assistant-role message content: array-of-parts -> plain string, in one chat-completions body.
+
+    The tool-role twin above, one role over. OpenAI accepts both shapes and the OpenHands SDK sends
+    the array form for every assistant turn it replays, which Vercel's mistral endpoint refuses —
+    and refuses MISLEADINGLY: `400 Assistant message must have either content or tool_calls, but
+    not none.` about a message whose content is right there. Isolated against the live endpoint
+    (2026-09-18): the identical request answers 200 with `content: "M1"` and 400 with
+    `content: [{"type": "text", "text": "M1"}]`.
+
+    It only bites once a conversation HAS an assistant turn, so a first turn passes and every one
+    after it fails — which is exactly how it presented, four of five scenarios on
+    vercel|openhands|mistral-medium-3.5. Text parts are all an assistant message carries here, so
+    the flatten is lossless; applied only after a provider says exactly that."""
+    try:
+        obj = json.loads(body)
+        changed = False
+        for m in obj.get("messages") or []:
+            if (isinstance(m, dict) and m.get("role") == "assistant"
+                    and isinstance(m.get("content"), list)):
+                m["content"] = "".join(p.get("text", "") for p in m["content"]
+                                       if isinstance(p, dict))
+                changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 def _set_reasoning_effort_none(body: bytes) -> bytes:
     """Set `reasoning_effort: "none"` in one chat-completions body.
 
@@ -3370,6 +3415,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
                 body = _stringify_tool_content(body)
+            if flags.get("stringify_assistant_content"):
+                body = _stringify_assistant_content(body)
             if flags.get("drop_stream_options"):
                 body = _drop_stream_options(body)
             if flags.get(f"reasoning_effort_none:{_body_model}"):
@@ -3413,6 +3460,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         and stringified is not None and stringified != body):
                     flags["stringify_tool_content"] = True
                     body = stringified
+                    headers["content-length"] = str(len(body))
+                    continue
+                assistant = _stringify_assistant_content(body) if body is not None else None
+                if (attempt < 2 and e.code == 400
+                        and b"Assistant message must have either content" in data
+                        and assistant is not None and assistant != body):
+                    flags["stringify_assistant_content"] = True
+                    body = assistant
                     headers["content-length"] = str(len(body))
                     continue
                 effort = _set_reasoning_effort_none(body) if body is not None else None
@@ -5602,6 +5657,120 @@ _aider_to_claude.eof = _aider_eof   # type: ignore[attr-defined]
 # ── kimi ─────────────────────────────────────────────────────────────────────────
 
 
+OPENHANDS_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+# A field litellm sends on its own initiative, the kimi precedent: for an id its registry knows as
+# Anthropic's (the provider-native `claude-haiku-4-5-20251001` a custom connection resolves to)
+# it puts BOTH `max_tokens` and `max_completion_tokens` on the request, the same 64,000 in each,
+# and Anthropic's OpenAI-compatible endpoint answers "Setting 'max_tokens' and
+# 'max_completion_tokens' at the same time is not supported" (captured with a sink in the venv
+# and against the live endpoint, 2026-09-19; every other id carries the second field alone, and
+# every provider on the matrix takes it). The harness never asked for either; the one every
+# provider takes stays.
+_OPENHANDS_DROP_FIELDS = ("max_tokens",)
+OPENHANDS_PYTHON = os.environ.get("HR_OPENHANDS_PYTHON",
+                                  "/data/agent-tools/openhands-venv/bin/python")
+OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openhands_driver.py")
+
+
+def _openhands_mcp_config(mcp_servers: list[dict] | None) -> dict:
+    """The declared servers as the SDK's `Agent.mcp_config`: {name: MCPServer}.
+
+    This base needs no bridge — unlike aider, which ships no MCP client at all — because the agent
+    server's own SDK takes the servers on the agent and dials them itself. Its MCPServer accepts
+    `url`/`transport`/`headers` and the stdio trio `command`/`args`/`env`, so the harness's
+    declaration maps across one field at a time and nothing is invented here.
+
+    THE DECLARED TRANSPORT TRAVELS, the rule #191's review set for kimi: the harness says what a
+    server speaks and the url's spelling decides nothing. The SDK's own values are
+    stdio / http / streamable-http / sse, and anything else is dropped rather than guessed at —
+    a server dialled with the wrong protocol cannot answer, and a config the SDK rejects would
+    fail the whole turn rather than the one server.
+    """
+    out: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        entry: dict = {}
+        if url:
+            entry["url"] = url
+            transport = str(sv.get("transport") or "").lower()
+            if transport in ("stdio", "http", "streamable-http", "sse"):
+                entry["transport"] = transport
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry["transport"] = "stdio"
+            entry["command"] = argv[0]
+            entry["args"] = [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+            if sv.get("cwd"):
+                entry["cwd"] = str(sv["cwd"])
+        else:
+            continue
+        out[name] = entry
+    return out
+
+
+def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                     tools_disabled: list[str] | None = None,
+                     max_turns: int | None = None) -> list[str]:
+    """OpenHands V1, driven through `openhands-agent-server` (OpenHands/agent-sdk, MIT).
+
+    NOT the CLI. PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project
+    is no longer actively maintained" and whose last release is 1.16.0 of 2026-05-08; the agent
+    server released 1.49.2 on 2026-09-17. The turn process is runner/openhands_driver.py, which
+    starts a server on loopback, drives ONE turn over its HTTP + WebSocket API and exits — the same
+    one-process-per-turn contract as every other backend, and the codex app-server precedent.
+
+    THE MODEL ID IS SENT WITH AN `openai/` PREFIX and the key rides the driver's environment rather
+    than the conversation. Both are forced by what the server persists: base_state.json carries the
+    whole LLM spec with `api_key: None`, so a key passed on the create call reaches the first turn
+    and nothing after it, and without an explicit provider litellm INFERS one from the base url —
+    which is how a relay url produced `Vercel_ai_gatewayException … set the VERCEL_AI_GATEWAY_API_KEY`
+    on a resumed turn. Every turn rides the loopback relay for the qwen reason: the real key never
+    enters the agent's environment and the provider's own `model` passes through for the
+    served-model check."""
+    pr = provider or "openai-api"
+    if pr not in OPENHANDS_PROVIDERS:
+        raise HTTPException(400,
+                            f"unknown openhands provider '{pr}' (one of {sorted(OPENHANDS_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "openhands needs a base_url (none configured)")
+    # GUARDED ON THE KEY, as every other builder is. The relay holds the real credential and hands
+    # the turn a token in its place; with nothing to hold it registers a route whose upstream key
+    # is empty and the provider refuses the forwarded request — measured on the google integration,
+    # whose `Please pass a valid API key` came back through a relay that had none to send.
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
+                                                    drop_fields=_OPENHANDS_DROP_FIELDS)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    # The relay token rides the turn's ENVIRONMENT as well as the job: _relay_served_model and
+    # _relay_usage find the turn's route by the placeholder bearer in env, and a token that lived
+    # only in the driver's argv left every openhands turn with no served model and no usage
+    # (measured: usage None on three turns whose provider calls the relay had counted).
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["OPENAI_BASE_URL"] = auth.base_url
+    job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
+           "base_url": auth.base_url, "api_key": auth.api_key,
+           "tools_disabled": list(tools_disabled or []),
+           # Declared MCP servers reach the agent itself; a parameter accepted and then dropped is
+           # the defect aider's bridge already taught this repo, so the test suite pins the whole
+           # chain rather than this line.
+           "mcp_config": _openhands_mcp_config(mcp_servers),
+           # the server's own default is 500 iterations per run; an operator's budget that the
+           # backend drops is the quiet lie kimi shipped at 1000 steps
+           "max_turns": max_turns}
+    return [OPENHANDS_PYTHON, OPENHANDS_DRIVER, json.dumps(job)]
+
+
 def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE `kimi -p … --output-format stream-json` line to zero+ canonical claude events.
 
@@ -5728,6 +5897,84 @@ _kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
+# ── openhands ────────────────────────────────────────────────────────────────────
+# The turn process is runner/openhands_driver.py, which re-emits what it observes on the
+# agent-server's WebSocket as NDJSON in the dsh_driver shape. The driver has already decided what
+# is prose, what is a tool call and what is a failure — it sees typed SDK events, not text — so
+# this maps one shape to another and judges nothing.
+_OPENHANDS_SESSION_NAME = "harness"
+
+
+def _openhands_to_claude(obj: dict, state: dict) -> list[dict]:
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if not state.get("_oh_init"):
+        # _run_turn_bg records the conversation id ONLY from a system/init event, and that recorded
+        # id is what makes the next turn a follow-up rather than a new thread.
+        state["_oh_init"] = True
+        return ([{"type": "system", "subtype": "init", "session_id": _OPENHANDS_SESSION_NAME,
+                  "model": state.get("model")}]
+                + _openhands_event(obj, state, m, p))
+    return _openhands_event(obj, state, m, p)
+
+
+def _openhands_event(obj: dict, state: dict, m, p) -> list[dict]:
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if not txt.strip():
+            return []
+        state["final"] = txt
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if m == "tool_call":
+        state["_oh_last_call"] = str(p.get("id") or "t0")
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": state["_oh_last_call"], "name": str(p.get("name") or "Tool"),
+             "input": p.get("input") or {}}]}}]
+    if m == "tool_result":
+        out = p.get("output")
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result",
+             "tool_use_id": str(p.get("id") or state.get("_oh_last_call") or "t0"),
+             "is_error": bool(p.get("is_error")) or bool(isinstance(out, dict) and out.get("is_error")),
+             "content": json.dumps(out, default=str) if not isinstance(out, str) else out}]}}]
+    if m == "error":
+        # Reached the conversation's error channel, which the model's prose cannot reach. Recorded,
+        # NOT rendered: it is the turn's failure reason, not part of its answer.
+        state["_oh_error"] = str(p.get("text") or "")
+        return []
+    if m == "warning":
+        state.setdefault("_oh_warnings", []).append(str(p.get("text") or ""))
+        return []
+    if m == "init":
+        state["_oh_conversation"] = str(p.get("conversation_id") or "")
+        return []
+    if m == "result":
+        err = state.get("_oh_error") or ""
+        ok = bool(p.get("ok")) and not err
+        final = str(p.get("final") or state.get("final") or "")
+        if ok:
+            state["final"] = final
+        # usage is {} deliberately: per the 2026-09-13 decision no harness PR builds its own usage
+        # pipeline, and _relay_usage stamps these rows.
+        return [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                 "result": final if ok else (err or f"the turn ended {p.get('status') or 'unknown'}"),
+                 "usage": {}}]
+    return []
+
+
+def _openhands_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result event, so this fires only when the process died before
+    reaching it — a crash, a kill, an import failure."""
+    err = state.get("_oh_error") or ""
+    if rc == 0 and not err:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": err, "usage": {}}]
+
+
+_openhands_to_claude.eof = _openhands_eof   # type: ignore[attr-defined]
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -5768,6 +6015,9 @@ BACKENDS = {
              "normalize": _kimi_to_claude},
     "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
               "normalize": _aider_to_claude},
+    "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
+                  "default_model": OPENHANDS_DEFAULT_MODEL,
+                  "normalize": _openhands_to_claude},
 }
 
 
@@ -5820,11 +6070,53 @@ _turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retrie
 _turns_lock = threading.Lock()
 
 
-def _kill_proc_tree(proc: subprocess.Popen) -> None:
+# Every process a turn starts carries the turn's id in its environment (set on the CLI's env
+# and inherited by everything below it), so what the process group misses can still be found.
+_TURN_MARK = "HR_TURN_ID"
+
+
+def _sweep_turn_processes(turn_id: str) -> int:
+    """Kill every process still carrying this turn's marker, and remove the tmux socket
+    directory such a process names. The group kill misses a process that put itself in a new
+    session: openhands' terminal tool runs commands in tmux, whose server daemonises with
+    setsid, so a cancelled or timed-out turn left the tmux server AND the agent's command
+    running (`sleep 240` alive after cancel, hr-test 2026-09-19), and every turn's
+    /tmp/oh<port> directory behind it. The marker is what makes the turn's processes findable
+    whatever they did to their process group; /proc is read as the runner, which is root here."""
+    if not turn_id:
+        return 0
+    want = f"{_TURN_MARK}={turn_id}".encode()
+    killed = 0
+    dirs: set[str] = set()
+    me = os.getpid()
+    for entry in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            environ = pathlib.Path("/proc", entry, "environ").read_bytes()
+        except OSError:
+            continue
+        if want not in environ.split(b"\0"):
+            continue
+        for kv in environ.split(b"\0"):
+            if kv.startswith(b"TMUX_TMPDIR="):
+                dirs.add(kv.split(b"=", 1)[1].decode(errors="replace"))
+        try:
+            os.kill(int(entry), signal.SIGKILL)
+            killed += 1
+        except OSError:
+            pass
+    for d in dirs:
+        if d.startswith("/tmp/oh"):
+            shutil.rmtree(d, ignore_errors=True)
+    return killed
+
+
+def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
     """SIGKILL the CLI's whole process GROUP (Popen uses start_new_session). Killing only
     the CLI leaves its shell children (e.g. a `sleep`) holding the inherited stdout pipe,
     which keeps the reader loop blocked until the child exits — a cancel/timeout then
-    appears to hang for the child's full duration."""
+    appears to hang for the child's full duration. Then the stragglers by marker."""
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001
@@ -5832,18 +6124,25 @@ def _kill_proc_tree(proc: subprocess.Popen) -> None:
             proc.kill()
         except Exception:  # noqa: BLE001
             pass
+    if turn_id:
+        try:
+            _sweep_turn_processes(turn_id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
     rec["capped"] = True
-    _kill_proc_tree(proc)
+    _kill_proc_tree(proc, str(rec.get("turn_id") or ""))
 
 
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False) -> None:
     rec = _turns[turn_id]
+    rec["turn_id"] = turn_id
     state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time()}
     result_ev = None
+    env = {**env, _TURN_MARK: turn_id}
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
@@ -5856,7 +6155,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     rec["pid"] = proc.pid
     rec["proc"] = proc   # live handle so POST /turn/{id}/cancel can kill on demand
     if rec.get("cancelled"):
-        _kill_proc_tree(proc)   # Stop raced the spawn — kill immediately, not at pipe EOF
+        _kill_proc_tree(proc, turn_id)   # Stop raced the spawn — kill immediately, not at pipe EOF
     # Hard wall-clock cap — the caller's timeout_seconds (harness config / request override),
     # bounded by the global MAX_TURN_SECONDS ceiling (resource abuse backstop).
     cap = min(timeout_seconds, MAX_TURN_SECONDS) if timeout_seconds else MAX_TURN_SECONDS
@@ -6999,6 +7298,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
                            mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
                            skills_read=aider_read, max_turns=req.max_turns)
+    elif backend == "openhands":
+        model = model or OPENHANDS_DEFAULT_MODEL
+        cmd = _build_openhands(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id,
+                               mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
@@ -7122,7 +7427,7 @@ def cancel_turn(turn_id: str) -> dict:
     rec["cancelled"] = True
     proc = rec.get("proc")
     if proc is not None:
-        _kill_proc_tree(proc)
+        _kill_proc_tree(proc, turn_id)
     return {"turn_id": turn_id, "status": "cancelling", "cancelled": True}
 
 

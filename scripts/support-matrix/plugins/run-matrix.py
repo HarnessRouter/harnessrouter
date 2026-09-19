@@ -35,7 +35,7 @@ HERE = pathlib.Path(__file__).parent
 FIXTURE = HERE / "fixture"
 # Every base the catalog serves. Since #180/#182 every one of them takes a stdio server (pi's
 # adapter and dsh's client spawn it themselves), so no base is expected to refuse any column.
-BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode", "cline", "omp", "pi", "dsh", "kimi", "aider"]
+BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode", "cline", "omp", "pi", "dsh", "kimi", "aider", "openhands"]
 NO_STDIO: set[str] = set()
 # The public probe the remote columns call: its SSE end answers PROBE-SSE-<id>, its streamable-HTTP
 # end PROBE-HTTP-<id>. Both are the same fixed server, so a wrong answer is the base, not the probe.
