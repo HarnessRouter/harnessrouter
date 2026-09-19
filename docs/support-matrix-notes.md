@@ -1031,6 +1031,26 @@ the deck restyled in 53 s, DONE, five tool cards, no markup. The doc also says n
 of a bash block runs on its own (a multi-line `python3 -c "…"` ran line by line) and that binary
 files are worked on with commands.
 
+**After the first real tasks on the hosted service (2026-09-19, folded into open source).** "build a
+1 pager ppt about SFO" on aider. A reply that announces work and does none ("I'll create a one-page
+PowerPoint deck about SFO and save it in the workspace.", gpt-5.5, zero commands) ends the turn,
+because aider reflects only on something to feed back; the driver now says "go ahead" once, only when
+the reply reads as an announcement. A turn whose last response was an edit block and nothing else
+gets the same note as one that ended on a command. The normaliser used to fail any turn that
+recorded an error at any point: gpt-5.4 wrote an edit aider refused (a leading slash, "not in the
+subpath"), was told, wrote it again, aider applied it, and the record said "did not conform to the
+edit format"; the driver's verdict stands now. gpt-5.5 built the deck with officecli and then put
+its closing answer inside a SEARCH/REPLACE block for the .pptx; aider read the binary as text and
+died on its own None content; an edit block aimed at a binary is refused at aider's prompt like an
+add, with the reflection that says to report instead. The stripper takes the file name inside the
+fence, which gpt-5.5 writes. The notes say to name files by workspace-relative path.
+
+What the base is, measured five times on that task: the gpt-5 family builds the deck through
+officecli in about two runs of five (gpt-5.5, 29 s and 74 s, six commands) and otherwise writes
+an outline .md and stops, treating the file as the deliverable under aider's coding prompt;
+nemotron-3-super and claude-sonnet-4.6 built it every time on the hosted service (457 s and 428 s).
+Not a harness defect: the prompt is aider's, the choice is the model's, and the record says which.
+
 ## The openhands backend: OpenHands V1 through its agent-server (2026-09-18/19)
 
 PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer

@@ -757,6 +757,12 @@ def test_a_binary_file_the_model_names_is_refused_at_aiders_add_prompt():
     assert io.confirm_ask("Add file to the chat?", subject="deck.pptx") is False
     assert io.confirm_ask("Add file to the chat?", subject="notes.md") is True
     assert asked == ["notes.md"]                       # the binary never reached aider's prompt
+    # the same for an edit block aimed at a binary the model never added (gpt-5.5 put its
+    # closing answer in a SEARCH/REPLACE block for the .pptx it had built; aider read the file
+    # as text and crashed on its own None content)
+    assert io.confirm_ask("Allow edits to file that has not been added to the chat?", subject="deck.pptx") is False
+    assert io.confirm_ask("Allow edits to file that has not been added to the chat?", subject="notes.md") is True
+    assert asked == ["notes.md", "notes.md"]
     # nobody is at aider's prompt to say what to do instead, so the turn is told and goes on
     assert "`deck.pptx` is a binary file" in coder.reflected_message and "```bash" in coder.reflected_message
 
