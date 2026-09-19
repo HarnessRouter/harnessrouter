@@ -56,8 +56,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HARNESS_WORKSPACE=/data/workspaces \
     HR_DATA_DIR=/data
 
+# tmux is here for openhands and nothing else: openhands-tools declares `libtmux`, the python
+# client, and libtmux drives the real `tmux` binary — upstream's own image apt-installs it. Without
+# it the agent-server dies on import (`ModuleNotFoundError` / a tmux that is not there), which is a
+# failure at START, not at use. The locale above matters to it too: libtmux's format parsing needs
+# a UTF-8 locale, which LANG=C.UTF-8 already gives.
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-        curl ca-certificates git bash tini \
+        curl ca-certificates git bash tini tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Document preview. The built-in skills create .docx/.pptx/.xlsx routinely, and LibreOffice is

@@ -142,6 +142,14 @@ which fails the type-check, and that is the only one a compiler will find for yo
    a history carrying the error prose. The normaliser must recognise the CLI's prefix, fail the
    turn, and keep the sentence as the reason — `_CLAUDE_ERR_RE` and `_GOOSE_ERR_RE`. Pin the
    prefix with a test, and take it from the pinned binary (`strings`), not from the docs.
+   A harness can also report a failure NOWHERE. openhands' agent-server publishes an error event
+   only for an exception that is not a `ConversationRunError`, on the assumption that the run
+   already emitted its own — and an exception raised out of the run's error handling is exactly
+   the case where nobody did: the status flips to error and the wire carries no reason at all.
+   Where a backend writes a log, read its tail as the fallback, and take the EXCEPTION lines out
+   of it rather than the last lines — a turn that dies in seconds and is then retried to
+   exhaustion ends with `SIGTERM … Shutting down`, and putting that in the record is worse than
+   silence, because it reads like a reason.
 7. `CHECKPOINT_EXCLUDE` and `_git_ensure`'s ignore list: any file the CLI writes that can hold a
    credential.
 

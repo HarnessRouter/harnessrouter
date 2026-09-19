@@ -1050,3 +1050,219 @@ officecli in about two runs of five (gpt-5.5, 29 s and 74 s, six commands) and o
 an outline .md and stops, treating the file as the deliverable under aider's coding prompt;
 nemotron-3-super and claude-sonnet-4.6 built it every time on the hosted service (457 s and 428 s).
 Not a harness defect: the prompt is aider's, the choice is the model's, and the record says which.
+
+
+
+## The openhands backend: OpenHands V1 through its agent-server (2026-09-18/19)
+
+PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
+actively maintained". The product its vendor does maintain is the SDK's **agent-server**
+(`openhands-agent-server` 1.49.2, MIT), a REST + WebSocket service, and that is what this base
+drives. One server process per turn — cold start 3.3-4.1 s measured — so the one-process-per-turn
+contract every other backend keeps is kept here too, and a conversation survives in the workspace
+rather than in the process.
+
+**The surface, as measured.**
+
+- A turn is: start the server on a free port, `POST /api/conversations` (created once; a second
+  create with a different tool list leaves the persisted agent as it was), then send the message
+  and read the event WebSocket to EOF.
+- The agent is FROZEN at the conversation's first creation, so the conversation id is a uuid5 over
+  the tool policy AND the declared MCP servers: a changed policy has to be a different conversation
+  or the change is silently dropped.
+- The credential is never persisted: `base_state.json` holds the whole LLM spec with
+  `api_key: None`, so the key rides the environment and a resumed turn gets it from there.
+- The model id is sent with an `openai/` prefix. Without an explicit provider litellm infers one
+  from the base url, and a relay url inferred as Vercel produced
+  `Missing credentials … VERCEL_AI_GATEWAY_API_KEY` on a resumed turn.
+- The answer can arrive as a `FinishAction` rather than a trailing assistant message; disabling a
+  tool is enforced by OMISSION from the spec, not by a refusal.
+
+**TMUX_TMPDIR, the defect that cost the most.** The terminal tool runs commands in tmux, and the
+server defaults `TMUX_TMPDIR` to a directory inside the working directory. A workspace here is
+`/data/workspaces/hsess<32 hex>`, so the socket landed at
+`/data/workspaces/hsess…/tmp/openhands-agent-server-<pid>/tmux-<uid>/openhands` — 106 characters
+against the 108-byte `sun_path` limit — and tmux answered `error connecting to … (File name too
+long)`. The agent then retried the tool it could not start, which turned a 10 s turn into 235 s and
+then into 4,000 s. Four wrong guesses came first (a tmux session leak, process exhaustion, a
+Chromium preload, a blocking relay); none of them survived contact with the server's own output,
+which at that point was going to `DEVNULL`. The server's stdout now goes to a FILE under
+`.harness/`, and that single change is what ended the investigation. A driver run from a short cwd
+never sees any of this.
+
+**Columns.**
+
+- **vercel** (49 of the 50 catalog ids runnable): 239 of 245 scenarios. qwen3.8-27b missed a recall
+  after a switch and after a recycle (the model, not the wiring). mistral-medium-3.5 failed its
+  other four scenarios; Vercel names its own fix in the refusal (`Assistant message must have
+  either content`), the relay now stringifies assistant content for that route, and the re-run
+  passed five of five. The section below rules out the litellm defect as a second cause.
+- **google** (the eight gemini ids): 40 of 40 after the litellm pin below; 29 of 40 before it.
+- **custom-harness**: openhands carries its own skill, script and tool policy, and reaches a
+  declared MCP server (`https://mcp.deepwiki.com/mcp`, 19 s, all six claims).
+
+## openhands: a follow-up dies of a field that two dependencies disagree about (2026-09-19)
+
+Every gemini follow-up on the google column failed after 145-212 s with `the turn failed: the turn
+ended error` and no reason of any kind. Eleven scenarios across five models, and never a FIRST
+turn. The cause is neither the provider nor the request shape:
+
+```
+AttributeError: 'PromptTokensDetailsWrapper' object has no attribute 'cache_creation_tokens'
+  openhands/sdk/llm/utils/telemetry.py:259, _cache_buckets
+```
+
+From litellm 1.95.0, `PromptTokensDetailsWrapper.__setattr__` mirrors an assignment between
+`cache_write_tokens` and `cache_creation_tokens`, which puts BOTH names into `model_fields_set`,
+and litellm then drops the unset attribute from `__dict__` as a construction-cost optimisation. The
+SDK's telemetry uses `"cache_creation_tokens" in details.model_fields_set` as its existence test.
+Each side is self-consistent; together they are not. Three lines reproduce it with no agent, no
+provider and no network:
+
+```
+>>> PromptTokensDetailsWrapper(cached_tokens=123).model_fields_set
+{'cache_creation_tokens', 'cached_tokens', 'cache_write_tokens'}
+>>> hasattr(_, 'cache_creation_tokens')
+False
+```
+
+`_cache_buckets` returns `(0, 0)` before reading anything when `prompt_tokens_details` is absent,
+so the defect needs a response that carries it — which is why this reads as "follow-ups fail and
+first turns do not". Vercel is immune for a reason worth recording: it reports
+`cache_creation_input_tokens` on every response, litellm therefore SETS `cache_creation_tokens`
+rather than leaving it None, the attribute genuinely exists, and the existence test agrees with it.
+Measured through litellm 1.101.0 on the real streaming path — vercel/mistral-medium-3.5 and
+vercel/gpt-5.4 both `hasattr=True`, both ok.
+
+**Not yet pinned: what makes Google report the field.** Four shapes asked of Google directly (a
+short prompt, a 4,008-token prefix sent twice, tools declared, and a follow-up carrying a tool
+result) all came back with no `prompt_tokens_details` at all, so none of them reproduces the crash
+from outside. The production turns that do crash go through the relay and carry the SDK's own large
+system prompt; the necessary condition is established and the sufficient one is not. This does not
+touch the fix, which was measured end to end.
+
+1.49.2 is the newest SDK, so there is nothing to upgrade to; the SDK asks only for
+`litellm>=1.93.0`, so the fix is to hold litellm below 1.95.0. The entrypoint pins 1.94.3 as a
+fourth pin in the same single pip invocation and then asserts the DEFECT IS ABSENT rather than
+asserting the version, so a future bump fails the image instead of failing every follow-up on a
+provider that reports prompt caching.
+
+**THE DEFECT IS INTERMITTENT, and that shapes what the evidence can carry.** Google populates
+`prompt_tokens_details` only sometimes; a turn that does not get it passes on the broken pin too.
+Captured from inside `_cache_buckets` on litellm 1.101.0, on a 7,410-token follow-up that passed:
+`Usage(prompt_tokens=7410, …, prompt_tokens_details=None)`. In one five-scenario run on the broken
+pin, follow-up, switch and artifact failed while recycle passed. So the single-model A/B below is
+supporting evidence rather than proof — the column is the measurement that carries the claim:
+**29 of 40 before the pin, 40 of 40 after**, same eight ids, same image otherwise.
+
+**The A/B.** Same command, same image, same model (gemini-3-flash-preview), litellm the only
+difference:
+
+| scenario | litellm 1.101.0 | litellm 1.94.3 |
+| --- | --- | --- |
+| first | ok 10.71 s | ok 10.69 s |
+| follow-up | **FAIL 145.01 s** | ok 10.70 s |
+| switch | ok 34.80 s | ok 10.71 s |
+| artifact | **FAIL 175.02 s** | ok 13.76 s |
+| recycle | **FAIL 147.59 s** | ok 10.69 s |
+
+**Why the record said nothing.** `event_service._run_and_publish` publishes an error event only
+for an exception that is NOT a `ConversationRunError`, on the assumption that `run()/arun()` already
+emitted its own — and an exception raised out of arun's error handling is exactly the case where
+nobody did. The status flips to error, the WebSocket carries nothing else, and tenacity retries
+five times with an 8→64 s backoff, which is the whole of the 145-212 s. The sentence existed only
+in the server's log. The driver now falls back to that log's tail when a turn fails with no reason
+on the wire, and sets `COLUMNS` so the log is wide enough for the sentence to survive in one piece.
+
+**mistral-medium-3.5 on Vercel was a different defect, and this settles it.** Its four failures
+share the shape and the duration band (144-208 s, never a first turn) of the litellm defect above,
+which is reason enough to doubt the first attribution — a re-run passing five of five cannot rule
+out a probabilistic cache-hit crash. It is ruled out by the probe instead: asked through litellm
+1.101.0 on the real streaming path, vercel/mistral-medium-3.5 answers `hasattr=True`, so that turn
+never reaches the missing attribute. The four failures were the assistant-content refusal Vercel
+named in its own bytes, as first recorded.
+
+## openhands, the review of PR #215 on hr-test (2026-09-19)
+
+Reviewed on a derived image of the PR branch merged with main (0.19.0 plus #214 and #216), tmux
+added to the image, every built-in skill installed as a fresh volume installs them. What the
+review changed, each with the measurement that made it a defect.
+
+**No served model and no usage on any turn.** The relay token lived only in the driver's argv;
+`_relay_served_model` and `_relay_usage` find the turn's route by the placeholder bearer in the
+turn's environment, so the record carried neither. The token now rides the environment as well.
+
+**A conversation died after every deploy.** The agent's persisted spec carried the relay's
+`base_url`, and the loopback relay binds a fresh port on every runner start: the first turn after
+a restart dialled the old port (`Cannot connect to host 127.0.0.1:39265`). The base url rides the
+environment like the key; measured across a swap, the follow-up answered from the history.
+
+**A model switch was ignored.** The agent is frozen at the conversation's creation, its LLM spec
+included, and the server offers no way to change it: a turn that asked for claude-sonnet-5 was
+served gpt-5.4, the record naming the first and the relay the second. The turn's model is written
+into the persisted state before the server loads the conversation, the same door the conversation
+id uses; measured gpt-5.4, then claude-sonnet-5, then gpt-5.4 again, each served as asked. The
+three muse switch failures in the first column (270-310 s of retries against a route that could
+not serve the persisted id) were this.
+
+**A disabled MCP tool was called.** The built-ins are withheld by omission from the spec; an MCP
+tool is loaded from the server at agent start and was called all the same (`probe_sse` disabled,
+its token in the answer). The SDK's own `filter_tools_regex` runs over every tool name after the
+MCP tools are added; the disabled names are excluded there and are part of the conversation's
+identity. Re-probed, the tool was not offered; the model then wrote its own SSE client in the
+shell and dialled the public probe, which is the shell reaching a URL, the same reach `curl` has
+on every base. The policy holds at the tool surface, as it does on kimi (Shell withheld, the
+boot id read with the file tool) and here (Edit withheld, the file written with printf).
+
+**A cancelled turn left its command running.** The terminal tool runs commands in tmux, whose
+server daemonises with setsid, so the runner's process-group kill left the tmux server and the
+agent's `sleep 240` alive and every turn's `/tmp/oh<port>` directory behind it (84 after an
+hour). Every process a turn starts now carries `HR_TURN_ID` in its environment and the runner
+sweeps what still carries it after the group kill, tmux directory included; the driver removes
+its own on the normal path. And the directory is the turn's own (mkdtemp), not the port's: ports
+are reused and turns run as different uids, and a directory left by an earlier turn answered
+`Permission denied` on the next.
+
+**litellm's own `max_tokens`.** For an id its registry knows as Anthropic's, the provider-native
+`claude-haiku-4-5-20251001` a custom Anthropic connection resolves to, litellm sends both
+`max_tokens` and `max_completion_tokens` (64,000 each) and Anthropic's OpenAI-compatible endpoint
+refuses the pair. Captured with a sink inside the venv and against the live endpoint; every
+other id carries the second field alone and every provider on the matrix takes it. The relay
+drops the first on this backend's route, the kimi precedent.
+
+**Retries in seconds.** The SDK's defaults (5 retries, 8 to 64 s waits) made a provider that
+answered the same 503 every time a 270-310 s turn before the reason was reported. Two retries a
+few seconds apart now, persisted with the agent.
+
+**The driver's own ceiling.** An 1800 s deadline of the driver's own sat below the harness's
+timeout (7200 s by default); it is the runner's global ceiling now, and a server that dies
+mid-turn is noticed by asking the process rather than waiting it out.
+
+**Cards.** The tool cards carried the SDK's registry names (`terminal`, `file_editor`,
+`task_tracker`) and the raw observation record as JSON; they carry the catalog's names (Shell,
+Edit, Todo), the action's arguments as the input and the observation's text as the output.
+
+**In the default set**, for the reason aider is; the icon is OpenHands' own (MIT).
+
+**The columns on the review image (`cand-a14761d`, hr-test, 2026-09-19).** Console scenario matrix,
+50 ids × first / follow-up / switch / artifact / recycle, connections as the console routes them
+(TokenRouter 38, Vercel 6, Anthropic 2, Custom OpenAI 2, Azure 1, OpenRouter 1):
+
+```
+first 50/50   follow-up 50/50   switch 49/50   artifact 49/50   recycle 49/50   = 247/250
+```
+
+The three: `gpt-5.4` on the switch to gpt-5.6-sol, TokenRouter's multi-account gpt-5 route
+refusing a replayed encrypted reasoning item (the sentence the gateway already has for it);
+`llama-3.3-70b` on the artifact after a switch, the server marking the conversation stuck once in
+two runs (by hand it wrote the file in 24 s); `qwen3.8-27b` on the recycle recall, the model. The
+first pass, on the branch as submitted plus the early fixes, was 237/246, and every miss between
+the two was one of the defects above: the persisted model on the three muse switches, litellm's
+`max_tokens` pair on claude-haiku through the Anthropic connection.
+
+Plugin matrix 4/4 twice; `custom-harness.mjs` 4 of 5 (the miss the same encrypted-reasoning
+refusal); conformance 75/75 alone against an openhands harness on gpt-5.4; fresh volume with
+fourteen backends: the OpenHands venv installs in about a minute beside aider's. Cancel: nothing
+of the turn survives the sweep. The agent doc reaches the model as context: asked, with no tool
+allowed, for a secret word in the harness's instructions and the installed skills, it answered
+both from the doc.
