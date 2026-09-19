@@ -103,6 +103,21 @@ def _norm(events):
     return [e for e in out if e.get("subtype") != "init"], state
 
 
+def test_an_error_the_turn_recovered_from_does_not_fail_it():
+    """gpt-5.4 wrote an edit aider refused ("not in the subpath"), was told, wrote it again and
+    aider applied it; the driver said ok and the normaliser said failed on the earlier error.
+    The driver's verdict is the verdict; the error text is the reason only when it says not ok."""
+    state: dict = {"_aider_init": True}
+    _aider_to_claude({"m": "error", "p": {"text": "The LLM did not conform to the edit format."}}, state)
+    _aider_to_claude({"m": "edits", "p": {"files": ["deck.md"]}}, state)
+    ev = _aider_to_claude({"m": "result", "p": {"ok": True, "final": "The deck outline is in deck.md."}}, state)[0]
+    assert ev["is_error"] is False and ev["result"] == "The deck outline is in deck.md."
+    state = {"_aider_init": True}
+    _aider_to_claude({"m": "error", "p": {"text": "litellm.AuthenticationError: bad key"}}, state)
+    ev = _aider_to_claude({"m": "result", "p": {"ok": False, "final": ""}}, state)[0]
+    assert ev["is_error"] is True and ev["result"] == "litellm.AuthenticationError: bad key"
+
+
 def test_a_failure_on_the_error_channel_is_not_rendered_as_the_answer():
     """The whole point of the driver. io.tool_error is reachable only by aider itself; the model's
     prose cannot reach it. The text becomes the turn's reason and never its result."""
@@ -261,6 +276,7 @@ def test_the_doc_tells_the_model_how_this_workspace_works_and_names_the_skills_b
     assert "## How this workspace works for you" in text
     assert "- `cat .harness/skills/plugin-probe/SKILL.md`" in text
     assert "```bash" in text and "Report only output you were actually given" in text
+    assert "never by an absolute path" in text
     # written fresh each turn on top of the doc the turn wrote: no growth across turns
     doc.write_text("# harness contract\n")
     _build_aider("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
@@ -275,6 +291,10 @@ def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards(
     text = ("I will create the file.\n\nhello.py\n```python\n<<<<<<< SEARCH\n=======\n"
             "print(\"aider\")\n>>>>>>> REPLACE\n```\n\nDONE-FILE")
     assert aider_driver.strip_edit_blocks(text) == "I will create the file.\n\n\nDONE-FILE"
+    # the file name inside the fence, the shape gpt-5.5 writes and aider's parser also takes
+    inside = ("Deck builder:\n```python\nbuild_sfo.py\n<<<<<<< SEARCH\n=======\nfrom pptx import "
+              "Presentation\n>>>>>>> REPLACE\n```\nRun it with `python3 build_sfo.py`.")
+    assert aider_driver.strip_edit_blocks(inside) == "Deck builder:\nRun it with `python3 build_sfo.py`."
     shell = "Run this:\n```bash\ncat SKILL.md\n```"
     assert aider_driver.strip_edit_blocks(shell) == "Run this:"  # the command renders as a card
     # a fence the model closed and kept writing on ("```An improved…") closes the block for aider
@@ -291,7 +311,49 @@ def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards(
     # the markup comes back through the other door (measured: the text event was clean and the
     # stored answer still carried the block)
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
-    assert '"final": strip_edit_blocks(coder.partial_response_content or "")' in src
+    assert 'final = strip_edit_blocks(coder.partial_response_content or "")' in src
+
+
+def test_a_turn_that_ended_on_a_command_says_so_rather_than_saying_nothing():
+    """A response that was commands and nothing else leaves no answer once the blocks are cards;
+    the record then read as an empty reply (hosted, 2026-09-19: seven officecli attempts, no text,
+    no file). The sentence states what happened; a turn with an answer, an edit-only turn (no
+    commands) and a failed turn keep their own text."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "if not final.strip() and not failed and (gate.calls or coder.aider_edited_files):" in src
+    assert "The task ended without a written answer after running commands." in src
+    assert "The task ended without a written answer after editing files." in src
+
+
+def test_a_reply_that_announces_work_and_does_none_is_nudged_once():
+    """gpt-5.5 on "build a 1 pager ppt about SFO" wrote "I'll create a one-page PowerPoint deck
+    about SFO and save it in the workspace." with zero commands and the turn ended; at a terminal
+    the person types "go ahead". The nudge is that, once, only for a reply that reads as an
+    announcement; a plain answer, a reply that acted, and a second announcement get none."""
+    a = aider_driver._announces_without_acting
+    assert a("I'll create a one-page PowerPoint deck about SFO and save it in the workspace.")
+    assert a("Sure, I will build the deck now.") and a("Let me start by reading the skill.")
+    assert a("Okay. I'm going to write the outline first.") and a("Here's the plan:\n1. read")
+    assert not a("M1-gpt-5.4") and not a("The file I'll need is hello.py, which exists.")
+    assert not a("Done. The deck is at SFO.pptx.") and not a("")
+
+    class Coder:
+        def __init__(self, replies):
+            self.replies = list(replies); self.reflected_message = None
+            self.partial_response_content = ""; self.aider_edited_files = set(); self.max_reflections = 5
+            self.io = types.SimpleNamespace(user_input=lambda p: None); self.sent = []
+        def init_before_message(self): pass
+        def send_message(self, m):
+            self.sent.append(m); self.partial_response_content = self.replies.pop(0); return iter(())
+    gate = aider_driver._Gate([])
+    c = Coder(["I'll create the deck and save it in the workspace.", "I'll do it right away."])
+    aider_driver._run_turn(c, "build a deck", gate)
+    assert c.sent == ["build a deck", aider_driver.NUDGE]          # nudged once, not twice
+    c = Coder(["M1-gpt-5.4"]); aider_driver._run_turn(c, "Reply with exactly: M1-gpt-5.4", gate)
+    assert c.sent == ["Reply with exactly: M1-gpt-5.4"]             # an answer is not nudged
+    c = Coder(["I'll create it.\n\nsfo.md\n```md\n<<<<<<< SEARCH\n=======\n# SFO\n>>>>>>> REPLACE\n```"])
+    c.aider_edited_files = {"sfo.md"}; aider_driver._run_turn(c, "make sfo.md", gate)
+    assert c.sent == ["make sfo.md"]                                 # it acted: no nudge
 
 
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():

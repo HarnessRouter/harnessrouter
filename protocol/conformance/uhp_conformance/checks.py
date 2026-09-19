@@ -37,7 +37,14 @@ def _harness(ctx) -> dict:
     if not items:
         raise Skip("this server has no configured harnesses, so no task can be run")
     if ctx.harness_id:
-        items = [h for h in items if h.get("id") == ctx.harness_id] or items
+        # Never a silent fallback: a named harness that is not there is the caller's mistake
+        # (a name given for an id, a typo), and two runs against different --harness-id values
+        # once produced byte-identical reports because both fell back to the first harness
+        # listed (#203). The CLI resolves the id before the first task; this is the guard for a
+        # harness that disappears mid-run.
+        items = [h for h in items if h.get("id") == ctx.harness_id]
+        if not items:
+            raise RuntimeError(f"no harness with id {ctx.harness_id!r} on this server")
     ctx.state["harness"] = items[0]
     return items[0]
 
