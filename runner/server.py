@@ -240,6 +240,26 @@ def _own_tree(root: str, uid: int, from_uids: set[int]) -> None:
                 continue
 
 
+def _aider_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """aider has no session id at all: its continuation is a chat-history FILE, and a missing one
+    resumes silently with no output difference whatsoever (measured on 0.86.2). So the question
+    "is the conversation there?" is "does the history hold at least one message?", asked with
+    aider's own parser rather than by eyeballing the markdown.
+
+    The driver relocates that file under .harness/ so it is neither a produced file nor a name the
+    user sees; the runner mints the session id, as it does for kimi."""
+    hist = pathlib.Path(cwd) / ".harness" / "aider" / "chat.history.md"
+    if not hist.is_file():
+        return False
+    try:
+        text = hist.read_text(errors="replace")
+    except OSError:
+        return False
+    # aider's own marker for a recorded exchange: split_chat_history_markdown keys on the "####"
+    # user-message heading. Matching it here is reading aider's format, not guessing at prose.
+    return any(line.startswith("####") for line in text.splitlines())
+
+
 def _argv_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     """The builder looked the session up and said so in argv: claude's --resume, opencode's
     --session and kimi's -r carry the id only when it was found in this workspace."""
@@ -271,6 +291,7 @@ _SESSION_PRESENT = {
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
+    "aider": _aider_session_present,
 }
 
 
@@ -437,6 +458,7 @@ DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
+AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -858,7 +880,11 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
     else:
-        # dsh has no skill loader; the AGENTS.md block below is the only door
+        # dsh has no skill loader; the AGENTS.md block below is the only door.
+        # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
+        # instruction-file discovery, so its turn builder passes every file under this directory to
+        # --read explicitly. Under .harness/ the bundle is excluded from produced files, so a skill
+        # is never handed back to the user as a deliverable of their own task.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
     # cline lands in the else on purpose, with the evidence written down so nobody "fixes" it:
@@ -1185,8 +1211,10 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # 1.50.0 package), merging from the project root down to the work dir, and injects the
         # content VERBATIM into the system prompt: verified live, inside a
         # "<!-- From: .../AGENTS.md -->" fence, with a behavioural instruction in it obeyed.
+        # aider has no instruction-file convention of its own (no AGENTS.md discovery, no
+        # CLAUDE.md): the file is written here and the driver puts it into aider's system message.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi")
+                                   "goose", "kimi", "aider")
         else "CLAUDE.md")
 
 
@@ -3141,6 +3169,77 @@ def _served_model_in(data: bytes) -> str:
 _FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
 
 
+def _usage_fields(u) -> dict:
+    """One provider usage object, in the runner's contract: {input_tokens (FRESH input only),
+    output_tokens, cache_read_tokens, cache_write_tokens}, only the fields the object carries.
+
+    Three shapes pass the relay. OpenAI chat: prompt_tokens is GROSS (cache hits included) with the
+    cached part under prompt_tokens_details.cached_tokens, so it is netted here the way
+    _norm_token_usage nets codex's. Anthropic messages: input_tokens is already net, the cache
+    counters are their own fields. Gemini's usageMetadata: promptTokenCount is gross with
+    cachedContentTokenCount the cached part."""
+    if not isinstance(u, dict):
+        return {}
+
+    def n(v) -> int:
+        try:
+            return max(int(v or 0), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    if "prompt_tokens" in u or "completion_tokens" in u:
+        det = u.get("prompt_tokens_details")
+        cached = n(det.get("cached_tokens")) if isinstance(det, dict) else 0
+        return {"input_tokens": max(n(u.get("prompt_tokens")) - cached, 0),
+                "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached}
+    if "input_tokens" in u or "output_tokens" in u:
+        out = {}
+        for src, dst in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
+                         ("cache_read_input_tokens", "cache_read_tokens"),
+                         ("cache_creation_input_tokens", "cache_write_tokens")):
+            if u.get(src) is not None:
+                out[dst] = n(u[src])
+        return out
+    if "promptTokenCount" in u or "candidatesTokenCount" in u:
+        cached = n(u.get("cachedContentTokenCount"))
+        return {"input_tokens": max(n(u.get("promptTokenCount")) - cached, 0),
+                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached}
+    return {}
+
+
+def _usage_in_doc(doc) -> dict:
+    """The usage a response document or stream event carries, if any. Anthropic's stream puts the
+    input side on message_start (under message.usage) and the output side on message_delta, so a
+    call's usage is the union of what its events said, later values replacing earlier ones."""
+    if not isinstance(doc, dict):
+        return {}
+    for u in (doc.get("usage"), doc.get("usageMetadata"),
+              (doc.get("message") or {}).get("usage") if isinstance(doc.get("message"), dict) else None):
+        got = _usage_fields(u)
+        if got:
+            return got
+    return {}
+
+
+def _usage_in_sse_line(line: bytes) -> dict:
+    """One SSE line as it passes the relay → the usage it carries, {} for anything else."""
+    if not line.startswith(b"data:") or b"sage" not in line:
+        return {}
+    try:
+        return _usage_in_doc(json.loads(line[5:].strip()))
+    except ValueError:
+        return {}
+
+
+def _usage_add(flags: dict, call_usage: dict) -> None:
+    """Fold one call's usage into the route's running total: a turn is many provider calls."""
+    if not call_usage:
+        return
+    total = flags.setdefault("usage", {})
+    for k, v in call_usage.items():
+        total[k] = int(total.get(k, 0)) + int(v)
+
+
 def _model_metadata_with_context_length(data: bytes) -> bytes:
     """A model listing (GET /models or /models/<id>) with the window also under `context_length`.
 
@@ -3199,6 +3298,24 @@ def _relay_served_model(env: dict) -> str:
             if route:
                 return str((route[2] or {}).get("served_model") or "")
     return ""
+
+
+def _relay_usage(env: dict) -> dict:
+    """The tokens the provider reported on this turn's route, summed over its calls; {} when the
+    turn did not ride the relay or nothing carried usage. Found by the placeholder bearer, exactly
+    as _relay_served_model finds the served model, and subject to the same one-route invariant.
+
+    This is the usage of every backend whose own stream reports none (kimi, aider): the provider's
+    statement of what it counted, read off the bytes as they pass, rather than a number the CLI
+    estimated or nothing at all. A backend that reports its own usage keeps it; this only fills a
+    result event that arrived empty."""
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            if route:
+                u = (route[2] or {}).get("usage")
+                return dict(u) if isinstance(u, dict) and u else {}
+    return {}
 
 
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
@@ -3355,6 +3472,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             pending = b""
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
+            call_usage: dict = {}   # what this call's events said about tokens, unioned
             while True:
                 chunk = resp.read(4096)
                 if not chunk:
@@ -3373,14 +3491,20 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 if fr:
                     flags["last_finish"] = fr
                 fcarry = chunk[-64:]
-                if sigs is not None:
-                    pending += chunk
-                    while b"\n" in pending:
-                        line, pending = pending.split(b"\n", 1)
-                        for cid, sig in _google_signatures_in_line(line.strip()):
+                # usage (and Google's tool-call signatures) live on whole SSE lines, so the
+                # stream is line-buffered as it passes; the bytes still go through untouched
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    line = line.strip()
+                    call_usage.update(_usage_in_sse_line(line))
+                    if sigs is not None:
+                        for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
                 self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                 self.wfile.flush()
+            call_usage.update(_usage_in_sse_line(pending.strip()))
+            _usage_add(flags, call_usage)
             self.wfile.write(b"0\r\n\r\n")
         else:
             data = resp.read()
@@ -3391,6 +3515,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fr = _finish_reason_in(data[-65536:])
             if fr:
                 flags["last_finish"] = fr
+            if body is not None and b"sage" in data:
+                try:
+                    _usage_add(flags, _usage_in_doc(json.loads(data)))
+                except ValueError:
+                    pass
             if body is None and "/models" in tail.split("?", 1)[0]:
                 data = _model_metadata_with_context_length(data)
             if sigs is not None and b"thought_signature" in data:
@@ -3939,6 +4068,178 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     if skills_dir:
         cmd += ["--skills-dir", skills_dir]
     return cmd
+
+
+AIDER_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+AIDER_PYTHON = os.environ.get("HR_AIDER_PYTHON", "/data/agent-tools/aider-venv/bin/python")
+AIDER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aider_driver.py")
+# aider's MCP client, runner/aider_mcp_bridge.py, run by the aider venv's own interpreter. aider
+# ships none of its own — zero source hits across the whole 0.86.2 tree — so rather than record the
+# capability as missing, the harness brings one and lets the model reach it through the ONE tool
+# surface aider has: a shell command it proposes. The maintainer's 2026-09-13 decision: bridge the
+# capability, then measure the claim for real.
+AIDER_MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aider_mcp_bridge.py")
+
+
+def _aider_mcp_servers(mcp_servers: list[dict] | None) -> dict:
+    """The declared servers, keyed by the NAME the model will use. Named rather than URL'd so the
+    model cannot invent an endpoint: it says `hr-mcp call <name> …` and the mapping is ours.
+
+    THE DECLARED TRANSPORT TRAVELS, for the reason _kimi_mcp_config states: the harness's
+    declaration decides, never the url's spelling. It matters more here, because the bridge's SDK
+    does not guess at all — `Client(<str>)` is hard-wired to streamable HTTP (client.py:393-394) —
+    so an SSE server reached this backend as the wrong protocol and could not answer."""
+    out: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"url": url}
+            if str(sv.get("transport") or "").lower() == "sse":
+                entry["transport"] = "sse"
+            hdrs = sv.get("headers")
+            if isinstance(hdrs, dict) and hdrs:
+                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": argv[0],
+                     "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        out[name] = entry
+    return out
+
+
+def _aider_working_notes(cwd: str, servers: dict | None = None) -> str:
+    """How THIS workspace works, in the terms aider's own prompt uses.
+
+    aider's system prompt tells the model that the USER adds files to the chat and that the
+    user may run the shell commands it suggests. Here nobody sits at that keyboard: the driver
+    answers every confirmation, adds a file the model names, runs a command it proposes and hands
+    the output back in the same turn. Unless the model is told so it behaves as aider's prompt
+    says, measured 2026-09-18 on hr-test: asked to use a skill it guessed the token instead of
+    reading SKILL.md, asked to call an MCP tool it wrote "I'm constrained here to only return
+    SEARCH/REPLACE blocks", asked for a streamable-HTTP tool it invented the result. Reading goes
+    through the shell on purpose: aider's own file-mention route adds only files git already
+    tracks, and on a session's first turn the skill files are not committed yet (measured: the
+    model named the path exactly and the turn ended there). `cat` works on every turn. The paths
+    are workspace-relative; the skills block above keeps its absolute folders for composing
+    commands."""
+    skills = sorted(p.relative_to(cwd).as_posix()
+                    for p in (pathlib.Path(cwd) / ".harness" / "skills").glob("*/SKILL.md"))
+    lines = ["\n## How this workspace works for you\n",
+             "You cannot open files or run anything yourself; the harness does both for you "
+             "between messages, without asking anyone.\n",
+             "- To run a command, put it in a ```bash fenced block and end your reply. It is "
+             "executed and its output is given back to you in the next message; then continue.",
+             "- To read a file that is not in the chat, run `cat <path>` that way."]
+    if skills:
+        lines.append("  Read a skill before using it:")
+        lines += [f"  - `cat {rel}`" for rel in skills]
+    lines += ["- A skill's scripts run the same way (cd into the skill's folder first)"
+              + (", and so do MCP tool calls (`hr-mcp`, below)." if servers else "."),
+              "- Each line of a bash block runs as its own command. A program that needs more "
+              "than one line goes into a file first (a SEARCH/REPLACE block creates it), then "
+              "one line runs it.",
+              "- Binary files (documents, decks, spreadsheets, images, PDFs) cannot be added to "
+              "the chat or edited with SEARCH/REPLACE; inspect and change them with commands.",
+              "- Report only output you were actually given. Never write the result you expect "
+              "a command or a tool to produce; if you have not run it yet, run it first.\n"]
+    return "\n".join(lines)
+
+
+def _aider_mcp_block(servers: dict) -> str:
+    """The bridge, in the context aider reads, in the exact form the driver's gate recognises.
+
+    Listing the servers is all the runner can do from here: their tool NAMES are only knowable by
+    asking the server, which needs a live connection at turn time. So `hr-mcp tools <server>` is
+    part of the instruction — the model discovers the tools the way a person would — and
+    `hr-mcp call` is what the gate matches, so a call made this way is recorded under the MCP
+    tool's own name and the support matrix measures `mcp_called` from a command that actually ran
+    rather than from a capability we claimed."""
+    if not servers:
+        return ""
+    rows = []
+    for name, entry in servers.items():
+        if entry.get("url"):
+            rows.append(f"- `{name}` — streamable HTTP")
+        else:
+            rows.append(f"- `{name}` — stdio")
+    return ("\n## MCP servers\n\n"
+            "These MCP servers are available to you through the `hr-mcp` command. They are real "
+            "tools: use them when the task calls for one.\n\n"
+            + "\n".join(rows) + "\n\n"
+            "List a server's tools with `hr-mcp tools <server>`, and call one with\n\n"
+            "```bash\n"
+            "hr-mcp call <server> <tool> --params '{\"key\": \"value\"}'\n"
+            "```\n\n"
+            "Propose the command in a ```bash block as you would any other shell command.\n")
+
+
+def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 mcp_servers: list[dict] | None = None, tools_disabled: list[str] | None = None,
+                 skills_read: list[str] | None = None, max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in AIDER_PROVIDERS:
+        raise HTTPException(400, f"unknown aider provider '{pr}' (one of {sorted(AIDER_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "aider needs a base_url (none configured)")
+    if auth.api_key:
+        # Every aider turn rides the loopback relay, the qwen rationale unchanged. It matters twice
+        # over here: aider takes its credential only from the environment, and aider reports no
+        # served model of its own, so _relay_served_model is what makes matrix rule 2 enforceable.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env["OPENAI_API_BASE"] = auth.base_url
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    env["HOME"] = str(pathlib.Path(cwd) / ".harness" / "home")
+    pathlib.Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
+    # The MCP bridge, and the only reason aider can reach an MCP server at all. The shim is written
+    # per turn rather than installed once because it has to name the aider venv's interpreter and
+    # the bridge beside this file, both of which are known here and nowhere else.
+    servers = _aider_mcp_servers(mcp_servers)
+    bindir = pathlib.Path(cwd) / ".harness" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    cfg = pathlib.Path(cwd) / ".harness" / "aider-mcp.json"
+    # The disabled names ride with the servers: the bridge refuses a disabled tool itself, where
+    # the call executes, so the policy holds whatever shell the model wraps the call in.
+    cfg.write_text(json.dumps({"mcpServers": servers,
+                               "disabledTools": [str(t) for t in (tools_disabled or [])]}, indent=2))
+    shim = bindir / "hr-mcp"
+    shim.write_text("#!/bin/sh\nexec %s %s --config %s \"$@\"\n"
+                    % (shlex.quote(AIDER_PYTHON), shlex.quote(AIDER_MCP_BRIDGE), shlex.quote(str(cfg))))
+    shim.chmod(0o755)
+    env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", os.environ.get("PATH", ""))
+    # The notes and the MCP block are APPENDED to the agent doc the turn already wrote, which
+    # the driver puts into the system message. Without the block the bridge exists and the model is never told
+    # it does — the defect this call site is here to prevent, caught because the block was
+    # generated and never used.
+    doc = _agent_doc_path(cwd, "aider")
+    try:
+        doc.write_text((doc.read_text() if doc.exists() else "")
+                       + _aider_working_notes(cwd, servers) + _aider_mcp_block(servers))
+    except OSError:
+        pass
+    # aider resolves a BARE id against its own MODEL_ALIASES table, which rewrites 21 of them —
+    # `gemini-2.5-pro` among them, an id this product's catalog also serves. An `openai/` prefix
+    # routes through litellm's openai provider verbatim and skips that table entirely, so the id the
+    # picker offered is the id the provider is asked for.
+    job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
+           "tools_disabled": list(tools_disabled or []),
+           # the agent doc, which the driver puts into aider's system message
+           "system_files": list(skills_read or []),
+           # aider takes the budget as Coder.max_reflections, set in the driver: it has no CLI flag
+           # for it, and only an in-process driver holds the object.
+           "max_turns": max_turns}
+    return [AIDER_PYTHON, AIDER_DRIVER, json.dumps(job)]
+
+
 
 
 # Path A only (Gemini API Key / Google AI Studio). Unlike qwen, upstream gemini-cli speaks NO
@@ -5168,6 +5469,128 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
+# aider has NO conversation id of ANY kind — its continuation is the chat-history FILE — so the
+# runner announces a synthetic one. Without it the gateway never records a conversation id, never
+# treats a later turn as a follow-up, and every turn is a fresh thread: measured as the support
+# matrix's recycle scenario failing on every aider row while first/follow-up/switch passed, because
+# those three never ask the agent to remember anything.
+_AIDER_SESSION_NAME = "harness"
+# aider's in-chat command advice in a failure message: the line, and the heading it sits under
+# when nothing else is left of that list.
+_AIDER_CHAT_ADVICE = re.compile(r"^[ \t]*-?[ \t]*Use /\w+[^\n]*\n?", re.M)
+
+
+# ── aider ────────────────────────────────────────────────────────────────────────
+# The turn process is runner/aider_driver.py inside the pinned aider venv: aider is driven IN
+# PROCESS through its own `main(..., return_coder=True)` entry point, and the driver re-emits what
+# it observes as NDJSON — the dsh_driver shape ({"m": method, "p": payload}).
+#
+# THIS IS NOT A STYLE CHOICE. aider has no machine-readable output mode, and its stdout is one
+# channel carrying the model's prose and aider's own diagnostics together. Measured on 0.86.2: a
+# stub returning model prose whose second line began `litellm.AuthenticationError:` was
+# BYTE-IDENTICAL on stdout to a real 401 on the same stream, same exit code 0, no colour under
+# --no-pretty. A text-parsing normaliser would therefore report real answers as provider failures,
+# which is worse than reporting nothing. In process the channels are separate at the source:
+# io.tool_error carries failures, io.assistant_output carries prose, and `coder.usage_report` is
+# None exactly when no completion came back.
+def _aider_to_claude(obj: dict, state: dict) -> list[dict]:
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if not state.get("_aider_init"):
+        # _run_turn_bg records the conversation id ONLY from a system/init event, and that recorded
+        # id is what makes the next turn a follow-up rather than a new thread.
+        state["_aider_init"] = True
+        return ([{"type": "system", "subtype": "init", "session_id": _AIDER_SESSION_NAME,
+                  "model": state.get("model")}]
+                + _aider_event(obj, state, m, p))
+    return _aider_event(obj, state, m, p)
+
+
+def _aider_event(obj: dict, state: dict, m, p) -> list[dict]:
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if not txt.strip():
+            return []
+        state["final"] = txt
+        # One event per response, a whole response each, and the console joins consecutive
+        # text blocks as they come: without the blank line a closing fence ran into the next
+        # response's first sentence and the rest of the turn rendered inside a code block
+        # (2026-09-19). A paragraph break keeps each response its own markdown.
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt.rstrip() + "\n\n"}]}}]
+    if m == "error":
+        # Reached io.tool_error, which the model's prose cannot reach. Recorded, NOT rendered: it is
+        # the turn's failure reason, not part of its answer. aider's advice about its own in-chat
+        # commands (`- Use /drop …`, `- Use /clear …`, base_coder.py show_exhausted_error) is cut,
+        # the same rule kimi's "To resume this session:" line earned: this product has no such
+        # commands, and a reason that names them sends the user looking for a prompt that is not
+        # there.
+        state["_aider_error"] = _AIDER_CHAT_ADVICE.sub("", str(p.get("text") or "")).strip()
+        return []
+    if m == "warning":
+        state.setdefault("_aider_warnings", []).append(str(p.get("text") or ""))
+        return []
+    if m == "shell_decision":
+        # A command the model proposed. An approved one renders as a call whose result arrives on
+        # the following shell_result; a REFUSED one is a complete pair here and now, because the
+        # policy is the whole of its result and nothing ran.
+        tuid = f"sh{len(state.setdefault('_aider_calls', []))}"
+        state["_aider_calls"].append(tuid)
+        call = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": str(p.get("tool") or "Shell"),
+             "input": {"command": str(p.get("command") or "")}}]}}
+        if p.get("approved"):
+            state["_aider_last_call"] = tuid
+            return [call]
+        return [call, {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid, "is_error": True,
+             "content": str(p.get("reason") or "refused by the harness tool policy")}]}}]
+    if m == "shell_result":
+        tuid = state.get("_aider_last_call") or "sh0"
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid, "is_error": False,
+             "content": str(p.get("output") or "")}]}}]
+    if m == "edits":
+        # Files aider's edit engine wrote this pass, one card each, the way every other base's
+        # file edits render. The SEARCH/REPLACE markup that produced them is aider's wire format,
+        # not the answer, and the driver strips it from the text.
+        out: list[dict] = []
+        for f in p.get("files") or []:
+            tuid = f"ed{len(state.setdefault('_aider_calls', []))}"
+            state["_aider_calls"].append(tuid)
+            out.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tuid, "name": "Edit", "input": {"file_path": str(f)}}]}})
+            out.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tuid, "is_error": False, "content": "edited"}]}})
+        return out
+    if m == "result":
+        err = state.get("_aider_error") or ""
+        ok = bool(p.get("ok")) and not err
+        final = str(p.get("final") or state.get("final") or "")
+        if ok:
+            state["final"] = final
+        # usage is {} deliberately: per the 2026-09-13 decision no harness PR builds its own usage
+        # pipeline. aider's own numbers would be the wrong ones anyway — with streaming it fills the
+        # real field names with a tiktoken ESTIMATE (587 against a true 595, measured), and it reads
+        # cache under names an OpenAI-shaped response never carries. _relay_usage stamps these rows.
+        return [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                 "result": final if ok else (err or p.get("reason") or ""), "usage": {}}]
+    return []
+
+
+def _aider_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result event, so this fires only when the process died before
+    reaching it — a crash, a kill, an import failure. The reason then comes from io.tool_error if
+    anything got that far, and otherwise from the errbuf tail _failure_reason prefers."""
+    err = state.get("_aider_error") or ""
+    if rc == 0 and not err:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": err, "usage": {}}]
+
+
+_aider_to_claude.eof = _aider_eof   # type: ignore[attr-defined]
+
+
 # ── kimi ─────────────────────────────────────────────────────────────────────────
 
 
@@ -5335,6 +5758,8 @@ BACKENDS = {
     # normaliser and an eof rather than the passthrough qwen's claude-shaped stream can use.
     "kimi": {"providers": sorted(KIMI_PROVIDERS), "default_model": KIMI_DEFAULT_MODEL,
              "normalize": _kimi_to_claude},
+    "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
+              "normalize": _aider_to_claude},
 }
 
 
@@ -5455,6 +5880,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     served = _relay_served_model(env)
                     if served:
                         ev["model"] = served
+                if ev.get("type") == "result" and not ev.get("usage"):
+                    # Same for the tokens: the CLI reported none, the relay counted the provider's.
+                    ev["usage"] = _relay_usage(env)
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -5482,6 +5910,8 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 served = _relay_served_model(env)
                 if served:
                     ev["model"] = served
+            if ev.get("type") == "result" and not ev.get("usage"):
+                ev["usage"] = _relay_usage(env)
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
@@ -6540,6 +6970,27 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
                           max_turns=req.max_turns)
+    elif backend == "aider":
+        model = model or AIDER_DEFAULT_MODEL
+        # aider has no skill loader and no instruction-file convention: the driver puts the agent
+        # doc into aider's system message (the Model's system_prompt_prefix, aider's own hook). The
+        # agent doc alone goes through it. Its
+        # skills block names each installed skill with its description and folder, and the model
+        # reaches a skill's files ON DEMAND through the one tool surface it has, a shell command
+        # (`cat <folder>/SKILL.md`), whose output the driver feeds back in the same turn, or by
+        # naming a tracked file, which aider adds to the chat itself. That is the door every base
+        # without a loader uses (dsh reads them with its file tools). The PR read EVERY file of every
+        # bundle on every turn: measured on hr-test 2026-09-18, the three built-in bundles are 27
+        # files and 264 KB, licences and a PNG among them, and "Reply with exactly: …" cost 45,030
+        # input tokens. A skill's content is loaded when a task calls for it, never as a tax on
+        # every turn.
+        aider_read: list[str] = []
+        doc = _agent_doc_path(cwd, backend)
+        if doc.exists():
+            aider_read.append(str(doc))
+        cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
+                           mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
+                           skills_read=aider_read, max_turns=req.max_turns)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
