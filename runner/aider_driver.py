@@ -123,6 +123,10 @@ def _emit(method: str, payload) -> None:
     sys.stdout.flush()
 
 
+# aider's two confirmations that name a file the model wants in the chat or wants to edit.
+_FILE_PROMPTS = ("Add file to the chat?", "Allow edits to file that has not been added to the chat?")
+
+
 class _Gate:
     """The policy gate on every shell command the model proposes.
 
@@ -232,11 +236,15 @@ def _install(coder, gate: _Gate) -> None:
             _emit("shell_decision", {"command": command, "tool": name,
                                      "approved": approved, "reason": reason})
             return approved
-        # A file the model named, which aider offers to add to the chat (base_coder.py:1773).
-        # Binary files are refused: aider reads a chat file as UTF-8 text, and a .pptx or an
-        # image fails that read every time it is mentioned. The model works on such files with
-        # commands, as the doc says.
-        if question == "Add file to the chat?" and subject:
+        # A file the model named, which aider offers to add to the chat (base_coder.py:1773), or
+        # wrote an edit block for without it being in the chat (allowed_to_edit). Binary files
+        # are refused at both: aider reads a chat file as UTF-8 text, and a .pptx or an image
+        # fails that read every time it is mentioned; an edit block aimed at one reads it the
+        # same way and then dies on its own None content (`'NoneType' object has no attribute
+        # 'splitlines'`, hr-test 2026-09-19: gpt-5.5 had built the deck with officecli and put
+        # its closing answer inside a SEARCH/REPLACE block for the .pptx). The model works on
+        # such files with commands, as the doc says, and the reflection below tells it so.
+        if question in _FILE_PROMPTS and subject:
             path = str(subject) if os.path.isabs(str(subject)) else os.path.join(coder.root, str(subject))
             if not is_text_file(path):
                 _emit("warning", {"text": f"{subject} is not a text file and stays out of the chat"})
