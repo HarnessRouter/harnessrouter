@@ -1247,6 +1247,8 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     workspace PARENT, the user saw an empty turn, and three turns went to copying files into view.
     An instruction is the right mechanism here: writes cannot be walled in a sandbox whose point is
     real bash, and widening collection would ship every scratch file as a deliverable."""
+    if backend == "systemone":
+        return                  # reads no workspace; its instructions travel in the job (see _build_systemone)
     p = _agent_doc_path(cwd, backend)
     base = (agent_doc or "").strip()
     lines = [_AGENTS_BEGIN, "## Workspace", "",
@@ -1581,6 +1583,12 @@ def _status_from_result(result_ev: dict | None, exit_code: int) -> str:
             return "done"
         if sub == "error_max_turns":
             return "max_turns"
+        if sub == "incomplete" and not result_ev.get("is_error"):
+            # The loop stopped for a reason of its own that is neither a failure nor a budget: the
+            # model asked for help, or would not clear the confidence a destructive action needs
+            # (systemone). The reason rides the result event and the poll body, and the gateway
+            # reports it as the task's incomplete_details.
+            return "incomplete"
         return "failed"
     return "done" if exit_code == 0 else "failed"
 
@@ -5671,6 +5679,73 @@ OPENHANDS_PYTHON = os.environ.get("HR_OPENHANDS_PYTHON",
                                   "/data/agent-tools/openhands-venv/bin/python")
 OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openhands_driver.py")
 
+# ── systemone: the System One Harness (github.com/HarnessRouter/SystemOneHarness, Apache-2.0) ──
+# A loop over a decision model rather than a coding CLI: TypeSafe's Jev answers typed questions with
+# probabilities and writes no text, so the harness compiles the environment's actions into one
+# request per step and gates the answer by the action's risk. The turn process is
+# runner/systemone_driver.py; the model id reaches the provider verbatim (`typesafe/jev-1.13`).
+SYSTEMONE_DEFAULT_MODEL = os.environ.get("SYSTEMONE_DEFAULT_MODEL", "typesafe/jev-1.13")
+SYSTEMONE_PROVIDERS = {"openrouter", "typesafe"}
+SYSTEMONE_PYTHON = os.environ.get("HR_SYSTEMONE_PYTHON",
+                                  "/data/agent-tools/systemone-venv/bin/python")
+SYSTEMONE_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "systemone_driver.py")
+
+
+def _systemone_relay_route(provider: str, base_url: str, api_key: str) -> tuple[str, str]:
+    """Register one systemone turn's upstream; -> (relay base for the driver, placeholder bearer).
+
+    OpenRouter serves decisions at /api/alpha/decisions and NOWHERE under /api/v1 (404 on the
+    versioned path, measured 2026-09-19), so the route's base is the connection's API root with its
+    version segment removed: the driver posts to <relay>/v1/alpha/decisions, the relay drops the
+    /v1 it joins on and reaches https://openrouter.ai/api/alpha/decisions. TypeSafe's own endpoint
+    is /v1/systemone, under the version, so that base keeps it. The relay reads the served model
+    and the usage off the answer as it does for every backend: Jev's body names `model` and
+    carries `usage.input_tokens` / `output_tokens`, both shapes the relay already parses."""
+    base = (base_url or "").rstrip("/")
+    if provider == "openrouter":
+        base = re.sub(r"/v\d+[a-z]*$", "", base)
+    else:
+        base = _relay_base_with_version(base)
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = (base, api_key, {})
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
+def _build_systemone(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                     tools_disabled: list[str] | None = None, max_turns: int | None = None,
+                     timeout_seconds: int | None = None, agent_doc: str = "") -> list[str]:
+    """The System One Harness, one turn: the job rides argv as JSON, the driver emits claude-shaped
+    stream-json. The harness's MCP servers ARE the environment (the first one; the driver says so
+    in the trace when there are more); with none, the built-in order desk. `tools_disabled` are
+    actions withheld by omission from what the model is offered, the hardest enforcement there is.
+    `agent_doc` is the harness's instructions and travels in the job, not as a file: this backend
+    reads no workspace. The key rides the relay, like every backend; the driver holds a placeholder,
+    and it is in the environment as well as the job so the served-model and usage taps find the
+    route."""
+    pr = provider or "openrouter"
+    if pr not in SYSTEMONE_PROVIDERS:
+        raise HTTPException(400, f"unknown systemone provider '{pr}' (one of {sorted(SYSTEMONE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "systemone needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _systemone_relay_route(pr, auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env["SYSTEMONE_API_KEY"] = auth.api_key or ""
+    job = {"cwd": cwd, "model": model, "prompt": prompt, "provider": pr,
+           "base_url": auth.base_url, "api_key": auth.api_key,
+           "resume_session_id": resume_session_id,
+           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")],
+           "tools_disabled": list(tools_disabled or []),
+           "max_turns": max_turns, "timeout_seconds": timeout_seconds,
+           "agent_doc": agent_doc or ""}
+    return [SYSTEMONE_PYTHON, SYSTEMONE_DRIVER, json.dumps(job)]
+
 
 def _openhands_mcp_config(mcp_servers: list[dict] | None) -> dict:
     """The declared servers as the SDK's `Agent.mcp_config`: {name: MCPServer}.
@@ -6018,6 +6093,12 @@ BACKENDS = {
     "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
                   "default_model": OPENHANDS_DEFAULT_MODEL,
                   "normalize": _openhands_to_claude},
+    # The System One driver emits claude's stream-json itself (system/init, assistant tool_use and
+    # thinking blocks, user tool_result, result with usage and a `reason`), so its normaliser is the
+    # passthrough, as qwen's is.
+    "systemone": {"providers": sorted(SYSTEMONE_PROVIDERS),
+                  "default_model": SYSTEMONE_DEFAULT_MODEL,
+                  "normalize": _claude_passthrough},
 }
 
 
@@ -6237,6 +6318,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     rec["status"] = ("cancelled" if rec.get("cancelled")
                      else "timeout" if rec.get("capped")
                      else _status_from_result(result_ev, rc))
+    rec["reason"] = str((result_ev or {}).get("reason") or "")
     # Never leave a failure opaque: surface the captured CLI stderr (and result-event error) so the
     # gateway/trace shows WHY it failed (throttling, model error, etc.) instead of an empty string.
     if rec["status"] in ("failed", "error", "timeout"):
@@ -7304,6 +7386,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                resume_session_id=req.resume_session_id,
                                mcp_servers=req.mcp_servers,
                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "systemone":
+        model = model or SYSTEMONE_DEFAULT_MODEL
+        cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                               timeout_seconds=req.timeout_seconds, agent_doc=agent_doc)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
@@ -7444,5 +7532,5 @@ def get_turn(turn_id: str, since: int = 0) -> dict:
     return {"turn_id": turn_id, "status": rec["status"], "done": rec["done"],
             "result": rec.get("result", ""), "exit_code": rec.get("exit_code"),
             "error": rec.get("error"), "backend": rec["backend"], "model": rec["model"],
-            "session_id": rec.get("session_id"),
+            "session_id": rec.get("session_id"), "reason": rec.get("reason") or "",
             "events": evs, "n_total": n, "elapsed": round(time.time() - rec["started"], 1)}

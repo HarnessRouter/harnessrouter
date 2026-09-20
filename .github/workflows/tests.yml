@@ -55,7 +55,9 @@ jobs:
           cache-dependency-path: runner/requirements.txt
       # httpx: the runner suite drives the app through FastAPI's TestClient, which needs it. The
       # runner itself does not, so it stays out of requirements.txt and lives with pytest here.
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx
+      # The System One Harness is on the runner's venv in the image (docker/entrypoint.sh pins the tag);
+      # the driver's tests import it, and skip without it, so the suite installs the same pin.
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.3.1"
       - run: python -m pytest runner/tests -q
 
   conformance:
