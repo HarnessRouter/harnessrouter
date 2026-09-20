@@ -14820,7 +14820,11 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        skills=[] if kit_plugin else _kit_skills(kit),
                        plugins=[kit_plugin] if kit_plugin else [],
                        mcp_servers=spec.get("mcp_servers") or [],
-                       disabled_tools=spec.get("disabled_tools") or [])
+                       disabled_tools=spec.get("disabled_tools") or [],
+                       # A kit knows how long its turns run: a game played several decisions a
+                       # second needs more steps than a document does. Absent, the base's default.
+                       max_step=spec.get("max_step"),
+                       timeout_seconds=spec.get("timeout_seconds"))
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
