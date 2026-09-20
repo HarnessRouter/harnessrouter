@@ -354,6 +354,18 @@ SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.2.1}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v
 # ships no browser and a session process cannot read root's cache.
 SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[browser] @ git+https://github.com/HarnessRouter/SystemOneHarness@v${SYSTEMONE_PIN}}"
 export PLAYWRIGHT_BROWSERS_PATH="$TOOLS/ms-playwright"
+# The libraries that Chromium links against live in the container, not on the volume the browser
+# is on, so a container recreated over a volume that already holds the browser has the binary and
+# none of its libraries (measured: libatk, libatspi, libXcomposite "not found", and every launch
+# died before CDP came up). They are installed per container, keyed on a marker in the container's
+# own filesystem: on the first install, and on every start that finds the venv already there.
+CHROMIUM_LIBS_MARK=/var/lib/harnessrouter/chromium-libs
+chromium_libs() {
+  [ -f "$CHROMIUM_LIBS_MARK" ] && return 0
+  echo "[harnessrouter]   installing the system libraries Chromium links against (this container)…"
+  "$TOOLS/systemone-venv/bin/playwright" install-deps chromium >/dev/null 2>&1 || return 1
+  mkdir -p "$(dirname "$CHROMIUM_LIBS_MARK")" && : > "$CHROMIUM_LIBS_MARK"
+}
 install_systemone() {
   # A failed install leaves NO venv behind: the executable is the definition of installed, and a
   # venv whose pip step failed reported the base as available on a box where it could not run.
@@ -362,10 +374,11 @@ install_systemone() {
     || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   if ! ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
     echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
-    "$TOOLS/systemone-venv/bin/playwright" install --with-deps chromium \
+    "$TOOLS/systemone-venv/bin/playwright" install chromium \
       || { rm -rf "$TOOLS/systemone-venv"; return 1; }
     chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true
   fi
+  chromium_libs || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   # Prove the loop imports and the version is the pin, the way every other installer here proves
   # its executable: an install that cannot import is a base that dies on its first turn.
   "$TOOLS/systemone-venv/bin/python" -c '
@@ -637,6 +650,9 @@ install_backends() {
     rm -rf "$TOOLS/systemone-venv"
     echo "[harnessrouter] installing System One Harness $SYSTEMONE_PIN (Apache-2.0)…"
     try_install "System One Harness" install_systemone || true
+  fi
+  if wanted systemone && [ -x "$TOOLS/systemone-venv/bin/playwright" ]; then
+    chromium_libs || echo "[harnessrouter]   WARNING: Chromium's system libraries could not be installed; the System One base's browser environments will not start until they are (retried on the next start)"
   fi
 
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
