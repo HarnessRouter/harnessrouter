@@ -346,21 +346,32 @@ KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
 # decision model, pinned by git tag. Its own venv on the data volume like openhands and aider: three
 # small dependencies (httpx, pyyaml, the MCP SDK), installed once and rebuilt when the pin moves.
 # The executable is the venv's python, which the runner hands runner/systemone_driver.py.
-SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.2.0}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
+SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.2.1}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
 # HR_SYSTEMONE_SPEC overrides where pip takes the package from (a mirror, a fork, a local tree
-# copied into a derived image); the version proven below is the pin either way.
-SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[mcp] @ git+https://github.com/HarnessRouter/SystemOneHarness@v${SYSTEMONE_PIN}}"
+# copied into a derived image); the version proven below is the pin either way. The browser extra
+# brings Browser Use, and with it the page and game environments; the Chromium they drive is
+# installed beside the venv on the data volume (Playwright's, world-readable), because the image
+# ships no browser and a session process cannot read root's cache.
+SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[browser] @ git+https://github.com/HarnessRouter/SystemOneHarness@v${SYSTEMONE_PIN}}"
+export PLAYWRIGHT_BROWSERS_PATH="$TOOLS/ms-playwright"
 install_systemone() {
   # A failed install leaves NO venv behind: the executable is the definition of installed, and a
   # venv whose pip step failed reported the base as available on a box where it could not run.
   "${HR_SYSTEMONE_BASE_PYTHON:-python3}" -m venv "$TOOLS/systemone-venv" || { rm -rf "$TOOLS/systemone-venv"; return 1; }
-  "$TOOLS/systemone-venv/bin/pip" install -q --disable-pip-version-check "$SYSTEMONE_SPEC" \
+  "$TOOLS/systemone-venv/bin/pip" install -q --disable-pip-version-check "$SYSTEMONE_SPEC" playwright \
     || { rm -rf "$TOOLS/systemone-venv"; return 1; }
+  if ! ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
+    echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
+    "$TOOLS/systemone-venv/bin/playwright" install --with-deps chromium \
+      || { rm -rf "$TOOLS/systemone-venv"; return 1; }
+    chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true
+  fi
   # Prove the loop imports and the version is the pin, the way every other installer here proves
   # its executable: an install that cannot import is a base that dies on its first turn.
   "$TOOLS/systemone-venv/bin/python" -c '
 import sys
-import systemone_harness, systemone_harness.envs.mcp  # noqa: F401 - the loop and the MCP adapter
+import systemone_harness, systemone_harness.envs.mcp, systemone_harness.envs.browser  # noqa: F401 - the loop, the MCP adapter, the browser
+import browser_use  # noqa: F401 - the browser extra
 have = systemone_harness.__version__
 if have != sys.argv[1]:
     print(f"systemone-harness {have} installed, {sys.argv[1]} pinned", file=sys.stderr); sys.exit(1)

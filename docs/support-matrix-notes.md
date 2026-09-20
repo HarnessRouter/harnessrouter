@@ -1270,7 +1270,7 @@ both from the doc.
 ## systemone: the System One Harness as the fifteenth base (2026-09-19)
 
 Not a coding CLI. The base runs the open-source System One Harness
-(github.com/HarnessRouter/SystemOneHarness, Apache-2.0, pinned at v0.2.0 in `docker/entrypoint.sh`)
+(github.com/HarnessRouter/SystemOneHarness, Apache-2.0, pinned at v0.2.1 in `docker/entrypoint.sh`)
 over TypeSafe's Jev, a decision model: it answers typed questions (a choice, a yes/no probability,
 a score) with probabilities in one pass and writes no text. Every step is one request carrying
 the next action as a choice over what the environment offers right now, every parameter of every
