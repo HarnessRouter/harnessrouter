@@ -177,7 +177,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -199,6 +199,7 @@ backend_bin() {
     kimi)   echo "$TOOLS/bin/kimi" ;;
     aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
+    systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
   esac
 }
 
@@ -341,6 +342,26 @@ KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
 #
 # Own venv, the dsh/hermes precedent: it pins litellm, fastmcp, pydantic and a browser stack, and
 # must not share the runner's interpreter.
+# The System One Harness (github.com/HarnessRouter/SystemOneHarness, Apache-2.0): a loop over a
+# decision model, pinned by git tag. Its own venv on the data volume like openhands and aider: three
+# small dependencies (httpx, pyyaml, the MCP SDK), installed once and rebuilt when the pin moves.
+# The executable is the venv's python, which the runner hands runner/systemone_driver.py.
+SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.1.1}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
+install_systemone() {
+  "${HR_SYSTEMONE_BASE_PYTHON:-python3}" -m venv "$TOOLS/systemone-venv" || return 1
+  "$TOOLS/systemone-venv/bin/pip" install -q --disable-pip-version-check \
+    "systemone-harness[mcp] @ git+https://github.com/HarnessRouter/SystemOneHarness@v${SYSTEMONE_PIN}" || return 1
+  # Prove the loop imports and the version is the pin, the way every other installer here proves
+  # its executable: an install that cannot import is a base that dies on its first turn.
+  "$TOOLS/systemone-venv/bin/python" -c '
+import sys
+import systemone_harness, systemone_harness.envs.mcp  # noqa: F401 - the loop and the MCP adapter
+have = systemone_harness.__version__
+if have != sys.argv[1]:
+    print(f"systemone-harness {have} installed, {sys.argv[1]} pinned", file=sys.stderr); sys.exit(1)
+' "$SYSTEMONE_PIN" || return 1
+}
+
 install_openhands() {
   oh_py="${HR_OPENHANDS_BASE_PYTHON:-python3}"
   "$oh_py" -m venv "$TOOLS/openhands-venv" || return 1
@@ -590,6 +611,16 @@ install_backends() {
     rm -rf "$TOOLS/openhands-venv"
     echo "[harnessrouter] installing OpenHands agent-server $OPENHANDS_PIN (MIT) — ~666 MB, this takes a minute…"
     try_install "OpenHands" install_openhands || true
+  fi
+
+  s1_have=""
+  if [ -x "$(backend_bin systemone)" ]; then
+    s1_have="$("$(backend_bin systemone)" -c 'import systemone_harness as s; print(s.__version__)' 2>/dev/null || true)"
+  fi
+  if wanted systemone && [ "$s1_have" != "$SYSTEMONE_PIN" ]; then
+    rm -rf "$TOOLS/systemone-venv"
+    echo "[harnessrouter] installing System One Harness $SYSTEMONE_PIN (Apache-2.0)…"
+    try_install "System One Harness" install_systemone || true
   fi
 
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then

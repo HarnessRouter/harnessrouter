@@ -1266,3 +1266,51 @@ fourteen backends: the OpenHands venv installs in about a minute beside aider's.
 of the turn survives the sweep. The agent doc reaches the model as context: asked, with no tool
 allowed, for a secret word in the harness's instructions and the installed skills, it answered
 both from the doc.
+
+## systemone: the System One Harness as the fifteenth base (2026-09-19)
+
+Not a coding CLI. The base runs the open-source System One Harness
+(github.com/HarnessRouter/SystemOneHarness, Apache-2.0, pinned at v0.1.1 in `docker/entrypoint.sh`)
+over TypeSafe's Jev, a decision model: it answers typed questions (a choice, a yes/no probability,
+a score) with probabilities in one pass and writes no text. Every step is one request carrying
+the next action as a choice over what the environment offers right now, every parameter of every
+offered action, and a goal check; the harness gates the answer by the action's risk and executes.
+The turn process is `runner/systemone_driver.py`; its events are claude's stream-json, so the
+normaliser is the passthrough.
+
+### Measured, 2026-09-19
+
+- **Through the runner's own relay.** `_build_systemone` registers the route at the provider's API
+  ROOT (`https://openrouter.ai/api`), because OpenRouter serves decisions at `/api/alpha/decisions`
+  and a POST to `/api/v1/alpha/decisions` is a 404. The driver posts to `<relay>/v1/alpha/decisions`.
+  One live turn on the built-in order desk: six actions, `success`, 1.44 s wall; the relay's taps
+  read the served model `typesafe/jev-1.13-20260917` and usage 6304 in / 1410 out off the answer,
+  and the driver's own result event said the same. Rule 2 of harness-verification.md holds the
+  way it holds for cline and qwen: the base rides the relay.
+- **The environment is the harness's MCP server** (the first one configured), its tools compiled to
+  actions at the start of each turn; a tool that needs free text is named in the trace as not
+  offered. With no server, the built-in order desk, so the base answers before anything is
+  configured. `disabledTools` withholds an action from the question itself (hard, by omission).
+- **`incomplete` is a runner status now.** A loop that stops because the model asked for help or a
+  destructive action never cleared its confidence bar is neither a failure nor a step cap. The
+  driver's result carries `subtype: incomplete` and a `reason`; `_status_from_result` returns
+  `incomplete`, the poll body carries `reason`, and the gateway reports it as the task's
+  `incomplete_details.reason` without retrying another connection. Pinned by
+  `runner/tests/test_systemone_backend.py` and `gateway/tests/test_systemone_catalog.py`.
+- **Continuation.** The desk's state and the loop's steps persist under
+  `.harness/systemone/<session>/` in the workspace; a resumed turn carries on from where the last
+  one stopped and the model sees the earlier steps as history (a two-step first turn followed by a
+  continuation redid none of its picks).
+- **What the five matrix scenarios mean here.** First turn, follow-up, switch and recycle apply as
+  written; the artifact scenario's "create a file" prompt does not, because the desk produces one
+  artifact of its own (`manifest.json`, on ship). The base is verified by its own loop rather than
+  the coding prompts: the harness package's 35 tests, its UHP core conformance (40 of 40) and its
+  benchmark (15 of 15 goals on the live model) are the record, in that repository.
+
+### The models
+
+`jev-1.13` and `jev-latest`, OpenRouter only (`typesafe/jev-1.13`, `~typesafe/jev-latest`), added to
+OpenRouter's vendor table after the shared copy so no other aggregator inherits an id it cannot
+serve. No chat model is listed on this base: the loop asks typed questions a text model cannot
+answer. TypeSafe's direct endpoint (`/v1/systemone`) is wired in the runner and not yet offered by
+the gateway.

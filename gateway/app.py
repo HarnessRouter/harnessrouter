@@ -1087,6 +1087,9 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("anthropic", "openhands"): "anthropic",   ("openai", "openhands"): "openai",
     ("azure-foundry", "openhands"): "azure",
     ("openrouter", "openhands"): "openai-api",
+    # systemone speaks the provider's decisions endpoint through the loopback relay; OpenRouter is
+    # the one aggregator serving TypeSafe's Jev (beta since 2026-09-18), so it is the one wiring.
+    ("openrouter", "systemone"): "openrouter",
     ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
@@ -2485,13 +2488,15 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             await _vertex_upsert(sid, {"cli_session_id": s["session_id"]})
         if s.get("done"):
             st = s.get("status")
-            terminal = ("completed" if st == "done" else "incomplete" if st == "max_turns"
+            terminal = ("completed" if st == "done" else "incomplete" if st in ("max_turns", "incomplete")
                         else "cancelled" if st == "cancelled" else "incomplete" if st == "timeout"
                         else "failed")
             if st == "max_turns":
                 translator.incomplete_reason = "max_steps"
             elif st == "timeout":
                 translator.incomplete_reason = "timeout"
+            elif st == "incomplete":
+                translator.incomplete_reason = str(s.get("reason") or "incomplete")
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -5777,6 +5782,11 @@ _OPENROUTER_RESLUG = {
 _OPENROUTER_NO_CHANNEL: set[str] = set()
 _VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                                 if c not in _OPENROUTER_NO_CHANNEL}
+# System One models. TypeSafe's Jev is a decision model (typed answers with probabilities, no text)
+# served by OpenRouter on its decisions endpoint and by no other aggregator here, so it is added
+# AFTER the shared copy: TokenRouter and Vercel must not inherit an id they cannot serve. Only the
+# systemone base lists these ids in its catalog, so no chat backend's picker ever shows them.
+_VENDOR_MODELS["openrouter"].update({"jev-1.13": "typesafe/jev-1.13", "jev-latest": "~typesafe/jev-latest"})
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -6237,6 +6247,10 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# systemone: the two ids OpenRouter serves for Jev, measured live 2026-09-19 (jev-1.13 resolves to
+# typesafe/jev-1.13-20260917; jev-latest is OpenRouter's rolling alias of the same). A chat model is
+# not offered here: this base asks typed questions and a text model cannot answer them.
+_MODEL_CATALOG["systemone"] = {"default": "jev-1.13", "models": ["jev-1.13", "jev-latest"]}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
@@ -7030,6 +7044,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 elif st == "max_turns":
                     terminal = "incomplete"
                     translator.incomplete_reason = "max_steps"
+                elif st == "incomplete":
+                    # The loop stopped for a reason of its own (systemone: the model asked for help,
+                    # or a destructive action never cleared its confidence bar). Neither a failure
+                    # nor a budget: the reason is the task's incomplete_details, and nothing is
+                    # retried on another connection, because nothing went wrong with this one.
+                    terminal = "incomplete"
+                    translator.incomplete_reason = str(s.get("reason") or "incomplete")
                 elif st in ("cancelled", "timeout"):
                     # user cancel / wall-clock cap end the SESSION's turn — never retry it
                     # on the next connection in the chain (that would re-run the whole task)
@@ -13472,6 +13493,22 @@ _BASE_CATALOG: dict[str, dict] = {
         # ONE HONEST LIMIT, because a shell is a file writer: disabling Edit alone does not stop a
         # file from being written, since the agent reaches for `printf > file` instead. That is true
         # of every backend here that has a shell.
+        "tool_enforcement": "hard",
+    },
+    "systemone": {
+        "label": "System One", "backend": "systemone", "status": "ready",
+        # Delivered as the loop's task instructions on every step, beside the environment's own.
+        "system_prompt": ("You act inside a finite set of actions the environment offers each step. "
+                          "Choose the action that moves the goal forward, finish when the goal is "
+                          "reached, and escalate when nothing offered fits."),
+        # The actions of the built-in environment, the order desk, which is what a harness on this
+        # base runs until an MCP server is configured; with one, the server's tools are the actions
+        # (compiled at the start of every turn) and these six are not there. Enforcement is by
+        # OMISSION from the question the model answers: an action withheld is never offered, and a
+        # decision model cannot choose what it was not asked about. Pinned by
+        # runner/tests/test_systemone_backend.py.
+        "tools": [("pick_item", "Pick Item"), ("pack", "Pack"), ("choose_carrier", "Choose Carrier"),
+                  ("ship", "Ship"), ("cancel_order", "Cancel Order"), ("add_note", "Add Note")],
         "tool_enforcement": "hard",
     },
     "qwen": {

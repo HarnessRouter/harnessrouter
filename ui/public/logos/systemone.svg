@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="System One">
+  <rect width="64" height="64" rx="14" fill="#101828"/>
+  <circle cx="32" cy="32" r="21" fill="none" stroke="#7DD3FC" stroke-width="3"/>
+  <path d="M32 11 L32 32 L47 41" fill="none" stroke="#7DD3FC" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="3.5" fill="#F8FAFC"/>
+</svg>
