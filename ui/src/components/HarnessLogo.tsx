@@ -19,6 +19,7 @@ const LOGO: Record<string, string> = {
   kimi: '/logos/kimi.png',     // the official Kimi mark (the K app icon from kimi.ai/code), supplied by Richard 2026-09-17
   aider: '/logos/aider.png',   // aider's own app icon (aider.chat/assets/icons/apple-touch-icon.png, from the Apache-2.0 repo's website assets)
   openhands: '/logos/openhands.png',   // OpenHands' own app icon (public/apple-touch-icon.png in the MIT OpenHands/OpenHands repository)
+  systemone: '/logos/systemone.png',   // the System One Harness's own mark (the project has no vendor logo; Jev is TypeSafe's model, not the harness)
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {

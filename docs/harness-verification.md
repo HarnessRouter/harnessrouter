@@ -20,6 +20,11 @@ For every harness and every model its menu offers, one session runs five scenari
 | Artifact | a file the task must produce exists in the turn record and is shown to the reader |
 | Recycle | the sandbox is let go on purpose, then a follow-up still recalls the first message |
 
+One base is not a coding agent. `systemone` runs a decision loop over a typed action space rather
+than a CLI over a workspace, so the artifact scenario's prompt does not apply to it; it is verified by
+its own loop (its package's tests, its UHP conformance and its benchmark) and by the first-turn,
+follow-up, switch and recycle scenarios here. See docs/support-matrix-notes.md, "systemone".
+
 ## The rules that decide a row
 
 A scenario that "completed" is not a pass on its own. Four rules turn a run into a verdict, and each

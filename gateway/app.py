@@ -1087,6 +1087,9 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("anthropic", "openhands"): "anthropic",   ("openai", "openhands"): "openai",
     ("azure-foundry", "openhands"): "azure",
     ("openrouter", "openhands"): "openai-api",
+    # systemone speaks the provider's decisions endpoint through the loopback relay; OpenRouter is
+    # the one aggregator serving TypeSafe's Jev (beta since 2026-09-18), so it is the one wiring.
+    ("openrouter", "systemone"): "openrouter",
     ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
@@ -2485,13 +2488,15 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             await _vertex_upsert(sid, {"cli_session_id": s["session_id"]})
         if s.get("done"):
             st = s.get("status")
-            terminal = ("completed" if st == "done" else "incomplete" if st == "max_turns"
+            terminal = ("completed" if st == "done" else "incomplete" if st in ("max_turns", "incomplete")
                         else "cancelled" if st == "cancelled" else "incomplete" if st == "timeout"
                         else "failed")
             if st == "max_turns":
                 translator.incomplete_reason = "max_steps"
             elif st == "timeout":
                 translator.incomplete_reason = "timeout"
+            elif st == "incomplete":
+                translator.incomplete_reason = str(s.get("reason") or "incomplete")
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -2933,8 +2938,9 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         # of the deployment rather than of a saved configuration. Returning nothing here is why
         # the default harnesses, which is what most people actually use, had no image generation
         # and no document skills while custom ones did.
-        return [], _builtin_default_skills(), [], [], []
+        return [], (_builtin_default_skills() if _base_takes_skills(harness_id) else []), [], [], []
     v = await _mcp_migrate(org, harness_id, v)
+    takes_skills = _base_takes_skills(str(v.get("base") or harness_id))
 
     def _arr(prop):
         try:
@@ -3088,6 +3094,8 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
     # Built-ins the harness never mentions: on when the image says so. Implicit, so the set follows
     # the image rather than whatever was true when the Harness was created.
     skills_out += _builtin_default_skills(seen)
+    if not takes_skills:
+        skills_out = []        # nothing on this base can read a skill; see _BASE_CATALOG["systemone"]
 
     disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
     return mcp_out, skills_out, suppressed, disabled_tools, plugins_out
@@ -4629,6 +4637,15 @@ _CUSTOM_FORMAT_BACKENDS = {
 }
 
 
+def _custom_can_drive(backend: str) -> bool:
+    """Whether ANY custom-endpoint format can run this backend. A custom integration's models are
+    shown greyed on a backend its format cannot drive, so the reader learns why a model they
+    configured is not pickable there; on a backend no custom format drives at all (systemone runs
+    System One models only, and a custom endpoint speaks OpenAI or Anthropic text shapes) the row
+    is not an explanation but a chat model offered on a harness that cannot use one."""
+    return any(backend in bs for bs in _CUSTOM_FORMAT_BACKENDS.values())
+
+
 def _integration_serves_backend(integ: dict, backend: str) -> bool:
     """Can this integration actually run a turn on `backend`? For a custom provider this is
     gated by its api_format (see _CUSTOM_FORMAT_BACKENDS); every other provider just needs a
@@ -5777,6 +5794,11 @@ _OPENROUTER_RESLUG = {
 _OPENROUTER_NO_CHANNEL: set[str] = set()
 _VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                                 if c not in _OPENROUTER_NO_CHANNEL}
+# System One models. TypeSafe's Jev is a decision model (typed answers with probabilities, no text)
+# served by OpenRouter on its decisions endpoint and by no other aggregator here, so it is added
+# AFTER the shared copy: TokenRouter and Vercel must not inherit an id they cannot serve. Only the
+# systemone base lists these ids in its catalog, so no chat backend's picker ever shows them.
+_VENDOR_MODELS["openrouter"].update({"jev-1.13": "typesafe/jev-1.13", "jev-latest": "~typesafe/jev-latest"})
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -6237,6 +6259,10 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# systemone: the two ids OpenRouter serves for Jev, measured live 2026-09-19 (jev-1.13 resolves to
+# typesafe/jev-1.13-20260917; jev-latest is OpenRouter's rolling alias of the same). A chat model is
+# not offered here: this base asks typed questions and a text model cannot answer them.
+_MODEL_CATALOG["systemone"] = {"default": "jev-1.13", "models": ["jev-1.13", "jev-latest"]}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
@@ -6515,7 +6541,7 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
         if canonical in seen:
             continue
         integ = integrations.get(iname)
-        if integ and str(integ.get("provider") or "").lower() == "custom":
+        if integ and str(integ.get("provider") or "").lower() == "custom" and _custom_can_drive(backend):
             models.append({"id": canonical, "label": canonical, "backend": backend,
                            "available": False, "default": canonical == default})
             seen.add(canonical)
@@ -7030,6 +7056,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 elif st == "max_turns":
                     terminal = "incomplete"
                     translator.incomplete_reason = "max_steps"
+                elif st == "incomplete":
+                    # The loop stopped for a reason of its own (systemone: the model asked for help,
+                    # or a destructive action never cleared its confidence bar). Neither a failure
+                    # nor a budget: the reason is the task's incomplete_details, and nothing is
+                    # retried on another connection, because nothing went wrong with this one.
+                    terminal = "incomplete"
+                    translator.incomplete_reason = str(s.get("reason") or "incomplete")
                 elif st in ("cancelled", "timeout"):
                     # user cancel / wall-clock cap end the SESSION's turn — never retry it
                     # on the next connection in the chain (that would re-run the whole task)
@@ -7475,6 +7508,16 @@ async def create_response(body: CreateResponseBody, request: Request):
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
     # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
     harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
+    if not harness_id and body.previous_response_id:
+        # A continuation belongs to its session's harness. A client that does not repeat harness_id
+        # on a follow-up (the protocol asks only for previous_response_id) used to be routed by the
+        # inherited MODEL NAME, and for a base whose models no chat backend serves that fell to the
+        # default backend: a systemone follow-up asked claude for jev-1.13 (measured 2026-09-19).
+        # The session vertex records the harness the conversation started on; that is the harness.
+        _pr = await _resp_get(body.previous_response_id)
+        _psid = str(((_pr or {}).get("metadata") or {}).get("session_id") or "")
+        _pv = await _vertex_get(_psid) if _psid else None
+        harness_id = str((_pv or {}).get("harness_id") or "")
     harness_name = str(meta.get("harness_name") or "")
     hv = await _harness_vertex(harness_id) if harness_id else None
     # A deleted harness cannot run new turns (same 404 as the read endpoints). Cross-org runs are
@@ -13254,6 +13297,12 @@ def _builtin_skills() -> dict:
     return out
 
 
+def _base_takes_skills(base_id: str) -> bool:
+    """Whether skills, built-in or added, mean anything on this base. A base that declares
+    `"skills": False` in the catalog (systemone) gets none mounted and none offered."""
+    return bool((_BASE_CATALOG.get(str(base_id or "")) or {}).get("skills", True))
+
+
 def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
     """Built-ins that are on by default, minus any the harness has its own entry for.
 
@@ -13473,6 +13522,30 @@ _BASE_CATALOG: dict[str, dict] = {
         # file from being written, since the agent reaches for `printf > file` instead. That is true
         # of every backend here that has a shell.
         "tool_enforcement": "hard",
+    },
+    "systemone": {
+        "label": "System One", "backend": "systemone", "status": "ready",
+        # Delivered as the loop's task instructions on every step, beside the environment's own.
+        "system_prompt": ("You act inside a finite set of actions the environment offers each step. "
+                          "Choose the action that moves the goal forward, finish when the goal is "
+                          "reached, and escalate when nothing offered fits."),
+        # Nothing is built into this base: its actions are its environment's, the tools of the MCP
+        # server the harness configures (a kit's plugin, a server added by hand), compiled at the
+        # start of every turn. Listing the order desk's six actions here showed them on the Super
+        # Mario harness as "built into System One", enabled, while that harness never offers them.
+        # Without a server the loop runs the order desk as a demonstration, which is the base's
+        # description's business, not a tool list's. A tool disabled on the harness is withheld by
+        # OMISSION from the question the model answers, whatever environment offers it (pinned by
+        # runner/tests/test_systemone_backend.py).
+        "tools": [],
+        "tool_enforcement": "hard",
+        # No skills, built-in or added. A skill is prose an agent reads and scripts it runs from a
+        # shell, and each of the built-ins needs free text (an image prompt, a document's content,
+        # HTML for a PDF); a System One model chooses among offered actions and writes nothing, so
+        # a skill mounted for it is a capability the console would show enabled that can never
+        # act. Guidance reaches this base as instructions; a skill's scripts reach it as actions of
+        # an MCP server. Pinned by gateway/tests/test_systemone_catalog.py.
+        "skills": False,
     },
     "qwen": {
         "label": "Qwen Code", "backend": "qwen", "status": "ready",
@@ -14747,7 +14820,11 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        skills=[] if kit_plugin else _kit_skills(kit),
                        plugins=[kit_plugin] if kit_plugin else [],
                        mcp_servers=spec.get("mcp_servers") or [],
-                       disabled_tools=spec.get("disabled_tools") or [])
+                       disabled_tools=spec.get("disabled_tools") or [],
+                       # A kit knows how long its turns run: a game played several decisions a
+                       # second needs more steps than a document does. Absent, the base's default.
+                       max_step=spec.get("max_step"),
+                       timeout_seconds=spec.get("timeout_seconds"))
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
@@ -15248,10 +15325,12 @@ async def list_bases(request: Request) -> dict:
             # skills of its own at run time that nothing outside a turn can enumerate, so
             # `builtinSkillsEnumerable` stays False: the console must say "and it brings its own"
             # rather than presenting this list as everything the agent has.
-            "builtinSkills": [{"name": n, "title": b2["title"], "description": b2["description"],
-                               "defaultEnabled": b2["default_enabled"], "origin": b2["origin"]}
-                              for n, b2 in sorted(_builtin_skills().items())],
+            "builtinSkills": ([{"name": n, "title": b2["title"], "description": b2["description"],
+                                "defaultEnabled": b2["default_enabled"], "origin": b2["origin"]}
+                               for n, b2 in sorted(_builtin_skills().items())]
+                              if b.get("skills", True) else []),
             "builtinSkillsEnumerable": False,
+            "takesSkills": bool(b.get("skills", True)),
         })
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.
@@ -15293,7 +15372,7 @@ async def list_models(request: Request) -> dict:
             if _integration_serves_backend(integ, b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": True, "default": False})
-            elif str(integ.get("provider") or "").lower() == "custom":
+            elif _custom_can_drive(b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": False, "default": False})
             seen.add(canonical)
