@@ -7593,23 +7593,8 @@ async def create_response(body: CreateResponseBody, request: Request):
 
     prompt, files_in, input_items = _parse_input(body.input)
     user_text = prompt   # the raw user message (before instructions / file-note prepends) for the trace
-    # resolve file_id-referenced inputs to inline base64 (uploaded via POST /v1/files);
-    # the original filename comes from the uploads/{fid}.meta blob when the input
-    # block didn't inline one (mirrors the containers/*.meta read in the files lister)
-    for f in files_in:
-        if f.get("content_b64") is None and f.get("file_id"):
-            data = await _blob_get(f"uploads/{f['file_id']}", kb=RESP_BLOB_KB)
-            if data is not None:
-                f["content_b64"] = base64.b64encode(data).decode()
-            if not f.get("filename"):
-                fmeta = await _blob_get(f"uploads/{f['file_id']}.meta", kb=RESP_BLOB_KB)
-                if fmeta is not None:
-                    try:
-                        f["filename"] = (json.loads(fmeta.decode()) or {}).get("filename") or ""
-                    except Exception:
-                        f["filename"] = ""
-                if not f.get("filename"):
-                    f["filename"] = f["file_id"]   # last resort: readable, unique
+    # uploads referenced by file_id (POST /v1/files) become inline bytes, this org's only
+    await _resolve_uploads(files_in, org)
     files_in = [{"filename": f["filename"], "content_b64": f["content_b64"]}
                 for f in files_in if f.get("content_b64") and f.get("filename")]
     if body.instructions:
@@ -8512,7 +8497,7 @@ async def upload_file(request: Request, purpose: str = Form("user_data"), file: 
     disk; we relay it in chunks to the blob plane, whose staged-block commit-at-end makes a
     truncated stream harmless). Capped: uploads are inlined base64 into the runner's turn body,
     so the cap bounds turn-payload RAM too — matching the engine's 25 MiB attachment cap."""
-    await _principal(request)
+    principal = await _principal(request)
     if BACKING.mode == "vg" and not VG_GATEWAY_URL:
         raise HTTPException(503, "file storage is not configured")
     # Fail fast on the declared size when present (well-behaved clients send Content-Length);
@@ -8555,11 +8540,44 @@ async def upload_file(request: Request, purpose: str = Form("user_data"), file: 
             buf += chunk
         if not await BACKING.blob.put(RESP_BLOB_KB, f"uploads/{fid}", bytes(buf)):
             raise HTTPException(502, "durable upload failed")
+    # THE OWNER IS RECORDED WITH THE UPLOAD. Files §5: a file_id from another principal must
+    # answer 404, never the bytes. The sidecar carried only the name and media type, so a task
+    # by any org that named a file_id was handed the file (found 2026-09-20 while answering
+    # #198); _resolve_uploads reads the org back and refuses a mismatch.
     await _blob_put(f"uploads/{fid}.meta", json.dumps(
-        {"filename": file.filename, "media_type": file.content_type or "application/octet-stream"}).encode(),
+        {"filename": file.filename, "media_type": file.content_type or "application/octet-stream",
+         "org": str(principal.get("org") or "")}).encode(),
         kb=RESP_BLOB_KB)
     return {"id": fid, "object": "file", "bytes": nbytes, "created_at": int(time.time()),
             "filename": file.filename, "purpose": purpose}
+
+
+async def _resolve_uploads(files_in: list[dict], org: str) -> None:
+    """Inline the uploads a task references by file_id, for THIS org only.
+
+    Files §5: a file_id from another principal answers 404, never the bytes. The owner is read
+    from the upload's sidecar; an upload made before the owner was recorded has none and is
+    served, since nothing can say whose it is. An unknown id is a 404 too: it used to be dropped
+    in silence and the task ran without its file, which is the confident, wrong answer §1.2 warns
+    about. The name comes from the sidecar when the input block did not inline one."""
+    for f in files_in:
+        if f.get("content_b64") is not None or not f.get("file_id"):
+            continue
+        fid = str(f["file_id"])
+        meta: dict = {}
+        raw = await _blob_get(f"uploads/{fid}.meta", kb=RESP_BLOB_KB)
+        if raw is not None:
+            try:
+                meta = json.loads(raw.decode()) or {}
+            except Exception:  # noqa: BLE001
+                meta = {}
+        owner = str(meta.get("org") or "")
+        data = None if (owner and owner != org) else await _blob_get(f"uploads/{fid}", kb=RESP_BLOB_KB)
+        if data is None:
+            raise uhp_error(404, "file_not_found", f"No file with id {fid}.", "input")
+        f["content_b64"] = base64.b64encode(data).decode()
+        if not f.get("filename"):
+            f["filename"] = str(meta.get("filename") or "") or fid   # last resort: readable, unique
 
 
 # ── session workspace files (list + download-by-id) ─────────────────────────────

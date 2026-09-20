@@ -35,7 +35,41 @@ def test_an_upload_lands_in_the_local_store_and_answers_the_file_object():
     import asyncio
     assert asyncio.run(gw._blob_get(f"uploads/{f['id']}", kb=gw.RESP_BLOB_KB)) == b"The secret token is uhp-198.\n"
     meta = json.loads(asyncio.run(gw._blob_get(f"uploads/{f['id']}.meta", kb=gw.RESP_BLOB_KB)))
-    assert meta == {"filename": "brief.txt", "media_type": "text/plain"}
+    assert meta == {"filename": "brief.txt", "media_type": "text/plain", "org": "local"}
+
+
+def test_an_upload_is_served_to_its_owner_only_and_an_unknown_id_is_a_404():
+    """Files §5: a file_id from another principal answers 404, never the bytes. The sidecar carried
+    no owner, so a task by any org that named a file_id was handed the file; and an unknown id
+    was dropped in silence, the task running without its file."""
+    import asyncio
+    import base64
+    from fastapi import HTTPException
+    c = TestClient(gw.app)
+    f = _upload(c, "brief.txt", b"The secret token is uhp-198.\n").json()
+    mine = [{"file_id": f["id"], "content_b64": None, "filename": ""}]
+    asyncio.run(gw._resolve_uploads(mine, "local"))
+    assert mine[0]["filename"] == "brief.txt"
+    assert mine[0]["content_b64"] == base64.b64encode(b"The secret token is uhp-198.\n").decode()
+    theirs = [{"file_id": f["id"], "content_b64": None, "filename": ""}]
+    try:
+        asyncio.run(gw._resolve_uploads(theirs, "another-org"))
+    except HTTPException as e:
+        assert e.status_code == 404 and e.detail["code"] == "file_not_found"
+        assert theirs[0]["content_b64"] is None          # never the bytes
+    else:
+        raise AssertionError("another org was handed the upload")
+    try:
+        asyncio.run(gw._resolve_uploads([{"file_id": "file_doesnotexist", "content_b64": None, "filename": ""}], "local"))
+    except HTTPException as e:
+        assert e.status_code == 404 and e.detail["code"] == "file_not_found"
+    else:
+        raise AssertionError("an unknown file_id was dropped in silence")
+    # an upload made before the owner was recorded has no org in its sidecar and is served
+    asyncio.run(gw._blob_put(f"uploads/{f['id']}.meta", json.dumps({"filename": "brief.txt", "media_type": "text/plain"}).encode(), kb=gw.RESP_BLOB_KB))
+    legacy = [{"file_id": f["id"], "content_b64": None, "filename": ""}]
+    asyncio.run(gw._resolve_uploads(legacy, "another-org"))
+    assert legacy[0]["content_b64"]
 
 
 def test_an_oversized_upload_is_refused_as_file_too_large_and_stores_nothing(monkeypatch):
