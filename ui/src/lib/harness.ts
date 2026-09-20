@@ -268,6 +268,10 @@ export interface BaseInfo {
   /** false means the base brings its own skills but nothing outside a turn can list them. The UI
    *  must say that rather than render an empty list as "this base has no skills". */
   builtinSkillsEnumerable: boolean;
+  /** false means skills mean nothing on this base (System One: a decision model chooses among
+   *  offered actions and reads no documents), so none are offered and none can be added. Absent
+   *  on older gateways, which is the same as true. */
+  takesSkills?: boolean;
 }
 
 let _bases: Record<string, BaseInfo> | null = null;

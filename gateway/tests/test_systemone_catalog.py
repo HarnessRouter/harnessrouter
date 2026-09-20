@@ -75,3 +75,19 @@ def test_a_custom_endpoints_models_never_appear_on_the_systemone_list(monkeypatc
     view = asyncio.run(gw._harness_models_view(None, "claude", set()))
     row = next(m for m in view["models"] if m["id"] == "gpt-5.5")
     assert row["available"] is False
+
+
+def test_the_base_takes_no_skills_and_none_are_mounted_for_a_turn(monkeypatch):
+    """The built-in skills are prose an agent reads and scripts it runs from a shell, each needing
+    free text; a System One model chooses among offered actions and writes nothing. So the base
+    declares it takes no skills, the bases endpoint offers none, and a turn mounts none, for the
+    built-in harness and for a harness forked from it alike."""
+    import asyncio
+    assert gw._BASE_CATALOG["systemone"]["skills"] is False
+    assert not gw._base_takes_skills("systemone") and gw._base_takes_skills("codex") and gw._base_takes_skills("")
+    monkeypatch.setattr(gw, "_builtin_skills", lambda: {"pdf": {"title": "PDF", "description": "", "default_enabled": True,
+                                                                  "origin": "image", "files": [{"path": "SKILL.md", "content": "x"}]}})
+    _, skills, _, _, _ = asyncio.run(gw._harness_plugins("systemone", "local", None, hv=None))
+    assert skills == []
+    _, skills, _, _, _ = asyncio.run(gw._harness_plugins("codex", "local", None, hv=None))
+    assert [s["name"] for s in skills] == ["pdf"]

@@ -194,7 +194,8 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   const ownSkills = skills.map((s, idx) => ({ s, idx })).filter(({ s }) => isOwnSkill(s));
   // Built-ins the harness has not replaced with one of its own. A built-in is implicit: the
   // harness stores an entry only when its answer differs from the image's default.
-  const baseSkills = (srvBase?.builtinSkills || []).filter((b) => !ownSkills.some(({ s }) => s.name === b.name));
+  const takesSkills = srvBase?.takesSkills !== false;
+  const baseSkills = (takesSkills ? (srvBase?.builtinSkills || []) : []).filter((b) => !ownSkills.some(({ s }) => s.name === b.name));
   const disabledTools = new Set(draft?.disabledTools || []);
 
   const stats = statsFor(cards);
@@ -317,6 +318,20 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
             </div>
           </section>
 
+          {!takesSkills ? (
+          <section className="form-section">
+            <div><h3>Skills</h3><p>What this base can take.</p></div>
+            <div className="field-stack">
+              <div className="capability-list">
+                <div className="capability-row">
+                  <span className="capability-icon"><iconify-icon icon="tabler:bulb-off"></iconify-icon></span>
+                  <div className="capability-copy"><strong>{base?.name} takes no Skills</strong>
+                    <span>A Skill is guidance an agent reads and scripts it runs. This base chooses among the actions its environment offers and writes no text, so guidance goes in its instructions and scripts become actions of an MCP server.</span></div>
+                </div>
+              </div>
+            </div>
+          </section>
+          ) : (
           <section className="form-section">
             <div><h3>Skills</h3><p>Add Harness-specific workflows, replace inherited Skills, or disable capabilities this agent should not use.</p></div>
             <div className="field-stack">
@@ -383,6 +398,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
               </div>
             </div>
           </section>
+          )}
 
           <section className="form-section">
             <div><h3>Plugins</h3><p>A plugin is a package of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>

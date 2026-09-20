@@ -2938,8 +2938,9 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         # of the deployment rather than of a saved configuration. Returning nothing here is why
         # the default harnesses, which is what most people actually use, had no image generation
         # and no document skills while custom ones did.
-        return [], _builtin_default_skills(), [], [], []
+        return [], (_builtin_default_skills() if _base_takes_skills(harness_id) else []), [], [], []
     v = await _mcp_migrate(org, harness_id, v)
+    takes_skills = _base_takes_skills(str(v.get("base") or harness_id))
 
     def _arr(prop):
         try:
@@ -3093,6 +3094,8 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
     # Built-ins the harness never mentions: on when the image says so. Implicit, so the set follows
     # the image rather than whatever was true when the Harness was created.
     skills_out += _builtin_default_skills(seen)
+    if not takes_skills:
+        skills_out = []        # nothing on this base can read a skill; see _BASE_CATALOG["systemone"]
 
     disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
     return mcp_out, skills_out, suppressed, disabled_tools, plugins_out
@@ -13294,6 +13297,12 @@ def _builtin_skills() -> dict:
     return out
 
 
+def _base_takes_skills(base_id: str) -> bool:
+    """Whether skills, built-in or added, mean anything on this base. A base that declares
+    `"skills": False` in the catalog (systemone) gets none mounted and none offered."""
+    return bool((_BASE_CATALOG.get(str(base_id or "")) or {}).get("skills", True))
+
+
 def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
     """Built-ins that are on by default, minus any the harness has its own entry for.
 
@@ -13529,6 +13538,13 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("pick_item", "Pick Item"), ("pack", "Pack"), ("choose_carrier", "Choose Carrier"),
                   ("ship", "Ship"), ("cancel_order", "Cancel Order"), ("add_note", "Add Note")],
         "tool_enforcement": "hard",
+        # No skills, built-in or added. A skill is prose an agent reads and scripts it runs from a
+        # shell, and each of the built-ins needs free text (an image prompt, a document's content,
+        # HTML for a PDF); a System One model chooses among offered actions and writes nothing, so
+        # a skill mounted for it is a capability the console would show enabled that can never
+        # act. Guidance reaches this base as instructions; a skill's scripts reach it as actions of
+        # an MCP server. Pinned by gateway/tests/test_systemone_catalog.py.
+        "skills": False,
     },
     "qwen": {
         "label": "Qwen Code", "backend": "qwen", "status": "ready",
@@ -15304,10 +15320,12 @@ async def list_bases(request: Request) -> dict:
             # skills of its own at run time that nothing outside a turn can enumerate, so
             # `builtinSkillsEnumerable` stays False: the console must say "and it brings its own"
             # rather than presenting this list as everything the agent has.
-            "builtinSkills": [{"name": n, "title": b2["title"], "description": b2["description"],
-                               "defaultEnabled": b2["default_enabled"], "origin": b2["origin"]}
-                              for n, b2 in sorted(_builtin_skills().items())],
+            "builtinSkills": ([{"name": n, "title": b2["title"], "description": b2["description"],
+                                "defaultEnabled": b2["default_enabled"], "origin": b2["origin"]}
+                               for n, b2 in sorted(_builtin_skills().items())]
+                              if b.get("skills", True) else []),
             "builtinSkillsEnumerable": False,
+            "takesSkills": bool(b.get("skills", True)),
         })
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.
