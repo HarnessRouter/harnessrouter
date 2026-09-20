@@ -7496,6 +7496,16 @@ async def create_response(body: CreateResponseBody, request: Request):
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
     # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
     harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
+    if not harness_id and body.previous_response_id:
+        # A continuation belongs to its session's harness. A client that does not repeat harness_id
+        # on a follow-up (the protocol asks only for previous_response_id) used to be routed by the
+        # inherited MODEL NAME, and for a base whose models no chat backend serves that fell to the
+        # default backend: a systemone follow-up asked claude for jev-1.13 (measured 2026-09-19).
+        # The session vertex records the harness the conversation started on; that is the harness.
+        _pr = await _resp_get(body.previous_response_id)
+        _psid = str(((_pr or {}).get("metadata") or {}).get("session_id") or "")
+        _pv = await _vertex_get(_psid) if _psid else None
+        harness_id = str((_pv or {}).get("harness_id") or "")
     harness_name = str(meta.get("harness_name") or "")
     hv = await _harness_vertex(harness_id) if harness_id else None
     # A deleted harness cannot run new turns (same 404 as the read endpoints). Cross-org runs are
