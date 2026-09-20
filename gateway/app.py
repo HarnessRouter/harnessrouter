@@ -13529,14 +13529,15 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You act inside a finite set of actions the environment offers each step. "
                           "Choose the action that moves the goal forward, finish when the goal is "
                           "reached, and escalate when nothing offered fits."),
-        # The actions of the built-in environment, the order desk, which is what a harness on this
-        # base runs until an MCP server is configured; with one, the server's tools are the actions
-        # (compiled at the start of every turn) and these six are not there. Enforcement is by
-        # OMISSION from the question the model answers: an action withheld is never offered, and a
-        # decision model cannot choose what it was not asked about. Pinned by
-        # runner/tests/test_systemone_backend.py.
-        "tools": [("pick_item", "Pick Item"), ("pack", "Pack"), ("choose_carrier", "Choose Carrier"),
-                  ("ship", "Ship"), ("cancel_order", "Cancel Order"), ("add_note", "Add Note")],
+        # Nothing is built into this base: its actions are its environment's, the tools of the MCP
+        # server the harness configures (a kit's plugin, a server added by hand), compiled at the
+        # start of every turn. Listing the order desk's six actions here showed them on the Super
+        # Mario harness as "built into System One", enabled, while that harness never offers them.
+        # Without a server the loop runs the order desk as a demonstration, which is the base's
+        # description's business, not a tool list's. A tool disabled on the harness is withheld by
+        # OMISSION from the question the model answers, whatever environment offers it (pinned by
+        # runner/tests/test_systemone_backend.py).
+        "tools": [],
         "tool_enforcement": "hard",
         # No skills, built-in or added. A skill is prose an agent reads and scripts it runs from a
         # shell, and each of the built-ins needs free text (an image prompt, a document's content,

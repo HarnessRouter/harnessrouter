@@ -32,11 +32,11 @@ def test_only_the_systemone_base_offers_jev_and_it_offers_nothing_else():
         assert not (set(JEV) & set(cat.get("models", []))), f"{backend} offers a Jev id it cannot answer"
 
 
-def test_the_base_is_in_the_catalog_with_hard_enforcement_and_the_desk_actions():
+def test_the_base_is_in_the_catalog_with_hard_enforcement_and_no_built_in_tools():
     b = gw._BASE_CATALOG["systemone"]
     assert b["backend"] == "systemone" and b["status"] == "ready" and b["label"] == "System One"
     assert b["tool_enforcement"] == "hard"
-    assert [n for n, _ in b["tools"]] == ["pick_item", "pack", "choose_carrier", "ship", "cancel_order", "add_note"]
+    assert b["tools"] == []     # the actions are the environment's; nothing is built into the base
 
 
 def test_an_openrouter_integration_drives_the_base_and_no_other_provider_claims_to():
