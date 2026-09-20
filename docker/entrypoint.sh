@@ -346,7 +346,7 @@ KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
 # decision model, pinned by git tag. Its own venv on the data volume like openhands and aider: three
 # small dependencies (httpx, pyyaml, the MCP SDK), installed once and rebuilt when the pin moves.
 # The executable is the venv's python, which the runner hands runner/systemone_driver.py.
-SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.3.0}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
+SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.3.1}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
 # HR_SYSTEMONE_SPEC overrides where pip takes the package from (a mirror, a fork, a local tree
 # copied into a derived image); the version proven below is the pin either way. The browser extra
 # brings Browser Use, and with it the page and game environments; the Chromium they drive is
