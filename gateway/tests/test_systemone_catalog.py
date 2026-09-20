@@ -49,3 +49,29 @@ def test_an_openrouter_integration_drives_the_base_and_no_other_provider_claims_
 
 def test_an_incomplete_turn_status_is_a_response_status_of_its_own():
     assert gw._RESP_STATUS_MAP["incomplete"] == "incomplete"
+
+
+def test_a_custom_endpoints_models_never_appear_on_the_systemone_list(monkeypatch):
+    """Measured on hr-test 2026-09-19: a System One harness's picker showed claude-sonnet-4.6,
+    gpt-5.5 and four more as "(no provider)". They were the rows of custom-endpoint integrations,
+    appended to every backend as unavailable. No custom format can drive systemone, so nothing of
+    theirs belongs on its list; a chat backend keeps the greyed row as its explanation."""
+    import asyncio
+    integ = [{"name": "my-openai", "provider": "custom", "config": {"api_format": "openai", "base_url": "https://x/v1"}}]
+
+    async def _integrations():
+        return integ
+
+    async def _map():
+        return {"gpt-5.5": "my-openai", "jev-1.13": "openrouter"}
+
+    monkeypatch.setattr(gw, "_integrations_doc", _integrations)
+    monkeypatch.setattr(gw, "_effective_model_map", _map)
+    assert not gw._custom_can_drive("systemone") and gw._custom_can_drive("claude") and gw._custom_can_drive("hermes")
+    view = asyncio.run(gw._harness_models_view(None, "systemone", {"jev-1.13", "jev-latest"}))
+    assert [m["id"] for m in view["models"]] == ["jev-1.13", "jev-latest"]
+    assert all(m["available"] for m in view["models"])
+    # a chat backend the custom format cannot drive still shows the row, greyed, as the explanation
+    view = asyncio.run(gw._harness_models_view(None, "claude", set()))
+    row = next(m for m in view["models"] if m["id"] == "gpt-5.5")
+    assert row["available"] is False

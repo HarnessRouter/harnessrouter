@@ -4634,6 +4634,15 @@ _CUSTOM_FORMAT_BACKENDS = {
 }
 
 
+def _custom_can_drive(backend: str) -> bool:
+    """Whether ANY custom-endpoint format can run this backend. A custom integration's models are
+    shown greyed on a backend its format cannot drive, so the reader learns why a model they
+    configured is not pickable there; on a backend no custom format drives at all (systemone runs
+    System One models only, and a custom endpoint speaks OpenAI or Anthropic text shapes) the row
+    is not an explanation but a chat model offered on a harness that cannot use one."""
+    return any(backend in bs for bs in _CUSTOM_FORMAT_BACKENDS.values())
+
+
 def _integration_serves_backend(integ: dict, backend: str) -> bool:
     """Can this integration actually run a turn on `backend`? For a custom provider this is
     gated by its api_format (see _CUSTOM_FORMAT_BACKENDS); every other provider just needs a
@@ -6529,7 +6538,7 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
         if canonical in seen:
             continue
         integ = integrations.get(iname)
-        if integ and str(integ.get("provider") or "").lower() == "custom":
+        if integ and str(integ.get("provider") or "").lower() == "custom" and _custom_can_drive(backend):
             models.append({"id": canonical, "label": canonical, "backend": backend,
                            "available": False, "default": canonical == default})
             seen.add(canonical)
@@ -15340,7 +15349,7 @@ async def list_models(request: Request) -> dict:
             if _integration_serves_backend(integ, b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": True, "default": False})
-            elif str(integ.get("provider") or "").lower() == "custom":
+            elif _custom_can_drive(b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": False, "default": False})
             seen.add(canonical)
