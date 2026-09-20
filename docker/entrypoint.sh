@@ -347,10 +347,15 @@ KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
 # small dependencies (httpx, pyyaml, the MCP SDK), installed once and rebuilt when the pin moves.
 # The executable is the venv's python, which the runner hands runner/systemone_driver.py.
 SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.1.1}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
+# HR_SYSTEMONE_SPEC overrides where pip takes the package from (a mirror, a fork, a local tree
+# copied into a derived image); the version proven below is the pin either way.
+SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[mcp] @ git+https://github.com/HarnessRouter/SystemOneHarness@v${SYSTEMONE_PIN}}"
 install_systemone() {
-  "${HR_SYSTEMONE_BASE_PYTHON:-python3}" -m venv "$TOOLS/systemone-venv" || return 1
-  "$TOOLS/systemone-venv/bin/pip" install -q --disable-pip-version-check \
-    "systemone-harness[mcp] @ git+https://github.com/HarnessRouter/SystemOneHarness@v${SYSTEMONE_PIN}" || return 1
+  # A failed install leaves NO venv behind: the executable is the definition of installed, and a
+  # venv whose pip step failed reported the base as available on a box where it could not run.
+  "${HR_SYSTEMONE_BASE_PYTHON:-python3}" -m venv "$TOOLS/systemone-venv" || { rm -rf "$TOOLS/systemone-venv"; return 1; }
+  "$TOOLS/systemone-venv/bin/pip" install -q --disable-pip-version-check "$SYSTEMONE_SPEC" \
+    || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   # Prove the loop imports and the version is the pin, the way every other installer here proves
   # its executable: an install that cannot import is a base that dies on its first turn.
   "$TOOLS/systemone-venv/bin/python" -c '
@@ -359,7 +364,7 @@ import systemone_harness, systemone_harness.envs.mcp  # noqa: F401 - the loop an
 have = systemone_harness.__version__
 if have != sys.argv[1]:
     print(f"systemone-harness {have} installed, {sys.argv[1]} pinned", file=sys.stderr); sys.exit(1)
-' "$SYSTEMONE_PIN" || return 1
+' "$SYSTEMONE_PIN" || { rm -rf "$TOOLS/systemone-venv"; return 1; }
 }
 
 install_openhands() {
