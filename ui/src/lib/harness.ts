@@ -155,10 +155,11 @@ export const OOB: OobHarness[] = [
     systemPrompt: 'You are OpenHands, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'systemone', name: 'System One', version: 'v0.3.1', backend: 'systemone', status: 'ready',
-    // Placeholder only: the gateway's catalog wins once fetched. The two ids OpenRouter serves for
-    // TypeSafe's Jev, a decision model; there is no chat model on this base because the loop asks
-    // typed questions a text model cannot answer. Measured live 2026-09-19.
-    models: ['jev-1.13', 'jev-latest'], defaultModel: 'jev-1.13', moreModels: 0,
+    // Placeholder only: the gateway's catalog wins once fetched. Jev, a decision model, under the
+    // ids its two providers serve: jev-latest on both (the default), jev-preview on TypeSafe's own
+    // API, jev-1.13 on OpenRouter. There is no chat model on this base because the loop asks typed
+    // questions a text model cannot answer. Measured live 2026-09-19 and 2026-09-20.
+    models: ['jev-latest', 'jev-preview', 'jev-1.13'], defaultModel: 'jev-latest', moreModels: 0,
     systemPrompt: 'You act inside a finite set of actions the environment offers each step. Choose the action that moves the goal forward, finish when the goal is reached, and escalate when nothing offered fits.',
     tools: [], skills: [] },
 ];

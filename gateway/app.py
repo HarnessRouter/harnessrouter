@@ -856,7 +856,7 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 # transparent to the CLI. bedrock/vertex sign with the cloud SDK and are handled separately
 # (see _auth_from_conn) — they keep their own credential until their signing path is brokered.
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
-                         "openrouter", "openai-api", "custom", "google"}
+                         "openrouter", "openai-api", "custom", "google", "typesafe"}
 
 # Backends that speak a provider's NATIVE API rather than the OpenAI or Anthropic shape the broker
 # and the loopback relays carry: nothing sits between the CLI and the provider, so the sandbox
@@ -1087,9 +1087,9 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("anthropic", "openhands"): "anthropic",   ("openai", "openhands"): "openai",
     ("azure-foundry", "openhands"): "azure",
     ("openrouter", "openhands"): "openai-api",
-    # systemone speaks the provider's decisions endpoint through the loopback relay; OpenRouter is
-    # the one aggregator serving TypeSafe's Jev (beta since 2026-09-18), so it is the one wiring.
-    ("openrouter", "systemone"): "openrouter",
+    # systemone speaks the provider's decisions endpoint through the loopback relay: TypeSafe's own
+    # API (/v1/systemone) and OpenRouter, the one aggregator serving Jev (beta since 2026-09-18).
+    ("openrouter", "systemone"): "openrouter", ("typesafe", "systemone"): "typesafe",
     ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
@@ -4491,6 +4491,18 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret_label": "API Key",
         "key_hint": "sk-or-…",
     },
+    # TypeSafe AI, the maker of Jev: the System One wire on its own API, decisions at /v1/systemone
+    # under this base, the same body and answers OpenRouter carries at /api/alpha/decisions. A key
+    # is checked at GET /v1/models, which answers 401 for a bad one (measured 2026-09-20). Only the
+    # systemone base can use it: it serves no chat model.
+    "typesafe": {
+        "label": "TypeSafe AI",
+        "base_url": "https://api.typesafe.ai/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "apikey_…",
+    },
     "tokenrouter": {
         "label": "TokenRouter",
         "base_url": "https://api.tokenrouter.com/v1",
@@ -5799,6 +5811,11 @@ _VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHA
 # AFTER the shared copy: TokenRouter and Vercel must not inherit an id they cannot serve. Only the
 # systemone base lists these ids in its catalog, so no chat backend's picker ever shows them.
 _VENDOR_MODELS["openrouter"].update({"jev-1.13": "typesafe/jev-1.13", "jev-latest": "~typesafe/jev-latest"})
+# TypeSafe's own API names the same model its own way: `jev-latest` (served as jev-1.13.0, measured
+# 2026-09-20) and `jev-preview`, "a preview version of jev-latest". `jev-1.13` is unknown there, so
+# the pinned id stays OpenRouter's alone and the preview stays TypeSafe's: a harness resolves the id
+# it names through the table of the connection that serves it, and nothing is guessed across them.
+_VENDOR_MODELS["typesafe"] = {"jev-latest": "jev-latest", "jev-preview": "jev-preview"}
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -6259,10 +6276,13 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
-# systemone: the two ids OpenRouter serves for Jev, measured live 2026-09-19 (jev-1.13 resolves to
-# typesafe/jev-1.13-20260917; jev-latest is OpenRouter's rolling alias of the same). A chat model is
-# not offered here: this base asks typed questions and a text model cannot answer them.
-_MODEL_CATALOG["systemone"] = {"default": "jev-1.13", "models": ["jev-1.13", "jev-latest"]}
+# systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
+# and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
+# connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
+# resolves to typesafe/jev-1.13-20260917 there; measured 2026-09-19 and 2026-09-20, see
+# _VENDOR_MODELS). A chat model is not offered here: this base asks typed questions and a text
+# model cannot answer them.
+_MODEL_CATALOG["systemone"] = {"default": "jev-latest", "models": ["jev-latest", "jev-preview", "jev-1.13"]}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
