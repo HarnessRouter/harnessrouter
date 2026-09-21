@@ -118,7 +118,7 @@ saved (11); the one run that hit the time cap is also the one that reached the n
 
 Rule 2 could not be checked on cline or dsh: through a custom OpenAI-format connection their
 turn records carry no served model (opencode's do, pi's do). The instance's console proxy still
-cut synchronous turns at five minutes (#214 is open); 20 runs went past it and were recovered
+cut synchronous turns at five minutes (#214 has since merged); 20 runs went past it and were recovered
 from the session list and graded from the record. Two earlier columns are set aside: cline on
 0.18.0 before #209 (36 of 50, input reported gross at 18.87M) and opencode before #216 (37 of
 48, output reported as 81k of visible text where the same tasks generate about 700k), the second
