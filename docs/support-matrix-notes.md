@@ -1309,8 +1309,20 @@ normaliser is the passthrough.
 
 ### The models
 
-`jev-1.13` and `jev-latest`, OpenRouter only (`typesafe/jev-1.13`, `~typesafe/jev-latest`), added to
-OpenRouter's vendor table after the shared copy so no other aggregator inherits an id it cannot
-serve. No chat model is listed on this base: the loop asks typed questions a text model cannot
-answer. TypeSafe's direct endpoint (`/v1/systemone`) is wired in the runner and not yet offered by
-the gateway.
+Jev under the ids its two providers serve, and nothing across them. OpenRouter: `jev-1.13`
+(`typesafe/jev-1.13`, resolving to typesafe/jev-1.13-20260917) and `jev-latest`
+(`~typesafe/jev-latest`), added to OpenRouter's vendor table after the shared copy so no other
+aggregator inherits an id it cannot serve. TypeSafe AI, the maker's own API (provider `typesafe`,
+base `https://api.typesafe.ai/v1`, decisions at `/v1/systemone`, a key checked at `/v1/models`,
+401 for a bad one): `jev-latest` (served as jev-1.13.0) and `jev-preview`; `jev-1.13` is "Unknown
+model" there (measured 2026-09-20). The base's default is `jev-latest`, the one id both serve, so a
+harness made on either connection runs. No chat model is listed on this base: the loop asks typed
+questions a text model cannot answer.
+
+**TypeSafe direct, measured 2026-09-20** on a derived image of 37a9159 with a fresh volume and a
+native key: the console's integrations route stores the connection with its base filled in and the
+key masked; `/v1/bases` shows jev-latest and jev-preview available and jev-1.13 unavailable without
+an OpenRouter connection; an order-desk turn on jev-preview completes in 6 actions (6316 in / 1408
+out), and on jev-latest the same; a turn on jev-1.13 with only a TypeSafe connection answers 400
+`invalid_input`, "no provider configured for backend systemone". The harness alone (`s1 run` with
+TYPESAFE_API_KEY) completes the order desk in 5 actions, 0.86 s wall.
