@@ -928,7 +928,7 @@ def _calibration_env(hv: dict | None, org: str, sid: str, timeout_s: int | None)
     if not inner:
         return None
     ttl = (int(timeout_s) + 600) if timeout_s else _CALIBRATION_TTL_S
-    return {"HR_API_URL": HR_PLATFORM_API_URL,
+    return {"HR_API_URL": HR_PLATFORM_API_URL, "HR_INNER_HARNESS": inner,
             "HR_CALIBRATION_TOKEN": _mint_calibration_token(sid, org, inner, ttl)}
 
 
@@ -6840,7 +6840,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         harness_id: str = "", max_step: int = 40,
                         timeout_s: int | None = None,
                         hdr_vals: dict[str, str] | None = None,
-                        partial_messages: bool = False,
+                        partial_messages: bool = False, probe: dict | None = None,
                         codex_appserver: bool = False,
                         hv: dict | None = None) -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
@@ -7018,6 +7018,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # A harness that drives another one: the platform's own API and a credential
                 # scoped to that harness, for this turn (see _calibration_env).
                 "env": _calibration_env(hv, org, sid, timeout_s),
+                # A probe (docs/dual-loop.md, Appendix B): `metadata.systemone.script` names the
+                # actions a scripted provider answers instead of the model. The additive
+                # extension point of the protocol; nothing else of the metadata reaches the runner.
+                "metadata": probe,
                 # idempotency: all _sandbox_json retries of THIS turn share the response id, so a
                 # lost/slow first reply that gets retried dedups to the same runner turn (no re-exec).
                 "idempotency_key": f"{translator.resp_id}:{name}",
@@ -7593,6 +7597,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
     meta = body.metadata or {}
+    probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # Request idempotency: the durable control store is the SINGLE authority (create_item = atomic
     # reservation). No in-process/blob/Redis fallback — a keyed request without the store fails
     # closed (503), never runs a divergent degraded path. idem_sha_v/idem_rhash are computed here
@@ -7866,7 +7871,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit_bg,
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
-                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
+                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
                     for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -7915,7 +7920,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
-                            timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
+                            timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
                         for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -7973,7 +7978,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
-                timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
+                timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):

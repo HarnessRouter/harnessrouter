@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import pathlib
 import sys
 import uuid
@@ -74,7 +75,7 @@ def _provider_path(provider: str) -> str:
 
 def run_turn(job: dict, provider=None, emit=_emit) -> dict:
     """Run one turn and emit its events; returns the result event. `provider` is injectable for tests."""
-    from systemone_harness import Controller, DecisionProvider
+    from systemone_harness import Config, Controller, DecisionProvider, ScriptProvider, StateEncoder
     from systemone_harness.envs import McpEnvironment, OrderWorkflow
     from systemone_harness.trace import Step, reasoning_text
 
@@ -86,6 +87,19 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
 
     notes: list[str] = []
     servers = [e for e in (_server_entry(s) for s in (job.get("mcp_servers") or [])) if e]
+    # The package's configuration (docs/dual-loop.md, Appendix B): config.yaml at the root the
+    # environment's server runs from. Its instructions and gate replace the space's, its encoder
+    # settings shape the state, its version rides the trace; the same file reaches the server as
+    # SYSTEMONE_CONFIG, so the environment reads its tunables from where the loop reads.
+    cfg = None
+    root = str((servers[0] or {}).get("cwd") or "") if servers else ""
+    cfg_path = os.path.join(root, "config.yaml") if root else ""
+    if cfg_path and os.path.exists(cfg_path):
+        try:
+            cfg = Config.load(cfg_path)
+            servers[0]["env"] = {**(servers[0].get("env") or {}), "SYSTEMONE_CONFIG": cfg_path}
+        except Exception as exc:  # noqa: BLE001 - a package whose configuration does not load runs without it, and says so
+            notes.append(f"config.yaml was not read ({exc}); the package runs without it.")
     env = None
     try:
         if servers:
@@ -101,6 +115,15 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
             env = OrderWorkflow("ship_cheapest")
             space = OrderWorkflow.action_space()
             notes.append("No MCP server is configured; the built-in order desk is the environment.")
+        encoder = None
+        if cfg is not None:
+            if cfg.instructions:
+                space.instructions = cfg.instructions
+            space.gate = cfg.gate
+            if cfg.encoder:
+                encoder = StateEncoder(instructions=space.instructions,
+                                       **{k: int(v) for k, v in cfg.encoder.items() if k in ("history_steps", "budget_tokens")})
+            notes.append(f"Configuration v{cfg.version} from the package.")
 
         state_dir = cwd / ".harness" / "systemone" / sid
         prior: list[Step] = []
@@ -120,6 +143,12 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
                                         path=_provider_path(str(job.get("provider") or "openrouter")),
                                         api_key=str(job.get("api_key") or ""), model=model,
                                         headers={"X-Title": "HarnessRouter"})
+        # A probe: the request's metadata.systemone.script names the actions a scripted provider
+        # answers, so the environment is measured at a place without the model deciding anything.
+        script = ((job.get("metadata") or {}).get("systemone") or {}).get("script")
+        if script:
+            provider = ScriptProvider([str(a) for a in script])
+            notes.append("A scripted provider answers this run, a probe; the model is not called.")
         first = {"done": False}
 
         def on_step(step) -> None:
@@ -140,9 +169,11 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
                 emit({"type": "assistant", "message": {"content": [
                     {"type": "thinking", "thinking": reasoning_text(step)}]}})
 
-        ctl = Controller(space, env, provider, max_steps=int(job.get("max_turns") or 100),
+        ctl = Controller(space, env, provider, encoder=encoder, max_steps=int(job.get("max_turns") or 100),
                          timeout_seconds=job.get("timeout_seconds") or None,
-                         disabled=set(job.get("tools_disabled") or []), on_step=on_step)
+                         disabled=set(job.get("tools_disabled") or []), on_step=on_step,
+                         config_version=int(cfg.version) if cfg else 0,
+                         trace_path=str(cwd / "trace.json"))   # the run record, in the session workspace
         run = ctl.run(str(job.get("prompt") or ""), reset=not resumed,
                       task_instructions=str(job.get("agent_doc") or ""), prior=prior)
         if not first["done"] and notes:

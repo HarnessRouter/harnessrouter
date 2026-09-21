@@ -31,7 +31,7 @@ def test_a_turn_of_such_a_harness_is_handed_the_api_and_a_scoped_credential_and_
     assert gw._calibration_env({"calibrates": ""}, "org", "hsess1", 600) is None
     assert gw._calibration_env(None, "org", "hsess1", 600) is None
     env = gw._calibration_env({"calibrates": INNER}, "org-a", "hsess1", 600)
-    assert env["HR_API_URL"] == gw.HR_PLATFORM_API_URL
+    assert env["HR_API_URL"] == gw.HR_PLATFORM_API_URL and env["HR_INNER_HARNESS"] == INNER
     tok = env["HR_CALIBRATION_TOKEN"]
     assert tok.startswith("hrc_")
     c = gw._verify_calibration_token(tok)

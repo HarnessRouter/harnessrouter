@@ -5719,7 +5719,8 @@ def _systemone_relay_route(provider: str, base_url: str, api_key: str) -> tuple[
 def _build_systemone(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                      resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                      tools_disabled: list[str] | None = None, max_turns: int | None = None,
-                     timeout_seconds: int | None = None, agent_doc: str = "") -> list[str]:
+                     timeout_seconds: int | None = None, agent_doc: str = "",
+                     metadata: dict | None = None) -> list[str]:
     """The System One Harness, one turn: the job rides argv as JSON, the driver emits claude-shaped
     stream-json. The harness's MCP servers ARE the environment (the first one; the driver says so
     in the trace when there are more); with none, the built-in order desk. `tools_disabled` are
@@ -5743,7 +5744,7 @@ def _build_systemone(provider: str, auth: Auth, model: str, prompt: str, cwd: st
            "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")],
            "tools_disabled": list(tools_disabled or []),
            "max_turns": max_turns, "timeout_seconds": timeout_seconds,
-           "agent_doc": agent_doc or ""}
+           "agent_doc": agent_doc or "", "metadata": metadata or None}
     return [SYSTEMONE_PYTHON, SYSTEMONE_DRIVER, json.dumps(job)]
 
 
@@ -7202,6 +7203,7 @@ class TurnReq(BaseModel):
     image_auth: dict | None = None         # {base_url, api_key, model} for image generation via the broker
     env: dict | None = None                # names for the turn process, HR_-prefixed only (a harness that
                                            # drives another one gets HR_API_URL + HR_CALIBRATION_TOKEN)
+    metadata: dict | None = None           # systemone: {"systemone": {"script": [...]}} selects a scripted provider (a probe)
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
     vision: bool = True                    # pi: whether the model's channel accepts image input
@@ -7403,7 +7405,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
                                resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                                tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                               timeout_seconds=req.timeout_seconds, agent_doc=agent_doc)
+                               timeout_seconds=req.timeout_seconds, agent_doc=agent_doc,
+                               metadata=req.metadata)
     elif backend == "gemini":
         model = model or GEMINI_DEFAULT_MODEL
         cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,

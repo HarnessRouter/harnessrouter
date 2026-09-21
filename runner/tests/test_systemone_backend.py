@@ -193,3 +193,22 @@ def test_an_mcp_entry_carries_its_auth_as_a_header_and_a_targetless_one_is_dropp
     assert e == {"url": "https://h/mcp", "headers": {"A": "b", "Authorization": "Bearer tok"}, "transport": "sse"}
     assert drv._server_entry({"name": "plugin", "command": "./run.sh", "args": [1]})["args"] == ["1"]
     assert drv._server_entry({"name": "nothing"}) is None
+
+
+def test_a_probe_answers_from_its_script_and_the_trace_lands_in_the_workspace(tmp_path):
+    """docs/dual-loop.md, Appendix B: `metadata.systemone.script` selects a scripted provider, so the
+    environment is measured at a place without the model; the run record is trace.json in the
+    session workspace, with the configuration version (0 here: the desk ships no config.yaml)."""
+    import json
+    events = []
+    job = {"cwd": str(tmp_path), "model": "jev-latest", "prompt": "ship it", "provider": "typesafe",
+           "base_url": "http://127.0.0.1:1/v1", "api_key": "x", "max_turns": 4,
+           "metadata": {"systemone": {"script": ["pack"]}}}
+    result = drv.run_turn(job, emit=events.append)
+    assert result["model"] == "script/s1"                 # the scripted provider, not the model
+    assert result["is_error"] is False and "handoff" in result
+    trace = json.loads((tmp_path / "trace.json").read_text())
+    assert trace.get("config_version") == 0 and isinstance(trace.get("steps"), list)
+    thinking = " ".join(c.get("thinking", "") for e in events if e.get("type") == "assistant"
+                        for c in e["message"]["content"] if c.get("type") == "thinking")
+    assert "probe" in thinking
