@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import pathlib
 import sys
 import uuid
@@ -66,6 +67,28 @@ def _server_entry(s: dict) -> dict | None:
     return None
 
 
+def _package_root(entry: dict | None) -> str:
+    """The root of the package a stdio server runs from. The runner hands a plugin's server as a
+    launcher script (see the runner's _plugin_launchers): the entry carries no cwd, and the script
+    exports PLUGIN_ROOT before it execs the server; that export is read here, so the root is the
+    one the server itself gets, never a guess. An entry with a cwd of its own keeps it."""
+    e = entry or {}
+    if e.get("cwd"):
+        return str(e["cwd"])
+    cmd = str(e.get("command") or "")
+    if not cmd.endswith(".sh") or not os.path.isfile(cmd):
+        return ""
+    try:
+        import shlex
+        for line in open(cmd, encoding="utf-8"):
+            if line.startswith("export PLUGIN_ROOT="):
+                parts = shlex.split(line[len("export "):])
+                return parts[0].split("=", 1)[1] if parts and "=" in parts[0] else ""
+    except (OSError, ValueError):
+        return ""
+    return ""
+
+
 def _provider_path(provider: str) -> str:
     """Where the decisions endpoint sits under the route's base. OpenRouter: /api + /alpha/decisions.
     TypeSafe direct: host + /v1/systemone."""
@@ -74,7 +97,7 @@ def _provider_path(provider: str) -> str:
 
 def run_turn(job: dict, provider=None, emit=_emit) -> dict:
     """Run one turn and emit its events; returns the result event. `provider` is injectable for tests."""
-    from systemone_harness import Controller, DecisionProvider
+    from systemone_harness import Config, Controller, DecisionProvider, ScriptProvider, StateEncoder
     from systemone_harness.envs import McpEnvironment, OrderWorkflow
     from systemone_harness.trace import Step, reasoning_text
 
@@ -86,6 +109,19 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
 
     notes: list[str] = []
     servers = [e for e in (_server_entry(s) for s in (job.get("mcp_servers") or [])) if e]
+    # The package's configuration (docs/dual-loop.md, Appendix B): config.yaml at the root the
+    # environment's server runs from. Its instructions and gate replace the space's, its encoder
+    # settings shape the state, its version rides the trace; the same file reaches the server as
+    # SYSTEMONE_CONFIG, so the environment reads its tunables from where the loop reads.
+    cfg = None
+    root = _package_root(servers[0]) if servers else ""
+    cfg_path = os.path.join(root, "config.yaml") if root else ""
+    if cfg_path and os.path.exists(cfg_path):
+        try:
+            cfg = Config.load(cfg_path)
+            servers[0]["env"] = {**(servers[0].get("env") or {}), "SYSTEMONE_CONFIG": cfg_path}
+        except Exception as exc:  # noqa: BLE001 - a package whose configuration does not load runs without it, and says so
+            notes.append(f"config.yaml was not read ({exc}); the package runs without it.")
     env = None
     try:
         if servers:
@@ -101,6 +137,15 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
             env = OrderWorkflow("ship_cheapest")
             space = OrderWorkflow.action_space()
             notes.append("No MCP server is configured; the built-in order desk is the environment.")
+        encoder = None
+        if cfg is not None:
+            if cfg.instructions:
+                space.instructions = cfg.instructions
+            space.gate = cfg.gate
+            if cfg.encoder:
+                encoder = StateEncoder(instructions=space.instructions,
+                                       **{k: int(v) for k, v in cfg.encoder.items() if k in ("history_steps", "budget_tokens")})
+            notes.append(f"Configuration v{cfg.version} from the package.")
 
         state_dir = cwd / ".harness" / "systemone" / sid
         prior: list[Step] = []
@@ -120,6 +165,12 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
                                         path=_provider_path(str(job.get("provider") or "openrouter")),
                                         api_key=str(job.get("api_key") or ""), model=model,
                                         headers={"X-Title": "HarnessRouter"})
+        # A probe: the request's metadata.systemone.script names the actions a scripted provider
+        # answers, so the environment is measured at a place without the model deciding anything.
+        script = ((job.get("metadata") or {}).get("systemone") or {}).get("script")
+        if script:
+            provider = ScriptProvider([str(a) for a in script])
+            notes.append("A scripted provider answers this run, a probe; the model is not called.")
         first = {"done": False}
 
         def on_step(step) -> None:
@@ -140,9 +191,11 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
                 emit({"type": "assistant", "message": {"content": [
                     {"type": "thinking", "thinking": reasoning_text(step)}]}})
 
-        ctl = Controller(space, env, provider, max_steps=int(job.get("max_turns") or 100),
+        ctl = Controller(space, env, provider, encoder=encoder, max_steps=int(job.get("max_turns") or 100),
                          timeout_seconds=job.get("timeout_seconds") or None,
-                         disabled=set(job.get("tools_disabled") or []), on_step=on_step)
+                         disabled=set(job.get("tools_disabled") or []), on_step=on_step,
+                         config_version=int(cfg.version) if cfg else 0,
+                         trace_path=str(cwd / "trace.json"))   # the run record, in the session workspace
         run = ctl.run(str(job.get("prompt") or ""), reset=not resumed,
                       task_instructions=str(job.get("agent_doc") or ""), prior=prior)
         if not first["done"] and notes:
@@ -170,6 +223,7 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
             subtype, is_error = "error", True
         result = {"type": "result", "subtype": subtype, "is_error": is_error,
                   "result": text if not is_error else (run.error or text), "reason": run.reason,
+                  "handoff": _handoff_of(run),
                   "session_id": sid, "model": run.served_model or model,
                   "usage": {"input_tokens": int(run.usage.get("input_tokens", 0)),
                             "output_tokens": int(run.usage.get("output_tokens", 0))} if run.steps else {}}
@@ -181,6 +235,23 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
                 env.close()
             except Exception:  # noqa: BLE001 - closing is best effort
                 pass
+
+
+def _handoff_of(run) -> dict | None:
+    """The run's handoff branch, when it ended on a refusal or an escalation: the state it stopped
+    on, the questions, the answers with their probabilities, the weakest judgment, the threshold,
+    the risk class and the step (System One Harness 0.4.0, SystemOneHarness#3). None on every other
+    ending, and None on a harness that predates the field."""
+    ho = getattr(run, "handoff", None)
+    if ho is None:
+        return None
+    if isinstance(ho, dict):
+        return ho
+    try:
+        import dataclasses
+        return dataclasses.asdict(ho)
+    except Exception:  # noqa: BLE001 - an object of another shape: its public fields
+        return {k: v for k, v in vars(ho).items() if not k.startswith("_")}
 
 
 def _blank_step() -> dict:
@@ -200,7 +271,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_turn(job)
     except Exception as exc:  # noqa: BLE001 - a crash is a failed turn with its reason, never a silent exit
         _emit({"type": "result", "subtype": "error", "is_error": True,
-               "result": f"{type(exc).__name__}: {exc}", "reason": "harness_error", "usage": {}})
+               "result": f"{type(exc).__name__}: {exc}", "reason": "harness_error", "handoff": None,
+               "usage": {}})
         return 1
     return 0 if not result.get("is_error") else 1
 
