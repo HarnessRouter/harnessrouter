@@ -212,3 +212,20 @@ def test_a_probe_answers_from_its_script_and_the_trace_lands_in_the_workspace(tm
     thinking = " ".join(c.get("thinking", "") for e in events if e.get("type") == "assistant"
                         for c in e["message"]["content"] if c.get("type") == "thinking")
     assert "probe" in thinking
+
+
+def test_the_package_root_is_read_from_the_launcher_the_runner_hands_the_driver(tmp_path):
+    """The runner hands a plugin's server as a launcher script with no cwd; the script exports
+    PLUGIN_ROOT before it execs the server. The driver reads that export, so config.yaml is looked
+    for where the server itself runs (measured on hr-test 2026-09-21: the first run on a package
+    with a config carried config_version 0 because the root was taken from a cwd that is not there)."""
+    root = tmp_path / ".harness" / "plugins" / "mario_env"
+    root.mkdir(parents=True)
+    launcher = tmp_path / ".launch-mario.sh"
+    import shlex
+    launcher.write_text("#!/bin/sh\nexport FOO=bar\nexport PLUGIN_ROOT=" + shlex.quote(str(root)) + "\n"
+                        "export PLUGIN_DATA=/x\nexec /bin/true \"$@\"\n")
+    assert drv._package_root({"command": str(launcher), "args": []}) == str(root)
+    assert drv._package_root({"command": str(launcher), "cwd": "/elsewhere"}) == "/elsewhere"
+    assert drv._package_root({"command": "/usr/bin/env"}) == ""
+    assert drv._package_root({"url": "https://x/mcp"}) == "" and drv._package_root(None) == ""

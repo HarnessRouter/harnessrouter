@@ -67,6 +67,28 @@ def _server_entry(s: dict) -> dict | None:
     return None
 
 
+def _package_root(entry: dict | None) -> str:
+    """The root of the package a stdio server runs from. The runner hands a plugin's server as a
+    launcher script (see the runner's _plugin_launchers): the entry carries no cwd, and the script
+    exports PLUGIN_ROOT before it execs the server; that export is read here, so the root is the
+    one the server itself gets, never a guess. An entry with a cwd of its own keeps it."""
+    e = entry or {}
+    if e.get("cwd"):
+        return str(e["cwd"])
+    cmd = str(e.get("command") or "")
+    if not cmd.endswith(".sh") or not os.path.isfile(cmd):
+        return ""
+    try:
+        import shlex
+        for line in open(cmd, encoding="utf-8"):
+            if line.startswith("export PLUGIN_ROOT="):
+                parts = shlex.split(line[len("export "):])
+                return parts[0].split("=", 1)[1] if parts and "=" in parts[0] else ""
+    except (OSError, ValueError):
+        return ""
+    return ""
+
+
 def _provider_path(provider: str) -> str:
     """Where the decisions endpoint sits under the route's base. OpenRouter: /api + /alpha/decisions.
     TypeSafe direct: host + /v1/systemone."""
@@ -92,7 +114,7 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
     # settings shape the state, its version rides the trace; the same file reaches the server as
     # SYSTEMONE_CONFIG, so the environment reads its tunables from where the loop reads.
     cfg = None
-    root = str((servers[0] or {}).get("cwd") or "") if servers else ""
+    root = _package_root(servers[0]) if servers else ""
     cfg_path = os.path.join(root, "config.yaml") if root else ""
     if cfg_path and os.path.exists(cfg_path):
         try:
