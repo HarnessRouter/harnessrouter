@@ -1270,7 +1270,7 @@ both from the doc.
 ## systemone: the System One Harness as the fifteenth base (2026-09-19)
 
 Not a coding CLI. The base runs the open-source System One Harness
-(github.com/HarnessRouter/SystemOneHarness, Apache-2.0, pinned at v0.3.1 in `docker/entrypoint.sh`)
+(github.com/HarnessRouter/SystemOneHarness, Apache-2.0, pinned at v0.4.0 in `docker/entrypoint.sh`)
 over TypeSafe's Jev, a decision model: it answers typed questions (a choice, a yes/no probability,
 a score) with probabilities in one pass and writes no text. Every step is one request carrying
 the next action as a choice over what the environment offers right now, every parameter of every
@@ -1326,3 +1326,32 @@ an OpenRouter connection; an order-desk turn on jev-preview completes in 6 actio
 out), and on jev-latest the same; a turn on jev-1.13 with only a TypeSafe connection answers 400
 `invalid_input`, "no provider configured for backend systemone". The harness alone (`s1 run` with
 TYPESAFE_API_KEY) completes the order desk in 5 actions, 0.86 s wall.
+### The dual loop (2026-09-21)
+
+An outer harness calibrates an inner one through the platform's own API (docs/dual-loop.md in the
+System One Harness repository, Appendix B). On this tree:
+
+- **A harness that drives another one.** `calibrates` on a harness names the one harness it may
+  drive. Every turn of such a harness is handed `HR_API_URL`, `HR_INNER_HARNESS` and
+  `HR_CALIBRATION_TOKEN`, a credential signed like the broker's, scoped to that harness and good for
+  the turn's wall-clock cap plus a margin. With it the turn starts that harness's runs, reads their
+  sessions, turns and files, reads and publishes that harness's package (`PUT
+  /v1/harnesses/{id}/plugin`, or `PUT /v1/harnesses/{id}` with `plugins`) and relaunches its kit;
+  every other route answers 403, a session of another harness is not found, and the credential
+  cannot change `calibrates`. Never an org key, never a provider key.
+- **The package's configuration.** The driver reads `config.yaml` at the root of the package the
+  environment's server runs from (the root is the `PLUGIN_ROOT` the runner's launcher exports): its
+  instructions and gate replace the space's, its encoder settings shape the state, its version rides
+  the trace, and the server gets the same file as `SYSTEMONE_CONFIG`. `trace.json` lands in the
+  session workspace. A request's `metadata.systemone.script` selects a scripted provider, a probe.
+- **The handoff.** A run that ends on a refusal or an escalation carries the branch on the result
+  event, the status body and the response's `incomplete_details` beside its reason; the console says
+  where it handed off and on what judgment. Null on every other ending.
+
+Measured on hr-test, 2026-09-21, on a derived image of 851e4d1 with the harness at v0.4.0: a
+Calibrator on the pi base read the Mario harness by name, listed its sessions, was refused on keys
+and on the harness list, and started an inner run on it; a Mario run on the package's config v1
+wrote `trace.json` with `config_version: 1` and 61 archived frames; a probe with a four-action
+script ran on `script/s1` and finished. The calibration itself (baseline, one change, validation)
+runs on a Calibrator on the claude base with the calibrate package.
+

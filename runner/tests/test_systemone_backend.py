@@ -121,6 +121,7 @@ def test_a_turn_is_init_then_a_call_and_result_per_action_then_the_sentence_and_
         assert text[-1]["message"]["content"][0]["text"] == "The environment reached a terminal state after 6 actions."
         assert events[-1] is result and result["subtype"] == "success" and result["is_error"] is False
         assert result["reason"] == "environment_terminal" and result["usage"]["input_tokens"] > 0
+        assert result["handoff"] is None                 # a completed run hands nothing off (#227)
         assert result["model"] == "recorded/jev" and result["session_id"] == events[0]["session_id"]
         assert server._status_from_result(result, 0) == "done"
         # the manifest is a file in the workspace, where the artifact cards read from
@@ -165,6 +166,13 @@ def test_a_refusal_streak_is_incomplete_with_its_reason_not_a_failure():
         result = drv.run_turn(_job(cwd, resume_session_id=sid), provider=RecordedProvider(shaky), emit=events.append)
         assert result["subtype"] == "incomplete" and result["is_error"] is False
         assert result["reason"] == "no_confident_action"
+        # the handoff rides the result event beside the reason: the branch a router can send on
+        # without reading the trace (#227). A harness that predates the field hands None.
+        assert "handoff" in result
+        if result["handoff"] is not None:
+            assert isinstance(result["handoff"], dict)
+            assert result["handoff"].get("reason") == "no_confident_action"
+            assert {"state", "questions", "answers", "weakest", "threshold", "risk", "step"} <= set(result["handoff"])
         assert server._status_from_result(result, 0) == "incomplete"
         thinking = [e["message"]["content"][0]["thinking"] for e in events
                     if e["type"] == "assistant" and e["message"]["content"][0]["type"] == "thinking"]
@@ -185,3 +193,39 @@ def test_an_mcp_entry_carries_its_auth_as_a_header_and_a_targetless_one_is_dropp
     assert e == {"url": "https://h/mcp", "headers": {"A": "b", "Authorization": "Bearer tok"}, "transport": "sse"}
     assert drv._server_entry({"name": "plugin", "command": "./run.sh", "args": [1]})["args"] == ["1"]
     assert drv._server_entry({"name": "nothing"}) is None
+
+
+def test_a_probe_answers_from_its_script_and_the_trace_lands_in_the_workspace(tmp_path):
+    """docs/dual-loop.md, Appendix B: `metadata.systemone.script` selects a scripted provider, so the
+    environment is measured at a place without the model; the run record is trace.json in the
+    session workspace, with the configuration version (0 here: the desk ships no config.yaml)."""
+    import json
+    events = []
+    job = {"cwd": str(tmp_path), "model": "jev-latest", "prompt": "ship it", "provider": "typesafe",
+           "base_url": "http://127.0.0.1:1/v1", "api_key": "x", "max_turns": 4,
+           "metadata": {"systemone": {"script": ["pack"]}}}
+    result = drv.run_turn(job, emit=events.append)
+    assert result["model"] == "script/s1"                 # the scripted provider, not the model
+    assert result["is_error"] is False and "handoff" in result
+    trace = json.loads((tmp_path / "trace.json").read_text())
+    assert trace.get("config_version") == 0 and isinstance(trace.get("steps"), list)
+    thinking = " ".join(c.get("thinking", "") for e in events if e.get("type") == "assistant"
+                        for c in e["message"]["content"] if c.get("type") == "thinking")
+    assert "probe" in thinking
+
+
+def test_the_package_root_is_read_from_the_launcher_the_runner_hands_the_driver(tmp_path):
+    """The runner hands a plugin's server as a launcher script with no cwd; the script exports
+    PLUGIN_ROOT before it execs the server. The driver reads that export, so config.yaml is looked
+    for where the server itself runs (measured on hr-test 2026-09-21: the first run on a package
+    with a config carried config_version 0 because the root was taken from a cwd that is not there)."""
+    root = tmp_path / ".harness" / "plugins" / "mario_env"
+    root.mkdir(parents=True)
+    launcher = tmp_path / ".launch-mario.sh"
+    import shlex
+    launcher.write_text("#!/bin/sh\nexport FOO=bar\nexport PLUGIN_ROOT=" + shlex.quote(str(root)) + "\n"
+                        "export PLUGIN_DATA=/x\nexec /bin/true \"$@\"\n")
+    assert drv._package_root({"command": str(launcher), "args": []}) == str(root)
+    assert drv._package_root({"command": str(launcher), "cwd": "/elsewhere"}) == "/elsewhere"
+    assert drv._package_root({"command": "/usr/bin/env"}) == ""
+    assert drv._package_root({"url": "https://x/mcp"}) == "" and drv._package_root(None) == ""

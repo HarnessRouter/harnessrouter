@@ -105,6 +105,11 @@ function makeWbMarkdown(getSid: () => string | null, getHarness?: () => string |
 const BASE_TINT: Record<string, string> = {
   codex: '#0E8C6A', 'claude-code': '#C2613D', pi: '#6E55FF', hermes: '#2563EB', omp: '#FF6B00',
 };
+/** A probability from a handoff as two decimals, or a question mark when it is not a number. */
+function probText(x: unknown): string {
+  return typeof x === 'number' ? x.toFixed(2) : '?';
+}
+
 function baseTint(id: string): string {
   if (BASE_TINT[id]) return BASE_TINT[id];
   let h = 0;
@@ -583,6 +588,13 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
                       : m.incompleteReason === 'interrupted'
                         ? 'The turn was interrupted before it finished, for example by a server restart. No limit was hit.'
                         : null}
+                  </div>
+                )}
+                {m.status === 'incomplete' && m.handoff && (
+                  <div className="wbx-incomplete-why">
+                    {`It handed off at step ${String(m.handoff.step ?? '?')}: ${String(m.handoff.reason ?? m.incompleteReason ?? '')}. `
+                      + `The weakest judgment was ${probText(m.handoff.weakest)} against a threshold of ${probText(m.handoff.threshold)}`
+                      + `${m.handoff.risk ? ` on a ${String(m.handoff.risk)} action` : ''}.`}
                   </div>
                 )}
                 <OutputFiles files={m.files.filter((f) => !isInternalOutput(f.filename))}
