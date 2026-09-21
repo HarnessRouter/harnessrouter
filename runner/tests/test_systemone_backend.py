@@ -121,6 +121,7 @@ def test_a_turn_is_init_then_a_call_and_result_per_action_then_the_sentence_and_
         assert text[-1]["message"]["content"][0]["text"] == "The environment reached a terminal state after 6 actions."
         assert events[-1] is result and result["subtype"] == "success" and result["is_error"] is False
         assert result["reason"] == "environment_terminal" and result["usage"]["input_tokens"] > 0
+        assert result["handoff"] is None                 # a completed run hands nothing off (#227)
         assert result["model"] == "recorded/jev" and result["session_id"] == events[0]["session_id"]
         assert server._status_from_result(result, 0) == "done"
         # the manifest is a file in the workspace, where the artifact cards read from
@@ -165,6 +166,13 @@ def test_a_refusal_streak_is_incomplete_with_its_reason_not_a_failure():
         result = drv.run_turn(_job(cwd, resume_session_id=sid), provider=RecordedProvider(shaky), emit=events.append)
         assert result["subtype"] == "incomplete" and result["is_error"] is False
         assert result["reason"] == "no_confident_action"
+        # the handoff rides the result event beside the reason: the branch a router can send on
+        # without reading the trace (#227). A harness that predates the field hands None.
+        assert "handoff" in result
+        if result["handoff"] is not None:
+            assert isinstance(result["handoff"], dict)
+            assert result["handoff"].get("reason") == "no_confident_action"
+            assert {"state", "questions", "answers", "weakest", "threshold", "risk", "step"} <= set(result["handoff"])
         assert server._status_from_result(result, 0) == "incomplete"
         thinking = [e["message"]["content"][0]["thinking"] for e in events
                     if e["type"] == "assistant" and e["message"]["content"][0]["type"] == "thinking"]

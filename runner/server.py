@@ -6319,6 +6319,10 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                      else "timeout" if rec.get("capped")
                      else _status_from_result(result_ev, rc))
     rec["reason"] = str((result_ev or {}).get("reason") or "")
+    # The handoff a run ended on (systemone: the state it refused or escalated on), or None; it
+    # rides the status body beside the reason so the gateway can report it without the trace.
+    _ho = (result_ev or {}).get("handoff")
+    rec["handoff"] = _ho if isinstance(_ho, dict) else None
     # Never leave a failure opaque: surface the captured CLI stderr (and result-event error) so the
     # gateway/trace shows WHY it failed (throttling, model error, etc.) instead of an empty string.
     if rec["status"] in ("failed", "error", "timeout"):
@@ -7196,6 +7200,8 @@ class TurnReq(BaseModel):
     skills_suppressed: list[str] | None = None  # built-in skill names to NOT mount (harness disabled them)
     tools_disabled: list[str] | None = None     # built-in tool names to disable (claude: --disallowedTools)
     image_auth: dict | None = None         # {base_url, api_key, model} for image generation via the broker
+    env: dict | None = None                # names for the turn process, HR_-prefixed only (a harness that
+                                           # drives another one gets HR_API_URL + HR_CALIBRATION_TOKEN)
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
     vision: bool = True                    # pi: whether the model's channel accepts image input
@@ -7286,6 +7292,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                      ("HR_IMAGE_MODEL", req.image_auth.get("model"))):
             if v:
                 env[k] = str(v)
+    # Names the gateway hands the turn process for the platform's own API: a harness that drives
+    # another one gets HR_API_URL and HR_CALIBRATION_TOKEN, a credential scoped to that harness
+    # and expiring with the turn. HR_-prefixed only, so nothing here shadows a CLI's own variable.
+    for k, val in (req.env or {}).items():
+        if isinstance(k, str) and k.startswith("HR_") and val not in (None, ""):
+            env[k] = str(val)
     # CRITICAL for resume: both CLIs write their conversation transcripts under $HOME
     # (~/.claude/projects/*.jsonl, ~/.codex/sessions/*) — NOT under CLAUDE_CONFIG_DIR. The default
     # $HOME is outside /workspace, so transcripts were never checkpointed and `--resume` found nothing
@@ -7533,4 +7545,5 @@ def get_turn(turn_id: str, since: int = 0) -> dict:
             "result": rec.get("result", ""), "exit_code": rec.get("exit_code"),
             "error": rec.get("error"), "backend": rec["backend"], "model": rec["model"],
             "session_id": rec.get("session_id"), "reason": rec.get("reason") or "",
+            "handoff": rec.get("handoff"),
             "events": evs, "n_total": n, "elapsed": round(time.time() - rec["started"], 1)}

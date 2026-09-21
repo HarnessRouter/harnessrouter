@@ -51,6 +51,8 @@ export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]
    *  gateway's incomplete_details. Absent on records from before the field existed, which is
    *  why the badge itself must not assert a cause. */
   incompleteReason?: string;
+  /** The handoff a run ended on (a refusal or an escalation): reason, step, weakest, threshold, risk. */
+  handoff?: Record<string, unknown>;
   /** Seconds this turn took and the credits it cost, when the gateway kept them. */
   elapsed?: number; credits?: number }
 // AGENTS.md / CLAUDE.md are harness-internal instruction files the runner seeds into the workspace
@@ -84,6 +86,7 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
     if (st === 'running') running = true;
     m.push({ role: 'assistant', blocks, files: t.files || [], status: st,
       incompleteReason: (t as { incomplete_reason?: string }).incomplete_reason || undefined,
+      handoff: (t as { handoff?: Record<string, unknown> | null }).handoff || undefined,
       elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined,
       credits: typeof t.credits === 'number' ? t.credits : undefined });
   }

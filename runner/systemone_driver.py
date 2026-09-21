@@ -170,6 +170,7 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
             subtype, is_error = "error", True
         result = {"type": "result", "subtype": subtype, "is_error": is_error,
                   "result": text if not is_error else (run.error or text), "reason": run.reason,
+                  "handoff": _handoff_of(run),
                   "session_id": sid, "model": run.served_model or model,
                   "usage": {"input_tokens": int(run.usage.get("input_tokens", 0)),
                             "output_tokens": int(run.usage.get("output_tokens", 0))} if run.steps else {}}
@@ -181,6 +182,23 @@ def run_turn(job: dict, provider=None, emit=_emit) -> dict:
                 env.close()
             except Exception:  # noqa: BLE001 - closing is best effort
                 pass
+
+
+def _handoff_of(run) -> dict | None:
+    """The run's handoff branch, when it ended on a refusal or an escalation: the state it stopped
+    on, the questions, the answers with their probabilities, the weakest judgment, the threshold,
+    the risk class and the step (System One Harness 0.4.0, SystemOneHarness#3). None on every other
+    ending, and None on a harness that predates the field."""
+    ho = getattr(run, "handoff", None)
+    if ho is None:
+        return None
+    if isinstance(ho, dict):
+        return ho
+    try:
+        import dataclasses
+        return dataclasses.asdict(ho)
+    except Exception:  # noqa: BLE001 - an object of another shape: its public fields
+        return {k: v for k, v in vars(ho).items() if not k.startswith("_")}
 
 
 def _blank_step() -> dict:
@@ -200,7 +218,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_turn(job)
     except Exception as exc:  # noqa: BLE001 - a crash is a failed turn with its reason, never a silent exit
         _emit({"type": "result", "subtype": "error", "is_error": True,
-               "result": f"{type(exc).__name__}: {exc}", "reason": "harness_error", "usage": {}})
+               "result": f"{type(exc).__name__}: {exc}", "reason": "harness_error", "handoff": None,
+               "usage": {}})
         return 1
     return 0 if not result.get("is_error") else 1
 
