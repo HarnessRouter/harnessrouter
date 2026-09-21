@@ -915,6 +915,7 @@ def _calibration_route_allowed(method: str, path: str, inner: str) -> bool:
         ("GET", r"/v1/sessions/[^/]+/files(/.*)?"),
         ("GET", rf"/v1/harnesses/{h}"), ("PUT", rf"/v1/harnesses/{h}"),
         ("GET", rf"/v1/harnesses/{h}/plugin"), ("PUT", rf"/v1/harnesses/{h}/plugin"),
+        ("GET", rf"/v1/harnesses/{h}/plugins/[^/]+/files"),     # the package it calibrates, as installed
         ("POST", r"/v1/kits/[^/]+/launch"),
     )
     return any(m == method.upper() and re.fullmatch(pat, path) for m, pat in allowed)
