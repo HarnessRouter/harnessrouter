@@ -2703,6 +2703,14 @@ def _hb_seconds(v: dict) -> float:
         return 0.0
 
 
+def _born_seconds(d: dict) -> float:
+    """When a record or a session vertex was created; 0 when unreadable."""
+    try:
+        return float(d.get("created_at") or 0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 async def _reconcile_response(rid: str, rec: dict) -> dict:
     """Durable settler for an async (background) response record. GET /v1/responses/{id} is the
     ONLY completion signal a background poller has, so a record left at 'running' by a replica that
@@ -2716,6 +2724,15 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     if not sid:
         return rec
     v = await _vertex_get(sid) or {}
+    if not v:
+        # THE OWNER HAS NOT WRITTEN THE SESSION YET. A background record is readable the moment its
+        # POST returns, and the turn's task writes the session vertex a beat later; a poller that
+        # reads in between saw no vertex, an "infinitely stale" heartbeat and an age past the hard
+        # cap, and this settled the record as failed and PERSISTED it, so every later read said
+        # failed until the owner's final write (measured 2026-09-21: every inner run a calibrator
+        # started read `failed`, error null, for its whole life). A turn that has not started is
+        # not an orphan.
+        return rec
     vs = str(v.get("status") or "")
     settled = None
     if vs in ("done", "failed", "cancelled") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
@@ -2750,7 +2767,10 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             # That is the invented-diagnosis bug this field exists to remove, one layer down.
             # Unknown stays absent, and the console renders the neutral badge with no line.
     else:
-        hb = _hb_seconds(v)
+        # The floor under the heartbeat is the turn's birth, the record's and the vertex's: a vertex
+        # the turn has not stamped yet carries no heartbeat, and an orphan test that reads 0 for
+        # "never" calls every newborn a corpse. Staleness is measured from the last sign of life.
+        hb = max(_hb_seconds(v), _born_seconds(rec), _born_seconds(v))
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
             ts = await _trace_terminal_status(v.get("trace_blob"))
             if ts:
