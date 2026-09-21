@@ -68,6 +68,11 @@ def test_the_credential_reaches_its_harness_s_routes_and_nothing_else():
     assert ok("GET", "/v1/sessions/hsess1/files", INNER) and ok("GET", "/v1/sessions/hsess1/files/observations/000001.jpg", INNER)
     assert ok("GET", f"/v1/harnesses/{INNER}", INNER) and ok("PUT", f"/v1/harnesses/{INNER}", INNER)
     assert ok("GET", f"/v1/harnesses/{INNER}/plugin", INNER) and ok("PUT", f"/v1/harnesses/{INNER}/plugin", INNER)
+    # the installed package's files, which is what the outer loop edits (the export route is a
+    # generated package named after the harness, and publishing it back made a stray, 2026-09-21)
+    assert ok("GET", f"/v1/harnesses/{INNER}/plugins/mario-env/files", INNER)
+    assert not ok("GET", f"/v1/harnesses/{other}/plugins/mario-env/files", INNER)
+    assert not ok("PUT", f"/v1/harnesses/{INNER}/plugins/mario-env/files", INNER)
     assert ok("POST", "/v1/kits/mario/launch", INNER)
     assert ok("get", "/api/harness/v1/sessions", INNER)         # through the console's proxy prefix
     # not its harness, not its business
