@@ -43,6 +43,9 @@ jobs:
       # against the spec schema. It stays out of requirements.txt so it never ships in the image.
       - run: pip install -r gateway/requirements.txt pytest pytest-asyncio jsonschema
       - run: python -m pytest gateway/tests -q
+      # the benchmark suite's rules are pinned by its tests; they read the gateway's vendor tables
+      # from source (scripts/support-matrix/samemodel.py) and need nothing the gateway job lacks
+      - run: python -m pytest scripts/benchmark -q
 
   runner:
     runs-on: ubuntu-latest
