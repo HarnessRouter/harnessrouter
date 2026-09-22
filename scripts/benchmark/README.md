@@ -21,7 +21,7 @@ grader stay outside this repository, at `PACK_ROOT`, under the suite's own licen
 
 | Pack | Suite | Grading | Needs on the grading machine |
 |---|---|---|---|
-| `spreadsheetbench` | [SpreadsheetBench Verified](https://github.com/RUCKBReasoning/SpreadsheetBench) (400 real spreadsheet-manipulation questions, NeurIPS 2024 D&B) | the suite's `evaluation.py`, cell by cell over the answer range | `openpyxl`; LibreOffice (`soffice`) so a workbook saved with formulas has values to compare |
+| `spreadsheetbench` | [SpreadsheetBench Verified](https://github.com/RUCKBReasoning/SpreadsheetBench) (400 real spreadsheet-manipulation questions, NeurIPS 2024 D&B) | the suite's `evaluation.py`, cell by cell over the answer range | `openpyxl`; LibreOffice (`soffice`) so a workbook saved with formulas has values to compare. Each grade opens the engine with a profile of its own, so parallel workers do not refuse each other's lock; a workbook the engine could not evaluate is graded as saved and its record says "formulas unevaluated" and why |
 
 ## The rules that decide a row
 
@@ -43,7 +43,11 @@ web tool; `curl`, `wget`, `git clone`, `urllib.request`, `requests`, `httpx`, `a
 shell or script) or searched the machine for the task (a recursive `grep`, `rg` or `find`
 rooted outside the workspace; a package fetched under a suite's name) is a finding, never a
 score. Package installs are the sandbox's normal traffic and do not count; a URL merely spelled
-in code (an xlsx's XML namespaces) does not either; the workspace is the agent's to search.
+in code (an xlsx's XML namespaces) does not either; the workspace is the agent's to search, and
+so is `/tmp`, its scratch; every other absolute path is outside, the product's own code under
+`/app` included. A tool is network use by its name when the name says it goes out (web, fetch,
+browse, a URL, the internet, a search engine by name), not merely because it searches: cline's
+`search_files` and a codebase search search the workspace and are not findings.
 Disable the harness's web tools as well, on the harness or the connection: the rule catches what
 the switch missed — and on a harness whose switch is an instruction to the model (cline, dsh)
 it did, once in two hundred runs, fifteen minutes into a task the run did not finish. A

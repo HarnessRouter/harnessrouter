@@ -60,6 +60,16 @@ def test_a_web_tool_or_a_shell_that_reaches_out_is_network_use():
     assert network_use([{"name": "bash", "arguments": json.dumps({"command": "wget http://h/x"})}])
 
 
+def test_a_tool_that_searches_the_workspace_is_not_network_use():
+    """cline's search_files, a codebase search and a grep-shaped tool search the workspace; a
+    column that read their names as network use would turn its cleanest runs into findings. A
+    search is network use when its name says where: the web, the internet, a search engine."""
+    for name in ("search_files", "codebase_search", "file_search", "grep_search", "search", "Grep", "list_code_definition_names"):
+        assert network_use([{"name": name, "arguments": '{"regex": "TOTAL"}'}]) == [], name
+    for name in ("web_search", "WebSearch", "search_web", "internet_search", "google_search", "brave_search", "online_search"):
+        assert network_use([{"name": name, "arguments": '{"query": "x"}'}]) == [f"{name}: x"], name
+
+
 def test_pip_and_local_work_are_not_network_use():
     assert network_use([{"name": "bash", "arguments": json.dumps({"command": "pip install openpyxl pandas"})}]) == []
     assert network_use([{"name": "bash", "arguments": json.dumps({"command": "python3 -m pip install openpyxl && python3 solve.py"})}]) == []
@@ -88,7 +98,11 @@ def test_searching_the_machine_for_the_task_is_a_lookup():
     assert lookup_use(sh("find / -name '*golden*.xlsx' 2>/dev/null"))
     assert lookup_use(sh("cd /tmp && timeout 60 pip download spreadsheetbench -d /tmp/sb --no-deps"))
     assert lookup_use(sh("rg 'answer_position' /data 2>/dev/null"))
-    # the workspace is the agent's to search; pip for a library is not a lookup
+    # the product's own code and the base images' trees are outside the workspace too
+    assert lookup_use(sh("grep -rl 'answer_position' /app 2>/dev/null"))
+    assert lookup_use(sh("find /opt/harnessrouter -name 'dataset.json'"))
+    # the workspace is the agent's to search, and so is its scratch directory; pip for a library is not a lookup
+    assert lookup_use(sh("find /tmp -name '*.xlsx'")) == []
     assert lookup_use(sh("grep -rn 'TOTAL' /data/workspaces/hsess1234/ | head")) == []
     assert lookup_use(sh("find /data/workspaces/hsess1234 -name '*.xlsx'")) == []
     assert lookup_use(sh("grep -r 'Sheet1' . && pip install openpyxl pandas")) == []
@@ -133,6 +147,7 @@ def test_a_finding_is_listed_and_left_out_of_the_score():
     row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
     assert "| 1 | 1 (100%) |" in row, row            # one counted run of four
     assert "3 runs are findings, not counted" in row
+    assert "1 run is a finding, not counted" in render([_rec(task="a"), _rec(task="b", network=["webfetch"])])
     assert "reached the network: webfetch" in md and "served by integration:other" in md and "served as gpt-5.5" in md
     md = render([_rec(task="e", lookup=["bash: grep -rl x /"])])
     assert "looked for the task outside the workspace: bash: grep -rl x /" in md
@@ -141,7 +156,7 @@ def test_a_finding_is_listed_and_left_out_of_the_score():
 def test_a_capped_run_is_a_failure_and_the_row_says_how_many():
     md = render([_rec(task="a"), _rec(task="b", resolved=False, reward=0.0, capped=900, detail="time cap 900 s; no workbook produced")])
     row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
-    assert "| 2 | 1 (50%) |" in row and "1 runs hit the time cap (counted as failures)" in row, row
+    assert "| 2 | 1 (50%) |" in row and "1 run hit the time cap (counted as failures)" in row, row
 
 
 def test_a_task_the_grader_cannot_decide_is_left_out_not_failed():
@@ -150,7 +165,7 @@ def test_a_task_the_grader_cannot_decide_is_left_out_not_failed():
     md = render([_rec(task="a"), _rec(task="b", resolved=None, reward=None, detail="ungradable: the grader raises on the golden workbook: ValueError('b2b is not a valid coordinate or range')")])
     row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
     assert "| 1 | 1 (100%) |" in row, row
-    assert "1 runs the pack could not grade (the task fails its own grader), left out" in row and "findings" not in row
+    assert "1 run the pack could not grade (the task fails its own grader), left out" in row and "findings" not in row
 
 
 def test_an_unreported_served_model_is_noted_not_scored_against():

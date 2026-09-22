@@ -61,7 +61,12 @@ def api(method: str, path: str, body=None, raw: bool = False, timeout: int = 180
 # The first pilot's third task fetched its own ground truth from the suite's public data because
 # the task id was in a filename and the sandbox has internet. Packs anonymise; this reads the tool
 # calls the runner stored for the turn and names any that went out for anything but pip.
-WEB_TOOL = re.compile(r"web|fetch|search|browse|http", re.I)
+# A tool's NAME says it goes out when it names the web, a fetch, a browse, a URL or the internet.
+# "search" alone does not: cline's search_files, codex's codebase search and a grep-shaped tool
+# search the workspace, and a column that called them network use would turn its cleanest runs
+# into findings. A search is network use when the name says where it searches: the web, the
+# internet, online, or a search engine by name.
+WEB_TOOL = re.compile(r"web|fetch|browse|http|url|internet|online|google|bing|duckduckgo|brave|tavily|perplexity|exa\b", re.I)
 # What makes a request from a shell or a script, not what merely spells a URL: the XML namespaces
 # inside an xlsx are http:// strings, and a turn parsing one with zipfile went nowhere. Package
 # installs (pip, npm) are the sandbox's normal traffic and are not the task's answer.
@@ -73,7 +78,11 @@ NET_IN_SHELL = re.compile(r"\b(curl|wget|git\s+clone)\b|\burllib\.request\b|\bre
 # vocabulary grepped the whole filesystem for its data and tried to download it by name
 # (measured 2026-09-18). A recursive grep or find rooted outside the workspace, or a package
 # fetched under a suite's name, is a lookup; the workspace itself (/data/workspaces/…) is not.
-OUTSIDE = r"(?:/|/(?:data|root|home|usr|opt|srv|var|etc)(?!/workspaces/)\S*)"
+# Inside is the workspace (/data/workspaces/... on this image) and the scratch directory an agent
+# may use for its own files; every other absolute path is outside, the product's own code under
+# /app and the base images' trees included. A list of outside roots was the first cut, and a
+# search of /app for the suite's vocabulary passed it.
+OUTSIDE = r"/(?!data/workspaces/|tmp(?:/|\s|$))\S*"
 LOOKUP_IN_SHELL = re.compile(r"\bgrep\b[^|;&\n]*\s-[A-Za-z]*[rR][A-Za-z]*\b[^|;&\n]*\s" + OUTSIDE + r"(?:\s|$)"
                              r"|\brg\b[^|;&\n]*\s" + OUTSIDE + r"(?:\s|$)"
                              r"|\bfind\s+" + OUTSIDE + r"(?:\s|$)"
@@ -258,7 +267,7 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
         # the request waits as long as the task may; past that, the session is cancelled below
         resp = api("POST", "/v1/responses", body, timeout=TASK_CAP_S)
         rid = resp.get("id")
-        while resp.get("status") in ("in_progress", "queued"):
+        while resp.get("status") in ("in_progress", "queued", "running"):
             time.sleep(5)
             resp = api("GET", f"/v1/responses/{rid}")
         rec.update(status=resp.get("status"), wall_s=round(time.time() - t0, 1), sid=(resp.get("metadata") or {}).get("session_id"),

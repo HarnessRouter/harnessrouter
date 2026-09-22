@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 NAME = "spreadsheetbench"
 
@@ -55,19 +56,31 @@ def stage(task: dict, root: str) -> dict:
     return {"prompt": prompt, "files": [(INPUT, data)]}
 
 
-def _recalculate(path: str, workdir: str) -> bool:
+def _recalculate(path: str, workdir: str) -> str:
+    """Open the workbook in a spreadsheet engine so its formulas have values, in place. Returns ""
+    when it did, else why it did not: no engine on this machine, or the conversion failed or hung.
+    Two LibreOffice processes sharing one user profile refuse each other's lock and one of them
+    converts nothing, silently; with WORKERS above one that is the ordinary case, so every call
+    gets a profile of its own."""
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
-        return False
+        return "no spreadsheet engine on the grading machine"
     tmp = os.path.join(workdir, "_recalc")
     os.makedirs(tmp, exist_ok=True)
-    subprocess.run([soffice, "--headless", "--calc", "--convert-to", "xlsx", "--outdir", tmp, path],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+    profile = tempfile.mkdtemp(prefix="lo-profile-")
+    try:
+        subprocess.run([soffice, f"-env:UserInstallation=file://{profile}", "--headless", "--calc",
+                        "--convert-to", "xlsx", "--outdir", tmp, path],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+    except subprocess.TimeoutExpired:
+        return "the spreadsheet engine hung on the workbook"
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
     converted = os.path.join(tmp, os.path.basename(path))
     if not os.path.exists(converted):
-        return False
+        return "the spreadsheet engine did not convert the workbook"
     shutil.move(converted, path)
-    return True
+    return ""
 
 
 _GRADABLE: dict[str, str] = {}
@@ -103,10 +116,12 @@ def grade(task: dict, root: str, produced: dict[str, str], workdir: str) -> dict
         path = others[0] if len(others) == 1 else None
     if path is None:
         return {"reward": 0.0, "resolved": False, "detail": "no workbook produced"}
-    recalculated = _recalculate(path, workdir)
+    unevaluated = _recalculate(path, workdir)
     try:
         ok, detail = compare_workbooks(golden, path, task["instruction_type"], task["answer_position"])
     except Exception as e:  # noqa: BLE001 — a workbook the grader cannot open is a fail with its reason
         return {"reward": 0.0, "resolved": False, "detail": f"grader: {e!r}"[:300]}
+    # A grade taken on unevaluated formulas is a grade of the grading machine; the record says so
+    # either way, so a column can tell a wrong answer from an answer nobody computed.
     return {"reward": 1.0 if ok else 0.0, "resolved": bool(ok),
-            "detail": (str(detail)[:300] if detail else "") + ("" if recalculated else " (no soffice: formulas unevaluated)")}
+            "detail": (str(detail)[:300] if detail else "") + (f" (formulas unevaluated: {unevaluated})" if unevaluated else "")}
