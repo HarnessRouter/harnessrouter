@@ -196,6 +196,14 @@ and need no edit — they were hand-written lists once, and each silently missed
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.
 
+## Beyond working: the benchmark dimension
+
+The matrix asks whether a harness works. `scripts/benchmark` asks how well a harness × model
+does the same work, on public task suites whose grading is deterministic, one task per session,
+every number read from the turn record. Its rules are the matrix's rules 1 and 2 plus three of
+its own (a run that reached the network or searched the machine for the task is a finding, tokens
+on one convention, no judge), stated and pinned in [scripts/benchmark/README.md](../scripts/benchmark/README.md).
+
 ## Console changes
 
 Any change to a console surface must survive narrow widths. `scripts/responsive-audit.mjs` sweeps
