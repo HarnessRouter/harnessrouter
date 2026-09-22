@@ -26,6 +26,10 @@ def fmt_k(n):
     return "-" if n is None else (f"{n / 1e6:.2f}M" if n >= 1e6 else f"{n / 1e3:.0f}k")
 
 
+def runs(n: int) -> str:
+    return "1 run" if n == 1 else f"{n} runs"
+
+
 def render(records: list[dict]) -> str:
     by = collections.defaultdict(list)
     for r in records:
@@ -35,7 +39,7 @@ def render(records: list[dict]) -> str:
            "[scripts/benchmark/README.md](../scripts/benchmark/README.md). One task is one session; "
            "the pack's own grader decides; every number is read from the turn record.", ""]
     for (prov, pack), rows in sorted(by.items()):
-        out += [f"## Provider: {prov} — pack: {pack}", "",
+        out += [f"## Provider: {prov}, pack: {pack}", "",
                 "| Harness | Model | Tasks | Resolved | Reward | Wall (sum) | Median wall | Tool calls | Calls failed | Fresh in | Cached in | Output | Served by | Notes |",
                 "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         findings, errors = [], []
@@ -63,15 +67,15 @@ def render(records: list[dict]) -> str:
                 else:
                     clean.append(r)
             if ungraded:
-                notes.append(f"{ungraded} runs the pack could not grade (the task fails its own grader), left out")
+                notes.append(f"{runs(ungraded)} the pack could not grade (the task fails its own grader), left out")
             capped = sum(1 for r in clean if r.get("capped"))
             if capped:
-                notes.append(f"{capped} runs hit the time cap (counted as failures)")
+                notes.append(f"{runs(capped)} hit the time cap (counted as failures)")
             unreported = sum(1 for r in ran if r.get("served_unreported"))
             if unreported:
                 notes.append(f"served model unreported on {unreported} of {len(ran)} runs (rule 2 unverifiable there)")
             if len(clean) + ungraded < len(ran):
-                notes.append(f"{len(ran) - len(clean) - ungraded} runs are findings, not counted")
+                notes.append(f"{runs(len(ran) - len(clean) - ungraded)} {'is a finding' if len(ran) - len(clean) - ungraded == 1 else 'are findings'}, not counted")
             u = [r.get("usage") or {} for r in clean]
             served = sorted({str(r.get("connection") or "").replace("integration:", "") for r in ran if r.get("connection")}) or ["?"]
             resolved = sum(1 for r in clean if r.get("resolved"))
@@ -97,7 +101,7 @@ def render(records: list[dict]) -> str:
                 f"| {h} | {m} | 0 | - | - | - | - | - | - | - | - | - | {', '.join(served)} | {' ; '.join(notes) or 'no counted runs'} |")
         out.append("")
         if findings:
-            out += ["Findings, runs served by another connection, as another model, or that reached the network or looked for the task outside the workspace — listed, not scored:", ""]
+            out += ["Findings, runs served by another connection, as another model, or that reached the network or looked for the task outside the workspace: listed, not scored.", ""]
             out += [f"- {f}" for f in findings] + [""]
         if errors:
             out += ["Runner errors (the run never produced a record to judge; re-run them):", ""] + [f"- {e}" for e in errors] + [""]

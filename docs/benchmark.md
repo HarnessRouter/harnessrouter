@@ -2,16 +2,16 @@
 
 How a row is measured, and the rules that decide it, are in [scripts/benchmark/README.md](../scripts/benchmark/README.md). One task is one session; the pack's own grader decides; every number is read from the turn record.
 
-## Provider: deepseek — pack: spreadsheetbench
+## Provider: deepseek, pack: spreadsheetbench
 
 | Harness | Model | Tasks | Resolved | Reward | Wall (sum) | Median wall | Tool calls | Calls failed | Fresh in | Cached in | Output | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| cline | deepseek-v4.1-flash | 47 | 36 (77%) | 0.77 | 6882 s | 108 s | 736 | 121 (16%) | 1.20M | 19.74M | 1.21M | deepseek | 2 runs the pack could not grade (the task fails its own grader), left out ; served model unreported on 50 of 50 runs (rule 2 unverifiable there) ; 1 runs are findings, not counted |
+| cline | deepseek-v4.1-flash | 47 | 36 (77%) | 0.77 | 6882 s | 108 s | 736 | 121 (16%) | 1.20M | 19.74M | 1.21M | deepseek | 2 runs the pack could not grade (the task fails its own grader), left out ; served model unreported on 50 of 50 runs (rule 2 unverifiable there) ; 1 run is a finding, not counted |
 | dsh | deepseek-v4.1-flash | 46 | 36 (78%) | 0.78 | 6506 s | 100 s | 721 | 113 (16%) | 761k | 12.32M | 752k | deepseek | 2 runs the pack could not grade (the task fails its own grader), left out ; served model unreported on 50 of 50 runs (rule 2 unverifiable there) ; 2 runs are findings, not counted |
 | opencode | deepseek-v4.1-flash | 48 | 39 (81%) | 0.81 | 5515 s | 75 s | 563 | 67 (12%) | 666k | 11.64M | 709k | deepseek | 2 runs the pack could not grade (the task fails its own grader), left out ; served model unreported on 1 of 50 runs (rule 2 unverifiable there) |
-| pi | deepseek-v4.1-flash | 47 | 40 (85%) | 0.85 | 3605 s | 48 s | 526 | 89 (17%) | 484k | 7.53M | 546k | deepseek | 2 runs the pack could not grade (the task fails its own grader), left out ; served model unreported on 1 of 50 runs (rule 2 unverifiable there) ; 1 runs are findings, not counted |
+| pi | deepseek-v4.1-flash | 47 | 40 (85%) | 0.85 | 3605 s | 48 s | 526 | 89 (17%) | 484k | 7.53M | 546k | deepseek | 2 runs the pack could not grade (the task fails its own grader), left out ; served model unreported on 1 of 50 runs (rule 2 unverifiable there) ; 1 run is a finding, not counted |
 
-Findings, runs served by another connection, as another model, or that reached the network or looked for the task outside the workspace — listed, not scored:
+Findings, runs served by another connection, as another model, or that reached the network or looked for the task outside the workspace: listed, not scored.
 
 - cline x deepseek-v4.1-flash 290-1: reached the network: fetch_web_content; fetch_web_content
 - dsh x deepseek-v4.1-flash 79-7: looked for the task outside the workspace: bash: grep -rl "Where the answer goes" /opt/harnessrouter /data/agent-tools 2>/dev/null | head -20
