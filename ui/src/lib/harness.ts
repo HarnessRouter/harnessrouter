@@ -49,6 +49,9 @@ export interface CustomHarness {
   maxStep?: number | null;        // default agent step budget per turn (blank = 40)
   timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = server default)
   additionalHeaders?: string[]; // declared header NAMES callers pass per request (app-level auth)
+  // Variables every Task's shell and tools start with. A value is `$headers.X-Name` (a declared
+  // request header), `vault:ref` (a stored secret) or a literal. Resolved by the service per turn.
+  env?: Record<string, string>;
   // Installed plugins (UHP Plugins chapter). The server derives manifest, mcpServers, skills and
   // skipped from the package on every save; a saved plugin round-trips as {name, enabled, blob}
   // plus those derived fields, and a freshly picked one carries its `files` until it is saved.
@@ -402,6 +405,7 @@ function harnessBody(input: Partial<CustomHarness> & { name: string; base: strin
     max_step: input.maxStep || null,
     timeout_seconds: input.timeoutSeconds || null,
     additional_headers: input.additionalHeaders || [],
+    env: input.env || {},
   };
 }
 

@@ -752,6 +752,7 @@
     .header-row { display: grid; grid-template-columns: minmax(0,.8fr) minmax(0,1.2fr) auto; gap: 8px; align-items: end; }
     .header-row .field input { min-height: 36px; }
     .header-row .icon-button { margin-bottom: 1px; }
+    .header-row + .header-row { margin-top: 10px; }   /* a second mapping or variable stands apart from the first */
     .settings-form-footer { position: sticky; bottom: 0; z-index: 2; display: flex; justify-content: flex-end; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); background: rgba(251,251,252,.94); backdrop-filter: blur(8px); }
     .save-state { color: var(--muted); font-size: 11.5px; }
     .modal-backdrop {
