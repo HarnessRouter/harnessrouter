@@ -207,6 +207,10 @@ curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
 
 The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events.
 
+Never put a long exact value such as a token, an id or a hash in the prompt: the agent retypes what it reads, and a model drops and swaps characters in strings like that. Attach it as a file (`POST /v1/files`, then an `input_file` block; the file lands in the agent's working directory under its filename before every turn that carries it) or hand it to the agent through the harness's environment. A harness takes an `env` map whose values resolve on every turn: `$headers.X-Name` takes that header from the request (declare it in `additional_headers`), `vault:name` takes a stored secret, anything else is used as written. The agent's shell and tools start with those variables set, so a task can say "the token is in $DEPLOY_TOKEN", and a value that came through a reference is redacted from everything that leaves the sandbox, the response, the stream, the trace and the stored record, even when the agent prints it. A `vault:` reference reads only a secret your own workspace stored through `PUT /v1/mcp-secrets/{ref}`. The redaction protects the record, not the agent: a value the agent can read it can also send elsewhere if a prompt or a page tells it to, so hand it a token scoped to the user and the task, short-lived and least privilege.
+
+The whole API is described at `$HARNESSROUTER_BASE_URL/v1/openapi.json`, generated from the routes, with a browsable copy at `/v1/docs`.
+
 The default URL works when your backend and CE run on the same computer. From another machine or container, use a reachable URL for the CE instance. [Read the complete self-hosted API and networking guide →](docs/self-hosting-guide.md#using-the-api)
 
 <a id="one-interface-for-the-agent-lifecycle"></a>
