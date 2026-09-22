@@ -361,6 +361,24 @@ def _isolate_session(ws: str) -> None:
     _own_tree(ws, uid, previous)
 
 
+_CALLER_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_")
+
+
+def _caller_env(env: dict | None) -> dict:
+    """A harness's environment variables as the gateway resolved them: shell-safe names only, and
+    none under a prefix the runner uses for the agent's own credentials and paths."""
+    out = {}
+    for k, v in (env or {}).items():
+        name = str(k or "")
+        if not _CALLER_ENV_NAME.match(name) or name.upper().startswith(_CALLER_ENV_RESERVED):
+            continue
+        if v is None:
+            continue
+        out[name] = str(v)
+    return out
+
+
 def _child_env() -> dict:
     """The environment an agent process starts from: the runner's, minus anything secret-shaped.
     On the self-hosted box the runner's environment is the container's, and that carried the
@@ -7201,8 +7219,9 @@ class TurnReq(BaseModel):
     skills_suppressed: list[str] | None = None  # built-in skill names to NOT mount (harness disabled them)
     tools_disabled: list[str] | None = None     # built-in tool names to disable (claude: --disallowedTools)
     image_auth: dict | None = None         # {base_url, api_key, model} for image generation via the broker
-    env: dict | None = None                # names for the turn process, HR_-prefixed only (a harness that
-                                           # drives another one gets HR_API_URL + HR_CALIBRATION_TOKEN)
+    env: dict | None = None                # variables for the turn process: the harness's own (resolved by the
+                                           # gateway, see _caller_env) and the platform's HR_ names (a harness
+                                           # that drives another one gets HR_API_URL + HR_CALIBRATION_TOKEN)
     metadata: dict | None = None           # systemone: {"systemone": {"script": [...]}} selects a scripted provider (a probe)
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
@@ -7282,7 +7301,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
                 f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
     _write_agent_doc(cwd, backend, agent_doc, installed_skills)
-    env = _child_env()
+    # The harness's own variables under the runner's, so nothing a caller names shadows the
+    # runner's credentials or paths; the platform's HR_ names come after and win (below).
+    env = {**_caller_env(req.env), **_child_env()}
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can
     # only carry one credential. The imagegen skill's wrapper reads these and passes them to the

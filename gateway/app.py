@@ -598,6 +598,12 @@ def _bus_publish(org: str, harness_id: str, member: str, sid: str, rid: str, ev)
     a slow/full consumer drops the live event and recovers via the turns reconciliation."""
     if not harness_id:
         return
+    _sec = (_session_trace.get(sid) or {}).get("secrets")
+    if _sec:
+        try:
+            ev = json.loads(_scrub_secrets(json.dumps(ev, default=str), _sec))
+        except Exception:  # noqa: BLE001 — an event that will not serialize goes out as it is
+            pass
     if _redis_out is not None:
         try:
             _redis_out.put_nowait({"org": org, "harness": harness_id, "member": member,
@@ -1912,7 +1918,7 @@ async def _trace_flush(tr: dict, s: dict) -> bool:
     evs = s.get("events") or []
     put_ok = True
     if evs and tr.get("prefix"):
-        body = ("\n".join(json.dumps(e, default=str) for e in evs) + "\n").encode()
+        body = _scrub_secrets("\n".join(json.dumps(e, default=str) for e in evs) + "\n", tr.get("secrets")).encode()
         seq = tr.get("seq", 0)
         # Monotonic per session: an NTP step-back must not mint a key that sorts BEFORE an
         # already-written one (the last-chunk terminal probe and the chunk-key tail cursor both
@@ -2995,6 +3001,75 @@ def _mcp_name(s: str) -> str:
 
 
 _HDR_REF = re.compile(r"\$headers\.([A-Za-z0-9_-]+)")
+
+
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Names the runner sets for the agent process itself (its credentials, its paths); a harness may not
+# take them over. The runner also gives its own values precedence, so this is the message, not the wall.
+_ENV_RESERVED_PREFIX = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_")
+_ENV_RESERVED = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR"}
+_ENV_MAX = 64
+
+
+def _env_clean(env: dict | None) -> dict[str, str]:
+    """The environment map as stored: shell-safe names, none the runner owns, values as strings."""
+    out: dict[str, str] = {}
+    for k, v in (env or {}).items():
+        name = str(k or "").strip()
+        if not _ENV_NAME_RE.match(name):
+            raise uhp_error(400, "invalid_env_name", f"'{name}' is not a valid environment variable name.", "env")
+        if name.upper() in _ENV_RESERVED or name.upper().startswith(_ENV_RESERVED_PREFIX):
+            raise uhp_error(400, "reserved_env_name", f"'{name}' is set by the runtime and cannot be overridden.", "env")
+        if v is None:
+            continue
+        out[name] = str(v)
+        if len(out) > _ENV_MAX:
+            raise uhp_error(400, "too_many_env", f"At most {_ENV_MAX} environment variables per harness.", "env")
+    return out
+
+
+def _parse_env(raw) -> dict[str, str]:
+    try:
+        d = json.loads(raw) if raw else {}
+        return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def _harness_env(hv: dict | None, org: str, hdr_vals: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """The environment a turn's processes start with, resolved the way MCP auth is: a $headers
+    reference takes the request's declared header, a vault reference the stored secret, anything
+    else is the literal. Resolved here and handed to the runner as values; the model never sees a
+    reference or a value in its prompt. Returns the map and the values that are secrets: those
+    that came through a reference. They are scrubbed from everything the turn records (see
+    _scrub_secrets). A literal is not a secret: it is stored in the harness for anyone who can
+    read the harness, and redacting "us-east-1" from a transcript only mangles the record. A
+    reference that resolves to nothing is left out rather than set to an empty string, so a shell
+    test for the variable says what happened."""
+    out: dict[str, str] = {}
+    secrets: list[str] = []
+    for name, ref in _parse_env((hv or {}).get("env")).items():
+        val = _sub_headers(ref, hdr_vals) if "$headers." in ref else ref
+        if isinstance(val, str) and val.startswith("vault:"):
+            val = await _resolve_mcp_auth(org, val)
+        if not val:
+            continue
+        out[name] = str(val)
+        if val != ref:
+            secrets.append(str(val))
+    return out, sorted(set(secrets), key=len, reverse=True)
+
+
+_SCRUB_MIN = 8            # shorter values are not scrubbed: replacing "yes" everywhere would mangle the record
+
+
+def _scrub_secrets(text: str, secrets: list[str] | None) -> str:
+    """Every occurrence of a turn's environment values replaced in a serialized record, so a value
+    an agent echoed reaches no trace, no stored response and no live stream."""
+    for sec in secrets or []:
+        if sec and len(sec) >= _SCRUB_MIN and sec in text:
+            text = text.replace(sec, "[redacted]")
+    return text
 
 
 def _sub_headers(value: str, hdr_vals: dict[str, str]) -> str:
@@ -6672,6 +6747,9 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
                     status: str, created_at: float, store: bool) -> None:
     try:
         _resp_cache_forget(rid)
+        _sec = (_session_trace.get(sid) or {}).get("secrets")
+        if _sec:
+            stored = json.loads(_scrub_secrets(json.dumps(stored, default=str), _sec))
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -6944,6 +7022,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # instead of re-reading it twice more here. Beyond cutting reads, a same-request snapshot means
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
     mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
+    turn_env, turn_secrets = await _harness_env(hv, org, hdr_vals)
+    if turn_secrets and sid in _session_trace:
+        _session_trace[sid]["secrets"] = turn_secrets
     if mcp_servers or skills or skills_suppressed or tools_disabled:
         rec["plugins"] = {"mcp": [m.get("name") for m in mcp_servers], "skills": [s.get("name") for s in skills],
                           "skills_off": skills_suppressed, "tools_off": tools_disabled}
@@ -7038,7 +7119,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "image_auth": image_auth,
                 # A harness that drives another one: the platform's own API and a credential
                 # scoped to that harness, for this turn (see _calibration_env).
-                "env": _calibration_env(hv, org, sid, timeout_s),
+                # The harness's own variables, then the platform's HR_ names for a harness that drives
+                # another one; the platform's win.
+                "env": {**turn_env, **(_calibration_env(hv, org, sid, timeout_s) or {})},
                 # A probe (docs/dual-loop.md, Appendix B): `metadata.systemone.script` names the
                 # actions a scripted provider answers instead of the model. The additive
                 # extension point of the protocol; nothing else of the metadata reaches the runner.
@@ -13785,6 +13868,8 @@ class HarnessBody(BaseModel):
     max_step: int | None = _either("max_step")            # default agent step budget for this harness's turns
     timeout_seconds: int | None = _either("timeout_seconds")     # default per-turn wall-clock cap
     additional_headers: list | None = _either("additional_headers")  # header NAMES callers may pass per request
+    env: dict | None = None                 # variables every turn's shell and tools start with: name -> literal,
+                                            # $headers.X-Name (a declared request header) or vault:ref
     # The one harness this harness may drive through the platform's own API, by id: a Calibrator
     # names the harness it calibrates. Every turn of a harness that names one is handed HR_API_URL
     # and HR_CALIBRATION_TOKEN, a credential scoped to that harness and expiring with the turn
@@ -13818,6 +13903,7 @@ def _harness_out(v: dict) -> dict:
             "plugins": _plugins_of(v),
             "disabledTools": [t for t in _parse(v.get("disabled_tools")) if isinstance(t, str)],
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
+            "env": _parse_env(v.get("env")),
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
             "timeoutSeconds": int(v.get("timeout_seconds")) if str(v.get("timeout_seconds") or "").isdigit() else None,
             "calibrates": str(v.get("calibrates") or ""),
@@ -13837,6 +13923,7 @@ def _harness_props(body: HarnessBody) -> dict:
             "disabled_tools": json.dumps(body.disabled_tools or []),
             "additional_headers": json.dumps([str(h).strip() for h in (body.additional_headers or [])
                                               if isinstance(h, str) and str(h).strip()]),
+            "env": json.dumps(_env_clean(body.env)),
             "calibrates": str(body.calibrates or "").strip(),
             "max_step": str(body.max_step) if body.max_step else "",
             "timeout_seconds": str(body.timeout_seconds) if body.timeout_seconds else ""}
@@ -15441,6 +15528,49 @@ async def get_harness_public(hid: str, request: Request) -> dict:
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     return _harness_out(await _mcp_migrate(org, hid, v))
+
+
+# ── the API, described ────────────────────────────────────────────────────────────────────────
+# The public surface as an OpenAPI document, generated from the routes themselves so it cannot
+# drift from what is served. Only the routes a customer calls with a login or an API key: the
+# org-addressed twins the console uses, the admin pages, the console's own features (kits, cloud
+# upload, workspaces) and every route behind the internal key stay out. Served on the same host as the API, and once per process.
+_OPENAPI_PUBLIC_PREFIXES = ("/v1/responses", "/v1/files", "/v1/sessions", "/v1/harnesses", "/v1/bases",
+                            "/v1/models", "/v1/mcp-secrets", "/v1/mcp-test", "/v1/containers", "/v1/traces",
+                            "/v1/uhp", "/v1/openapi.json")
+_openapi_doc: dict | None = None
+
+
+def _openapi_public() -> dict:
+    global _openapi_doc
+    if _openapi_doc is None:
+        from fastapi.openapi.utils import get_openapi
+        from fastapi.routing import APIRoute
+        routes = []
+        for r in app.routes:
+            if not isinstance(r, APIRoute) or not r.path.startswith(_OPENAPI_PUBLIC_PREFIXES):
+                continue
+            if any(getattr(d, "dependency", None) is _internal_only for d in (r.dependencies or [])):
+                continue
+            routes.append(r)
+        doc = get_openapi(title="HarnessRouter API", version="1", routes=routes,
+                          description=("The HarnessRouter API: run a harness (an OpenAI Responses-compatible surface "
+                                       "at /v1/responses), attach files, read sessions, turns and produced files, "
+                                       "manage harnesses, keys and provider connections. Authenticate with an API "
+                                       "key or a login token as a bearer."))
+        _openapi_doc = doc
+    return _openapi_doc
+
+
+@app.get("/v1/openapi.json", include_in_schema=False)
+async def openapi_public() -> dict:
+    return _openapi_public()
+
+
+@app.get("/v1/docs", include_in_schema=False)
+async def openapi_docs():
+    from fastapi.openapi.docs import get_swagger_ui_html
+    return get_swagger_ui_html(openapi_url="/v1/openapi.json", title="HarnessRouter API")
 
 
 @app.get("/v1/bases")

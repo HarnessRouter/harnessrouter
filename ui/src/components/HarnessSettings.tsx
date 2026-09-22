@@ -41,6 +41,14 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // The environment as rows, so a half-typed name does not vanish from a map keyed by name.
+  const [envRows, setEnvRows] = useState<{ name: string; value: string }[]>([]);
+  useEffect(() => { setEnvRows(Object.entries(draft?.env || {}).map(([name, value]) => ({ name, value }))); }, [draft?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const setEnvRow = (idx: number, patch: Partial<{ name: string; value: string }>) => setEnvRows((rows) => {
+    const next = rows.map((r, k) => (k === idx ? { ...r, ...patch } : r));
+    upd({ env: Object.fromEntries(next.filter((r) => r.name).map((r) => [r.name, r.value])) });
+    return next;
+  });
   const [editSkillIdx, setEditSkillIdx] = useState<number | null>(null);
   const [mcpModal, setMcpModal] = useState<{ idx: number | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -508,6 +516,27 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                 {!(draft?.additionalHeaders || []).length && <span className="field-help">No headers declared.</span>}
               </div>
               <span className="field-help">Values are resolved from the incoming Task request when the Harness calls an MCP server. Store credentials in a trusted secret manager; never enter literal secrets here.</span>
+            </div>
+          </section>
+
+          <section className="form-section">
+            <div><h3>Environment</h3><p>Variables every Task's shell and tools start with. Put a secret behind a request header or a stored secret, never as a literal; the agent never sees the value in its prompt, and anything it prints is redacted from the record.</p></div>
+            <div className="field-stack">
+              <div className="section-actions"><strong>{Object.keys(draft?.env || {}).length} variables</strong>
+                {!readOnly && <button className="button small" type="button" onClick={() => setEnvRows((r) => [...r, { name: '', value: '' }])}><iconify-icon icon="tabler:plus"></iconify-icon>Add variable</button>}</div>
+              <div>
+                {envRows.map((row, idx) => (
+                  <div key={idx} className="header-row">
+                    <div className="field"><label>Name</label>
+                      <input value={row.name} placeholder="API_KEY" disabled={readOnly} onChange={(e) => setEnvRow(idx, { name: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') })} /></div>
+                    <div className="field"><label>Value or reference</label>
+                      <input value={row.value} placeholder="$headers.X-Api-Key or vault:my-secret" disabled={readOnly} onChange={(e) => setEnvRow(idx, { value: e.target.value })} /></div>
+                    {!readOnly && <button className="icon-button" type="button" aria-label="Remove variable" onClick={() => setEnvRows((r) => r.filter((_, k) => k !== idx))}><iconify-icon icon="tabler:trash"></iconify-icon></button>}
+                  </div>
+                ))}
+                {!envRows.length && <span className="field-help">No variables set.</span>}
+              </div>
+              <span className="field-help">A reference like $headers.X-Api-Key takes the header a Task request sends (declare it above); vault:name takes a secret stored with the service. A shell in the Task reads the variable by name.</span>
             </div>
           </section>
 
