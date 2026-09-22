@@ -113,6 +113,8 @@ export NEXT_PUBLIC_HR_EDITION=selfhost
 # The console can create harnesses, read every transcript, and run an agent with your provider
 # key, so an instance anyone can reach needs a gate. Defaults exist so the first run works; they
 # are also published in the README, which makes them a placeholder rather than a secret.
+# The Claude Code release this image was verified with; see install_backends.
+export CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.280}"
 export HR_AUTH_USER="${HR_AUTH_USER:-harnessrouter}"
 export HR_AUTH_PASSWORD="${HR_AUTH_PASSWORD:-harnessrouter}"
 export HR_AUTH_STORE="${HR_AUTH_STORE:-/data/selfhost-auth.json}"
@@ -544,9 +546,17 @@ install_backends() {
 
   # -g is what creates $TOOLS/bin/<cmd>; --prefix alone just drops a node_modules tree with no
   # entry point, which npm reports as success.
-  if wanted claude && [ ! -x "$(backend_bin claude)" ]; then
-    echo "[harnessrouter] installing Claude Code (Anthropic's terms apply)…"
-    try_install "Claude Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund @anthropic-ai/claude-code || true
+  # Claude Code is installed at a PINNED version and moved to it when the volume holds another:
+  # a model can require a minimum CLI (Claude Opus 5.5 needs 2.1.280; the API refuses older ones
+  # with "version 2.1.280 or newer is required"), and a volume that installed the CLI once, months
+  # ago, would otherwise never learn that. The pin is what this release was verified with.
+  if wanted claude; then
+    have=""
+    [ -x "$(backend_bin claude)" ] && have="$("$(backend_bin claude)" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [ "$have" != "$CLAUDE_CODE_VERSION" ]; then
+      echo "[harnessrouter] installing Claude Code $CLAUDE_CODE_VERSION (Anthropic's terms apply)${have:+, replacing $have}…"
+      try_install "Claude Code" npm install -g --prefix "$TOOLS" --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" || true
+    fi
   fi
 
   # opencode is MIT, so unlike Claude Code and hermes it COULD be baked into the image. It is
