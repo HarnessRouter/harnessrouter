@@ -33,42 +33,62 @@ def test_env_clean_keeps_shell_safe_names_and_refuses_the_runtimes_own():
         gw._env_clean({f"V{i}": "x" for i in range(gw._ENV_MAX + 1)})
 
 
-def test_harness_env_resolves_header_vault_and_literal(monkeypatch):
+def test_harness_env_resolves_header_vault_and_literal_and_names_the_secrets(monkeypatch):
     async def _vault(org, auth):
-        assert org == "org.a" and auth == "vault:deploy-key"
+        assert org == "org.a" and auth == "vault:harness-mcp-deploy-key"
         return "from-the-vault"
     monkeypatch.setattr(gw, "_resolve_mcp_auth", _vault)
-    hv = {"env": json.dumps({"TOKEN": "$headers.X-App-Token", "DEPLOY": "vault:deploy-key",
+    hv = {"env": json.dumps({"TOKEN": "$headers.X-App-Token", "DEPLOY": "vault:harness-mcp-deploy-key",
                              "REGION": "us-east-1", "MISSING": "$headers.X-Absent"})}
-    out, secrets = asyncio.run(gw._harness_env(hv, "org.a", {"x-app-token": SECRET}))
+    out, secret = asyncio.run(gw._harness_env(hv, "org.a", {"x-app-token": SECRET}))
     assert out == {"TOKEN": SECRET, "DEPLOY": "from-the-vault", "REGION": "us-east-1"}   # the absent header is left unset
-    assert secrets == [SECRET, "from-the-vault"]                                          # the literal is not a secret
+    assert secret == ["TOKEN", "DEPLOY"]                                                  # the literal is not a secret
 
 
-def test_scrub_replaces_values_wherever_they_appear():
-    assert gw._scrub_secrets(f"echo {SECRET}; export T={SECRET}", [SECRET]) == "echo [redacted]; export T=[redacted]"
-    assert gw._scrub_secrets("region us-east-1 stays", ["us"]) == "region us-east-1 stays"   # short values are not scrubbed
+def test_a_vault_reference_reads_only_the_orgs_own_mcp_secrets(monkeypatch):
+    """The platform pool is never consulted, and only the MCP-secrets namespace resolves: a
+    customer's reference is resolved into that customer's sandbox."""
+    asked = []
+
+    async def _vault_get(tenant, key):
+        asked.append((tenant, key))
+        return f"<{tenant}>:{key}"
+    monkeypatch.setattr(gw, "_vault_get", _vault_get)
+    mine = gw._org_tenant("org.attacker.example")
+    assert asyncio.run(gw._resolve_mcp_auth("org.attacker.example", "vault:harness-mcp-github")) == f"<{mine}>:harness-mcp-github"
+    for ref in ("vault:harness-conn-OpenRouter", "vault:harness-integrations", "vault:harness-media-access",
+                "vault:harness-policy-x", "vault:" + gw._HOSTED_SECRET_PREFIX + "x", "vault:anything"):
+        assert asyncio.run(gw._resolve_mcp_auth("org.attacker.example", ref)) == "", ref
+    assert all(t == mine for t, _ in asked) and gw.GLOBAL_TENANT not in {t for t, _ in asked}
+    assert asyncio.run(gw._resolve_mcp_auth("", "vault:harness-mcp-github")) == ""      # no org, nothing resolves
+    assert asyncio.run(gw._resolve_mcp_auth("org.a", "literal-bearer")) == "literal-bearer"
 
 
-def test_stored_response_and_live_events_are_scrubbed(monkeypatch):
-    sid = "sess_scrub"
-    monkeypatch.setitem(gw._session_trace, sid, {"secrets": [SECRET]})
-    put: dict = {}
+def test_an_mcp_secret_is_stored_in_the_orgs_own_tenant(monkeypatch):
+    put = []
 
-    async def _blob_put(key, data, **kw):
-        put[key] = data
-    async def _vg_upsert(*a, **kw):
-        pass
-    monkeypatch.setattr(gw, "_blob_put", _blob_put)
-    monkeypatch.setattr(gw, "_vg_upsert", _vg_upsert)
-    asyncio.run(gw._resp_put("resp_1", {"output": [{"text": f"the token is {SECRET}"}]}, "org.a", sid, None, "completed", 0.0, True))
-    assert SECRET not in put["responses/resp_1.json"].decode() and "[redacted]" in put["responses/resp_1.json"].decode()
+    async def _vault_put(tenant, key, value):
+        put.append((tenant, key, value))
+    monkeypatch.setattr(gw, "_vault_put", _vault_put)
+    out = asyncio.run(gw._mcp_secret_store("org.songrenchu.example.com", "GitHub token", "ghp_x"))
+    assert put == [(gw._org_tenant("org.songrenchu.example.com"), "harness-mcp-github-token", "ghp_x")]
+    assert out["ref"] == "vault:harness-mcp-github-token" and out["tenant"] != gw.GLOBAL_TENANT
+    with pytest.raises(gw.HTTPException):
+        asyncio.run(gw._mcp_secret_store("", "x", "y"))
 
-    seen = []
-    monkeypatch.setattr(gw, "_redis_out", None)
-    monkeypatch.setattr(gw, "_bus_deliver", lambda *a: seen.append(a[-1]))
-    gw._bus_publish("org.a", "chrn_x", "m", sid, "resp_1", {"type": "response.output_text.delta", "delta": SECRET})
-    assert seen == [{"type": "response.output_text.delta", "delta": "[redacted]"}]
+
+def test_env_clean_refuses_the_loader_the_import_paths_the_trust_roots_and_the_proxies():
+    for name in ("LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "PYTHONPATH", "NODE_OPTIONS", "SSL_CERT_FILE", "HTTPS_PROXY", "no_proxy"):
+        with pytest.raises(gw.HTTPException):
+            gw._env_clean({name: "x"})
+
+
+def test_the_runner_is_told_which_values_are_secret():
+    """The turn body names the secret variables; the runner redacts them where the gateway reads
+    the turn, so the gateway has no scrub of its own (one mechanism, every sink)."""
+    src = open(Path(gw.__file__)).read()
+    assert '"env_secret": turn_secret,' in src
+    assert "_scrub_secrets" not in src
 
 
 def test_harness_body_stores_env_and_reads_it_back():

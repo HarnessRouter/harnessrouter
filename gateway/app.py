@@ -598,12 +598,6 @@ def _bus_publish(org: str, harness_id: str, member: str, sid: str, rid: str, ev)
     a slow/full consumer drops the live event and recovers via the turns reconciliation."""
     if not harness_id:
         return
-    _sec = (_session_trace.get(sid) or {}).get("secrets")
-    if _sec:
-        try:
-            ev = json.loads(_scrub_secrets(json.dumps(ev, default=str), _sec))
-        except Exception:  # noqa: BLE001 — an event that will not serialize goes out as it is
-            pass
     if _redis_out is not None:
         try:
             _redis_out.put_nowait({"org": org, "harness": harness_id, "member": member,
@@ -793,10 +787,27 @@ def _vault_tenant_ok(org: str | None) -> bool:
     return bool(org) and org != GLOBAL_TENANT and "--" not in org and bool(_VAULT_TENANT_RE.match(org))
 
 
+def _org_tenant(org: str | None) -> str | None:
+    """The vault tenant that holds an org's own secrets (its provider keys, connections, policies).
+
+    Org ids are dotted (org.acme.example.com) and a vault tenant cannot be, so a customer org
+    used to have NO tenant at all: every lookup fell straight through to the platform pool and
+    "bring your own key" was unreachable. The tenant is the id's alphanumeric runs joined by
+    single hyphens plus a short digest of the exact id: readable in the vault, and two ids that
+    differ only in punctuation cannot share one. An id that is already a valid tenant (self-host
+    style) keeps its name, so nothing stored under it moves."""
+    if not org or org == GLOBAL_TENANT:
+        return None
+    if _vault_tenant_ok(org):
+        return org
+    slug = re.sub(r"[^a-z0-9]+", "-", org.lower()).strip("-")[:60].strip("-") or "org"
+    return f"{slug}-{hashlib.sha1(org.encode()).hexdigest()[:8]}"
+
+
 def _tenants_for(org: str | None) -> list[str]:
-    """Resolution order: the org's own keys first (bill to the org), then the shared pool.
-    Skip the org tenant if it isn't a valid vault tenant (e.g. dotted ids) -> straight to global."""
-    return ([org] if _vault_tenant_ok(org) else []) + [GLOBAL_TENANT]
+    """Resolution order: the org's own keys first (bill to the org), then the shared pool."""
+    t = _org_tenant(org)
+    return ([t] if t else []) + [GLOBAL_TENANT]
 
 
 async def _get_connection(org: str | None, name: str) -> tuple[dict | None, str | None]:
@@ -1918,7 +1929,7 @@ async def _trace_flush(tr: dict, s: dict) -> bool:
     evs = s.get("events") or []
     put_ok = True
     if evs and tr.get("prefix"):
-        body = _scrub_secrets("\n".join(json.dumps(e, default=str) for e in evs) + "\n", tr.get("secrets")).encode()
+        body = ("\n".join(json.dumps(e, default=str) for e in evs) + "\n").encode()
         seq = tr.get("seq", 0)
         # Monotonic per session: an NTP step-back must not mint a key that sorts BEFORE an
         # already-written one (the last-chunk terminal probe and the chunk-key tail cursor both
@@ -2958,24 +2969,27 @@ def _vault_key(auth) -> str:
     return auth[len("vault:"):] if isinstance(auth, str) and auth.startswith("vault:") else ""
 
 
+_MCP_SECRET_PREFIX = "harness-mcp-"
+
+
 async def _resolve_mcp_auth(org: str, auth: str) -> str:
-    """Resolve an MCP server auth value. 'vault:<key>' → the secret from the org/global vault
-    (token never sits in the graph). Anything else is treated as a literal bearer token."""
+    """Resolve an MCP server auth value or an environment value. 'vault:<key>' is the secret the
+    org stored through PUT /v1/mcp-secrets (the key that call returned, under harness-mcp-),
+    read from the org's OWN vault tenant and nowhere else. Anything else is the literal.
+
+    Two doors are shut here on purpose. The platform pool is never consulted: a reference is
+    written by a customer and resolved into that customer's sandbox, and until 2026-09-22 the
+    lookup fell through to the shared tenant, so a harness naming a platform connection document
+    would have been handed the platform's provider key. And only the MCP-secrets namespace
+    resolves: the org's tenant also holds its connection documents and policies, which a member
+    who can edit a harness must not be able to read out through an agent."""
     if isinstance(auth, str) and auth.startswith("vault:"):
         key = auth[len("vault:"):]
-        if key.startswith(_HOSTED_SECRET_PREFIX):
-            # A record we hold for a server we host. It is not a bearer token for anybody, and
-            # this is the one place a stored secret becomes a literal on an outbound request — so
-            # refusing HERE is what makes "the connection string never leaves this process" true
-            # for callers that do not exist yet, including an entry that names this ref and points
-            # somewhere else on purpose.
-            print(f"[mcp] refusing to resolve {key} as a bearer token", flush=True)
+        tenant = _org_tenant(org)
+        if not tenant or not key.startswith(_MCP_SECRET_PREFIX) or key.startswith(_HOSTED_SECRET_PREFIX):
+            print(f"[mcp] refusing to resolve {key[:40]!r} for {org}: not an MCP secret of this org", flush=True)
             return ""
-        for tenant in _tenants_for(org):
-            v = await _vault_get(tenant, key)
-            if v:
-                return v
-        return ""
+        return await _vault_get(tenant, key) or ""
     return auth or ""
 
 
@@ -3006,8 +3020,13 @@ _HDR_REF = re.compile(r"\$headers\.([A-Za-z0-9_-]+)")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Names the runner sets for the agent process itself (its credentials, its paths); a harness may not
 # take them over. The runner also gives its own values precedence, so this is the message, not the wall.
-_ENV_RESERVED_PREFIX = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_")
-_ENV_RESERVED = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR"}
+_ENV_RESERVED_PREFIX = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_", "LD_", "DYLD_")
+# The shell's own, the interpreters' import paths, the trust roots and the network path: a
+# harness gets its variables, not the runtime's.
+_ENV_RESERVED = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
+                 "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+                 "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+                 "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
 _ENV_MAX = 64
 
 
@@ -3040,14 +3059,14 @@ async def _harness_env(hv: dict | None, org: str, hdr_vals: dict[str, str]) -> t
     """The environment a turn's processes start with, resolved the way MCP auth is: a $headers
     reference takes the request's declared header, a vault reference the stored secret, anything
     else is the literal. Resolved here and handed to the runner as values; the model never sees a
-    reference or a value in its prompt. Returns the map and the values that are secrets: those
-    that came through a reference. They are scrubbed from everything the turn records (see
-    _scrub_secrets). A literal is not a secret: it is stored in the harness for anyone who can
-    read the harness, and redacting "us-east-1" from a transcript only mangles the record. A
-    reference that resolves to nothing is left out rather than set to an empty string, so a shell
-    test for the variable says what happened."""
+    reference or a value in its prompt. Returns the map and the NAMES whose values came through a
+    reference: the runner redacts those values from everything it hands back (events, result,
+    error), so no record, stream or response carries them. A literal is not a secret: it is stored
+    in the harness for anyone who can read the harness, and redacting "us-east-1" from a transcript
+    only mangles the record. A reference that resolves to nothing is left out rather than set to
+    an empty string, so a shell test for the variable says what happened."""
     out: dict[str, str] = {}
-    secrets: list[str] = []
+    secret: list[str] = []
     for name, ref in _parse_env((hv or {}).get("env")).items():
         val = _sub_headers(ref, hdr_vals) if "$headers." in ref else ref
         if isinstance(val, str) and val.startswith("vault:"):
@@ -3056,20 +3075,8 @@ async def _harness_env(hv: dict | None, org: str, hdr_vals: dict[str, str]) -> t
             continue
         out[name] = str(val)
         if val != ref:
-            secrets.append(str(val))
-    return out, sorted(set(secrets), key=len, reverse=True)
-
-
-_SCRUB_MIN = 8            # shorter values are not scrubbed: replacing "yes" everywhere would mangle the record
-
-
-def _scrub_secrets(text: str, secrets: list[str] | None) -> str:
-    """Every occurrence of a turn's environment values replaced in a serialized record, so a value
-    an agent echoed reaches no trace, no stored response and no live stream."""
-    for sec in secrets or []:
-        if sec and len(sec) >= _SCRUB_MIN and sec in text:
-            text = text.replace(sec, "[redacted]")
-    return text
+            secret.append(name)
+    return out, secret
 
 
 def _sub_headers(value: str, hdr_vals: dict[str, str]) -> str:
@@ -6747,9 +6754,6 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
                     status: str, created_at: float, store: bool) -> None:
     try:
         _resp_cache_forget(rid)
-        _sec = (_session_trace.get(sid) or {}).get("secrets")
-        if _sec:
-            stored = json.loads(_scrub_secrets(json.dumps(stored, default=str), _sec))
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
@@ -7022,9 +7026,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # instead of re-reading it twice more here. Beyond cutting reads, a same-request snapshot means
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
     mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
-    turn_env, turn_secrets = await _harness_env(hv, org, hdr_vals)
-    if turn_secrets and sid in _session_trace:
-        _session_trace[sid]["secrets"] = turn_secrets
+    turn_env, turn_secret = await _harness_env(hv, org, hdr_vals)
     if mcp_servers or skills or skills_suppressed or tools_disabled:
         rec["plugins"] = {"mcp": [m.get("name") for m in mcp_servers], "skills": [s.get("name") for s in skills],
                           "skills_off": skills_suppressed, "tools_off": tools_disabled}
@@ -7121,7 +7123,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # scoped to that harness, for this turn (see _calibration_env).
                 # The harness's own variables, then the platform's HR_ names for a harness that drives
                 # another one; the platform's win.
-                "env": {**turn_env, **(_calibration_env(hv, org, sid, timeout_s) or {})},
+                "env": {**turn_env, **(_calibration_env(hv, org, sid, timeout_s) or {})}, "env_secret": turn_secret,
                 # A probe (docs/dual-loop.md, Appendix B): `metadata.systemone.script` names the
                 # actions a scripted provider answers instead of the model. The additive
                 # extension point of the protocol; nothing else of the metadata reaches the runner.
@@ -9727,18 +9729,28 @@ class McpTestBody(BaseModel):
     auth: str | None = None   # literal bearer OR vault:<ref> (left blank → no auth)
 
 
+async def _mcp_secret_store(org: str, ref: str, token: str) -> dict:
+    """Store a secret under a stable ref in the org's own vault tenant, so a harness config
+    carries only 'vault:<key>' and the live token never lands in the graph. The org's tenant
+    and nothing else: a dotted org id used to fall to the shared pool, where every org's
+    reference could read every other org's secret."""
+    tenant = _org_tenant(org)
+    if not tenant:
+        raise HTTPException(400, "no org to store the secret for")
+    # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
+    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
+    key = f"{_MCP_SECRET_PREFIX}{safe}"
+    await _vault_put(tenant, key, token)
+    return {"ref": f"vault:{key}", "tenant": tenant}
+
+
 @app.put("/v1/orgs/{org}/mcp-secrets/{ref}")
 async def put_mcp_secret(org: str, ref: str, body: McpSecretBody, request: Request) -> dict:
     await _owned_org(request, org)
     """Store an MCP server bearer token in the vault under a stable ref, so the harness config
     stores only 'vault:<ref>' and the live token never lands in the graph. Stored in the org's
     own vault tenant when valid, else the global pool (dotted org ids aren't valid vault tenants)."""
-    tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
-    # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
-    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
-    key = f"harness-mcp-{safe}"
-    await _vault_put(tenant, key, body.token)
-    return {"ref": f"vault:{key}", "tenant": tenant}
+    return await _mcp_secret_store(org, ref, body.token)
 
 
 @app.post("/v1/orgs/{org}/mcp-test")
@@ -9758,11 +9770,7 @@ async def test_mcp(org: str, body: McpTestBody, request: Request) -> dict:
 @app.put("/v1/mcp-secrets/{ref}")
 async def put_mcp_secret_public(ref: str, body: McpSecretBody, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
-    tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
-    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
-    key = f"harness-mcp-{safe}"
-    await _vault_put(tenant, key, body.token)
-    return {"ref": f"vault:{key}", "tenant": tenant}
+    return await _mcp_secret_store(org, ref, body.token)
 
 
 @app.post("/v1/mcp-test")
