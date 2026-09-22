@@ -868,6 +868,71 @@ _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-f
 _NATIVE_ONLY_BACKENDS = {"gemini"}
 
 
+# ── A harness that drives another harness ─────────────────────────────────────────────────────
+# A Calibrator (docs/dual-loop.md, Appendix B) starts runs on ONE inner harness, reads those runs
+# and publishes that harness's package. Its turn process gets the platform's own API and a
+# credential scoped to exactly that: never an org key, never a provider key, and it expires with
+# the turn. The credential is signed like the broker's (sid|org|inner|exp + hmac) and resolves to
+# a principal that carries its scope, which the routes below enforce.
+HR_PLATFORM_API_URL = os.environ.get("HR_PLATFORM_API_URL", "http://127.0.0.1:8080")
+_CALIBRATION_TTL_S = int(os.environ.get("HR_CALIBRATION_TTL_S", str(3 * 3600)))
+
+
+def _mint_calibration_token(sid: str, org: str, inner: str, ttl_s: int) -> str:
+    exp = str(int(time.time()) + max(int(ttl_s), 60))
+    body = f"{sid}|{org}|{inner}|{exp}"
+    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"calibration|" + body.encode(),
+                   hashlib.sha256).hexdigest()
+    return "hrc_" + base64.urlsafe_b64encode(body.encode()).decode().rstrip("=") + "." + sig
+
+
+def _verify_calibration_token(tok: str) -> dict | None:
+    """{sid, org, inner, exp} for a valid unexpired credential, else None."""
+    try:
+        raw, sig = tok[len("hrc_"):].split(".", 1)
+        body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
+        want = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"calibration|" + body.encode(),
+                        hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(want, sig):
+            return None
+        sid, org, inner, exp = body.split("|")
+        if int(exp) < time.time() or not (org and inner):
+            return None
+        return {"sid": sid, "org": org, "inner": inner, "exp": int(exp)}
+    except Exception:  # noqa: BLE001 - malformed is invalid
+        return None
+
+
+def _calibration_route_allowed(method: str, path: str, inner: str) -> bool:
+    """The routes the credential may reach: start and read runs (the harness check is on the
+    session), read and publish the ONE harness it drives, relaunch its kit."""
+    if path.startswith("/api/harness/"):
+        path = path[len("/api/harness"):]
+    h = re.escape(inner)
+    allowed = (
+        ("POST", r"/v1/responses"), ("GET", r"/v1/responses/[^/]+"), ("POST", r"/v1/responses/[^/]+/cancel"),
+        ("GET", r"/v1/sessions"), ("GET", r"/v1/sessions/[^/]+"), ("GET", r"/v1/sessions/[^/]+/turns"),
+        ("GET", r"/v1/sessions/[^/]+/files(/.*)?"),
+        ("GET", rf"/v1/harnesses/{h}"), ("PUT", rf"/v1/harnesses/{h}"),
+        ("GET", rf"/v1/harnesses/{h}/plugin"), ("PUT", rf"/v1/harnesses/{h}/plugin"),
+        ("GET", rf"/v1/harnesses/{h}/plugins/[^/]+/files"),     # the package it calibrates, as installed
+        ("POST", r"/v1/kits/[^/]+/launch"),
+    )
+    return any(m == method.upper() and re.fullmatch(pat, path) for m, pat in allowed)
+
+
+def _calibration_env(hv: dict | None, org: str, sid: str, timeout_s: int | None) -> dict | None:
+    """What a turn of a harness that drives another one is handed, or None: the platform's own
+    API and a credential scoped to the harness it names, good for the turn's wall-clock cap plus
+    a margin (the default ceiling when the turn carries none)."""
+    inner = str((hv or {}).get("calibrates") or "").strip()
+    if not inner:
+        return None
+    ttl = (int(timeout_s) + 600) if timeout_s else _CALIBRATION_TTL_S
+    return {"HR_API_URL": HR_PLATFORM_API_URL, "HR_INNER_HARNESS": inner,
+            "HR_CALIBRATION_TOKEN": _mint_calibration_token(sid, org, inner, ttl)}
+
+
 def _mint_turn_cred(sid: str, conn_name: str) -> str:
     """Per-turn credential: sid.conn.exp.hmac — resolvable back to exactly one connection."""
     exp = str(int(time.time()) + _BROKER_TTL_S)
@@ -2497,6 +2562,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
                 translator.incomplete_reason = "timeout"
             elif st == "incomplete":
                 translator.incomplete_reason = str(s.get("reason") or "incomplete")
+                translator.handoff = s.get("handoff") if isinstance(s.get("handoff"), dict) else None
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -2637,6 +2703,14 @@ def _hb_seconds(v: dict) -> float:
         return 0.0
 
 
+def _born_seconds(d: dict) -> float:
+    """When a record or a session vertex was created; 0 when unreadable."""
+    try:
+        return float(d.get("created_at") or 0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 async def _reconcile_response(rid: str, rec: dict) -> dict:
     """Durable settler for an async (background) response record. GET /v1/responses/{id} is the
     ONLY completion signal a background poller has, so a record left at 'running' by a replica that
@@ -2650,6 +2724,15 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     if not sid:
         return rec
     v = await _vertex_get(sid) or {}
+    if not v:
+        # THE OWNER HAS NOT WRITTEN THE SESSION YET. A background record is readable the moment its
+        # POST returns, and the turn's task writes the session vertex a beat later; a poller that
+        # reads in between saw no vertex, an "infinitely stale" heartbeat and an age past the hard
+        # cap, and this settled the record as failed and PERSISTED it, so every later read said
+        # failed until the owner's final write (measured 2026-09-21: every inner run a calibrator
+        # started read `failed`, error null, for its whole life). A turn that has not started is
+        # not an orphan.
+        return rec
     vs = str(v.get("status") or "")
     settled = None
     if vs in ("done", "failed", "cancelled") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
@@ -2684,7 +2767,10 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             # That is the invented-diagnosis bug this field exists to remove, one layer down.
             # Unknown stays absent, and the console renders the neutral badge with no line.
     else:
-        hb = _hb_seconds(v)
+        # The floor under the heartbeat is the turn's birth, the record's and the vertex's: a vertex
+        # the turn has not stamped yet carries no heartbeat, and an orphan test that reads 0 for
+        # "never" calls every newborn a corpse. Staleness is measured from the last sign of life.
+        hb = max(_hb_seconds(v), _born_seconds(rec), _born_seconds(v))
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
             ts = await _trace_terminal_status(v.get("trace_blob"))
             if ts:
@@ -4040,6 +4126,8 @@ async def list_sessions(request: Request, limit: int = 20, cursor: str = "",
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
     harness = harness or str(request.headers.get("x-harness-id") or "")
+    if p.get("calibration"):
+        harness = str(p["calibration"].get("inner") or "")     # the credential sees one harness's runs
     # A workspace-scoped principal (workspace-stamped API key, or the console's workspace header)
     # sees only its workspace's sessions; unscoped principals keep the whole-org view.
     return await _session_cards(org, limit, cursor, member, harness,
@@ -4053,6 +4141,9 @@ async def _owned_session(request: Request, sid: str) -> tuple[str, dict]:
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != org or str(v.get("status")) == "deleted":
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    c = p.get("calibration")
+    if c and str(v.get("harness_id") or "") != str(c.get("inner") or ""):
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")   # not its harness's
     return org, v
 
 
@@ -5183,6 +5274,11 @@ class _RespTranslator:
         # confidently sent an operator debugging a 400-step default that was never reached.
         # "max_steps" | "timeout" | "interrupted"; empty = unknown (old records).
         self.incomplete_reason: str = ""
+        # The handoff of a run that stopped on a refusal or an escalation (systemone): the state it
+        # stopped on, the questions, the answers with their probabilities, the weakest judgment, the
+        # threshold, the risk class and the step, so a router can hand the same state to a System
+        # Two harness or a person without reading the trace (#227). None on every other ending.
+        self.handoff: dict | None = None
         # run metadata (CT-124): the model the caller asked for, and whether the gateway substituted
         # the harness's authorized default because the request was unavailable for this backend.
         self.requested_model = ""
@@ -5222,7 +5318,7 @@ class _RespTranslator:
             meta["ignored_fields"] = self.ignored
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
                 "status": status, "error": self.error,
-                "incomplete_details": ({"reason": self.incomplete_reason}
+                "incomplete_details": ({"reason": self.incomplete_reason, "handoff": self.handoff}
                                        if status == "incomplete" and self.incomplete_reason else None),
                 "previous_response_id": self.prev, "model": self.model,
                 "output": self.output, "store": self.store, "usage": self.usage,
@@ -6765,7 +6861,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         harness_id: str = "", max_step: int = 40,
                         timeout_s: int | None = None,
                         hdr_vals: dict[str, str] | None = None,
-                        partial_messages: bool = False,
+                        partial_messages: bool = False, probe: dict | None = None,
                         codex_appserver: bool = False,
                         hv: dict | None = None) -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
@@ -6940,6 +7036,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # Image generation, when an integration can serve it. A per-turn credential for
                 # the broker, never a provider key — see _image_auth.
                 "image_auth": image_auth,
+                # A harness that drives another one: the platform's own API and a credential
+                # scoped to that harness, for this turn (see _calibration_env).
+                "env": _calibration_env(hv, org, sid, timeout_s),
+                # A probe (docs/dual-loop.md, Appendix B): `metadata.systemone.script` names the
+                # actions a scripted provider answers instead of the model. The additive
+                # extension point of the protocol; nothing else of the metadata reaches the runner.
+                "metadata": probe,
                 # idempotency: all _sandbox_json retries of THIS turn share the response id, so a
                 # lost/slow first reply that gets retried dedups to the same runner turn (no re-exec).
                 "idempotency_key": f"{translator.resp_id}:{name}",
@@ -7083,6 +7186,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     # retried on another connection, because nothing went wrong with this one.
                     terminal = "incomplete"
                     translator.incomplete_reason = str(s.get("reason") or "incomplete")
+                    translator.handoff = s.get("handoff") if isinstance(s.get("handoff"), dict) else None
                 elif st in ("cancelled", "timeout"):
                     # user cancel / wall-clock cap end the SESSION's turn — never retry it
                     # on the next connection in the chain (that would re-run the whole task)
@@ -7281,7 +7385,16 @@ async def _principal(request: Request) -> dict:
         return hdr
     auth = h.get("authorization", "")
     if auth[:7].lower() == "bearer ":
-        p = await _apikey_resolve(auth[7:].strip())
+        tok = auth[7:].strip()
+        if tok.startswith("hrc_"):
+            c = _verify_calibration_token(tok)
+            if not c:
+                raise HTTPException(401, "calibration credential invalid or expired")
+            if not _calibration_route_allowed(request.method, request.url.path, c["inner"]):
+                raise uhp_error(403, "forbidden", "This credential drives one harness: it starts that "
+                                "harness's runs, reads them, and publishes its package. Nothing else.")
+            return {"org": c["org"], "member": f"calibrator:{c['sid']}", "calibration": c}
+        p = await _apikey_resolve(tok)
         if p:
             return p
     raise HTTPException(401, "missing or invalid API key")
@@ -7505,6 +7618,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
     meta = body.metadata or {}
+    probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # Request idempotency: the durable control store is the SINGLE authority (create_item = atomic
     # reservation). No in-process/blob/Redis fallback — a keyed request without the store fails
     # closed (503), never runs a divergent degraded path. idem_sha_v/idem_rhash are computed here
@@ -7539,6 +7653,10 @@ async def create_response(body: CreateResponseBody, request: Request):
         _pv = await _vertex_get(_psid) if _psid else None
         harness_id = str((_pv or {}).get("harness_id") or "")
     harness_name = str(meta.get("harness_name") or "")
+    _cal = principal.get("calibration")
+    if _cal and harness_id != str(_cal.get("inner") or ""):
+        raise uhp_error(403, "forbidden", "This credential starts runs on the one harness it drives.",
+                        "metadata.harness_id", {"harness_id": _cal.get("inner")})
     hv = await _harness_vertex(harness_id) if harness_id else None
     # A deleted harness cannot run new turns (same 404 as the read endpoints). Cross-org runs are
     # ALLOWED — sibling products legitimately run a user's harness under a platform credential, and
@@ -7774,7 +7892,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit_bg,
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
-                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
+                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
                     for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -7823,7 +7941,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
-                            timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
+                            timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
                         for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -7881,7 +7999,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
-                timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv)
+                timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -8163,6 +8281,7 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "error": ((rec.get("error") or {}).get("message") or None) if isinstance(rec.get("error"), dict) else None,
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
+                      "handoff": ((rec.get("incomplete_details") or {}).get("handoff") or None),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
@@ -13666,6 +13785,11 @@ class HarnessBody(BaseModel):
     max_step: int | None = _either("max_step")            # default agent step budget for this harness's turns
     timeout_seconds: int | None = _either("timeout_seconds")     # default per-turn wall-clock cap
     additional_headers: list | None = _either("additional_headers")  # header NAMES callers may pass per request
+    # The one harness this harness may drive through the platform's own API, by id: a Calibrator
+    # names the harness it calibrates. Every turn of a harness that names one is handed HR_API_URL
+    # and HR_CALIBRATION_TOKEN, a credential scoped to that harness and expiring with the turn
+    # (docs/dual-loop.md in the System One Harness repository, Appendix B).
+    calibrates: str | None = _either("calibrates")
 
 
 def _harness_out(v: dict) -> dict:
@@ -13696,6 +13820,7 @@ def _harness_out(v: dict) -> dict:
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
             "timeoutSeconds": int(v.get("timeout_seconds")) if str(v.get("timeout_seconds") or "").isdigit() else None,
+            "calibrates": str(v.get("calibrates") or ""),
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created}
 
 
@@ -13712,6 +13837,7 @@ def _harness_props(body: HarnessBody) -> dict:
             "disabled_tools": json.dumps(body.disabled_tools or []),
             "additional_headers": json.dumps([str(h).strip() for h in (body.additional_headers or [])
                                               if isinstance(h, str) and str(h).strip()]),
+            "calibrates": str(body.calibrates or "").strip(),
             "max_step": str(body.max_step) if body.max_step else "",
             "timeout_seconds": str(body.timeout_seconds) if body.timeout_seconds else ""}
 
@@ -14777,6 +14903,8 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         await _vg_upsert("Harness", want_h, {"kit": kit_id, "updated_at": now0})
         existing = await _vertex_get(want_h) or {**target, "kit": kit_id}
         print(f"[kits] {kit_id} now runs on {want_h}", flush=True)
+    if p.get("calibration") and str((existing or {}).get("id") or "") != str(p["calibration"].get("inner") or ""):
+        raise uhp_error(403, "forbidden", "This credential relaunches the kit on the harness it drives only.", "harness")
     if decl and not db_in and not existing:
         # Declaring launch.database is what makes it required: every panel this kit builds would
         # have nothing to read, so a launch without a connection is not a partial success.
@@ -15459,12 +15587,45 @@ async def export_harness_plugin_public(hid: str, request: Request) -> dict:
     return await _harness_export_plugin(await _mcp_migrate(org, hid, v) or v)
 
 
+class PluginPublishBody(BaseModel):
+    name: str | None = None
+    files: list[dict] | None = None     # [{path, content|content_b64}], plugin.json among them
+    blob: str | None = None             # or a handle this server issued
+
+
+@app.put("/v1/harnesses/{hid}/plugin")
+async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Request) -> dict:
+    """Publish a package version onto a harness: the package replaces the one of the same name the
+    harness holds (a kit's, or one installed by hand) and every other package stays; the harness's
+    next turn runs it. This is `set_config` for a harness whose configuration lives in its package
+    (docs/dual-loop.md, Appendix B), and the route a calibration credential publishes through."""
+    org, _ = await _pub_org_member(request)
+    v = await _vertex_get(hid)
+    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _mcp_migrate(org, hid, v)
+    item = {k: getattr(body, k) for k in ("name", "files", "blob") if getattr(body, k)}
+    if not item.get("files") and not item.get("blob"):
+        raise uhp_error(400, "invalid_input", "A package needs files or a blob handle.", "files")
+    previous = _plugins_of(v)
+    name = _plugin_read_package(item["files"], item.get("name"))["name"] if item.get("files") else str(item.get("name") or "")
+    kept = [{"name": e["name"], "blob": e["blob"]} for e in previous if e["name"] != name and e.get("blob")]
+    hb = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""), plugins=[item] + kept)
+    hb.plugins = await _plugins_prepare(hb, org, previous=previous)
+    await _vg_upsert("Harness", hid, {"plugins": json.dumps(hb.plugins), "updated_at": str(int(time.time() * 1000))})
+    out = _harness_out(await _vertex_get(hid) or {"id": hid})
+    return {"id": hid, "published": name, "plugins": out["plugins"]}
+
+
 @app.put("/v1/harnesses/{hid}")
 async def update_harness_public(hid: str, body: HarnessBody, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     v = await _vertex_get(hid)
     if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _p = await _principal(request)
+    if _p.get("calibration") and str(body.calibrates or "") != str(v.get("calibrates") or ""):
+        raise uhp_error(403, "forbidden", "A calibration credential cannot grant calibration.", "calibrates")
     v = await _mcp_migrate(org, hid, v)
     if body.base and body.base != str(v.get("base") or ""):   # Harnesses §5.2, as in update_harness
         raise uhp_error(409, "harness_mismatch",
