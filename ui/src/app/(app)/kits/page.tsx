@@ -84,15 +84,17 @@ export default function KitsPage() {
   }, []);
 
   /** A kit app runs outside this Next app, so it gets its own tab. */
+  /** The kit app is this origin's own page, so the tab keeps its handle: `noopener` makes
+   *  window.open return null, which is what left the tab launch opened blank forever. */
   function openApp(route: string) {
-    window.open(route, '_blank', 'noopener,noreferrer');
+    window.open(route, '_blank');
   }
 
   async function launch(kit: Kit, base?: string, model?: string, database?: DbDraft) {
     // Open the tab NOW, on the click, and navigate it when the launch returns. Opening it after
     // the await is a popup the browser is entitled to block, because by then it is no longer a
     // user gesture.
-    const tab = window.open('', '_blank', 'noopener,noreferrer');
+    const tab = window.open('', '_blank');
     setBusy(kit.id); setErr('');
     try {
       const r = await harnessFetch(`/api/harness/v1/kits/${kit.id}/launch`, {
