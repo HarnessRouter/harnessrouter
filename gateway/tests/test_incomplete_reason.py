@@ -22,7 +22,7 @@ def test_a_capped_turn_names_its_cap():
     tr = _tr()
     tr.incomplete_reason = "max_steps"
     d = tr._response_obj("incomplete")
-    assert d["incomplete_details"] == {"reason": "max_steps"}
+    assert d["incomplete_details"] == {"reason": "max_steps", "handoff": None}   # a capped run hands nothing off
 
 
 def test_an_unknown_cause_stays_null_rather_than_guessing():
