@@ -9960,6 +9960,8 @@ async def _hosted_scrub_removed(org: str, hid: str, before: list[dict], after: l
         scrubbed += 1
     if scrubbed:
         print(f"[sql] {hid}: disconnected ({scrubbed} record(s) scrubbed)", flush=True)
+    for key in sorted(gone):
+        await _connection_vertex_drop(hid, key)
 
 
 async def _mcp_write(hid: str, servers: list[dict]) -> None:
@@ -10164,6 +10166,53 @@ async def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
     return eng, c, host, db
 
 
+# ── the connection, on the graph ─────────────────────────────────────────────────────────────
+# What a harness is connected to is configuration, and configuration is listed, shown and
+# managed; a vault record is none of those things. So the attach below writes two things: the
+# connection string into the vault (the only place a credential ever sits) and this vertex, which
+# holds everything else and names the vault key. One per harness entry, rewritten on reconnect.
+_CONNECTION_LABEL = "HarnessConnection"
+
+
+def _connection_vertex_id(hid: str, entry_id: str) -> str:
+    return "hconn_" + hashlib.sha1(f"{hid}|{entry_id}".encode()).hexdigest()[:24]
+
+
+async def _connection_vertex_put(org: str, hid: str, v: dict | None, entry_id: str, key: str,
+                                 engine: str, host: str, db: str, sample_rows: bool) -> None:
+    now = str(int(time.time() * 1000))
+    vid = _connection_vertex_id(hid, entry_id)
+    prev = await _vertex_get(vid)
+    await _vg_upsert(_CONNECTION_LABEL, vid, {
+        "org": org, "workspace": str((v or {}).get("workspace") or ""), "harness": hid, "entry": entry_id,
+        "kind": "database", "server": "database", "engine": engine, "host": host, "database": db,
+        "sample_rows": "1" if sample_rows else "0", "secret_key": key,
+        "created_at": str((prev or {}).get("created_at") or now), "updated_at": now, "deleted": "0"})
+
+
+async def _connection_vertex_drop(hid: str, key: str) -> None:
+    """The entry is gone, so the configuration is gone with it (the record was scrubbed already)."""
+    with contextlib.suppress(Exception):
+        for row in await BACKING.graph.find(_CONNECTION_LABEL, {"harness": hid, "secret_key": key}):
+            vid = str(row.get("id") or "")
+            if vid:
+                await _vg_upsert(_CONNECTION_LABEL, vid, {"deleted": "1", "updated_at": str(int(time.time() * 1000))})
+
+
+async def _connections_of(org: str, hid: str) -> list[dict]:
+    """A harness's connections as the console may see them: never the credential."""
+    out = []
+    for row in await BACKING.graph.find(_CONNECTION_LABEL, {"harness": hid, "org": org}):
+        if str(row.get("deleted") or "0") in ("1", "true", "True"):
+            continue
+        out.append({"id": str(row.get("id") or ""), "entry": str(row.get("entry") or ""),
+                    "kind": str(row.get("kind") or ""), "engine": str(row.get("engine") or ""),
+                    "host": str(row.get("host") or ""), "database": str(row.get("database") or ""),
+                    "sampleRows": str(row.get("sample_rows") or "0") == "1",
+                    "updatedAt": int(str(row.get("updated_at") or 0) or 0)})
+    return out
+
+
 async def _hosted_db_entry(hid: str, v: dict | None, decl: dict) -> None:
     """The database ENTRY, with no credential in it.
 
@@ -10230,6 +10279,7 @@ async def _hosted_db_attach(org: str, hid: str, v: dict | None, decl: dict,
              "auth": f"vault:{key}",
              "enabled": str(prev.get("enabled", True)) not in ("False", "false", "0")}
     await _mcp_write(hid, [e for e in cur if str(e.get("id") or "") != decl["id"]] + [entry])
+    await _connection_vertex_put(org, hid, v, decl["id"], key, engine, host, db, sample_rows)
     # host and database only. The credential is not printed, here or anywhere.
     print(f"[sql] {hid}: connected {engine} {host}/{db} "
           f"(sample rows {'on' if sample_rows else 'off'})", flush=True)
@@ -14840,8 +14890,12 @@ async def list_kits(request: Request) -> dict:
     org = p.get("org", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    # One kit, one Harness PER WORKSPACE: a launched kit's Harness belongs to the workspace it was
+    # launched in, so "launched" here is a fact about the caller's workspace, not the org.
+    ws, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
     rows = await _vg_list_by_org("Harness", org)
-    by_kit = {str(r.get("kit") or ""): r for r in rows if str(r.get("deleted") or "0") != "1"}
+    by_kit = {str(r.get("kit") or ""): r for r in rows
+              if str(r.get("deleted") or "0") != "1" and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)}
     out = []
     # Manifest order, NOT alphabetical. kits.json lists the kits in the order the catalogue wants
     # them shown, install-kits.sh bundles them in that order, and _kits() builds its dict by
@@ -14978,8 +15032,12 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     # a corrected form, not a half-configured Harness to find and fix.
     checked = await _db_validate(db_in.engine, db_in.connection_string) if db_in else None
 
+    # Per workspace (see list_kits): launching in a second workspace makes that workspace its own
+    # Harness rather than handing back the first workspace's, which its members could not see.
+    ws, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
     existing = next((r for r in await _vg_list_by_org("Harness", org)
-                     if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"),
+                     if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"
+                     and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
     want_h = (body_in.harness if body_in else "").strip()
     if want_h and want_h != str((existing or {}).get("id") or ""):
@@ -14987,7 +15045,8 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         # Harness keeps its sessions and its package but is no longer the one the app talks to,
         # and a Harness already running another kit is not taken over.
         target = await _vertex_get(want_h)
-        if not target or str(target.get("org") or "") != org or str(target.get("deleted") or "0") == "1":
+        if not target or str(target.get("org") or "") != org or str(target.get("deleted") or "0") == "1" \
+                or not _workspace_keep(str(target.get("workspace") or ""), ws, wsd):
             raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness")
         other = str(target.get("kit") or "")
         if other and other != kit_id:
