@@ -1546,11 +1546,14 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
             if r.status_code < 400 and raw:
                 return r.json()
             last = f"HTTP {r.status_code}, {len(raw)}B body"
+            if 400 <= r.status_code < 500 and r.status_code != 429:   # the server's verdict: waiting cannot change it
+                last = f"HTTP {r.status_code}: {raw[:300].decode('utf-8', 'replace')}"
+                break
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {str(e)[:120]}"
         if i < attempts - 1:
             await asyncio.sleep(min(base * (1.5 ** i), 15.0))
-    raise RuntimeError(f"sandbox {path} unavailable after {attempts} tries ({last})")
+    raise RuntimeError(f"sandbox {path} failed after {i + 1} of {attempts} tries ({last})")
 
 
 # ── durable session workspace (git checkpoint tarball in vg-gateway blob storage) ──
