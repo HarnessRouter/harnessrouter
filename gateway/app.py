@@ -15098,6 +15098,15 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
             # current package on the next press of Launch. Same version: nothing is rewritten.
             existing = await _kit_plugin_ensure(org, hid0, existing, kit_plugin, tuple(
                 str(d["name"]) for d in (decl, media_decl) if d and d.get("name"))) or existing
+        # The prompt too: it is the kit's, like the package, and a kit whose prompt changed
+        # (the sheet one gained its output contract on 2026-09-22) must reach the Harness
+        # people already run, or the fix ships to new launches only.
+        want_prompt = str((kit.get("harness") or {}).get("system_prompt") or "")
+        if want_prompt and str(existing.get("system_prompt") or "") != want_prompt:
+            await _vg_upsert("Harness", hid0, {"system_prompt": want_prompt,
+                                               "updated_at": str(int(time.time() * 1000))})
+            existing = await _vertex_get(hid0) or {**existing, "system_prompt": want_prompt}
+            print(f"[kits] {kit_id}: prompt refreshed on {hid0}", flush=True)
         return {"kit": kit_id, "harnessId": hid0,
                 "route": (kit.get("app") or {}).get("route") or "", "created": False,
                 "harness": _harness_out(existing)}

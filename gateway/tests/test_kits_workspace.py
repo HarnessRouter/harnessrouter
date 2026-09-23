@@ -116,3 +116,21 @@ def test_a_database_connection_is_recorded_on_the_graph_without_its_credential(w
     assert len(conns) == 1 and conns[0]["harness"] == hid and conns[0]["secret_key"] == key
     assert conns[0]["workspace"] == "org.a__ws1" and conns[0]["database"] == "shop" and "u:p@" not in json.dumps(conns[0])
     assert asyncio.run(gw._connections_of("org.a", hid))[0]["database"] == "shop"
+
+
+def test_a_relaunch_carries_the_kits_current_prompt(world, monkeypatch):
+    """The prompt is the kit's, like its package: a kit whose prompt changed reaches the Harness a
+    workspace already runs on the next launch, and an unchanged prompt rewrites nothing."""
+    store, who = world
+    kit = json.loads(json.dumps(KIT)); kit["harness"]["system_prompt"] = "Build decks."
+    monkeypatch.setattr(gw, "_kits", lambda: {"slides": kit})
+    hid = asyncio.run(gw.launch_kit("slides", _Req(), None))["harnessId"]
+    assert store[hid]["system_prompt"] == "Build decks."
+    stamp = store[hid]["updated_at"]
+    again = asyncio.run(gw.launch_kit("slides", _Req(), None))
+    assert not again["created"] and store[hid]["updated_at"] == stamp       # same prompt: untouched
+    kit["harness"]["system_prompt"] = "Build decks. The person sees only ./deck.json."
+    third = asyncio.run(gw.launch_kit("slides", _Req(), None))
+    assert not third["created"] and third["harnessId"] == hid
+    assert store[hid]["system_prompt"] == "Build decks. The person sees only ./deck.json."
+    assert third["harness"]["systemPrompt"] == "Build decks. The person sees only ./deck.json."
