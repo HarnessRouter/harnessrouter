@@ -10359,7 +10359,7 @@ class SqlQueryBody(BaseModel):
 # and the caller has to be able to say which. The harness segment carries authorization; the
 # server segment names the server.
 
-@app.get("/v1/harnesses/{hid}/servers/{sid}")
+@app.get("/v1/harnesses/{hid}/servers/{sid}", include_in_schema=False)
 async def get_harness_server(hid: str, sid: str, request: Request) -> dict:
     """One server this gateway hosts, describing itself — including what it is connected to.
 
@@ -10403,7 +10403,7 @@ async def _hosted_resolve_any(hid: str, org: str, servers: list[dict], *,
     return await _hosted_resolve(_hosted_server_name(entry), hid, org, servers, entry_id=entry_id)
 
 
-@app.post("/v1/harnesses/{hid}/servers/{sid}/query")
+@app.post("/v1/harnesses/{hid}/servers/{sid}/query", include_in_schema=False)
 async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Request) -> dict:
     """Run one SELECT — what refreshing a dashboard panel does."""
     org, _ = await _pub_org_member(request)
@@ -10417,7 +10417,7 @@ async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Requ
         raise _sql_http(e) from e
 
 
-@app.get("/v1/harnesses/{hid}/servers/{sid}/schema")
+@app.get("/v1/harnesses/{hid}/servers/{sid}/schema", include_in_schema=False)
 async def get_server_schema(hid: str, sid: str, request: Request) -> dict:
     """The shape of the connected database: tables, columns, types — and a few rows per table when
     the person left sample rows on. `sampled` in the response says which they got."""
@@ -13062,14 +13062,14 @@ class SceneWrite(BaseModel):
     scene: dict
 
 
-@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene")
+@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene", include_in_schema=False)
 async def get_media_scene(hid: str, eid: str, sid: str, request: Request) -> dict:
     await _media_route(hid, sid, eid, request)
     scene = await _media_scene_read(sid)
     return {"rev": int(float((scene.get("meta") or {}).get("rev") or 0)), "scene": scene}
 
 
-@app.put("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene")
+@app.put("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene", include_in_schema=False)
 async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
                           request: Request) -> dict:
     """The app's write, with the whole conflict story in three status codes.
@@ -13104,7 +13104,7 @@ async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
     return {"rev": new_rev}
 
 
-@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/jobs")
+@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/jobs", include_in_schema=False)
 async def get_media_jobs(hid: str, eid: str, sid: str, request: Request,
                          ids: str = "") -> dict:
     """The same _media_job_advance path the agent's check_jobs takes, so a browser and an agent
@@ -13147,7 +13147,7 @@ async def get_media_jobs(hid: str, eid: str, sid: str, request: Request,
     return {"jobs": out, "spend_usd": await _media_spend(sid)}
 
 
-@app.post("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/export")
+@app.post("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/export", include_in_schema=False)
 async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> dict:
     org, entry, _sv = await _media_route(hid, sid, eid, request)
     if not media_plane.have_ffmpeg():
@@ -13162,7 +13162,7 @@ async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> d
             "total_seconds": job.get("planned_seconds"), "status": job["status"]}
 
 
-@app.post("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media")
+@app.post("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media", include_in_schema=False)
 async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> dict:
     """Put a picture the person already has into this video, as media the agent can work from.
 
@@ -13229,7 +13229,7 @@ async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> d
             "seconds": rec["seconds"], "element_id": element_id or None}
 
 
-@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media/{med}")
+@app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/media/{med}", include_in_schema=False)
 async def get_media_bytes(hid: str, eid: str, sid: str, med: str, request: Request) -> Response:
     """The bytes, with Range support.
 
@@ -15559,7 +15559,7 @@ async def _cloud_remember_last(target: dict) -> None:
         await _cloud_targets_save(doc)
 
 
-@app.post("/v1/harnesses/upload")
+@app.post("/v1/harnesses/upload", include_in_schema=False)
 async def cloud_upload_batch(body: CloudUploadBody, request: Request) -> dict:
     p = await _principal(request)
     target = await _cloud_pick_target(body.target)
@@ -15574,7 +15574,7 @@ class CloudUploadOneBody(BaseModel):
     target: str | None = None
 
 
-@app.post("/v1/harnesses/{hid}/upload")
+@app.post("/v1/harnesses/{hid}/upload", include_in_schema=False)
 async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody | None = None) -> dict:
     p = await _principal(request)
     target = await _cloud_pick_target((body.target if body else None))
@@ -15587,7 +15587,7 @@ async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody 
     return {**res, "status": _cloud_status(hid, records, None, target) | {"changed": False}}
 
 
-@app.get("/v1/harnesses/{hid}/upload")
+@app.get("/v1/harnesses/{hid}/upload", include_in_schema=False)
 async def cloud_upload_status(hid: str, request: Request) -> dict:
     """The chip on the harness page: never uploaded, uploaded, or changed since."""
     p = await _principal(request)
@@ -15649,6 +15649,13 @@ def _openapi_public() -> dict:
             if not isinstance(r, APIRoute) or not r.path.startswith(_OPENAPI_PUBLIC_PREFIXES):
                 continue
             if any(getattr(d, "dependency", None) is _internal_only for d in (r.dependencies or [])):
+                continue
+            # A route the console owns under a public prefix opts out with FastAPI's own marker,
+            # include_in_schema=False, at its decorator: the cloud-upload handlers and the kits'
+            # server state, vendor and media handlers live under /v1/harnesses and joined the
+            # customer schema by prefix (#245). A new console route under a public prefix has to
+            # say so where it is defined, which is where a reviewer sees it.
+            if not r.include_in_schema:
                 continue
             routes.append(r)
         doc = get_openapi(title="HarnessRouter API", version="1", routes=routes,
