@@ -2905,6 +2905,23 @@ async def _drain_inflight() -> None:
             pass
 
 
+def _turn_harness_check(harness_id: str, hv: dict | None) -> None:
+    """A turn addressed to a harness runs on THAT harness or not at all. A deleted one answers the
+    same 404 as the read endpoints. An id that names no harness at all used to run as a turn with
+    no harness config, on the default backend, billed to the caller: a typo in a product's
+    configuration ran a generic agent and charged for it, and nothing said so (found by the
+    coding-agent plugin's own verification, 2026-09-23). A base id (codex, claude-code, ...) is a
+    harness without a vertex and stays allowed; anything else has to exist."""
+    if not harness_id:
+        return
+    if hv is None:
+        if harness_id in _BASE_CATALOG:
+            return
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    if str(hv.get("deleted")) in ("1", "true", "True"):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+
+
 async def _harness_vertex(harness_id: str) -> dict | None:
     """Read a Harness vertex (HR tenant) as a flat dict — its config (mcp_servers, skills props)."""
     # harness_id is caller-controlled (metadata / X-Harness-Id) and now drives BILLING — keep it to
@@ -7753,8 +7770,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # ALLOWED — sibling products legitimately run a user's harness under a platform credential, and
     # the marketplace model is exactly "callers run it, the owner pays infra". Until entitlements
     # land, the unguessable harness id is the run capability.
-    if hv and str(hv.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _turn_harness_check(harness_id, hv)
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
