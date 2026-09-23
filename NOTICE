@@ -38,9 +38,10 @@ run, by you, under their own licenses:
 
   @anthropic-ai/claude-code   Anthropic's own terms ("SEE LICENSE IN README.md")
   @openai/codex               Apache-2.0
-  hermes-agent                no license declared by the publisher
+  hermes-agent                MIT (License-Expression declared by the publisher since 0.19.0)
 
-Because Claude Code is distributed under Anthropic's terms and hermes-agent declares no
-license, neither may be redistributed inside a public image. Installing them at first
-start keeps that decision — and its terms — with the operator. Review each tool's license
-before enabling its backend. Set HR_BACKENDS to control which are installed.
+Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
+public image; hermes-agent's publisher declared no license before 0.19.0. Installing the
+agent CLIs at first start keeps that decision — and each tool's terms — with the operator.
+Review each tool's license before enabling its backend. Set HR_BACKENDS to control which
+are installed.
