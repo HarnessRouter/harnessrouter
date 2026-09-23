@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render import render  # noqa: E402
-from run import lookup_use, network_use, prompt_matches, provider_failure, provider_streak, tool_outcomes, usage_of  # noqa: E402
+from run import foreign_connection, lookup_use, network_use, prompt_matches, provider_failure, provider_streak, tool_outcomes, usage_of  # noqa: E402
 
 
 def test_three_provider_failures_in_a_row_trip_the_halt_and_a_result_resets_it():
@@ -197,3 +197,17 @@ def test_a_runner_error_is_listed_as_an_error_not_a_fail():
     assert "Runner errors" in md and "opencode x m b: request failed" in md
     row = next(line for line in md.splitlines() if line.startswith("| opencode |"))
     assert "| 1 | 1 (100%) |" in row
+
+
+def test_a_foreign_run_is_decided_before_its_session_is_cleaned_up():
+    """Rule 1 used to be decided in the caller after run_task had already deleted the session, so
+    the trace of a foreign run was gone before the run was printed as a finding (#243, reported by
+    trifonnt). The decision is a function run_task calls before cleanup."""
+    assert foreign_connection({"connection": "integration:other"}, "integration:deepseek") == "integration:other"
+    assert foreign_connection({"connection": "integration:deepseek"}, "integration:deepseek") == ""
+    assert foreign_connection({"connection": ""}, "integration:deepseek") == ""        # unreported: not a finding
+    assert foreign_connection({"connection": "integration:other"}, "") == ""           # nothing under test
+    import inspect
+    from run import run_task
+    src = inspect.getsource(run_task)
+    assert src.index("foreign_connection(rec, expect)") < src.index('api("DELETE", f"/v1/sessions/{sid}")', src.index("kept"))
