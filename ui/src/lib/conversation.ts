@@ -181,6 +181,16 @@ function withFile(files: RespFile[], f: RespFile): RespFile[] {
   return files.some(same) ? files : [...files, f];
 }
 
+/** The reason and handoff a terminal response carries in incomplete_details, applied to the
+ *  assistant message the same way msgsFromTurns applies them from history. The live paths used to
+ *  keep only the status, so a handoff showed nothing until the conversation was reopened (#242). */
+function applyIncomplete(a: AsstMsg, response: unknown): void {
+  const inc = (response as { incomplete_details?: { reason?: string; handoff?: Record<string, unknown> | null } | null } | null | undefined)?.incomplete_details;
+  if (!inc) return;
+  a.incompleteReason = inc.reason || undefined;
+  a.handoff = inc.handoff || undefined;
+}
+
 function busUpdateLast(sid: string, fn: (a: AsstMsg) => void) {
   setConvState(sid, (s) => {
     const out = s.msgs.slice();
@@ -236,7 +246,7 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
     case 'response.completed':
       busUpdateLast(sid, (a) => { a.status = 'done'; }); setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
     case 'response.incomplete':
-      busUpdateLast(sid, (a) => { a.status = 'incomplete'; }); setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
+      busUpdateLast(sid, (a) => { a.status = 'incomplete'; applyIncomplete(a, ev.response); }); setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
     case 'response.failed': {
       // A user Stop arrives as response.failed with reason/status "cancelled", show it as
       // Cancelled, not Failed (the session card + turn record already say cancelled).
@@ -523,10 +533,11 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           onTextDelta: (d) => updateLast((a) => { a.blocks = withText(a.blocks, d); }),
           onFile: (f) => updateLast((a) => { a.files = withFile(a.files, f); }),
           onError: (msg) => updateLast((a) => { a.blocks = withError(a.blocks, msg); }),
-          onDone: (status) => {
+          onDone: (status, response) => {
             updateLast((a) => {
               a.status = status === 'completed' ? 'done'
                 : (['failed', 'cancelled', 'incomplete'].includes(status) ? status as AsstMsg['status'] : 'failed');
+              applyIncomplete(a, response);
             });
             const sk = sessionId ?? sidRef.current;
             const ms = getConvState(convKeyRef.current).msgs;
