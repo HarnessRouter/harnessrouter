@@ -818,7 +818,7 @@ All paths below are relative to the API base above and use the same Bearer key.
 | Read session history | `GET /v1/sessions/{session_id}/turns` |
 | Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
 | Cancel work | `POST /v1/responses/{response_id}/cancel` |
-| Inspect execution | `GET /v1/traces/{session_id}` and `/v1/traces/{session_id}/events` |
+| Inspect execution | `GET /v1/sessions/{session_id}/turns` for the turns; `GET /v1/traces/{session_id}/all` for the stored event stream of the harness (assistant, tool and result events as the CLI emitted them); `/v1/traces/{session_id}/events?chunk=N` reads one stored chunk. Provider-call spans (the model requests behind a turn) are part of the hosted service's observability, not of this edition |
 
 For file attachment and download formats, see the [UHP specification](https://unifiedharnessprotocol.org/spec).
 
