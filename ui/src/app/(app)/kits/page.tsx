@@ -83,17 +83,17 @@ export default function KitsPage() {
       .catch(() => {});
   }, []);
 
-  /** A kit app runs outside this Next app, so it gets its own tab. */
-  /** The kit app is this origin's own page, so the tab keeps its handle: `noopener` makes
-   *  window.open return null, which is what left the tab launch opened blank forever. */
-  function openApp(route: string) {
-    window.open(route, '_blank');
-  }
-
+  /** Launch, and open the kit app in its own tab (it runs outside this Next app). Opening a
+   *  kit that is already running goes through the same call: launch is idempotent, and it is
+   *  where a running kit picks up what its kit definition has changed since (its package, its
+   *  prompt, the tools it needs), so a kit fixed after someone launched it is fixed for them the
+   *  next time they open it, not only for whoever launches it fresh.
+   *
+   *  The tab is opened NOW, on the click, and navigated when the launch returns. Opening it after
+   *  the await is a popup the browser is entitled to block, because by then it is no longer a
+   *  user gesture. The kit app is this origin's own page, so the tab keeps its handle: `noopener`
+   *  makes window.open return null, which is what left the tab launch opened blank forever. */
   async function launch(kit: Kit, base?: string, model?: string, database?: DbDraft) {
-    // Open the tab NOW, on the click, and navigate it when the launch returns. Opening it after
-    // the await is a popup the browser is entitled to block, because by then it is no longer a
-    // user gesture.
     const tab = window.open('', '_blank');
     setBusy(kit.id); setErr('');
     try {
@@ -115,7 +115,7 @@ export default function KitsPage() {
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail || `${r.status}`);
       const { route } = await r.json();
       const url = route || `/kits/${kit.id}`;
-      if (tab) tab.location.href = url; else openApp(url);
+      if (tab) tab.location.href = url; else window.location.assign(url);
       setPicking(null); setBusy('');
       reload();
     } catch (e) {
@@ -233,8 +233,8 @@ export default function KitsPage() {
                 )}
                 <span className="kit-actions-spacer" />
                   <button className="button primary" type="button" disabled={busy === k.id}
-                    onClick={() => (k.launched ? openApp(k.route || `/kits/${k.id}`) : setPicking(k))}>
-                    {busy === k.id ? 'Launching…' : k.launched ? 'Open' : 'Launch'}
+                    onClick={() => (k.launched ? void launch(k) : setPicking(k))}>
+                    {busy === k.id ? (k.launched ? 'Opening…' : 'Launching…') : k.launched ? 'Open' : 'Launch'}
                     <iconify-icon icon={k.launched ? 'tabler:external-link' : 'tabler:arrow-right'}></iconify-icon>
                   </button>
                 </footer>
