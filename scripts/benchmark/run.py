@@ -205,6 +205,13 @@ def provider_failure(turn_error) -> str:
     return msg[:160] if msg and PROVIDER_ERROR.search(msg) else ""
 
 
+def foreign_connection(rec: dict, expect: str) -> str:
+    """The connection a run was served by when it is not the one under test, else "": the matrix's
+    rule 1. Decided before a session is cleaned up, so a foreign run keeps its trace (#243)."""
+    got = str(rec.get("connection") or "")
+    return got if expect and got and got != expect else ""
+
+
 def prompt_matches(stored: str, prompt: str) -> bool:
     """Whether a session's stored prompt is this prompt. The session list keeps the prompt's head
     (1500 characters, measured), sometimes behind an attachment line, so the stored head — whole,
@@ -250,7 +257,8 @@ def recover_session(before: set[str], harness_id: str, prompt: str, t0: float, c
         time.sleep(10)
 
 
-def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: str, provider: str, workdir: str) -> dict:
+def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: str, provider: str, workdir: str,
+             expect: str = "") -> dict:
     staged = pack.stage(task, root)
     content = [{"type": "input_text", "text": staged["prompt"]}]
     for name, data in staged["files"]:
@@ -299,6 +307,11 @@ def run_task(pack, root: str, task: dict, label: str, harness_id: str, model: st
                assistant=(turn.get("assistant") or "")[:200])
     if rec.get("turn_error") is None and turn.get("error"):
         rec["turn_error"] = turn.get("error")
+    # Rule 1 is decided HERE, before the session is cleaned up: a run served by another connection
+    # is a finding, and a finding keeps its session and trace as the evidence. Deciding it after
+    # this function returned deleted the trace first and printed FINDING foreign second (#243).
+    if foreign_connection(rec, expect):
+        rec["foreign"] = rec["connection"]
     # A turn the provider refused before the agent did anything measures the account, not the
     # harness: 150 records of "402 Insufficient Balance" arrived in eleven minutes once a key ran
     # dry (2026-09-18). That is this runner's problem to re-run, never the harness's failure.
@@ -396,12 +409,10 @@ def main() -> None:
                 if halt.is_set():
                     return
                 try:
-                    rec = run_task(pack, root, t, label, hid, model, provider, workdir)
+                    rec = run_task(pack, root, t, label, hid, model, provider, workdir, expect=expect)
                 except Exception as e:  # noqa: BLE001 — this runner's own failure, re-run next launch
                     rec = {"provider": provider, "harness": label, "harness_id": hid, "model": model,
                            "pack": pack.NAME, "task": t["id"], "error": repr(e)[:300]}
-                if expect and rec.get("connection") and rec["connection"] != expect:
-                    rec["foreign"] = rec["connection"]
                 # three provider refusals in a row: the account, the key or the provider is down,
                 # and every further task would only record the same line
                 if provider_streak(rec) and not halt.is_set():
