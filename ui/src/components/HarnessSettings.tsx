@@ -42,11 +42,21 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // The environment as rows, so a half-typed name does not vanish from a map keyed by name.
+  // The rows are re-derived whenever the SAVED harness changes (a new harness, a save, a discard),
+  // never on every keystroke; and every change to the rows writes draft.env, so dirty state and
+  // saving, which read the draft, see what the screen shows (#244).
   const [envRows, setEnvRows] = useState<{ name: string; value: string }[]>([]);
-  useEffect(() => { setEnvRows(Object.entries(draft?.env || {}).map(([name, value]) => ({ name, value }))); }, [draft?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const rowsOf = (env: Record<string, string> | undefined) => Object.entries(env || {}).map(([name, value]) => ({ name, value }));
+  const envOf = (rows: { name: string; value: string }[]) => Object.fromEntries(rows.filter((r) => r.name).map((r) => [r.name, r.value]));
+  useEffect(() => { setEnvRows(rowsOf(draft?.env)); }, [draft?.id, saved]);   // eslint-disable-line react-hooks/exhaustive-deps
   const setEnvRow = (idx: number, patch: Partial<{ name: string; value: string }>) => setEnvRows((rows) => {
     const next = rows.map((r, k) => (k === idx ? { ...r, ...patch } : r));
-    upd({ env: Object.fromEntries(next.filter((r) => r.name).map((r) => [r.name, r.value])) });
+    upd({ env: envOf(next) });
+    return next;
+  });
+  const dropEnvRow = (idx: number) => setEnvRows((rows) => {
+    const next = rows.filter((_, k) => k !== idx);
+    upd({ env: envOf(next) });
     return next;
   });
   const [editSkillIdx, setEditSkillIdx] = useState<number | null>(null);
@@ -531,7 +541,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                       <input value={row.name} placeholder="API_KEY" disabled={readOnly} onChange={(e) => setEnvRow(idx, { name: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') })} /></div>
                     <div className="field"><label>Value or reference</label>
                       <input value={row.value} placeholder="$headers.X-Api-Key or vault:my-secret" disabled={readOnly} onChange={(e) => setEnvRow(idx, { value: e.target.value })} /></div>
-                    {!readOnly && <button className="icon-button" type="button" aria-label="Remove variable" onClick={() => setEnvRows((r) => r.filter((_, k) => k !== idx))}><iconify-icon icon="tabler:trash"></iconify-icon></button>}
+                    {!readOnly && <button className="icon-button" type="button" aria-label="Remove variable" onClick={() => dropEnvRow(idx)}><iconify-icon icon="tabler:trash"></iconify-icon></button>}
                   </div>
                 ))}
                 {!envRows.length && <span className="field-help">No variables set.</span>}
@@ -551,7 +561,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
               <button className="button danger" type="button" onClick={() => setConfirmDelete(true)}>Delete Harness</button>
               <span className="settings-footer-spacer" />
               {dirty && (
-                <button className="button" type="button" disabled={busy} onClick={() => setDraft(saved)}>Discard Changes</button>
+                <button className="button" type="button" disabled={busy} onClick={() => { setDraft(saved); setEnvRows(rowsOf(saved?.env)); }}>Discard Changes</button>
               )}
               {dirty ? (
                 <button className="button primary" type="submit" form="hs-form" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
