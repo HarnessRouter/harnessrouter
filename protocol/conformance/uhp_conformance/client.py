@@ -112,19 +112,11 @@ class Client:
                 self.stream_status = r.status
                 buf = b""
                 for chunk in r:
-                    buf += chunk
-                    while b"\n\n" in buf:
-                        raw, _, buf = buf.partition(b"\n\n")
-                        for line in raw.split(b"\n"):
-                            if line.startswith(b"data:"):
-                                try:
-                                    ev = json.loads(line[5:].strip().decode("utf-8"))
-                                except Exception:  # noqa: BLE001
-                                    continue
-                                ev["__t"] = time.time() - t0     # arrival time, for progressiveness
-                                events.append(ev)
+                    buf = _drain_sse(buf + chunk, events, t0)
                     if time.time() - t0 > max_seconds:
                         break
+                else:
+                    _drain_sse(buf, events, t0, final=True)
         except urllib.error.HTTPError as e:
             self.stream_status = e.code
             self.stream_headers = {k.lower(): v for k, v in (e.headers or {}).items()}
@@ -134,3 +126,29 @@ class Client:
             self.stream_headers = {}
             self.stream_error = str(e)[:500]
         return events
+
+
+def _drain_sse(buf: bytes, events: list[dict], t0: float, *, final: bool = False) -> bytes:
+    """Append every complete Server-Sent Event in `buf` to `events`; return the unparsed rest.
+
+    Lines may end in CRLF, LF or CR (WHATWG HTML, "Parsing an event stream"); sse-starlette, for
+    one, frames with CRLF by default. A trailing CR is held back unless `final`, since it may be
+    the first half of a CRLF split across reads. An event's data is its `data:` lines joined by LF.
+    """
+    held = b""
+    if buf.endswith(b"\r") and not final:
+        buf, held = buf[:-1], b"\r"
+    buf = buf.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    while b"\n\n" in buf:
+        raw, _, buf = buf.partition(b"\n\n")
+        data = [ln[5:].removeprefix(b" ") for ln in raw.split(b"\n") if ln.startswith(b"data:")]
+        if not data:
+            continue
+        try:
+            ev = json.loads(b"\n".join(data).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(ev, dict):
+            ev["__t"] = time.time() - t0     # arrival time, for progressiveness
+            events.append(ev)
+    return buf + held
