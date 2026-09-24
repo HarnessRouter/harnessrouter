@@ -1546,11 +1546,14 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
             if r.status_code < 400 and raw:
                 return r.json()
             last = f"HTTP {r.status_code}, {len(raw)}B body"
+            if 400 <= r.status_code < 500 and r.status_code != 429:   # the server's verdict: waiting cannot change it
+                last = f"HTTP {r.status_code}: {raw[:300].decode('utf-8', 'replace')}"
+                break
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {str(e)[:120]}"
         if i < attempts - 1:
             await asyncio.sleep(min(base * (1.5 ** i), 15.0))
-    raise RuntimeError(f"sandbox {path} unavailable after {attempts} tries ({last})")
+    raise RuntimeError(f"sandbox {path} failed after {i + 1} of {attempts} tries ({last})")
 
 
 # ── durable session workspace (git checkpoint tarball in vg-gateway blob storage) ──
@@ -4860,6 +4863,42 @@ def _integration_serves_backend(integ: dict, backend: str) -> bool:
     return bool(_INTEGRATION_WIRING.get((provider, backend)))
 
 
+def _chain_refusal(conn: dict, backend: str) -> str:
+    """Why a chain connection cannot drive `backend`, in the operator's words, or "" when it can.
+
+    A connection from the environment (HR_SECRET_GLOBAL_HARNESS_CONN_*) in the integrations'
+    vocabulary is held to the rule an integration is held to, in the same place: it drives a
+    backend only where the wiring says so, and a custom endpoint only in a format the backend
+    speaks. A provider the catalog does not know (a runner-native name such as openai-api or
+    azure) passes, and the runner remains its judge, as before. Until this, a chain connection
+    was sent to the runner verbatim, so a `custom` connector reached it as a provider no backend
+    has and the refusal came back in the runner's vocabulary (#201)."""
+    provider = str(conn.get("provider") or "").lower()
+    if provider not in _PROVIDER_CATALOG:
+        return ""
+    if provider == "custom":
+        fmt = str(conn.get("api_format") or "").strip().lower()
+        if fmt not in _CUSTOM_FORMAT_BACKENDS:
+            return f"a custom endpoint needs api_format, one of {', '.join(sorted(_CUSTOM_FORMAT_BACKENDS))}"
+        if backend not in _CUSTOM_FORMAT_BACKENDS[fmt]:
+            speaks = sorted(f for f, bs in _CUSTOM_FORMAT_BACKENDS.items() if backend in bs)
+            return (f"a custom endpoint in the {fmt} format cannot drive {backend}, which speaks "
+                    + (f"the {' or '.join(speaks)} format" if speaks else "no custom format"))
+        return ""
+    if not _INTEGRATION_WIRING.get((provider, backend)):
+        can = sorted({p for (p, b) in _INTEGRATION_WIRING if b == backend and p in _PROVIDER_CATALOG})
+        return f"provider {provider} cannot drive {backend}; providers that can: {', '.join(can) or 'none'}"
+    return ""
+
+
+def _chain_wired(conn: dict, backend: str) -> dict:
+    """The chain connection under the runner's own name for its provider, as an integration is
+    sent (see _integration_conn); api_format rides along for the backends that read it."""
+    provider = str(conn.get("provider") or "").lower()
+    mapped = _INTEGRATION_WIRING.get((provider, backend)) if provider in _PROVIDER_CATALOG else None
+    return {**conn, "provider": mapped} if mapped and mapped != provider else conn
+
+
 # Built-in agent tools an endpoint may refuse (a proxy that gates codex's web_search per model,
 # issue #150): named on the connection, comma-separated, and joined to the harness's own list on
 # every turn through it. Offered wherever a codex-driving provider is configured.
@@ -7111,6 +7150,17 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             # the connection's default model).
             rec["tried"].append({"connection": name, "error": f"provider does not serve '{model_req}'"})
             continue
+        if pre is None:
+            # The rule an integration is held to, applied to a chain connection in the same
+            # vocabulary: a pairing the backend cannot speak is refused here, before the runner
+            # is called, in the operator's words, and the provider reaches the runner under the
+            # runner's own name (#201: a custom connector went verbatim as "custom", a provider
+            # no backend has, and the runner's refusal was retried for five minutes).
+            why = _chain_refusal(conn, backend)
+            if why:
+                rec["tried"].append({"connection": name, "error": why})
+                continue
+            conn = _chain_wired(conn, backend)
         sandbox_auth = _auth_from_conn(conn, sid)
         if sandbox_auth is None:
             # Refusing beats running: the only alternative is handing the sandbox a real provider
