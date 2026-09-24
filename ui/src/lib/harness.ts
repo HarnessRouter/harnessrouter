@@ -537,3 +537,42 @@ export async function storeMcpSecret(serverId: string, token: string): Promise<s
   if (!r.ok) throw new Error(`mcp-secret store failed: ${r.status}`);
   return (await r.json()).ref as string;
 }
+
+// ── plugins: services a workspace connects once, each Harness including the ones it needs ────
+export interface PlugPricing { unit: string; usd_per_unit: number; markup: number; source: string; vendor: string; billed_as: string; rounding: string; session_cap_minutes: number; session_estimate_usd: number }
+export interface Plug {
+  type: string; label: string; source: 'platform' | 'local'; official: boolean;
+  status: 'connected' | 'disabled' | 'needs_auth' | 'missing';
+  config: Record<string, unknown>; secrets_set: string[]; secrets_needed: string[]; config_fields: string[];
+  version: number; tools: number; pricing?: PlugPricing;
+}
+export const PLUGS_ENTRY_ID = 'mcp.plugs';
+
+/** The plugin catalog for the current workspace, with each plugin's state here. */
+export function listPlugs(): Promise<{ workspace: string; plugs: Plug[] }> {
+  return gw<{ workspace: string; plugs: Plug[] }>('GET', '/v1/plugs');
+}
+/** Connect a plugin for the workspace, change its settings, or turn it off. */
+export function setPlug(type: string, body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<Plug> {
+  return gw<Plug>('PUT', `/v1/plugs/${encodeURIComponent(type)}`, body);
+}
+export function plugAttachments(type: string): Promise<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }> {
+  return gw<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }>('GET', `/v1/plugs/${encodeURIComponent(type)}/attachments`);
+}
+export interface HarnessPlugs { id: string; name: string; enabled: boolean; workspace: string; plugs: string[]; tools?: Record<string, string[]>; status: Record<string, string> }
+/** The plugins one Harness includes, or null when it includes none. */
+export async function getHarnessPlugs(harnessId: string): Promise<HarnessPlugs | null> {
+  const r = await harnessFetch(`/api/harness/v1/harnesses/${encodeURIComponent(harnessId)}/servers/${PLUGS_ENTRY_ID}`, { headers: gwHeaders(), cache: 'no-store' });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`plugins read failed (${r.status})`);
+  return (await r.json()) as HarnessPlugs;
+}
+/** Set the plugins a Harness includes; an empty list detaches the server. */
+export async function setHarnessPlugs(harnessId: string, plugs: string[]): Promise<HarnessPlugs | null> {
+  if (plugs.length === 0) {
+    const r = await harnessFetch(`/api/harness/v1/harnesses/${encodeURIComponent(harnessId)}/servers/plugs`, { method: 'DELETE', headers: gwHeaders() });
+    if (!r.ok && r.status !== 404) throw new Error(`plugins update failed (${r.status})`);
+    return null;
+  }
+  return gw<HarnessPlugs>('POST', `/v1/harnesses/${encodeURIComponent(harnessId)}/servers/plugs`, { plugs });
+}
