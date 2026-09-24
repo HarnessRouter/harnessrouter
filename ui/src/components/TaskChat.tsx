@@ -592,9 +592,13 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
                 )}
                 {m.status === 'incomplete' && m.handoff && (
                   <div className="wbx-incomplete-why">
-                    {`It handed off at step ${String(m.handoff.step ?? '?')}: ${String(m.handoff.reason ?? m.incompleteReason ?? '')}. `
-                      + `The weakest judgment was ${probText(m.handoff.weakest)} against a threshold of ${probText(m.handoff.threshold)}`
-                      + `${m.handoff.risk ? ` on a ${String(m.handoff.risk)} action` : ''}.`}
+                    {`It handed off at step ${String(m.handoff.step ?? '?')}: ${String(m.handoff.reason ?? m.incompleteReason ?? '')}.`
+                      // the judgment clause only when the harness measured one: an escalation the
+                      // model asked for carries no weakest judgment and no threshold
+                      + (typeof m.handoff.weakest === 'number' || typeof m.handoff.threshold === 'number'
+                        ? ` The weakest judgment was ${probText(m.handoff.weakest)} against a threshold of ${probText(m.handoff.threshold)}`
+                          + `${m.handoff.risk ? ` on a ${String(m.handoff.risk)} action` : ''}.`
+                        : '')}
                   </div>
                 )}
                 <OutputFiles files={m.files.filter((f) => !isInternalOutput(f.filename))}

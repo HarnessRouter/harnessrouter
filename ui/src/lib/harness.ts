@@ -160,9 +160,12 @@ export const OOB: OobHarness[] = [
   { id: 'systemone', name: 'System One', version: 'v0.4.0', backend: 'systemone', status: 'ready',
     // Placeholder only: the gateway's catalog wins once fetched. Jev, a decision model, under the
     // ids its two providers serve: jev-latest on both (the default), jev-preview on TypeSafe's own
-    // API, jev-1.13 on OpenRouter. There is no chat model on this base because the loop asks typed
-    // questions a text model cannot answer. Measured live 2026-09-19 and 2026-09-20.
-    models: ['jev-latest', 'jev-preview', 'jev-1.13'], defaultModel: 'jev-latest', moreModels: 0,
+    // API, jev-1.13 on OpenRouter; then the three open-weight models a HarnessRouter key serves
+    // (laya, openthai-systemone, system-one-phase2). The composer resolves a harness's saved default
+    // against THIS list before the catalog arrives, so an id missing here is silently swapped for
+    // jev-latest: a harness saved on laya ran on Jev (hr-test, 2026-09-24). There is no chat model
+    // on this base because the loop asks typed questions a text model cannot answer.
+    models: ['jev-latest', 'jev-preview', 'jev-1.13', 'laya', 'openthai-systemone', 'system-one-phase2'], defaultModel: 'jev-latest', moreModels: 0,
     systemPrompt: 'You act inside a finite set of actions the environment offers each step. Choose the action that moves the goal forward, finish when the goal is reached, and escalate when nothing offered fits.',
     tools: [], skills: [] },
 ];
