@@ -30,7 +30,11 @@ def test_jev_is_on_its_two_providers_under_their_own_ids_and_nowhere_else():
 
 def test_only_the_systemone_base_offers_jev_and_it_offers_nothing_else():
     # the default is the one id both providers serve, so a harness made on either connection runs
-    assert gw._MODEL_CATALOG["systemone"] == {"default": "jev-latest", "models": ["jev-latest", "jev-preview", "jev-1.13"]}
+    assert gw._MODEL_CATALOG["systemone"] == {"default": "jev-latest", "models": ["jev-latest", "jev-preview", "jev-1.13",
+                                                                                   "laya", "openthai-systemone", "system-one-phase2"]}
+    # the three open-weight models come through the hosted service's own key (its /v1/models lists
+    # them per key), so the HarnessRouter provider drives the base on TypeSafe's wire
+    assert gw._INTEGRATION_WIRING[("harnessrouter", "systemone")] == "typesafe"
     assert gw._MODEL_CATALOG["systemone"]["default"] in gw._VENDOR_MODELS["typesafe"]
     assert gw._MODEL_CATALOG["systemone"]["default"] in gw._VENDOR_MODELS["openrouter"]
     for backend, cat in gw._MODEL_CATALOG.items():
@@ -49,7 +53,7 @@ def test_the_base_is_in_the_catalog_with_hard_enforcement_and_no_built_in_tools(
 def test_a_typesafe_or_openrouter_integration_drives_the_base_and_no_other_provider_claims_to():
     assert gw._INTEGRATION_WIRING[("openrouter", "systemone")] == "openrouter"
     assert gw._INTEGRATION_WIRING[("typesafe", "systemone")] == "typesafe"
-    others = [k for k in gw._INTEGRATION_WIRING if k[1] == "systemone" and k[0] not in ("openrouter", "typesafe")]
+    others = [k for k in gw._INTEGRATION_WIRING if k[1] == "systemone" and k[0] not in ("openrouter", "typesafe", "harnessrouter")]
     assert others == []
     assert gw._integration_serves_backend({"provider": "openrouter"}, "systemone")
     assert gw._integration_serves_backend({"provider": "typesafe"}, "systemone")
@@ -84,8 +88,12 @@ def test_a_custom_endpoints_models_never_appear_on_the_systemone_list(monkeypatc
     monkeypatch.setattr(gw, "_effective_model_map", _map)
     assert not gw._custom_can_drive("systemone") and gw._custom_can_drive("claude") and gw._custom_can_drive("hermes")
     view = asyncio.run(gw._harness_models_view(None, "systemone", {"jev-1.13", "jev-latest", "jev-preview"}))
-    assert [m["id"] for m in view["models"]] == ["jev-latest", "jev-preview", "jev-1.13"]
-    assert all(m["available"] for m in view["models"])
+    assert [m["id"] for m in view["models"]] == ["jev-latest", "jev-preview", "jev-1.13",
+                                                 "laya", "openthai-systemone", "system-one-phase2"]
+    # the custom row is absent; the catalog's own open-weight rows stay, greyed, until a
+    # HarnessRouter key serves them (the same explanation every backend gives a curated model)
+    assert {m["id"]: m["available"] for m in view["models"]} == {"jev-latest": True, "jev-preview": True, "jev-1.13": True,
+                                                                  "laya": False, "openthai-systemone": False, "system-one-phase2": False}
     # a chat backend the custom format cannot drive still shows the row, greyed, as the explanation
     view = asyncio.run(gw._harness_models_view(None, "claude", set()))
     row = next(m for m in view["models"] if m["id"] == "gpt-5.5")

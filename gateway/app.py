@@ -1243,6 +1243,10 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "openhands"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
+    # The hosted service serves the open-weight System One models (laya, openthai-systemone,
+    # system-one-phase2) on its own GPU behind TypeSafe's wire, so a HarnessRouter key drives the
+    # systemone base too: decisions at <base>/systemone, billed to the key's credits (2026-09-24).
+    ("harnessrouter", "systemone"): "typesafe",
 }
 
 
@@ -6522,7 +6526,11 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # resolves to typesafe/jev-1.13-20260917 there; measured 2026-09-19 and 2026-09-20, see
 # _VENDOR_MODELS). A chat model is not offered here: this base asks typed questions and a text
 # model cannot answer them.
-_MODEL_CATALOG["systemone"] = {"default": "jev-latest", "models": ["jev-latest", "jev-preview", "jev-1.13"]}
+_MODEL_CATALOG["systemone"] = {"default": "jev-latest",
+                               # jev: TypeSafe's, on both Jev providers; the last three are open-weight
+                               # models the hosted service serves, reachable with a HarnessRouter key
+                               "models": ["jev-latest", "jev-preview", "jev-1.13",
+                                          "laya", "openthai-systemone", "system-one-phase2"]}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
