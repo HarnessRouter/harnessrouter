@@ -12,10 +12,12 @@ os.environ.setdefault("HR_BACKING", "local")
 import app as A  # noqa: E402
 
 
-def test_it_is_wired_wherever_tokenrouter_is():
+def test_it_is_wired_wherever_tokenrouter_is_and_on_the_systemone_base():
     tr = {b: v for (p, b), v in A._INTEGRATION_WIRING.items() if p == "tokenrouter"}
     hr = {b: v for (p, b), v in A._INTEGRATION_WIRING.items() if p == "harnessrouter"}
-    assert hr == tr and "claude" in hr and "codex" in hr and "dsh" in hr
+    # the one base tokenrouter never drives: the hosted service serves the open-weight System One
+    # models itself, on TypeSafe's wire, so a HarnessRouter key drives that base too (2026-09-24)
+    assert hr == {**tr, "systemone": "typesafe"} and "claude" in hr and "codex" in hr and "dsh" in hr
 
 
 def test_the_catalog_entry_and_the_fixed_endpoint():
