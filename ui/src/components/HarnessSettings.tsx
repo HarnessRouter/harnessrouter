@@ -11,6 +11,7 @@ import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, pluginSchemas,
   type CustomHarness, type OobHarness, type HarnessPlugin, getPluginFiles,
   useRuntimeDefaults,
+  listPlugs, getHarnessPlugs, setHarnessPlugs, type Plug, type HarnessPlugs,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
@@ -73,6 +74,27 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   // Plugins: which row is expanded (by name, so removing another row cannot move it), the folder
   // picker, the export in flight, and a notice that belongs to this section rather than to Save.
   const [pluginOpen, setPluginOpen] = useState<string | null>(null);
+  // The workspace's plugins and which of them this Harness includes; both read from the server.
+  const [wsPlugs, setWsPlugs] = useState<Plug[] | null>(null);
+  const [included, setIncluded] = useState<HarnessPlugs | null | undefined>(undefined);
+  const [plugBusy, setPlugBusy] = useState('');
+  const [plugErr, setPlugErr] = useState('');
+  useEffect(() => {
+    if (!id || oob) { setIncluded(null); return; }
+    let alive = true;
+    listPlugs().then((d) => { if (alive) setWsPlugs(d.plugs); }).catch(() => { if (alive) setWsPlugs([]); });
+    getHarnessPlugs(id).then((p) => { if (alive) setIncluded(p); }).catch(() => { if (alive) setIncluded(null); });
+    return () => { alive = false; };
+  }, [id, oob]);
+  const togglePlug = async (type: string) => {
+    if (!id) return;
+    const have = included?.plugs || [];
+    const next = have.includes(type) ? have.filter((t) => t !== type) : [...have, type];
+    setPlugBusy(type); setPlugErr('');
+    try { setIncluded(await setHarnessPlugs(id, next)); setDraft(await getCustom(id)); }
+    catch (e) { setPlugErr(e instanceof Error ? e.message : 'The plugin was not changed. Try again.'); }
+    finally { setPlugBusy(''); }
+  };
   const [pluginBusy, setPluginBusy] = useState(false);
   const [pluginNote, setPluginNote] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const pluginDirRef = useRef<HTMLInputElement>(null);
@@ -88,7 +110,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
     try {
       let total = 0;
       for (let i = 0; i < list.length; i++) total += list[i].size;
-      if (total > PLUGIN_PACKAGE_MAX) throw new Error(`That folder is ${fmtMb(total)}; a plugin package can be at most ${fmtMb(PLUGIN_PACKAGE_MAX)}.`);
+      if (total > PLUGIN_PACKAGE_MAX) throw new Error(`That folder is ${fmtMb(total)}; a package can be at most ${fmtMb(PLUGIN_PACKAGE_MAX)}.`);
       const files: NonNullable<HarnessPlugin['files']> = [];
       for (let i = 0; i < list.length; i++) {
         const f = list[i];
@@ -98,7 +120,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
         files.push(await readSkillUpload(f, path));
       }
       const manifestFile = files.find((f) => f.path === 'plugin.json');
-      if (!manifestFile || manifestFile.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a plugin package.');
+      if (!manifestFile || manifestFile.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a package.');
       let manifest: (HarnessPlugin['manifest'] & { $schema?: string }) = {};
       try { manifest = JSON.parse(manifestFile.content) as typeof manifest; } catch { throw new Error('plugin.json is not valid JSON.'); }
       const name = String(manifest?.name || '');
@@ -336,6 +358,38 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
             </div>
           </section>
 
+          {!oob && (
+          <section className="form-section">
+            <div><h3>Plugins</h3><p>Services this workspace connected. Include the ones this Harness needs; the agent gets their tools on every Task.</p></div>
+            <div className="field-stack">
+              {wsPlugs === null && <div className="capability-row"><span className="capability-icon"><iconify-icon icon="tabler:plug-connected"></iconify-icon></span><div className="capability-copy"><strong>Reading the workspace's plugins</strong></div></div>}
+              {wsPlugs && wsPlugs.filter((p) => p.status !== 'missing').length === 0 && (
+                <div className="capability-row"><span className="capability-icon"><iconify-icon icon="tabler:plug-connected"></iconify-icon></span>
+                  <div className="capability-copy"><strong>No plugins connected for this workspace yet</strong><span>Connect one on the Plugins page, then include it here.</span></div>
+                  <div className="capability-actions"><button className="button small" type="button" onClick={() => router.push('/plugins')}>Open Plugins</button></div>
+                </div>)}
+              {wsPlugs && wsPlugs.filter((p) => p.status !== 'missing').length > 0 && (
+                <div className="capability-list">
+                  {wsPlugs.filter((p) => p.status !== 'missing').map((p) => {
+                    const on = (included?.plugs || []).includes(p.type);
+                    return (
+                      <div key={p.type} className="capability-row">
+                        <span className="capability-icon"><iconify-icon icon={on ? 'tabler:circle-check' : 'tabler:circle-dashed'}></iconify-icon></span>
+                        <div className="capability-copy"><strong>{p.label}</strong>
+                          <span>{p.status === 'connected' ? `${p.tools} tools` : p.status === 'disabled' ? 'Turned off for the workspace' : 'Needs credentials on the Plugins page'}{p.pricing ? ` · $${p.pricing.usd_per_unit.toFixed(2)} per ${p.pricing.unit}` : ''}</span></div>
+                        <div className="capability-actions">
+                          <button className="toggle-button" type="button" disabled={readOnly || plugBusy === p.type} aria-pressed={on} onClick={() => void togglePlug(p.type)}>
+                            {on ? 'Included' : 'Not included'}</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>)}
+              {plugErr && <span className="field-help" role="alert">{plugErr}</span>}
+            </div>
+          </section>
+          )}
+
           {!takesSkills ? (
           <section className="form-section">
             <div><h3>Skills</h3><p>What this base can take.</p></div>
@@ -419,9 +473,9 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           )}
 
           <section className="form-section">
-            <div><h3>Plugins</h3><p>A plugin is a package of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
+            <div><h3>Packages</h3><p>A package is a bundle of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
             <div className="field-stack">
-              <div className="section-actions plugin-head"><strong>{(draft?.plugins || []).length} installed {(draft?.plugins || []).length === 1 ? 'plugin' : 'plugins'}</strong>
+              <div className="section-actions plugin-head"><strong>{(draft?.plugins || []).length} installed {(draft?.plugins || []).length === 1 ? 'package' : 'packages'}</strong>
                 {!readOnly && <button className="button small" type="button" disabled={pluginBusy} onClick={() => pluginDirRef.current?.click()}>
                   <iconify-icon icon="tabler:plus"></iconify-icon>Install from folder</button>}
                 <input ref={pluginDirRef} type="file" hidden onChange={(e) => void installPluginFolder(e.target.files)}
