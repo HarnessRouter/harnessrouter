@@ -61,6 +61,7 @@ def _result(events: list[dict]) -> dict:
     ("turn-unreachable.ndjson", "Failed — APIConnectionError: Connection error."),
     ("turn-401.ndjson", "Failed — AuthenticationError: Error code: 401"),
     ("turn-429.ndjson", "Failed — RateLimitError: Error code: 429"),
+    ("turn-timeout.ndjson", "Failed — APITimeoutError: Request timed out."),
 ])
 def test_a_provider_failure_fails_the_turn_with_the_clis_own_sentence(fixture, prefix):
     events, state = _normalise(_lines(fixture))
@@ -478,3 +479,54 @@ def test_an_mcp_server_that_did_not_connect_becomes_a_note_on_the_reply():
     out = _cheetahclaws_to_claude({"m": "mcp_unavailable", "p": {"servers": [{"name": "dead", "reason": "refused"}]}}, {})
     assert out == [{"type": "system", "subtype": "mcp_unavailable", "servers": [{"name": "dead", "reason": "refused"}]}]
     assert _cheetahclaws_to_claude({"m": "mcp_unavailable", "p": {"servers": []}}, {}) == []
+
+
+# ── a provider that never answers: bounded, not an hour-long silent turn ──
+def test_every_client_the_cli_builds_gets_a_timeout_and_no_retries_of_its_own():
+    openai = pytest.importorskip("openai")
+    before = openai.OpenAI
+    try:
+        drv.bound_provider_calls(7.0)
+        c = openai.OpenAI(api_key="x", base_url="http://127.0.0.1:1/v1")
+        assert c.timeout.read == 7.0 and c.timeout.connect == 30.0 and c.max_retries == 0
+        drv.bound_provider_calls(9.0)                      # idempotent: not wrapped twice
+        assert openai.OpenAI(api_key="x", base_url="http://127.0.0.1:1/v1").timeout.read == 7.0
+    finally:
+        openai.OpenAI = before
+
+
+class _Hang(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("content-length", "11")
+        self.end_headers()
+        self.wfile.write(b'{"data":[]}')
+
+    def do_POST(self):
+        import time
+        time.sleep(60)
+
+
+def test_an_endpoint_that_accepts_and_never_answers_fails_the_turn_in_bounded_time():
+    """Measured 2026-09-24 on 3.5.88 with HR_CHEETAHCLAWS_TIMEOUT=2: four attempts and the loop's
+    2/4/8 s backoff, 23 s, ending on the CLI's own timeout sentence. Without the bound the SDK's
+    600 s timeout and its own retries sat under the loop's (a live turn still running at 600 s)."""
+    pytest.importorskip("cheetahclaws", reason="the pinned CheetahClaws lives in its own venv, not here")
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Hang)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        ws = tempfile.mkdtemp()
+        home = pathlib.Path(ws, ".harness", "home")
+        home.mkdir(parents=True)
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "HR_CHEETAHCLAWS_TIMEOUT": "2",
+               "CUSTOM_BASE_URL": f"http://127.0.0.1:{srv.server_address[1]}/v1", "CUSTOM_API_KEY": "hr-relay-placeholder"}
+        out = subprocess.run([sys.executable, drv.__file__, json.dumps({"cwd": ws, "model": "custom/m", "prompt": "hi"})],
+                             cwd=ws, env=env, capture_output=True, text=True, timeout=90)
+        res = json.loads(out.stdout.splitlines()[-1])["p"]
+        assert res["ok"] is False and res["reason"].startswith("Failed — APITimeoutError: Request timed out.")
+        assert res["seconds"] < 60
+    finally:
+        srv.shutdown()

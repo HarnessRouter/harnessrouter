@@ -216,6 +216,21 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 - pi x gpt-6-astra: not run, not run in this column
 - qwen x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
+## Provider: cheetahclaws-custom
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| cheetahclaws | coder-pool | pass | pass | pass (tools-pool) | FAIL | FAIL | lab-chat | served as fast-pool, local-floor (finding below) ; artifact: no file card (files: none); Create a file named hello-cheetahclaws.txt containing exactly the word HELLO, then reply DONE. CHEETAHCLAWS ; recycle: answered without M1-coder-pool: What exact word did I ask you to reply with in my very first message of this task? Reply with just that word ; retested once; first try: recycle answered without M1-coder-pool: What exact word did I ask you to reply with in m |
+| cheetahclaws | fast-pool | pass | pass | pass (tools-pool) | pass | FAIL | lab-chat | served as local-floor (finding below) ; recycle: answered without M1-fast-pool: What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. ; retested once; first try: artifact no file card (files: none); Create a file named hello-cheetahclaws.txt containin; recycle answered without M1-fast-pool: What exact word did I ask you to reply with in my |
+| cheetahclaws | tools-pool | pass | pass | pass (fast-pool) | pass | pass | lab-chat | retested once; first try: recycle answered without M1-tools-pool: What exact word did I ask you to reply with in m |
+
+3 pairs, 5 of 5 scenario runs passed; 2 pairs served by another connection or as another model are findings, not counted.
+
+Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
+
+- cheetahclaws x coder-pool: served as fast-pool, local-floor (the CLI reports the model it ran)
+- cheetahclaws x fast-pool: served as local-floor (the CLI reports the model it ran)
+
 ## Provider: codex-azure-e2
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |

@@ -74,6 +74,37 @@ OPTIONAL_TOOLS = {"WebBrowse": "playwright", "ReadPDF": "fitz", "ReadSpreadsheet
                   "ReadImage": "PIL"}
 
 
+def bound_provider_calls(read_seconds: float) -> None:
+    """Give every OpenAI client the CLI builds a timeout, and let the loop's own ladder retry.
+
+    WITHOUT THIS A TURN CAN HANG FOR AN HOUR. `custom/` builds `OpenAI(api_key=…, base_url=…)` per
+    call (providers.py, stream_openai_compat) with the SDK's defaults: a 600 s timeout and two
+    retries of its own, and the agent loop retries each failed call three more times on top
+    (agent.py). Measured on the live instance: a turn aimed at an endpoint whose packets are
+    dropped was still running after 600 s with nothing in its record. The read timeout here is the
+    same budget aider's --timeout carries (HR_CHEETAHCLAWS_TIMEOUT, 300 s by default); the SDK's
+    own retries are turned off so the loop's ladder — the one that says `[Retry n/3 …]` and ends
+    on the `[Failed — …]` the record keeps — is the only one, bounding a dead endpoint to four
+    attempts. `from openai import OpenAI` runs inside that function on every call, so replacing
+    the module attribute reaches it."""
+    import httpx
+    import openai
+
+    base = openai.OpenAI
+    if getattr(base, "_hr_bounded", False):
+        return
+
+    class _Bounded(base):  # type: ignore[misc, valid-type]
+        _hr_bounded = True
+
+        def __init__(self, *a, **kw):
+            kw.setdefault("timeout", httpx.Timeout(read_seconds, connect=30.0, write=60.0, pool=30.0))
+            kw.setdefault("max_retries", 0)
+            super().__init__(*a, **kw)
+
+    openai.OpenAI = _Bounded
+
+
 def unavailable_tools() -> list[str]:
     import importlib.util
     return sorted(t for t, mod in OPTIONAL_TOOLS.items() if importlib.util.find_spec(mod) is None)
@@ -244,6 +275,7 @@ def main() -> int:
             "quiet": True,
         })
         bootstrap(config)
+        bound_provider_calls(float(os.environ.get("HR_CHEETAHCLAWS_TIMEOUT") or 300))
 
         # MCP: connect every configured server and register its tools BEFORE the tool list is
         # taken, instead of racing the background connect the import started.
