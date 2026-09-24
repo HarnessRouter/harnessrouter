@@ -327,9 +327,11 @@ OpenAI-compatible endpoint of your own takes the same pair with a `base_url` add
 -e HR_SECRET_GLOBAL_HARNESS_POLICY_CODEX='{"chain":["local"]}'
 ```
 
-Not every provider fits every backend, and a pairing that does not fit fails quietly: the turn
-comes back empty after a long wait rather than erroring. The Integrations page does not have this
-problem, because it only offers you providers that work.
+Not every provider fits every backend. A pairing that does not fit is refused before the runner
+is called, and the response's error names the connection and why (`a custom endpoint in the
+openai format cannot drive codex, which speaks the responses format`); a provider the runner
+itself refuses is answered at once with the runner's own sentence. The Integrations page only
+offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
