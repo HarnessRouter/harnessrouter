@@ -1176,6 +1176,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
     ("google", "openhands"): "openai-api",
+    # cheetahclaws speaks ONE wire protocol: its `custom/<model>` client is OpenAI Chat Completions
+    # aimed at the loopback relay (CUSTOM_BASE_URL, 3.5.88), so it is wired to the chat-completions
+    # connections and to nothing it would have to translate for.
+    ("openrouter", "cheetahclaws"): "openai-api",
+    ("tokenrouter", "cheetahclaws"): "tokenrouter", ("vercel", "cheetahclaws"): "tokenrouter",
+    ("custom", "cheetahclaws"): "openai-api",
     ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
     ("azure-foundry", "qwen"): "azure",
     ("openrouter", "qwen"): "openai-api",
@@ -1241,6 +1247,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "kimi"): "tokenrouter",
     ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "openhands"): "tokenrouter",
+    ("harnessrouter", "cheetahclaws"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
     # The hosted service serves the open-weight System One models (laya, openthai-systemone,
@@ -4838,8 +4845,9 @@ _CUSTOM_FORMAT_BACKENDS = {
     # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
     # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
     # until it is — the picker greys out what the router cannot actually run.
+    # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands"},
+               "openhands", "cheetahclaws"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
@@ -6405,6 +6413,26 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                       "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                       "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # cheetahclaws: the same relay reach as kimi and openhands (OpenAI chat/completions through the
+    # loopback relay), so the list is theirs. OFFERED, NOT YET MEASURED on these connections: the
+    # PR that added the base ran its column on a custom OpenAI-format connection only, and the
+    # hosted provider columns decide which of these ids stay. The id reaches the provider verbatim
+    # (the runner sends `custom/<id>`, and providers.py strips the prefix before the request).
+    "cheetahclaws": {"default": "gpt-5.4",
+                     "models": [
+                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                         "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
+                         "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
+                         "claude-sonnet-4.6", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
+                         "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
+                         "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+                         "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
+                         "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
+                         "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
+                         "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
+                         "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
+                         "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
+                         "nemotron-3-super"]},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -6552,7 +6580,8 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # sets), so a Responses-API-only id would be a picker row that fails on send.
 # aider and openhands speak chat/completions through litellm's openai provider (the id is sent
 # `openai/<id>`), so a Responses-API-only id would be a picker row that fails on send.
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands")
+# cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -13881,6 +13910,43 @@ _BASE_CATALOG: dict[str, dict] = {
         # ONE HONEST LIMIT, because a shell is a file writer: disabling Edit alone does not stop a
         # file from being written, since the agent reaches for `printf > file` instead. That is true
         # of every backend here that has a shell.
+        "tool_enforcement": "hard",
+    },
+    "cheetahclaws": {
+        "label": "CheetahClaws", "backend": "cheetahclaws", "status": "ready",
+        # NOT a system prompt of its own: the CLI composes its system prompt itself
+        # (context.build_system_prompt) and reads the harness's instructions from CLAUDE.md in the
+        # workspace — CLAUDE.md only; it has no AGENTS.md discovery at all.
+        "system_prompt": ("You are CheetahClaws, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The `tools` array a live 3.5.88 turn SENT ITS PROVIDER, captured at a stub (the CLI's
+        # "full" profile), by the names the model sees; test_catalog_cheetahclaws_tools.py pins
+        # these ids equal to the runner's CHEETAHCLAWS_TOOLS. Not offered, because the driver
+        # withholds them on every turn and a switch for them would change nothing: AskUserQuestion
+        # (it blocks on a terminal nobody is at), ReadEmail and SendEmail (no mailbox is ever
+        # configured), and WebBrowse, ReadPDF, ReadSpreadsheet and ReadImage, whose optional extras
+        # the pinned bare install does not carry (pymupdf, which `files` would bring, is AGPL-3.0).
+        "tools": [("Bash", "Shell"), ("Read", "File Read"), ("Write", "File Write"), ("Edit", "Edit"),
+                  ("Glob", "Glob"), ("Grep", "Search"), ("WebFetch", "Web Fetch"),
+                  ("WebSearch", "Web Search"), ("NotebookEdit", "Notebook Edit"),
+                  ("GetDiagnostics", "Diagnostics"), ("SummarizeLargeFile", "Large File Summary"),
+                  ("Skill", "Skill"), ("SkillList", "Skill List"), ("Agent", "Subagent"),
+                  ("CheckAgentResult", "Subagent Result"), ("ListAgentTasks", "Subagent Tasks"),
+                  ("ListAgentTypes", "Subagent Types"), ("SendMessage", "Subagent Message"),
+                  ("TaskCreate", "Task Create"), ("TaskGet", "Task Get"), ("TaskList", "Task List"),
+                  ("TaskUpdate", "Task Update"), ("MemorySave", "Memory Save"), ("MemoryList", "Memory List"),
+                  ("MemorySearch", "Memory Search"), ("MemoryVerify", "Memory Verify"),
+                  ("MemoryDelete", "Memory Delete"), ("Research", "Research"),
+                  ("EnterPlanMode", "Enter Plan"), ("ExitPlanMode", "Exit Plan"),
+                  ("SleepTimer", "Sleep Timer")],
+        # "hard", and measured: the driver sets the CLI's own `disabled_tools`, which removes the
+        # tool from the schema sent to the provider (tool_registry.get_tool_schemas) AND refuses a
+        # call to it at execution (agent.py: a name outside the turn's active set is an error, not a
+        # permission question). Pinned against a stub in runner/tests/test_cheetahclaws_backend.py
+        # (Bash and Write disabled: absent from the provider's `tools`). An MCP tool is withheld the
+        # same way, by its bare or server.tool name. The honest limit every shell-bearing base has:
+        # disabling Write alone does not stop a file being written through Bash.
         "tool_enforcement": "hard",
     },
     "systemone": {

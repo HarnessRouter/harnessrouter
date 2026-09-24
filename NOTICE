@@ -39,6 +39,11 @@ run, by you, under their own licenses:
   @anthropic-ai/claude-code   Anthropic's own terms ("SEE LICENSE IN README.md")
   @openai/codex               Apache-2.0
   hermes-agent                MIT (License-Expression declared by the publisher since 0.19.0)
+  cheetahclaws                Apache-2.0 — "CheetahClaws, Copyright 2026 SAIL Lab at UC Berkeley"
+                              (SAIL-Research-Lab/cheetahclaws; its NOTICE ships in the wheel). The
+                              console's CheetahClaws mark, ui/public/logos/cheetahclaws.png, is that
+                              project's app icon (cheetahclaws/web/static/favicon.png), included
+                              unmodified under the same license.
 
 Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
 public image; hermes-agent's publisher declared no license before 0.19.0. Installing the

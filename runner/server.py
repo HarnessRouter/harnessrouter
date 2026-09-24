@@ -260,6 +260,26 @@ def _aider_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     return any(line.startswith("####") for line in text.splitlines())
 
 
+def _cheetahclaws_home(cwd: str) -> pathlib.Path:
+    """~/.cheetahclaws under the redirected HOME (turn() points HOME at .harness/home)."""
+    return pathlib.Path(cwd) / ".harness" / "home" / ".cheetahclaws"
+
+
+def _cheetahclaws_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """CheetahClaws has no resume flag: `-p` always starts from an empty state, and continuing is
+    the REPL's /resume, which loads the autosaved session_latest.json. So this asks that file, read
+    the way /resume reads it: the session is there when the file names this id and holds a message.
+    The file is one per HOME, and HOME is redirected into the session's workspace, so "latest" is
+    this session's own; it travels in the checkpoint with the rest of the home."""
+    path = _cheetahclaws_home(cwd) / "sessions" / "mr_sessions" / "session_latest.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(data, dict) and data.get("session_id") == session_id
+            and isinstance(data.get("messages"), list) and bool(data["messages"]))
+
+
 def _argv_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     """The builder looked the session up and said so in argv: claude's --resume, opencode's
     --session and kimi's -r carry the id only when it was found in this workspace."""
@@ -306,6 +326,7 @@ _SESSION_PRESENT = {
     "kimi": _argv_session_present,
     "aider": _aider_session_present,
     "openhands": _openhands_session_present,
+    "cheetahclaws": _cheetahclaws_session_present,
 }
 
 
@@ -500,7 +521,16 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # the model is defined from the environment (see _build_kimi).
                       "./.harness/home/.kimi-code/logs",
                       "./.harness/home/.kimi-code/cache",
-                      "./.harness/home/.kimi-code/updates"]
+                      "./.harness/home/.kimi-code/updates",
+                      # CheetahClaws: sessions/ is what the next turn resumes from and it travels.
+                      # Its task tracker is written to the WORKSPACE (<cwd>/.cheetahclaws/
+                      # tasks.json, task/store.py) and is scratch; its mcp.json can carry an MCP
+                      # server's auth headers (the standing of claude's .mcp.json); its log is
+                      # the one place it prints what went wrong in full. The provider key is
+                      # never at rest: the CLI is handed the relay's placeholder in its env.
+                      "./.cheetahclaws/tasks.json",
+                      "./.harness/home/.cheetahclaws/mcp.json",
+                      "./.harness/home/.cheetahclaws/logs"]
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
@@ -519,6 +549,7 @@ GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
 AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
+CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -616,6 +647,7 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
         ".harness/goose/config/secrets.yaml",
+        ".cheetahclaws/tasks.json",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
         "",
@@ -692,6 +724,9 @@ def _git_shed_cli_home_history(ws: str) -> None:
 # ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
 # Paths never reported as agent-produced output (internal state / scratch / secrets / vcs).
 _PRODUCED_EXCLUDE_PREFIX = (".harness/", "tmp/", ".codex/", ".git/", ".claude/", ".pi/",
+                            # cheetahclaws: its project-level skills folder (written by
+                            # _write_skills) and its task tracker, both CLI state
+                            ".cheetahclaws/",
                             "node_modules/", ".venv/", "venv/", "__pycache__/", ".cache/", ".next/")
 _PRODUCED_EXCLUDE_NAMES = {".gitignore", ".gcp-sa.json", ".credentials.json"}
 # Dependency / install / build-cache noise the agent pulls in (apt debs, npm/py deps, byte-compiled
@@ -766,9 +801,11 @@ def _mcp_name(s: str) -> str:
     return n or "mcp"
 
 
-def _write_mcp_config_claude(cwd: str, servers: list[dict]) -> str | None:
+def _write_mcp_config_claude(cwd: str, servers: list[dict],
+                             dest: pathlib.Path | None = None) -> str | None:
     """Write a Claude Code .mcp.json for the enabled MCP servers. Returns its path
-    (passed via --mcp-config), or None if there are none.
+    (passed via --mcp-config), or None if there are none. `dest` puts the same document where
+    another CLI that reads this format looks for it (cheetahclaws: ~/.cheetahclaws/mcp.json).
 
     Both remote (http/sse, keyed on `url`) and local (stdio, keyed on `command`) servers
     are supported — stdio is the CLI's own default transport (`claude mcp add` defaults to
@@ -799,7 +836,7 @@ def _write_mcp_config_claude(cwd: str, servers: list[dict]) -> str | None:
         entries[name] = entry
     if not entries:
         return None
-    path = pathlib.Path(cwd) / HARNESS_STATE / "mcp.json"
+    path = dest or pathlib.Path(cwd) / HARNESS_STATE / "mcp.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"mcpServers": entries}, indent=2))
     return str(path)
@@ -923,6 +960,16 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # frontmatter does not match its directory name.
         rootrels = [".harness/goose/config/skills"]
         entryroot = ".harness/goose/config/skills"
+    elif backend == "cheetahclaws":
+        # <cwd>/.cheetahclaws/skills — the PROJECT-level root of the CLI's loader
+        # (skill/loader.py _get_skill_paths: project first, then ~/.cheetahclaws/skills, then the
+        # built-ins, deduplicated in that order), so a harness skill wins over a built-in of the
+        # same name. It is in the workspace, and `.cheetahclaws/` is in _PRODUCED_EXCLUDE_PREFIX
+        # for that reason: the bundle is never handed back as a deliverable. The loader reads
+        # `SKILL.md` or `skill.md` with the Claude Code frontmatter, and the agent reaches a skill
+        # through its own `Skill` and `SkillList` tools.
+        rootrels = [".cheetahclaws/skills"]
+        entryroot = ".cheetahclaws/skills"
     elif backend == "kimi":
         # --skills-dir "Overrides default discovery" (repeatable), so like opencode the loader
         # adapts to us and there is no per-CLI home directory to guess. Verified on 1.50.0: a skill
@@ -1273,6 +1320,10 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # "<!-- From: .../AGENTS.md -->" fence, with a behavioural instruction in it obeyed.
         # aider has no instruction-file convention of its own (no AGENTS.md discovery, no
         # CLAUDE.md): the file is written here and the driver puts it into aider's system message.
+        # cheetahclaws reads CLAUDE.md and ONLY CLAUDE.md (context.py get_claude_md: the first one
+        # walking up from the cwd, plus ~/.claude/CLAUDE.md; no source hit for AGENTS.md in
+        # 3.5.88), so it takes the CLAUDE.md branch below, and an AGENTS.md in the workspace is
+        # never loaded whether or not a CLAUDE.md is there.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
                                    "goose", "kimi", "aider", "openhands")
         else "CLAUDE.md")
@@ -2946,6 +2997,26 @@ def _drop_stream_options(body: bytes) -> bytes:
     return body
 
 
+def _request_stream_usage(body: bytes) -> bytes:
+    """Ask for the usage chunk on a streamed chat-completions body that does not ask for it.
+
+    OpenAI-shaped endpoints report usage on a stream only when the request carries
+    `stream_options: {"include_usage": true}`, and a client that leaves it out gets a turn the
+    relay cannot count. CheetahClaws's `custom/` client is one (3.5.88, stream_openai_compat sends
+    model, messages, stream, tools, tool_choice and max_tokens, nothing else), and its session file
+    carries no usage the runner can use. Set only on the routes that ask for it, and only when the
+    body streams and names no stream_options of its own; a provider that refuses the field meets
+    the relay's existing one-time retry without it (_drop_stream_options), which then sticks."""
+    try:
+        obj = json.loads(body)
+        if isinstance(obj, dict) and obj.get("stream") is True and "stream_options" not in obj:
+            obj["stream_options"] = {"include_usage": True}
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 def _rename_max_tokens(body: bytes) -> bytes:
     """max_tokens -> max_completion_tokens in one chat-completions body.
 
@@ -3464,6 +3535,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _body_model = ""
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
+            if flags.get("stream_usage"):
+                body = _request_stream_usage(body)
             if flags.get("rename_max_tokens"):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
@@ -3793,12 +3866,14 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
-def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = ()) -> tuple[str, str]:
+def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
+                        stream_usage: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
     the harness never asked for; they are removed before the provider sees them (the same list the
-    relay grows by itself when a provider names an unknown field)."""
+    relay grows by itself when a provider names an unknown field). `stream_usage` asks the provider
+    for a streamed call's usage when the client does not (_request_stream_usage)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -3812,7 +3887,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         # matrix; Anthropic's OpenAI-compatible surface lives under /v1). Bedrock keeps its host
         # (its own path is built in _bedrock_anthropic).
         _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key,
-                                        {"rename_max_tokens": False, "drop_fields": tuple(drop_fields)})
+                                        {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
+                                         "stream_usage": bool(stream_usage)})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -4349,6 +4425,81 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            # for it, and only an in-process driver holds the object.
            "max_turns": max_turns}
     return [AIDER_PYTHON, AIDER_DRIVER, json.dumps(job)]
+
+
+# ── cheetahclaws ────────────────────────────────────────────────────────────────
+# CheetahClaws (SAIL-Research-Lab/cheetahclaws, PyPI `cheetahclaws`, Apache-2.0), pinned to 3.5.88.
+# The turn process is runner/cheetahclaws_driver.py inside the pinned venv: the CLI's own agent loop
+# is driven IN PROCESS and every event it yields is re-emitted as it happens (the aider shape, for
+# the reasons the driver's docstring measures: `-p` has no event stream, the session file is
+# written once per turn, a provider failure is prose with exit 0, and there is no resume flag).
+#
+# ONE provider type, measured: `custom/<model>` is CheetahClaws's OpenAI Chat Completions client
+# (providers.py, stream_openai_compat) aimed at CUSTOM_BASE_URL with CUSTOM_API_KEY, which is
+# exactly what the loopback relay fronts. So the runner providers are the chat-completions ones;
+# no Anthropic Messages or Responses path is offered, because the CLI is not asked to speak one.
+CHEETAHCLAWS_PROVIDERS = {"openai-api", "tokenrouter"}
+CHEETAHCLAWS_PYTHON = os.environ.get("HR_CHEETAHCLAWS_PYTHON",
+                                     "/data/agent-tools/cheetahclaws-venv/bin/python")
+CHEETAHCLAWS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "cheetahclaws_driver.py")
+# The `tools` array a live 3.5.88 turn sent its provider, captured at a stub (the CLI's default
+# "full" profile, bare package), minus what the driver withholds on every turn in this image:
+# AskUserQuestion, ReadEmail and SendEmail (cheetahclaws_driver.ALWAYS_WITHHELD) and the four tools
+# of optional extras that are not installed (OPTIONAL_TOOLS: WebBrowse, ReadPDF, ReadSpreadsheet,
+# ReadImage). These are the names `disabled_tools` matches, exactly and case-sensitively; the
+# gateway's catalog is pinned equal to this tuple (gateway/tests/test_catalog_cheetahclaws_tools.py),
+# so a toggle the console shows always withholds a tool the model was actually offered.
+CHEETAHCLAWS_TOOLS = ("Agent", "Bash", "CheckAgentResult", "Edit", "EnterPlanMode", "ExitPlanMode",
+                      "GetDiagnostics", "Glob", "Grep", "ListAgentTasks", "ListAgentTypes",
+                      "MemoryDelete", "MemoryList", "MemorySave", "MemorySearch", "MemoryVerify",
+                      "NotebookEdit", "Read", "Research", "SendMessage", "Skill", "SkillList",
+                      "SleepTimer", "SummarizeLargeFile", "TaskCreate", "TaskGet", "TaskList",
+                      "TaskUpdate", "WebFetch", "WebSearch", "Write")
+
+
+def _build_cheetahclaws(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                        resume_session_id: str | None = None,
+                        mcp_servers: list[dict] | None = None,
+                        tools_disabled: list[str] | None = None,
+                        max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in CHEETAHCLAWS_PROVIDERS:
+        raise HTTPException(400, f"unknown cheetahclaws provider '{pr}' "
+                                 f"(one of {sorted(CHEETAHCLAWS_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "cheetahclaws needs a base_url (none configured)")
+    if auth.api_key:
+        # Every turn rides the loopback relay: the CLI is handed the relay's address and a
+        # per-turn placeholder, never the key, and the relay's taps supply what the CLI does not
+        # report — the served model (matrix rule 2) and fresh / cached / output tokens. The session
+        # file carries neither: its totals are the GROSS prompt tokens with no cache split, and it
+        # names no model.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, stream_usage=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    # The two names providers.py reads for `custom/`. custom_base_url in config.json would win
+    # over the variable, and the driver writes no config.json, so the variable is what applies.
+    env["CUSTOM_BASE_URL"] = auth.base_url
+    env["CUSTOM_API_KEY"] = auth.api_key or ""
+    home = _cheetahclaws_home(cwd)
+    home.mkdir(parents=True, exist_ok=True)
+    # MCP in the Claude Code `mcpServers` shape the CLI reads (mcp_client/config.py) at its
+    # user-level path, rewritten every turn so a server the harness no longer names is gone. The
+    # project-level <cwd>/.mcp.json is the user's own file and is left alone.
+    mcp = home / "mcp.json"
+    if not _write_mcp_config_claude(cwd, mcp_servers or [], dest=mcp):
+        mcp.write_text(json.dumps({"mcpServers": {}}))
+    have = _cheetahclaws_session_present(cwd, [], resume_session_id) if resume_session_id else False
+    job = {"cwd": cwd, "model": f"custom/{model}", "prompt": prompt,
+           # the session to continue, only when its file is here (see _resume_lost)
+           "session_id": resume_session_id if have else "",
+           # withheld from the tool schema by the CLI's own `disabled_tools` (the driver expands
+           # an MCP tool's bare or server.tool name to its mcp__server__tool registry name)
+           "tools_disabled": list(tools_disabled or []),
+           # the loop has no step limit of its own; the driver stops it through run()'s
+           # cancel_check once this many model calls have been made
+           "max_turns": max_turns}
+    return [CHEETAHCLAWS_PYTHON, CHEETAHCLAWS_DRIVER, json.dumps(job)]
 
 
 
@@ -5707,6 +5858,90 @@ def _aider_eof(state: dict, rc: int) -> list[dict]:
 _aider_to_claude.eof = _aider_eof   # type: ignore[attr-defined]
 
 
+# ── cheetahclaws ───────────────────────────────────────────────────────────────
+# One driver line → claude stream-json. The driver emits `__hr_init` first (the session id it
+# loaded or minted), then the loop's events AS THEY ARE YIELDED — `text` is a streamed delta, so the
+# console renders the answer while it is written — and `__hr_result` last, carrying the driver's
+# verdict. The verdict is structural (see cheetahclaws_driver.verdict): nothing here reads prose to
+# decide whether the turn failed. The CLI's own notices (`[Retry 1/3 …]`, `[Failed — …]`) arrive as
+# `notice` and are never rendered as the answer; the last `[Failed — …]` is the failure's reason.
+_CHEETAHCLAWS_ERR_RE = re.compile(r"^\s*\[?Failed — ")
+
+
+def _cheetahclaws_to_claude(obj: dict, state: dict) -> list[dict]:
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if m == "__hr_init":
+        state["_cc_init"] = True
+        return [{"type": "system", "subtype": "init", "session_id": str(p.get("session_id") or ""),
+                 "model": state.get("model")}]
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if not txt:
+            return []
+        state["_cc_text"] = state.get("_cc_text", "") + txt
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if m == "thinking":
+        txt = str(p.get("text") or "")
+        return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": txt}]}}] if txt else []
+    if m == "tool_start":
+        # A new call ends the text before it: the next text is a new paragraph, not a run-on of
+        # the sentence that announced the call.
+        if state.get("_cc_text") and not state["_cc_text"].endswith("\n"):
+            state["_cc_text"] += "\n\n"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": str(p.get("id") or ""), "name": str(p.get("name") or ""),
+             "input": p.get("input") if isinstance(p.get("input"), dict) else {}}]}}]
+    if m == "tool_end":
+        result = str(p.get("result") or "")
+        # The loop's own rule for an errored tool result (agent.py, its loop guard): a denial, or a
+        # result that opens with "error"/"denied".
+        head = result.lstrip()[:24].lower()
+        err = (not p.get("permitted", True)) or head.startswith("error") or head.startswith("denied")
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(p.get("id") or ""), "is_error": err,
+             "content": result}]}}]
+    if m == "notice":
+        state.setdefault("_cc_notices", []).append(str(p.get("text") or ""))
+        return []
+    if m == "mcp_unavailable":
+        # The CLI leaves a server that did not connect out of the turn and says nothing; the
+        # gateway renders this as a note on the reply, as it does for kimi.
+        servers = [s for s in (p.get("servers") or []) if isinstance(s, dict) and s.get("name")]
+        return [{"type": "system", "subtype": "mcp_unavailable", "servers": servers}] if servers else []
+    if m == "warning":
+        state.setdefault("_cc_warnings", []).append(str(p.get("text") or ""))
+        return []
+    if m == "__hr_result":
+        ok = bool(p.get("ok"))
+        sub = str(p.get("subtype") or ("success" if ok else "error"))
+        final = str(p.get("final") or "")
+        if ok or sub == "error_max_turns":
+            state["final"] = final
+        # usage is {} on purpose: the relay's taps count what the provider reported (fresh, cached
+        # and output tokens) and _run_turn_bg stamps them; the CLI's own totals are gross prompt
+        # tokens with no cache split.
+        return [{"type": "result", "subtype": sub, "is_error": not ok and sub != "error_max_turns",
+                 "result": final if (ok or final) else str(p.get("reason") or ""),
+                 "usage": {}}]
+    return []
+
+
+def _cheetahclaws_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result, so this fires only when it died before reaching it (an
+    import failure, a kill). The reason is the last `[Failed — …]` notice if one got that far, and
+    otherwise the errbuf tail _failure_reason prefers."""
+    failed = [n for n in state.get("_cc_notices") or [] if _CHEETAHCLAWS_ERR_RE.match(n)]
+    err = failed[-1].strip().strip("[]") if failed else ""
+    if rc == 0 and not err and state.get("_cc_text"):
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("_cc_text", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": err, "usage": {}}]
+
+
+_cheetahclaws_to_claude.eof = _cheetahclaws_eof   # type: ignore[attr-defined]
+
+
 # ── kimi ─────────────────────────────────────────────────────────────────────────
 
 
@@ -6139,6 +6374,11 @@ BACKENDS = {
     "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
                   "default_model": OPENHANDS_DEFAULT_MODEL,
                   "normalize": _openhands_to_claude},
+    # The driver emits its own NDJSON (see _cheetahclaws_to_claude), with an eof for a driver that
+    # died before its result.
+    "cheetahclaws": {"providers": sorted(CHEETAHCLAWS_PROVIDERS),
+                     "default_model": CHEETAHCLAWS_DEFAULT_MODEL,
+                     "normalize": _cheetahclaws_to_claude},
     # The System One driver emits claude's stream-json itself (system/init, assistant tool_use and
     # thinking blocks, user tool_result, result with usage and a `reason`), so its normaliser is the
     # passthrough, as qwen's is.
@@ -7444,6 +7684,15 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
                            mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
                            skills_read=aider_read, max_turns=req.max_turns)
+    elif backend == "cheetahclaws":
+        model = model or CHEETAHCLAWS_DEFAULT_MODEL
+        # Skills are already in <cwd>/.cheetahclaws/skills (_write_skills) and the agent doc in
+        # CLAUDE.md, both where the CLI's own loaders look; the builder adds the model, the relay,
+        # MCP and the tool policy.
+        cmd = _build_cheetahclaws(req.provider, auth, model, req.prompt, cwd, env,
+                                  resume_session_id=req.resume_session_id,
+                                  mcp_servers=req.mcp_servers,
+                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "openhands":
         model = model or OPENHANDS_DEFAULT_MODEL
         cmd = _build_openhands(req.provider, auth, model, req.prompt, cwd, env,

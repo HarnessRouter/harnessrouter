@@ -1,0 +1,3 @@
+{"m": "__hr_init", "p": {"session_id": "afacd074", "resumed": false, "messages": 0}}
+{"m": "notice", "p": {"text": "[Failed \u2014 AuthenticationError: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-bad. You can find your API key at https://pla.... Hint: Check your API key: /config or set the appropriate env var (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)]"}}
+{"m": "__hr_result", "p": {"ok": false, "subtype": "error", "final": "", "reason": "Failed \u2014 AuthenticationError: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-bad. You can find your API key at https://pla....", "session_id": "afacd074", "calls": 0, "seconds": 0.87}}
