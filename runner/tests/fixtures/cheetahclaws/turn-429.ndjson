@@ -1,0 +1,6 @@
+{"m": "__hr_init", "p": {"session_id": "cf22ccb4", "resumed": false, "messages": 0}}
+{"m": "notice", "p": {"text": "[Retry 1/3 after 6s \u2014 rate_limit: Error code: 429 - {'error': {'message': 'Rate limit reached for requests', 'type': 'requests', 'param': None, 'code':...]"}}
+{"m": "notice", "p": {"text": "[Retry 2/3 after 12s \u2014 rate_limit: Error code: 429 - {'error': {'message': 'Rate limit reached for requests', 'type': 'requests', 'param': None, 'code':...]"}}
+{"m": "notice", "p": {"text": "[Retry 3/3 after 24s \u2014 rate_limit: Error code: 429 - {'error': {'message': 'Rate limit reached for requests', 'type': 'requests', 'param': None, 'code':...]"}}
+{"m": "notice", "p": {"text": "[Failed \u2014 RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for requests', 'type': 'requests', 'param': None, 'code':.... Hint: Rate limited by the API. Will retry with backoff.]"}}
+{"m": "__hr_result", "p": {"ok": false, "subtype": "error", "final": "", "reason": "Failed \u2014 RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for requests', 'type': 'requests', 'param': None, 'code':.... Hint: Rate limited by the API. Will retry with backoff.", "session_id": "cf22ccb4", "calls": 0, "seconds": 48.17}}

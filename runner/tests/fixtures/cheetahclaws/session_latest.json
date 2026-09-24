@@ -1,0 +1,39 @@
+{
+  "_version": 1,
+  "session_id": "426953bd",
+  "title": "Run echo PROBE-OUT and tell me what it printed.",
+  "saved_at": "2026-09-24 13:45:49",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Run echo PROBE-OUT and tell me what it printed."
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "name": "Bash",
+          "input": {
+            "command": "echo PROBE-OUT"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_1",
+      "name": "Bash",
+      "content": "PROBE-OUT"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello from the stub.",
+      "tool_calls": []
+    }
+  ],
+  "turn_count": 2,
+  "total_input_tokens": 240,
+  "total_output_tokens": 14
+}
