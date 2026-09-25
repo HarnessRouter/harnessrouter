@@ -133,10 +133,10 @@ export default function PluginsPage() {
                 ))}
                 {editing.pricing && <span className="field-help">{`Up to ${editing.pricing.session_cap_minutes} minutes of browsing per task, at most $${editing.pricing.session_estimate_usd.toFixed(4)} a task. Private and local addresses are never reachable.`}</span>}
               </div>
-            </div>
-            <div className="modal-footer">
-              <button className="button" type="button" onClick={() => setEditing(null)} disabled={Boolean(busy)}>Cancel</button>
-              <button className="button primary" type="button" disabled={Boolean(busy)} onClick={() => void save(editing, true, true)}>{busy ? 'Saving…' : editing.status === 'missing' ? 'Connect' : 'Save'}</button>
+              <div className="modal-actions">
+                <button className="button" type="button" onClick={() => setEditing(null)} disabled={Boolean(busy)}>Cancel</button>
+                <button className="button primary" type="button" disabled={Boolean(busy)} onClick={() => void save(editing, true, true)}>{busy ? 'Saving…' : editing.status === 'missing' ? 'Connect' : 'Save'}</button>
+              </div>
             </div>
           </section>
         </div>
