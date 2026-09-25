@@ -7,6 +7,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [Install](#install)
 - [Restarts, upgrades, and backups](#restarts-upgrades-and-backups)
 - [Starter kits](#starter-kits)
+- [Plugins](#plugins)
 - [What it is](#what-it-is)
 - [Why self-host](#why-self-host)
 - [The Unified Harness Protocol](#the-unified-harness-protocol)
@@ -588,6 +589,64 @@ spends.
 
 ---
 
+## Plugins
+
+A plugin is a service your workspace connects once; each harness then includes the ones it needs,
+and its agent gets that service's tools on every task. The catalog is on the **Plugins** page of the
+Console, and every row of it is one plugin: what it is, its state here (Connected, Needs auth,
+Disabled, Not connected), what it costs, and how many harnesses include it.
+
+| Plugin | What the agent gets | What you provide |
+|---|---|---|
+| Browser | A real web browser: open a page, read it, click, type, scroll, wait, take a screenshot, go back, switch tabs. Thirteen tools, no JavaScript evaluation, no downloads. | Nothing on the page. The instance needs a [Browser Use Cloud](https://browser-use.com) key in its environment (below). |
+| GitHub | The connected repository: files, branches, commits, pull requests. | An access token and the repository (`owner/name`). |
+| Vercel | The connected project: deployments and domains. | An access token, the project id and team id. |
+| InsForge | The connected backend: its tables and records. | The API key and the backend's address. |
+
+**Turning a plugin on.** Open **Plugins**, and on the row choose **Turn on** (the browser) or
+**Connect** (a plugin that needs a credential; the credential is kept in the instance's secret store
+and never shown again). **Settings** changes what the plugin may do: the browser's site lists ("only
+these sites", "never these sites", matched by domain suffix; empty means any public site), a GitHub
+plugin's repository. **Turn off** keeps the record and refuses the agent's calls with a sentence
+until it is turned on again. Nothing is included on a harness by turning a plugin on.
+
+**Including it on a harness.** Open the harness, find **Plugins** under its settings, and mark the
+plugin **Included**. Over the API, the harness's plugins are its `plugs` attachment:
+
+```bash
+curl -s -X PUT "$HARNESSROUTER_BASE_URL/v1/plugs/browser" \
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"config":{"allow_domains":["example.com"],"deny_domains":[]}}'
+curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses/$HID/servers/plugs" \
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"plugs":["browser"]}'
+```
+
+`GET /v1/plugs` lists the catalog with each plugin's state for your workspace;
+`GET /v1/plugs/browser/attachments` says how many harnesses include it. A package can ask for a
+plugin with `"requires": {"plugs": ["browser"]}` in its `plugin.json`; the harness it lands on
+includes the plugin, and the workspace still has to have connected it.
+
+**The browser.** The browser runs in Browser Use Cloud and is driven from this instance; the agent
+never holds the browser's address or the key. Set the key in the container's environment:
+
+```bash
+docker run -e BROWSER_USE_API_KEY=... ...
+```
+
+Until it is set, the browser's tools answer that the browser service is not set up on this
+deployment. Every session is one browser per task, opened on the agent's first browser tool call
+and stopped when the task ends, after two idle minutes, or after twenty minutes, whichever comes
+first; each call has sixty seconds; at most three browsers per workspace are open at once
+(`HR_BROWSER_ORG_SESSIONS`) and nine per instance (`HR_BROWSER_MAX_SESSIONS`). Private, loopback
+and link-local addresses are never reachable, on a page or in anything a page loads. Screenshots
+are kept with the task's files. What the vendor charges ($0.02 per browser hour at the time of
+writing, rounded up to the minute) is what a session costs you on your Browser Use account; this
+instance keeps no ledger, and the price shown on the Plugins page is the vendor's list price with
+no markup, read from the same table the hosted service bills from. Every call and every session is
+written down on the task's trace (event type `plug`, plug `browser`, with the minutes and the
+vendor's figure on the session row).
+
 ## What it is
 
 An *agent harness* is the runtime layer around a model; Codex, Claude Code, and Hermes are harnesses. In this repo's API you also create *harness* objects: a saved configuration whose `base` is one of those runtimes, plus a model, instructions, and limits. A *task* is one run of that configuration, a real conversation against a real POSIX workspace with bash and git, streamed back as it happens.
@@ -726,15 +785,17 @@ It is created in this self-hosted instance and authenticates requests to that CE
 neither a Cloud key, your Console password, nor the model-provider key configured
 in **Integrations**. Never put it in browser-side code or commit it to Git.
 
-### Install a plugin on a harness
+### Install a package on a harness
 
-A plugin is a folder in the [Agent Plugins](https://agent-plugins.org) format: `plugin.json` at its
+A package is a folder in the [Agent Plugins](https://agent-plugins.org) format: `plugin.json` at its
 root, tools in `mcp.json`, Skills under `skills/`. Installing one gives a harness all of it at once,
 and the harness records it as a named, versioned package it can export again. Starter kits built from
-the kit release that carries plugin packages ship their Skills this way, so a kit launched from such
-an image shows the kit as an installed plugin; a kit launched earlier keeps its Skills as its own.
+the kit release that carries packages ship their Skills this way, so a kit launched from such
+an image shows the kit as an installed package; a kit launched earlier keeps its Skills as its own.
+(A package is not a plugin in the sense of the [Plugins](#plugins) page: a plugin is a service the
+workspace connects once; a package is files a harness carries.)
 
-In the Console, open the harness, find **Plugins**, and choose **Install from folder**. Over the API,
+In the Console, open the harness, find **Packages**, and choose **Install from folder**. Over the API,
 `plugins` is a field of the harness record. The simplest case is a new harness created with the
 package in it:
 
