@@ -13795,8 +13795,9 @@ _BASE_CATALOG: dict[str, dict] = {
                           "running commands to complete the task end to end."),
         # opencode's permission keys, verbatim from core/src/v1/config/permission.ts. These are the
         # real names the deny rules match, not display labels — the same trap the claude list warns
-        # about, where a decorated label silently matches nothing and disables no tool.
-        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+        # about, where a decorated label silently matches nothing and disables no tool. No row for a
+        # write: opencode's `edit` permission covers write and patch (its config.ts folds them in).
+        "tools": [("bash", "Bash"), ("read", "File Read"),
                   ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"), ("list", "List"),
                   ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("task", "Task"),
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
