@@ -14021,6 +14021,13 @@ async def plugs_mcp(request: Request):
 # address. The browser itself lives in browser_plane.py: one per harness session, opened on the
 # first call, stopped at the turn's end, after idle, or at the cap. Money is the vendor's list
 # price passed through under one unit, browser.usd, on the session's own audit row.
+# One open per session at a time. A CLI that issues tool calls in parallel (pi does) sent navigate
+# and screenshot together as a task's first browser calls; both found no session and both opened
+# a browser at the vendor, one of which nothing ever stopped (hr-test, 2026-09-25: two open rows,
+# one session row). The lock lives as long as the session's browser does.
+_browser_open_locks: dict[str, asyncio.Lock] = {}
+
+
 async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, tool: str, spec: dict, args: dict,
                              config: dict, started: float):
     plug = plugs_plane.BROWSER
@@ -14035,22 +14042,25 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
         return await refused("not configured", "The browser service is not set up on this deployment. Tell the person.")
     s = browser_plane.sessions().get(sid)
     if s is None:
-        # The first call opens the browser: the estimate is written on the row for the record (a
-        # self-hosted instance keeps no task cost cap; the vendor's own credit is the ceiling).
-        estimate = browser_plane.session_estimate_usd()
-        try:
-            s = await browser_plane.open_session(sid, hid, org, workspace, allow, deny)
-        except browser_plane.BrowserRefused as e:
-            return await refused(e.code, str(e))
-        except Exception as e:  # noqa: BLE001
-            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
-                                    f"open: {type(e).__name__}: {e}")
-            return _jsonrpc_result(rid, _tool_text(f"The browser could not be started ({type(e).__name__}). Try again.", True))
-        s.reserved = estimate
-        await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
-                                detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
-                                        "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
-    elif (s.allow, s.deny) != (allow, deny):
+        async with _browser_open_locks.setdefault(sid, asyncio.Lock()):
+            s = browser_plane.sessions().get(sid)      # the call that waited finds the browser the first one opened
+            if s is None:
+                # The first call opens the browser: the estimate is written on the row for the record
+                # (a self-hosted instance keeps no task cost cap; the vendor's own credit is the ceiling).
+                estimate = browser_plane.session_estimate_usd()
+                try:
+                    s = await browser_plane.open_session(sid, hid, org, workspace, allow, deny)
+                except browser_plane.BrowserRefused as e:
+                    return await refused(e.code, str(e))
+                except Exception as e:  # noqa: BLE001
+                    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
+                                            f"open: {type(e).__name__}: {e}")
+                    return _jsonrpc_result(rid, _tool_text(f"The browser could not be started ({type(e).__name__}). Try again.", True))
+                s.reserved = estimate
+                await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
+                                        detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
+                                                "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
+    if (s.allow, s.deny) != (allow, deny):
         s.allow, s.deny, s.host_cache = list(allow), list(deny), {}      # the workspace changed its lists
     async with s.lock:
         if s.closed:
@@ -14090,6 +14100,7 @@ async def _browser_close(sid: str, reason: str) -> None:
     s = browser_plane.sessions().get(sid)
     if not s or s.closed:
         return
+    _browser_open_locks.pop(sid, None)
     try:
         fig = await browser_plane.close_session_browser(s)
     except Exception as e:  # noqa: BLE001

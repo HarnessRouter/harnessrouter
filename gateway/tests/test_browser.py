@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.parse
 import zlib
 from pathlib import Path
@@ -696,3 +697,36 @@ def test_no_secret_ever_reached_a_caller():
     assert _seen
     for body in _seen:
         assert VENDOR_KEY not in body and CDP not in body and "SENTINEL" not in body
+
+
+def test_two_first_calls_at_once_open_one_browser(client, world, monkeypatch):
+    """A CLI that issues tool calls in parallel (pi) sent navigate and screenshot together as a
+    task's first browser calls; both found no session and both opened a browser at the vendor,
+    and only the one registered last was ever stopped (hr-test, 2026-09-25: two open rows, one
+    session row, one vendor session left running). The open is one per session now."""
+    reg, ven, posted = world
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid = _session_of(hid)
+    real = browser_plane.connector
+
+    async def slow_connect(cdp):          # the vendor answered; the CDP connect takes a moment
+        await asyncio.sleep(0.02)
+        return await real(cdp)
+    monkeypatch.setattr(browser_plane, "connector", slow_connect)
+    cfg = {"allow_domains": [], "deny_domains": []}
+
+    async def both():
+        return await asyncio.gather(
+            gw._browser_plug_call(1, hid, sid, ORG, WS, "navigate", plugs_plane.find("browser", "navigate"), {"url": "example.com"}, cfg, time.time()),
+            gw._browser_plug_call(2, hid, sid, ORG, WS, "screenshot", plugs_plane.find("browser", "screenshot"), {}, cfg, time.time()))
+    a, b = asyncio.run(both())
+    assert json.loads(a.body)["result"]["isError"] is False and json.loads(b.body)["result"]["isError"] is False
+    assert len(ven.created) == 1, ven.created          # one browser at the vendor, not two
+    opens = [r for r in _rows(hid) if r["tool"] == "open"]
+    assert len(opens) == 1
+    asyncio.run(gw._browser_close(sid, "turn_end"))
+    stops = [r for r in _rows(hid) if r["tool"] == "session"]
+    assert len(stops) == 1 and json.loads(stops[0]["detail"])["vendor_session"] == "bu_1"
+    assert sid not in gw._browser_open_locks
