@@ -1344,8 +1344,10 @@ class Auth(BaseModel):
     # Codex provider tuning
     wire_api: str | None = None            # responses | chat (default responses)
     # Custom provider
-    api_format: str | None = None          # "openai" | "anthropic" (custom integration)
+    api_format: str | None = None          # "openai" | "responses" | "anthropic" (custom integration)
     full_url: str | None = None            # "1" when the URL is a complete request URL
+    namespace_tools: bool | str | None = None  # "1"/true to opt into namespace tools
+    web_search: bool | str | None = None       # "1"/true to opt into built-in web search
 
 
 # ── canonical-event normalizers ──────────────────────────────────────────────────
@@ -1889,6 +1891,37 @@ def _codex_web_search_off(tools_disabled: list[str] | None) -> bool:
                for x in (tools_disabled or []) if x and x.strip())
 
 
+def _codex_flag(value: str | bool | None) -> bool | None:
+    """Parse a connection's optional on/off flag, preserving an unset value."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        return value
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _codex_custom_responses(auth: Auth) -> bool:
+    """Whether this Codex turn targets a custom OpenAI Responses integration."""
+    return str(auth.api_format or "").strip().lower() == "responses"
+
+
+def _codex_namespace_tools_off(auth: Auth) -> bool:
+    """Keep Codex's multi-agent namespace out of custom endpoints unless opted in."""
+    return _codex_custom_responses(auth) and _codex_flag(auth.namespace_tools) is not True
+
+
+def _codex_web_search_off_for_auth(auth: Auth, tools_disabled: list[str] | None) -> bool:
+    """Apply the connection opt-in without weakening the existing disabled-tools switch."""
+    return _codex_web_search_off(tools_disabled) or (
+        _codex_custom_responses(auth) and _codex_flag(auth.web_search) is not True)
+
+
+def _codex_insert_top_level(cfg: str, value: str) -> str:
+    """Insert a setting before the first TOML table so it stays at the document's top level."""
+    head, sep, tail = cfg.partition("\n[")
+    return head + "\n" + value + sep + tail if sep else cfg + "\n" + value + "\n"
+
+
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
                        env: dict, mcp_toml: str = "", resume: bool = False,
                        tools_disabled: list[str] | None = None) -> "pathlib.Path":
@@ -1930,15 +1963,19 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=base_url, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
-    if _codex_web_search_off(tools_disabled):
+    if _codex_namespace_tools_off(auth):
+        # Codex enables its multi-agent namespace by default. Most custom Responses endpoints
+        # only accept function tools, so custom integrations opt in explicitly when they support
+        # this Codex-specific tool family.
+        cfg = _codex_insert_top_level(cfg, "[agents]\nenabled = false")
+    if _codex_web_search_off_for_auth(auth, tools_disabled):
         # The one built-in codex tool with a hard switch. Codex offers web_search by default on
         # the Responses wire and an endpoint that gates it per model answers 400 "The following
         # tool is not allowed" on every turn (issue #150); the TOP-LEVEL key is the only knob
         # (verified on codex 0.147 and 0.154: `[tools] web_search = false` parses and does
         # nothing). It goes before the first table header: appended at the end it would belong
         # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
-        head, sep, tail = cfg.partition("\n[")
-        cfg = head + '\nweb_search = "disabled"' + sep + tail
+        cfg = _codex_insert_top_level(cfg, 'web_search = "disabled"')
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
