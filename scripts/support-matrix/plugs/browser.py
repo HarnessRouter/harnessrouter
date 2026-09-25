@@ -20,10 +20,15 @@ import time
 import urllib.error
 import urllib.request
 
-PROMPT = ("Use your browser tools for this, in order: 1) browser.navigate to https://example.com/ ; "
-          "2) browser.snapshot ; 3) browser.click the 'More information...' link by its ref ; 4) browser.extract_text ; "
-          "5) browser.screenshot . Then answer with: the final URL, the page title, and the first 200 characters of "
-          "the extracted text. Do nothing else and do not visit any other site.")
+# The tools are on the MCP server named plugs. Some CLIs list MCP tools directly; pi reaches them
+# through its `mcp` tool (search, then call), and a prompt that only names browser.navigate lets the
+# model answer that it has no such tool. So the prompt says where the tools are and how to reach them.
+PROMPT = ("Your browser tools come from the MCP server named plugs: browser.navigate, browser.snapshot, browser.click, "
+          "browser.extract_text, browser.screenshot. If they are not listed directly, use your mcp tool: search it for "
+          "browser, then call them. Do this, in order: 1) browser.navigate to https://example.com/ ; 2) browser.snapshot ; "
+          "3) browser.click the 'More information...' link by its ref ; 4) browser.extract_text ; 5) browser.screenshot . "
+          "Then answer with: the final URL, the page title, and the first 200 characters of the extracted text. "
+          "Do nothing else and do not visit any other site.")
 NEEDED = ["navigate", "snapshot", "click", "extract_text", "screenshot"]
 
 
