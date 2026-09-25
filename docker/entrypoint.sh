@@ -179,7 +179,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,muse,aider,openhands,systemone}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -199,6 +199,7 @@ backend_bin() {
     omp)    echo "$TOOLS/bin/omp" ;;
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
+    muse)   echo "$TOOLS/bin/muse" ;;
     aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
@@ -310,6 +311,23 @@ if aider.__version__ != want:
 # from KIMI_MODEL_* alone, -r refusing an unknown session, agent files matching tool NAMES,
 # $KIMI_CODE_HOME/mcp.json, the exit-1 failure line) was measured on THIS version.
 KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
+# Muse Code, Meta's coding agent, pinned to 1.4.0-R4161.1. Meta publishes no licence for the CLI, so
+# it is handled by the Claude Code rule in NOTICE: installed by the operator at first start under
+# Meta's own terms, never shipped inside the image. It is in the default HR_BACKENDS for aider's
+# reason — the console lists every base the gateway's catalogue does, and a listed base that is not
+# installed fails on its first task; an operator who does not want it leaves it out.
+#
+# The native binary from Meta's release manifest, not the vendor's install script: that script
+# installs a launcher which updates the CLI in the background on its own schedule, and a pinned
+# backend must not replace itself mid-session. The manifest names a sha256 per artifact; the digests
+# are pinned HERE for kimi's reason (a checksum served beside the artifact adds nothing against a
+# compromised origin). They are the 1.4.0-R4161.1 manifest's values. The aarch64 one matched the binary
+# this installer downloaded in a local build (2026-09-25); the x86_64 one has not been downloaded here.
+#
+# Everything runner/server.py's muse code relies on (the exec --json record shapes, the root-level
+# /muse-code/models catalog, --session-id creating an unknown session, the settings.json keys,
+# AGENTS.md read only in a trusted workspace) was measured on THIS version.
+MUSE_PIN="${HR_MUSE_VERSION:-1.4.0-R4161.1}"
 # OpenHands V1, MIT (OpenHands/agent-sdk), pinned to 1.49.2 — the AGENT SERVER, not the CLI.
 #
 # PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
@@ -463,6 +481,38 @@ install_kimi() {
   rm -rf "$km_tmp"
 }
 
+
+install_muse() {
+  case "$(uname -m)" in
+    x86_64)        ms_file="muse-x86-linux";     ms_sha="1b68bd4518d53a2aaff063915df4d141b0a205e6d79038299d04e3a14e85a5b9" ;;
+    aarch64|arm64) ms_file="muse-aarch64-linux"; ms_sha="38a0e3b7f59825ffc60f7fae65ac9727cf9bbb47fe4e687cc29cede9deb8fabf" ;;
+    *) echo "unsupported architecture $(uname -m) for muse"; return 1 ;;
+  esac
+  if [ "$MUSE_PIN" != "1.4.0-R4161.1" ]; then
+    # kimi's contract: an operator who overrides the version supplies the digest, or is TOLD the
+    # binary is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_MUSE_SHA256:-}" ]; then
+      ms_sha="$HR_MUSE_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_MUSE_VERSION=$MUSE_PIN overrides the pinned 1.4.0-R4161.1, and no"
+      echo "[harnessrouter]       HR_MUSE_SHA256 was given — this muse binary is UNVERIFIED."
+      ms_sha=""
+    fi
+  fi
+  ms_url="https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version=${MUSE_PIN}&file=${ms_file}"
+  ms_tmp="$(mktemp -d)"
+  curl -fsSL --proto '=https' "$ms_url" -o "$ms_tmp/muse" || { rm -rf "$ms_tmp"; return 1; }
+  if [ -n "$ms_sha" ]; then
+    ms_have="$(sha256sum "$ms_tmp/muse" | awk '{print $1}')"
+    if [ "$ms_sha" != "$ms_have" ]; then
+      echo "muse $MUSE_PIN: binary digest mismatch for $ms_file (want $ms_sha, have $ms_have)"
+      rm -rf "$ms_tmp"; return 1
+    fi
+  fi
+  mkdir -p "$TOOLS/bin" && install -m 755 "$ms_tmp/muse" "$TOOLS/bin/muse" \
+    || { rm -rf "$ms_tmp"; return 1; }
+  rm -rf "$ms_tmp"
+}
 
 install_goose() {
   case "$(uname -m)" in
@@ -668,6 +718,13 @@ install_backends() {
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
     try_install "Kimi Code CLI" install_kimi || true
+  fi
+
+  # See MUSE_PIN for the terms. `muse --version` prints "Muse Code 1.4.0 (1.4.0-R4161.1)": the build in
+  # parentheses is what the pin names, so a volume holding another build is replaced in place.
+  if wanted muse && [ "$("$(backend_bin muse)" --version 2>/dev/null | sed -n 's/.*(\(.*\)).*/\1/p' | head -n 1)" != "$MUSE_PIN" ]; then
+    echo "[harnessrouter] installing Muse Code $MUSE_PIN (Meta; no published licence — installed under Meta's terms)…"
+    try_install "Muse Code" install_muse || true
   fi
 
   # The largest install of the set: ~735 MB and about ninety seconds on a fresh volume
