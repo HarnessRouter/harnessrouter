@@ -383,7 +383,7 @@ def test_a_harness_includes_the_browser_like_any_plug_and_the_workspace_must_hav
     assert next(t for t in tools if t["name"] == "browser.click")["annotations"] == {"readOnlyHint": False, "destructiveHint": False}
     assert next(t for t in tools if t["name"] == "browser.navigate")["description"].startswith("[Browser, write]")
     out = _call(client, tok, "navigate", url="https://example.com/")
-    assert out["isError"] and out["content"][0]["text"].startswith("The workspace has no Browser plug connected")
+    assert out["isError"] and out["content"][0]["text"].startswith("The workspace has no Browser plugin connected")
     assert ven.created == [] and _rows(hid)[-1]["outcome"] == "refused" and _rows(hid)[-1]["error"] == "missing"
     # connected, then turned off by the workspace
     reg.record = _record()
@@ -586,7 +586,7 @@ def test_not_configured_a_stolen_credential_and_the_org_gate(client, world, monk
     _include(client, thief)
     stolen = gw._mint_hosted_cred(thief, "sessX", _key(hid))
     out = _call(client, stolen, "navigate", url="https://example.com/")
-    assert out["isError"] and "No plugs are connected" in out["content"][0]["text"] and ven.created == []
+    assert out["isError"] and "No plugins are connected" in out["content"][0]["text"] and ven.created == []
     # the org gate: the browser is open to every org; the held plugs are not, by name
     monkeypatch.setattr(gw, "_PLUGS_ORGS", set())
     sid2 = _session_of(thief)

@@ -300,13 +300,13 @@ def test_refusals_by_plug_state_are_not_metered(client, world, monkeypatch):
     def refused(contains: str):
         out = _rpc(client, tok, "tools/call", call)
         assert out["isError"] and contains in out["content"][0]["text"], out
-    refused("no GitHub plug connected")                                       # nothing in the registry
+    refused("no GitHub plugin connected")                                       # nothing in the registry
     reg.records[(WS, "github")] = _record("github", status="needs_auth")
     refused("needs attention")
     reg.records[(WS, "github")] = _record("github", status="disabled")
     refused("turned off")
     reg.records[(WS, "github")] = _record("github", org="someone.else")        # the registry's answer is not this org's
-    refused("no GitHub plug connected")
+    refused("no GitHub plugin connected")
     reg.fail = True
     refused("did not answer")
     reg.fail = False
@@ -326,12 +326,12 @@ def test_refusals_by_plug_state_are_not_metered(client, world, monkeypatch):
     _post(client, f"/v1/harnesses/{thief}/servers/plugs", {"plugs": ["github"]})
     stolen = gw._mint_hosted_cred(thief, "sessX", _key(hid))
     out = _rpc(client, stolen, "tools/call", call)
-    assert out["isError"] and "No plugs are connected to this agent" in out["content"][0]["text"]
+    assert out["isError"] and "No plugins are connected to this agent" in out["content"][0]["text"]
     assert _rpc(client, stolen, "tools/list") == {"tools": []}
     v = asyncio.run(gw._vertex_get(hid))
     asyncio.run(gw._mcp_write(hid, [{**e, "enabled": False} for e in gw._mcp_list(v)]))
     out = _rpc(client, tok, "tools/call", call)
-    assert out["isError"] and "No plugs are connected to this agent" in out["content"][0]["text"]
+    assert out["isError"] and "No plugins are connected to this agent" in out["content"][0]["text"]
     assert ven.calls == []
 
 
