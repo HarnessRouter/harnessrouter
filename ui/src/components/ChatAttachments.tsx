@@ -53,14 +53,18 @@ export function OutputFiles({ files, onPreview }: {
     if (!sid || files.length < LISTED_MAX) { setTotal(null); return; }
     let alive = true;
     harnessFetch(`/api/harness/v1/sessions/${encodeURIComponent(sid)}/files?changed=true`, { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null)).then((d: { count?: number } | null) => { if (alive && d && typeof d.count === 'number') setTotal(d.count); })
+      .then((r) => (r.ok ? r.json() : null)).then((d: { count?: number; produced?: number } | null) => { if (alive && d && typeof (d.produced ?? d.count) === 'number') setTotal(d.produced ?? d.count ?? 0); })
       .catch(() => undefined);
     return () => { alive = false; };
   }, [sid, files.length]);
   if (!files.length) return null;
   const more = total !== null && total > files.length;
-  const zipUrl = `/api/harness/v1/sessions/${encodeURIComponent(files[0].container_id)}`
-    + `/files/archive?files=${encodeURIComponent(files.map((f) => f.file_id).join(','))}`;
+  // the turn's captured files by id; when the turn produced more than the response carries, the
+  // whole workspace (every file of every turn), which is the only archive that holds them all
+  const zipUrl = more
+    ? `/api/harness/v1/sessions/${encodeURIComponent(sid)}/files/archive`
+    : `/api/harness/v1/sessions/${encodeURIComponent(sid)}`
+      + `/files/archive?files=${encodeURIComponent(files.map((f) => f.file_id).join(','))}`;
   return (
     <div className="wbx-files">
       {more && <div className="wbx-files-more">Showing {files.length} of the {total.toLocaleString()} files this turn produced.</div>}
@@ -83,7 +87,7 @@ export function OutputFiles({ files, onPreview }: {
       {files.length > 1 && (
         <button className="wbx-zipall" type="button"
           onClick={(e) => { e.stopPropagation(); setZipErr(''); downloadFile(zipUrl, 'outputs.zip').catch((err: unknown) => setZipErr(err instanceof Error ? err.message : 'Could not build the archive.')); }}>
-          <IcDl /> Download all ({files.length}) as .zip
+          <IcDl /> {more ? 'Download the whole workspace as .zip' : `Download all (${files.length}) as .zip`}
         </button>
       )}
       {zipErr && <div className="wbx-zipall-err" role="alert">{zipErr}</div>}

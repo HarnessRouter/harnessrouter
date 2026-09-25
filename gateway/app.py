@@ -6888,6 +6888,22 @@ def _is_internal_output(name: str) -> bool:
 
 
 # ── output (container) file collection: produced-this-turn files → blobs + citations ────
+# How many files the turn produced in all, by session, read once by the turn's changed.json: the
+# response carries at most RESP_MAX_FILES of them and the page says "showing 25 of N" from this.
+_produced_total: dict[str, int] = {}
+
+
+def _produced_rel(path: str) -> str:
+    """A produced path as the workspace names it: without a leading "./". A character strip
+    (`lstrip("./")`) also ate the dot of a dotfile, so `.harness/state.json` read as
+    `harness/state.json`, passed the internal-file check, and a produced `.env` would have been
+    captured as `env` (found by the test that pins this, 2026-09-25)."""
+    path = str(path or "")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
 async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[dict]:
     exclude = exclude or set()
     try:
@@ -6897,26 +6913,31 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
         items = (r.json() or {}).get("files") or []
     except Exception:  # noqa: BLE001
         return []
+    _produced_total[sid] = len([it for it in items if (it or {}).get("path")
+                                and not _is_internal_output(_produced_rel(it["path"]))])
     out: list[dict] = []
     # The response carries at most RESP_MAX_FILES of them. Newest first when the runner says when
     # each was written (the item's mtime), so a turn that produced a long series (a game's 1,400
     # archived frames, hosted 2026-09-25) shows its latest and not its first second; a runner
     # without the field keeps its own order. The console says how many there were in all.
     items = sorted(items, key=lambda it: float((it or {}).get("mtime") or 0), reverse=True)
-    for it in items[:RESP_MAX_FILES]:
+    # The cap counts produced files, so what is never one (an internal name, an input file the
+    # caller attached) is set aside before it: an internal file newer than the rest must not
+    # take a slot from a real one.
+    wanted: list[tuple[str, str]] = []
+    for it in items:
         path = (it or {}).get("path")
-        if not path:
-            continue
-        rel = path.lstrip("./")
-        if rel in exclude or _is_internal_output(rel):
-            continue
+        rel = _produced_rel(path) if path else ""
+        if rel and rel not in exclude and not _is_internal_output(rel):
+            wanted.append((path, rel))
+    for path, rel in wanted[:RESP_MAX_FILES]:
         try:
             fr = await _sandbox("/file", sid, "GET", params={"path": path})
             if fr.status_code >= 400 or not fr.content or len(fr.content) > RESP_MAX_FILE_BYTES:
                 continue
             cfile = _rid("cfile")
             media = fr.headers.get("content-type", "application/octet-stream")
-            fname = path.lstrip("./")
+            fname = rel
             if await _blob_put(f"containers/{sid}/{cfile}", fr.content, kb=RESP_BLOB_KB):
                 await _blob_put(f"containers/{sid}/{cfile}.meta",
                                 json.dumps({"filename": fname, "media_type": media,
@@ -7407,6 +7428,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     try:
         await _blob_put(f"sessions/{sid}/changed.json", json.dumps({
             "at": time.time(),
+            "produced": _produced_total.pop(sid, len(produced)),
             "files": [{"path": f.get("filename"), "file_id": f.get("file_id"),
                        "bytes": f.get("bytes")} for f in produced if f.get("file_id")],
         }).encode(), kb=RESP_BLOB_KB)
@@ -9243,9 +9265,12 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
     if changed:
         blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
         items = []
+        produced_n = 0
         if blob:
             try:
-                items = (json.loads(blob) or {}).get("files") or []
+                doc = json.loads(blob) or {}
+                items = doc.get("files") or []
+                produced_n = int(doc.get("produced") or 0)
             except Exception:  # noqa: BLE001
                 items = []
         files = [{"object": "file", "id": it["file_id"], "container_id": sid,
@@ -9255,7 +9280,9 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
                   "file_id": it["file_id"], "download_url": _file_url(sid, it["file_id"])}
                  for it in items if it.get("path") and it.get("file_id")]
         files.sort(key=lambda f: f["path"])
-        return {"session_id": sid, "changed": True, "count": len(files), "files": files}
+        # `produced` is how many files the turn wrote in all; `count` is how many of them the
+        # response captured (at most RESP_MAX_FILES), which is what this list can name.
+        return {"session_id": sid, "changed": True, "count": len(files), "produced": max(produced_n, len(files)), "files": files}
     tf = await _workspace_tar(sid)
     if tf is None:
         raise HTTPException(404, "no workspace for this session yet — run a task first")
