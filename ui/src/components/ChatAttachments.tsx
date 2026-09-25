@@ -5,9 +5,13 @@
 // own thinner versions instead of these: a text pill with an × where an image thumbnail belongs,
 // and a bare row where the output card belongs. One definition, so a column in an arena is the
 // same card as a task, because it is the same card.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { containerFileUrl, downloadFile, type RespFile } from '@/lib/chat';
+import { harnessFetch } from '@/lib/hfetch';
+
+// What a response lists at most (the gateway's HARNESS_RESP_MAX_FILES); a full list may be a cut.
+const LISTED_MAX = 25;
 
 const Svg = ({ s = 16, children }: { s?: number; children: React.ReactNode }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -41,11 +45,25 @@ export function OutputFiles({ files, onPreview }: {
 }) {
   // the archive is refused, with the names, when a cited file is no longer there; the row says so
   const [zipErr, setZipErr] = useState('');
+  // How many files the turn really produced when the list is full: the session's own count of
+  // the files changed in its most recent turn. Absent until read; nothing is shown before then.
+  const [total, setTotal] = useState<number | null>(null);
+  const sid = files[0]?.container_id || '';
+  useEffect(() => {
+    if (!sid || files.length < LISTED_MAX) { setTotal(null); return; }
+    let alive = true;
+    harnessFetch(`/api/harness/v1/sessions/${encodeURIComponent(sid)}/files?changed=true`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null)).then((d: { count?: number } | null) => { if (alive && d && typeof d.count === 'number') setTotal(d.count); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [sid, files.length]);
   if (!files.length) return null;
+  const more = total !== null && total > files.length;
   const zipUrl = `/api/harness/v1/sessions/${encodeURIComponent(files[0].container_id)}`
     + `/files/archive?files=${encodeURIComponent(files.map((f) => f.file_id).join(','))}`;
   return (
     <div className="wbx-files">
+      {more && <div className="wbx-files-more">Showing {files.length} of the {total.toLocaleString()} files this turn produced.</div>}
       {files.map((f, j) => (
         <div key={j} className="wbx-filecard"
           onClick={() => onPreview({ url: containerFileUrl(f), name: f.filename })}>

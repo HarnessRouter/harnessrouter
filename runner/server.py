@@ -7130,7 +7130,15 @@ def _produced_list(ws: str) -> list[dict]:
         path = path.strip().strip('"')
         if _produced_keep(status, path):
             seen.setdefault(path, status.strip() or "?")
-    return [{"path": k, "status": v} for k, v in seen.items()]
+    # mtime rides on each item so a reader can put the newest first: a response carries at most
+    # HARNESS_RESP_MAX_FILES of them, and git's path order handed a Mario run its first 24 frames
+    # of 1,400 (hosted, 2026-09-25). 0 when the file is gone (a deletion) or cannot be stat'ed.
+    def _mtime(rel: str) -> float:
+        try:
+            return float(os.stat(os.path.join(ws, rel)).st_mtime)
+        except OSError:
+            return 0.0
+    return [{"path": k, "status": v, "mtime": _mtime(k)} for k, v in seen.items()]
 
 
 def _produced_ack(ws: str) -> str:

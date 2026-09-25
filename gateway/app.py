@@ -6898,6 +6898,11 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
     except Exception:  # noqa: BLE001
         return []
     out: list[dict] = []
+    # The response carries at most RESP_MAX_FILES of them. Newest first when the runner says when
+    # each was written (the item's mtime), so a turn that produced a long series (a game's 1,400
+    # archived frames, hosted 2026-09-25) shows its latest and not its first second; a runner
+    # without the field keeps its own order. The console says how many there were in all.
+    items = sorted(items, key=lambda it: float((it or {}).get("mtime") or 0), reverse=True)
     for it in items[:RESP_MAX_FILES]:
         path = (it or {}).get("path")
         if not path:
