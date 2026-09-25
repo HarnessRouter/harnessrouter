@@ -2351,7 +2351,14 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
         return False
     path = home / ".pi" / "agent" / "mcp.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
+    # directTools: the tools are registered on the agent one by one, as every other CLI lists
+    # MCP tools. The adapter's default hides them behind one `mcp` proxy tool (search, then call),
+    # and a model that is not told to search answers that it has no such tool: a harness with the
+    # browser plugin included said "I can't directly control a browser here" to Richard on
+    # 2026-09-25 while all thirteen tools sat in the adapter's cache. The proxy goes with it, so
+    # the model has one way to a tool, not two.
+    path.write_text(json.dumps({"settings": {"directTools": True, "disableProxyTool": True},
+                                "mcpServers": entries}, indent=2))
     return True
 
 
