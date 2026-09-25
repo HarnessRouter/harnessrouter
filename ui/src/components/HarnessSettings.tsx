@@ -11,7 +11,7 @@ import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, pluginSchemas,
   type CustomHarness, type OobHarness, type HarnessPlugin, getPluginFiles,
   useRuntimeDefaults,
-  listPlugs, getHarnessPlugs, setHarnessPlugs, type Plug, type HarnessPlugs,
+  listPlugs, getHarnessPlugs, setHarnessPlugs, PLUGS_ENTRY_ID, type Plug, type HarnessPlugs,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
@@ -90,6 +90,10 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   // the packages installed on this Harness; the count is the list's length.
   const wsConnected = oob ? [] : (wsPlugs || []).filter((p) => p.status !== 'missing');
   const pluginCount = wsConnected.length + (draft?.plugins || []).length;
+  // The plugins binding is an MCP entry on the record (the gateway's own plugs server), but it is
+  // the Plugins section's, not a custom server: the Tools section neither lists it (its address is
+  // ours, and its switch would be a second one) nor counts it.
+  const ownServers = (draft?.mcpServers || []).map((m, idx) => ({ m, idx })).filter(({ m }) => m.id !== PLUGS_ENTRY_ID);
   const togglePlug = async (type: string) => {
     if (!id) return;
     const have = included?.plugs || [];
@@ -329,7 +333,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           <section className="form-section">
             <div><h3>Tools</h3><p>Control inherited tools and add MCP servers for external capabilities.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0)} configured tools</strong>
+              <div className="section-actions"><strong>{baseTools.length + ownServers.length} configured tools</strong>
                 {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add MCP</button>}</div>
               <div className="capability-list">
                 {baseTools.map((t) => (
@@ -345,7 +349,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                     </div>
                   </div>
                 ))}
-                {(draft?.mcpServers || []).map((m, idx) => (
+                {ownServers.map(({ m, idx }) => (
                   <div key={m.id || idx} className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:world-www"></iconify-icon></span>
                     <div className="capability-copy"><strong>{m.name}</strong><span>Custom MCP · {m.url || 'endpoint'}</span></div>
@@ -644,7 +648,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
         <CloudUploadDialog
           items={[{ id: draft.id, name: draft.name, uploaded: !!cloud?.uploaded,
                     includes: ['instructions', draft.defaultModel, (draft.skills || []).length ? `${draft.skills.length} skill${draft.skills.length === 1 ? '' : 's'}` : '',
-                               (draft.mcpServers || []).length ? `${draft.mcpServers.length} MCP server${draft.mcpServers.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') }]}
+                               ownServers.length ? `${ownServers.length} MCP server${ownServers.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') }]}
           onClose={() => setUploading(false)}
           onDone={() => { statusOne(draft.id).then(setCloud).catch(() => null); }} />
       )}
