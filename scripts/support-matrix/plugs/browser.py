@@ -46,7 +46,10 @@ def main() -> int:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 raw = r.read()
-                return r.status, (json.loads(raw) if raw.strip().startswith(b"{") or raw.strip().startswith(b"[") else raw.decode())
+                try:
+                    return r.status, json.loads(raw)
+                except ValueError:
+                    return r.status, raw.decode()      # the trace stream: one JSON object per line
         except urllib.error.HTTPError as e:
             raw = e.read()
             try:
