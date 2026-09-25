@@ -535,8 +535,8 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                     <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
                     <div className="capability-copy"><strong>No plugins installed</strong>
                       <span>{readOnly
-                        ? 'A built-in Harness carries no plugins. Create a Harness of your own to install packages of tools and Skills.'
-                        : 'A plugin is a folder with a plugin.json at its root, tools in mcp.json and Skills under skills. Install one to add all of it at once.'}</span></div>
+                        ? 'A built-in Harness carries no packages. Create a Harness of your own to install packages of tools and Skills.'
+                        : 'A package is a folder with a plugin.json at its root, tools in mcp.json and Skills under skills. Install one to add all of it at once.'}</span></div>
                   </div>
                 )}
               </div>

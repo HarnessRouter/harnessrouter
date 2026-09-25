@@ -87,7 +87,7 @@ export default function PluginsPage() {
               const c = counts[p.type];
               const price = p.pricing ? `$${p.pricing.usd_per_unit.toFixed(2)} per ${p.pricing.unit}, billed at the service's own price` : 'No charge';
               return (
-                <div key={p.type} className="capability-row plug-row">
+                <div key={p.type} className="capability-row">
                   <span className="capability-icon"><iconify-icon icon={ICON[p.type] || 'tabler:plug'}></iconify-icon></span>
                   <div className="capability-copy">
                     <strong>{p.label} {p.official && <span className="status neutral">Official</span>} <span className={'status ' + (on ? 'healthy' : p.status === 'needs_auth' ? 'warning' : 'neutral')}>{STATUS_LABEL[p.status]}</span></strong>

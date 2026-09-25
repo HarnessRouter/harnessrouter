@@ -91,7 +91,7 @@ def test_the_catalog_and_the_browser_connected_here(client, world):
     assert r.status_code == 200 and r.json()["status"] == {"browser": "missing"}
     tok = gw._mint_hosted_cred(hid, "sess1", gw._hosted_secret_key(hid, "mcp.plugs"))
     out = _rpc(client, tok, "browser.get_url")
-    assert out["isError"] and out["content"][0]["text"].startswith("The workspace has no Browser plug connected")
+    assert out["isError"] and out["content"][0]["text"].startswith("The workspace has no Browser plugin connected")
 
     # the workspace turns it on, with its site lists
     r = _req(client, "PUT", "/v1/plugs/browser", {"enabled": True, "config": {"allow_domains": ["Example.com", "*.iana.org"], "deny_domains": ["ads.example.com"]}})
@@ -175,3 +175,25 @@ def test_no_secret_ever_reached_a_caller():
     assert _seen
     for body in _seen:
         assert GH_TOKEN not in body and tb.VENDOR_KEY not in body and "SENTINEL" not in body
+
+
+def test_a_harness_created_without_a_workspace_header_is_in_the_default_workspace(client, world):
+    """The guide's bare API calls carry no workspace header: PUT /v1/plugs/browser lands in the
+    default workspace, and a harness created the same way carries no stamp. On a self-hosted
+    instance that harness is in the default workspace, the leniency its listing already applies,
+    so the include succeeds, binds to "default", and the attachment count sees it."""
+    bare = {k: v for k, v in HEADERS.items() if k != "x-harness-workspace"}
+    _req(client, "PUT", "/v1/plugs/browser", {"enabled": True})
+    r = client.request("POST", "/v1/harnesses", json={"name": "Bare", "base": "claude-code"}, headers=bare)
+    hid = r.json()["id"]
+    assert not r.json().get("workspace")
+    r = client.request("POST", f"/v1/harnesses/{hid}/servers/plugs", json={"plugs": ["browser"]}, headers=bare)
+    assert r.status_code == 200, r.text
+    assert r.json()["workspace"] == "default" and r.json()["status"]["browser"] == "connected"
+    a = _req(client, "GET", "/v1/plugs/browser/attachments").json()
+    assert hid in {h["id"] for h in a["harness_list"]} and a["attached"] <= a["harnesses"]
+    # behind a registry the stamp is required: a tenant is never guessed there
+    import unittest.mock as um
+    with um.patch.object(gw, "PLUGS_REGISTRY_URL", "http://registry"):
+        assert gw._harness_workspace_for_plugs({"workspace": ""}) == ""
+        assert gw._harness_workspace_for_plugs({"workspace": "ws1"}) == "ws1"

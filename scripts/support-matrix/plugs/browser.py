@@ -71,7 +71,7 @@ def main() -> int:
         print("include:", code, json.dumps(inc)[:200])
         if code != 200 or inc.get("status", {}).get("browser") != "connected":
             print("FAIL the harness did not include a connected browser plugin"); return 2
-        code, resp = call("POST", f"/{hid}/v1/responses" if False else "/v1/responses", {"input": PROMPT, "stream": False, "background": True, "model": a.model or None,
+        code, resp = call("POST", "/v1/responses", {"input": PROMPT, "stream": False, "background": True, "model": a.model or None,
                                                                            "metadata": {"harness_id": hid}}, timeout=180)
         if code != 200:
             print("FAIL turn:", code, resp); return 2

@@ -10073,7 +10073,7 @@ _NOT_CONNECTED = "No database is connected to this agent yet."
 _HOSTED_NOT_CONNECTED = {
     "database": ("database_not_connected", _NOT_CONNECTED),
     "media": ("media_not_connected", "No media tools are connected to this agent yet."),
-    "plugs": ("plugs_not_connected", "No plugs are connected to this agent yet."),
+    "plugs": ("plugs_not_connected", "No plugins are connected to this agent yet."),
 }
 
 
@@ -13451,7 +13451,7 @@ def _plugs_gate(org: str, plugs: list[str]) -> None:
     held = [t for t in plugs if not _plugs_allowed(org, t)]
     if held:
         raise uhp_error(404, "plugs_unavailable",
-                        f"The {plugs_plane.TYPES.get(held[0], held[0])} plug is not available on this account yet.", "plugs")
+                        f"The {plugs_plane.TYPES.get(held[0], held[0])} plugin is not available on this account yet.", "plugs")
 
 
 async def _plug_lookup(org: str, workspace: str, plug_type: str) -> tuple[str, dict | None]:
@@ -13687,8 +13687,7 @@ async def plug_attachments_public(plug_type: str, request: Request) -> dict:
     if plug_type not in _PLUG_FORMS:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
     workspace = _plug_workspace(request)
-    rows = [r for r in await BACKING.graph.find("Harness", {"workspace": workspace})
-            if str(r.get("org") or "") == org and str(r.get("deleted")) not in ("1", "true", "True")]
+    rows = _plugs_harness_rows(org, workspace, await BACKING.graph.find("Harness", {"org": org}))
     attached = []
     for r in rows:
         hid = str(r.get("id") or "")
@@ -13730,6 +13729,28 @@ def _plugs_tools_ok(tools, plugs: list[str]) -> dict | None:
     return out or None
 
 
+def _harness_workspace_for_plugs(v: dict | None) -> str:
+    """The workspace a harness's plugins bind to. A harness created without a workspace header
+    carries no stamp; on a self-hosted instance (no registry elsewhere) that harness is in the
+    instance's default workspace, the same leniency its listing applies (workspace_default), so
+    the guide's bare API calls, PUT /v1/plugs/browser then POST .../servers/plugs, meet in one
+    workspace. Behind a registry the stamp is required: a tenant is never guessed there."""
+    stamp = str((v or {}).get("workspace") or "")
+    if stamp or PLUGS_REGISTRY_URL:
+        return stamp
+    return _WORKSPACE_DEFAULT_ID
+
+
+def _plugs_harness_rows(org: str | None, workspace: str, rows: list[dict]) -> list[dict]:
+    """The harnesses of a workspace for the attachment count: those stamped with it, and on a
+    self-hosted instance the unstamped ones when it is the default workspace (see above)."""
+    lenient = not PLUGS_REGISTRY_URL and workspace == _WORKSPACE_DEFAULT_ID
+    return [r for r in rows
+            if (org is None or str(r.get("org") or "") == org)
+            and str(r.get("deleted")) not in ("1", "true", "True")
+            and (str(r.get("workspace") or "") == workspace or (lenient and not r.get("workspace")))]
+
+
 async def _plugs_attach(org: str, hid: str, v: dict | None, plugs: list[str], tools: dict | None) -> None:
     """Bind plugs to a harness: the record (with the harness's workspace) and one entry. Idempotent;
     a second attach keeps the entry's name and switch. The workspace is the harness's own and never
@@ -13739,10 +13760,10 @@ async def _plugs_attach(org: str, hid: str, v: dict | None, plugs: list[str], to
         raise uhp_error(501, "gateway_address_not_configured",
                         "This server has no address an agent could reach it on — set "
                         "HARNESS_PUBLIC_BASE_URL.", "plugs")
-    workspace = str((v or {}).get("workspace") or "")
+    workspace = _harness_workspace_for_plugs(v)
     if not workspace:
         raise uhp_error(400, "workspace_required",
-                        "This agent is not in a named workspace; plugs connect to a workspace.", "plugs")
+                        "This agent is not in a named workspace; plugins connect to a workspace.", "plugs")
     cur = _mcp_list(v)
     prev = next((e for e in cur if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None) or {}
     prev_key = _vault_key(prev.get("auth"))
@@ -13827,11 +13848,11 @@ async def _plugs_ensure_required(org: str, hid: str) -> bool:
 
 
 _PLUG_REFUSALS = {
-    "missing": ("The workspace has no {label} plug connected. Ask the person to connect one in the "
-                "workspace's Plugs page, then try again; you cannot connect it yourself."),
-    "needs_auth": "The workspace's {label} plug needs attention in the Plugs page before it can be used. Tell the person.",
-    "disabled": "The workspace's {label} plug is turned off. Tell the person if you need it.",
-    "unavailable": "The plug registry did not answer. Try again in a moment.",
+    "missing": ("The workspace has no {label} plugin connected. Ask the person to connect one on the "
+                "workspace's Plugins page, then try again; you cannot connect it yourself."),
+    "needs_auth": "The workspace's {label} plugin needs attention on the Plugins page before it can be used. Tell the person.",
+    "disabled": "The workspace's {label} plugin is turned off. Tell the person if you need it.",
+    "unavailable": "The plugin registry did not answer. Try again in a moment.",
 }
 
 
@@ -13906,8 +13927,8 @@ async def plugs_mcp(request: Request):
         if method == "tools/list":
             return _jsonrpc_result(rid, {"tools": []})
         return _jsonrpc_result(rid, _tool_text(
-            "No plugs are connected to this agent. Ask the person to attach them, then try again; "
-            "you cannot attach them yourself.", True))
+            "No plugins are connected to this agent. Ask the person to include them, then try again; "
+            "you cannot include them yourself.", True))
     plugs = [t for t in rec.get("plugs") or [] if isinstance(t, str) and t in plugs_plane.TYPES]
     enabled = rec.get("tools_enabled") if isinstance(rec.get("tools_enabled"), dict) else None
     if method == "tools/list":
@@ -13925,7 +13946,7 @@ async def plugs_mcp(request: Request):
     if not _plugs_allowed(org, plug):
         await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "refused",
                                 "plugs not open to this org")
-        return _jsonrpc_result(rid, _tool_text(f"The {label} plug is not available on this account yet.", True))
+        return _jsonrpc_result(rid, _tool_text(f"The {label} plugin is not available on this account yet.", True))
     status, prec = await _plug_lookup(org, workspace, plug)
     if status != "connected" or not prec:
         await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "refused", status)
@@ -14068,8 +14089,8 @@ async def plug_attachments(workspace: str, type: str) -> dict:
     """How many of a workspace's harnesses include one plug type, for the Plugins page's
     "attached N of M harnesses": M is the workspace's harnesses, N those whose plugs binding
     names the type. Read from the bindings, never guessed."""
-    rows = [r for r in await BACKING.graph.find("Harness", {"workspace": workspace})
-            if str(r.get("deleted")) not in ("1", "true", "True")]
+    rows = _plugs_harness_rows(None, workspace, await BACKING.graph.find("Harness", {"workspace": workspace})
+                               + (await BACKING.graph.find("Harness", {"workspace": ""}) if not PLUGS_REGISTRY_URL else []))
     attached = []
     for r in rows:
         hid = str(r.get("id") or "")
