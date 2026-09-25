@@ -64,3 +64,21 @@ def test_a_deleted_file_is_not_offered():
     _git(d, "add", "-A")
     _git(d, "commit", "-q", "-m", "checkpoint")
     assert _produced_list(d) == []
+
+
+def test_each_produced_item_says_when_it_was_written():
+    """A response carries at most HARNESS_RESP_MAX_FILES produced files, and the gateway puts the
+    newest first by this field (a Mario run's 1,400 frames showed its first 24 without it,
+    hosted 2026-09-25). A deletion is never a produced file, so the field is only ever a real time."""
+    import os
+    d = _ws()
+    (pathlib.Path(d) / "old.txt").write_text("old")
+    (pathlib.Path(d) / "new.txt").write_text("new")
+    os.utime(pathlib.Path(d) / "old.txt", (1_700_000_000, 1_700_000_000))
+    by = {f["path"]: f for f in _produced_list(d)}
+    assert by["old.txt"]["mtime"] == 1_700_000_000.0
+    assert by["new.txt"]["mtime"] > by["old.txt"]["mtime"]
+    # the field survives a checkpoint: the file is still on disk, the time is still its own
+    _git(d, "add", "-A")
+    _git(d, "commit", "-q", "-m", "checkpoint")
+    assert {f["path"]: f["mtime"] for f in _produced_list(d)}["old.txt"] == 1_700_000_000.0
