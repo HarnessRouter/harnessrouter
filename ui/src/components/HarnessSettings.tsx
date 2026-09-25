@@ -86,6 +86,10 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
     getHarnessPlugs(id).then((p) => { if (alive) setIncluded(p); }).catch(() => { if (alive) setIncluded(null); });
     return () => { alive = false; };
   }, [id, oob]);
+  // What the one list shows: the workspace's connected plugins (built-in harnesses take none) and
+  // the packages installed on this Harness; the count is the list's length.
+  const wsConnected = oob ? [] : (wsPlugs || []).filter((p) => p.status !== 'missing');
+  const pluginCount = wsConnected.length + (draft?.plugins || []).length;
   const togglePlug = async (type: string) => {
     if (!id) return;
     const have = included?.plugs || [];
@@ -358,38 +362,6 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
             </div>
           </section>
 
-          {!oob && (
-          <section className="form-section">
-            <div><h3>Plugins</h3><p>Services this workspace connected. Include the ones this Harness needs; the agent gets their tools on every Task.</p></div>
-            <div className="field-stack">
-              {wsPlugs === null && <div className="capability-row"><span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span><div className="capability-copy"><strong>Reading the workspace's plugins</strong></div></div>}
-              {wsPlugs && wsPlugs.filter((p) => p.status !== 'missing').length === 0 && (
-                <div className="capability-row"><span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span>
-                  <div className="capability-copy"><strong>No plugins connected for this workspace yet</strong><span>Connect one on the Plugins page, then include it here.</span></div>
-                  <div className="capability-actions"><button className="button small" type="button" onClick={() => router.push('/plugins')}>Open Plugins</button></div>
-                </div>)}
-              {wsPlugs && wsPlugs.filter((p) => p.status !== 'missing').length > 0 && (
-                <div className="capability-list">
-                  {wsPlugs.filter((p) => p.status !== 'missing').map((p) => {
-                    const on = (included?.plugs || []).includes(p.type);
-                    return (
-                      <div key={p.type} className="capability-row">
-                        <span className="capability-icon"><iconify-icon icon={on ? 'tabler:circle-check' : 'tabler:circle-dashed'}></iconify-icon></span>
-                        <div className="capability-copy"><strong>{p.label}</strong>
-                          <span>{p.status === 'connected' ? `${p.tools} tools` : p.status === 'disabled' ? 'Turned off for the workspace' : 'Needs credentials on the Plugins page'}{p.pricing ? ` · $${p.pricing.usd_per_unit.toFixed(2)} per ${p.pricing.unit}` : ''}</span></div>
-                        <div className="capability-actions">
-                          <button className="toggle-button" type="button" disabled={readOnly || plugBusy === p.type} aria-pressed={on} onClick={() => void togglePlug(p.type)}>
-                            {on ? 'Included' : 'Not included'}</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>)}
-              {plugErr && <span className="field-help" role="alert">{plugErr}</span>}
-            </div>
-          </section>
-          )}
-
           {!takesSkills ? (
           <section className="form-section">
             <div><h3>Skills</h3><p>What this base can take.</p></div>
@@ -473,9 +445,9 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           )}
 
           <section className="form-section">
-            <div><h3>Packages</h3><p>A package is a bundle of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
+            <div><h3>Plugins</h3><p>Tools and Skills this Harness carries beyond its own: the services this workspace connected, and the packages installed here in the Agent Plugins format. What they bring joins every Task.</p></div>
             <div className="field-stack">
-              <div className="section-actions plugin-head"><strong>{(draft?.plugins || []).length} installed {(draft?.plugins || []).length === 1 ? 'package' : 'packages'}</strong>
+              <div className="section-actions plugin-head"><strong>{pluginCount} {pluginCount === 1 ? 'plugin' : 'plugins'}</strong>
                 {!readOnly && <button className="button small" type="button" disabled={pluginBusy} onClick={() => pluginDirRef.current?.click()}>
                   <iconify-icon icon="tabler:plus"></iconify-icon>Install from folder</button>}
                 <input ref={pluginDirRef} type="file" hidden onChange={(e) => void installPluginFolder(e.target.files)}
@@ -483,6 +455,23 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
               </div>
               {pluginNote && <div className={'plugin-note is-' + pluginNote.kind} role={pluginNote.kind === 'error' ? 'alert' : 'status'}>{pluginNote.text}</div>}
               <div className="capability-list plugin-list">
+                {!oob && wsPlugs === null && <div className="capability-row"><span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span><div className="capability-copy"><strong>Reading the workspace's plugins</strong></div></div>}
+                {!oob && wsConnected.map((p) => {
+                  const on = (included?.plugs || []).includes(p.type);
+                  return (
+                    <div key={'ws:' + p.type} className={'capability-row plugin-row' + (on ? '' : ' is-off')}>
+                      <span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span>
+                      <div className="capability-copy">
+                        <strong className="plugin-title">{p.label}{p.official && <span className="status neutral">Official</span>}</strong>
+                        <span className="plugin-facts">{p.status === 'connected' ? `${p.tools} ${p.tools === 1 ? 'tool' : 'tools'}` : p.status === 'disabled' ? 'Turned off for the workspace' : 'Needs credentials on the Plugins page'}{p.pricing ? ` \u00b7 $${p.pricing.usd_per_unit.toFixed(2)} per ${p.pricing.unit}` : ''}</span>
+                      </div>
+                      <div className="capability-actions">
+                        <button className="toggle-button" type="button" disabled={readOnly || plugBusy === p.type} aria-pressed={on} onClick={() => void togglePlug(p.type)}>
+                          {on ? 'Included' : 'Not included'}</button>
+                      </div>
+                    </div>
+                  );
+                })}
                 {(draft?.plugins || []).map((p, idx) => {
                   const servers = p.mcpServers || [], skls = p.skills || [], skipped = p.skipped || [];
                   const pending = Boolean(p.files && p.files.length && !p.blob);
@@ -530,16 +519,18 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                     </div>
                   );
                 })}
-                {(draft?.plugins || []).length === 0 && (
+                {pluginCount === 0 && (oob || wsPlugs !== null) && (
                   <div className="capability-row">
-                    <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
-                    <div className="capability-copy"><strong>No plugins installed</strong>
+                    <span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span>
+                    <div className="capability-copy"><strong>No plugins yet</strong>
                       <span>{readOnly
-                        ? 'A built-in Harness carries no packages. Create a Harness of your own to install packages of tools and Skills.'
-                        : 'A package is a folder with a plugin.json at its root, tools in mcp.json and Skills under skills. Install one to add all of it at once.'}</span></div>
+                        ? 'A built-in Harness carries no plugins. Create a Harness of your own to include the services this workspace connects and install packages of tools and Skills.'
+                        : 'Connect a service on the Plugins page and include it here, or install a package: a folder with a plugin.json at its root, tools in mcp.json and Skills under skills.'}</span></div>
+                    {!readOnly && <div className="capability-actions"><button className="button small" type="button" onClick={() => router.push('/plugins')}>Open Plugins</button></div>}
                   </div>
                 )}
               </div>
+              {plugErr && <span className="field-help" role="alert">{plugErr}</span>}
             </div>
           </section>
 
