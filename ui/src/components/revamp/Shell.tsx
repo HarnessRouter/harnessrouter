@@ -67,7 +67,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     { href: '/harnesses', img: '/harnessrouter-logo-gray.svg', label: 'Agent Harnesses' },
     // Services the workspace connects once (a browser, a repository, a project); each Harness
     // includes the ones it needs under its settings.
-    { href: '/plugins', icon: 'tabler:plug-connected', label: 'Plugins' },
+    { href: '/plugins', icon: 'lucide:plug', label: 'Plugins' },
   ] },
   { label: 'Access', items: [
     { href: '/keys', icon: 'tabler:key', label: 'API Keys' },

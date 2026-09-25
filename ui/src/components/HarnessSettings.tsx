@@ -362,9 +362,9 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           <section className="form-section">
             <div><h3>Plugins</h3><p>Services this workspace connected. Include the ones this Harness needs; the agent gets their tools on every Task.</p></div>
             <div className="field-stack">
-              {wsPlugs === null && <div className="capability-row"><span className="capability-icon"><iconify-icon icon="tabler:plug-connected"></iconify-icon></span><div className="capability-copy"><strong>Reading the workspace's plugins</strong></div></div>}
+              {wsPlugs === null && <div className="capability-row"><span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span><div className="capability-copy"><strong>Reading the workspace's plugins</strong></div></div>}
               {wsPlugs && wsPlugs.filter((p) => p.status !== 'missing').length === 0 && (
-                <div className="capability-row"><span className="capability-icon"><iconify-icon icon="tabler:plug-connected"></iconify-icon></span>
+                <div className="capability-row"><span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span>
                   <div className="capability-copy"><strong>No plugins connected for this workspace yet</strong><span>Connect one on the Plugins page, then include it here.</span></div>
                   <div className="capability-actions"><button className="button small" type="button" onClick={() => router.push('/plugins')}>Open Plugins</button></div>
                 </div>)}
