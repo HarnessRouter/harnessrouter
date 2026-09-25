@@ -342,6 +342,7 @@ offers you providers that work.
 | `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
 | `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, Aider, OpenHands |
 | `typesafe` | System One (Jev on TypeSafe's own API: `jev-latest`, `jev-preview`) |
+| `meta` | Muse Code (Muse Spark on Meta's Model API: `muse-spark-1.3`, `muse-spark-1.2`, and each one's discounted `-contributor` twin, whose content Meta may use for product improvement) |
 | `bedrock` | Claude Code, Hermes |
 | `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
 | `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
@@ -713,12 +714,16 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,muse,aider,openhands,systemone ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
 Aider and OpenHands are the largest of the set: each environment is about 700 MB and takes a minute
 or two to install on a fresh volume. Leave either out of `HR_BACKENDS` if you will not use it.
+
+Muse Code (`muse`) is Meta's CLI, a single ~350 MB binary. Meta publishes no licence for it: it is
+installed under Meta's terms, like Claude Code under Anthropic's, and it runs only on a Meta Model API
+connection. Leave it out of `HR_BACKENDS` if you do not accept those terms or have no Meta key.
 
 A backend that fails to install is not fatal: the others still work. The console offers every
 base the gateway's catalogue lists, so a task on a backend that did not install fails on its

@@ -106394,5 +106394,313 @@
    "meta/muse-spark-1.1"
   ],
   "deleted": 200
+ },
+ "meta|muse|muse-spark-1.3": {
+  "provider": "meta",
+  "harness": "muse",
+  "model": "muse-spark-1.3",
+  "at": "2026-09-25T06:01:07.054Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.92,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 MUSE CODE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess3a2de4a2d0e54b08a1c6f3d684920dbe",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.69,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 MUSE CODE M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "muse-spark-1.3-contributor",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 28.87,
+   "tail": "Reply with exactly: M3-muse-spark-1.3-contributor MUSE CODE M3-muse-spark-1.3-contributor",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 44.01,
+   "tail": "Create a file named hello-muse.txt containing exactly the word HELLO, then reply DONE. MUSE CODE Used a tool DONE txt hello-muse.txt TXT · output Preview",
+   "turn_files": [
+    "hello-muse.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-muse.txt"
+   ],
+   "record_files": [
+    "hello-muse.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 25.85,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. MUSE CODE M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess3a2de4a2d0e54b08a1c6f3d684920dbe\",\"checkpoint_sha\":\"d8d4aa663a398dc3a3cb3a191574722e8687adbb09ac8e847fd8b6695016cfb4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:meta",
+  "connections": [
+   "integration:meta"
+  ],
+  "served": [
+   "muse-spark-1.3",
+   "muse-spark-1.3-contributor"
+  ],
+  "substituted": [],
+  "foreign": [],
+  "deleted": 200
+ },
+ "meta|muse|muse-spark-1.3-contributor": {
+  "provider": "meta",
+  "harness": "muse",
+  "model": "muse-spark-1.3-contributor",
+  "at": "2026-09-25T06:03:42.318Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 41.09,
+   "tail": "Reply with exactly: M1-muse-spark-1.3-contributor MUSE CODE M1-muse-spark-1.3-contributor",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess993383fe5f4247f9b8d7e469604d03a1",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 25.77,
+   "tail": "Reply with exactly: M2-muse-spark-1.3-contributor MUSE CODE M2-muse-spark-1.3-contributor",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "muse-spark-1.3",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-muse-spark-1.3 MUSE CODE M3-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 47.02,
+   "tail": "Create a file named hello-muse.txt containing exactly the word HELLO, then reply DONE. MUSE CODE Used a tool DONE txt hello-muse.txt TXT · output Preview",
+   "turn_files": [
+    "hello-muse.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-muse.txt"
+   ],
+   "record_files": [
+    "hello-muse.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 44.04,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. MUSE CODE M1-muse-spark-1.3-contributor",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess993383fe5f4247f9b8d7e469604d03a1\",\"checkpoint_sha\":\"ced32887ee6917669f34c0c4bbc1fe04feb1dbbc3eb0323b034ac8a0a197a020\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:meta",
+  "connections": [
+   "integration:meta"
+  ],
+  "served": [
+   "muse-spark-1.3-contributor",
+   "muse-spark-1.3"
+  ],
+  "substituted": [],
+  "foreign": [],
+  "deleted": 200
+ },
+ "meta|muse|muse-spark-1.2": {
+  "provider": "meta",
+  "harness": "muse",
+  "model": "muse-spark-1.2",
+  "at": "2026-09-25T06:06:38.930Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.61,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 MUSE CODE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess788972cc476f42599e4c98aa420e3ac2",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.62,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 MUSE CODE M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "muse-spark-1.3",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 22.81,
+   "tail": "Reply with exactly: M3-muse-spark-1.3 MUSE CODE M3-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.75,
+   "tail": "Create a file named hello-muse.txt containing exactly the word HELLO, then reply DONE. MUSE CODE Used a tool DONE txt hello-muse.txt TXT · output Preview",
+   "turn_files": [
+    "hello-muse.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-muse.txt"
+   ],
+   "record_files": [
+    "hello-muse.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.63,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. MUSE CODE M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess788972cc476f42599e4c98aa420e3ac2\",\"checkpoint_sha\":\"16e7d5d7406324c26f00104d4566323454dad51b434d175189cc9f97a480b653\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:meta",
+  "connections": [
+   "integration:meta"
+  ],
+  "served": [
+   "muse-spark-1.2",
+   "muse-spark-1.3"
+  ],
+  "substituted": [],
+  "foreign": [],
+  "deleted": 200
+ },
+ "meta|muse|muse-spark-1.2-contributor": {
+  "provider": "meta",
+  "harness": "muse",
+  "model": "muse-spark-1.2-contributor",
+  "at": "2026-09-25T06:07:52.204Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-muse-spark-1.2-contributor MUSE CODE M1-muse-spark-1.2-contributor",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess2ee36d85778f444db5b12ff4a554ec74",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.63,
+   "tail": "Reply with exactly: M2-muse-spark-1.2-contributor MUSE CODE M2-muse-spark-1.2-contributor",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "muse-spark-1.3",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 47.03,
+   "tail": "Reply with exactly: M3-muse-spark-1.3 MUSE CODE M3-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.71,
+   "tail": "Create a file named hello-muse.txt containing exactly the word HELLO, then reply DONE. MUSE CODE Used a tool DONE txt hello-muse.txt TXT · output Preview",
+   "turn_files": [
+    "hello-muse.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-muse.txt"
+   ],
+   "record_files": [
+    "hello-muse.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. MUSE CODE M1-muse-spark-1.2-contributor",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess2ee36d85778f444db5b12ff4a554ec74\",\"checkpoint_sha\":\"8837f5530f72efba54d2a289d48d2219d0e82fee7b68059874579189fd7cc06e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:meta",
+  "connections": [
+   "integration:meta"
+  ],
+  "served": [
+   "muse-spark-1.2-contributor",
+   "muse-spark-1.3"
+  ],
+  "substituted": [],
+  "foreign": [],
+  "deleted": 200
  }
 }

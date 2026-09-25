@@ -876,7 +876,7 @@ _BROKER_TTL_S = int(os.environ.get("HR_LLM_BROKER_TTL_S", str(6 * 3600)))   # > 
 # transparent to the CLI. bedrock/vertex sign with the cloud SDK and are handled separately
 # (see _auth_from_conn) — they keep their own credential until their signing path is brokered.
 _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-foundry",
-                         "openrouter", "openai-api", "custom", "google", "typesafe"}
+                         "openrouter", "openai-api", "custom", "google", "typesafe", "meta"}
 
 # Backends that speak a provider's NATIVE API rather than the OpenAI or Anthropic shape the broker
 # and the loopback relays carry: nothing sits between the CLI and the provider, so the sandbox
@@ -1175,6 +1175,9 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # systemone speaks the provider's decisions endpoint through the loopback relay: TypeSafe's own
     # API (/v1/systemone) and OpenRouter, the one aggregator serving Jev (beta since 2026-09-18).
     ("openrouter", "systemone"): "openrouter", ("typesafe", "systemone"): "typesafe",
+    # muse runs on Meta's Model API only: the CLI fetches Meta's own catalog (/muse-code/models)
+    # before every turn and speaks the Responses API, through the loopback relay (_build_muse).
+    ("meta", "muse"): "meta",
     ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
@@ -3315,8 +3318,10 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
 # Modes mirror the other observe->enforce gates in this file (HR_IDENTITY_MODE, HR_SESSION_LEASE,
 # HR_CREDIT_GATE): off | observe | enforce. A denial is one clearly-logged 403, never a silent
 # corruption, and HR_BROKER_PATHS=observe reopens everything instantly if a real CLI path was missed.
+# "muse-code/models": Muse Code's model catalog, a listing its CLI fetches before every turn and
+# will not start without — the same kind of read as "models", on Meta's API only.
 _BROKER_ALLOWED_EXACT = {"messages", "messages/count_tokens", "responses", "chat/completions",
-                         "completions", "embeddings", "models"}
+                         "completions", "embeddings", "models", "muse-code/models"}
 _BROKER_ALLOWED_PREFIX = ("responses/", "models/", "messages/batches")
 HR_BROKER_PATHS = os.environ.get("HR_BROKER_PATHS", "enforce").strip().lower()
 
@@ -3341,6 +3346,21 @@ def _broker_path_allowed(suffix: str) -> bool:
     if s in _BROKER_IMAGE_PATHS:
         return HR_BROKER_IMAGES
     return s in _BROKER_ALLOWED_EXACT or s.startswith(_BROKER_ALLOWED_PREFIX)
+
+
+def _broker_upstream_url(base: str, suffix: str) -> str:
+    """The provider URL for a brokered request: the path joined onto the connection's base_url.
+
+    Muse Code's catalog is the one path that is not under the version segment: Meta serves it at
+    https://api.meta.ai/muse-code/models and answers 404 at /v1/muse-code/models (measured
+    2026-09-25), so on a base ending in /v1 it goes beside the /v1. The runner's loopback relay
+    applies the same rule (runner/server.py, _relay_upstream_url) for a turn that is not brokered."""
+    b = base.rstrip("/")
+    if not suffix:
+        return b
+    if suffix.startswith("muse-code/") and b.endswith("/v1"):
+        b = b[: -len("/v1")]
+    return f"{b}/{suffix}"
 
 
 _BROKER_HOP = ("host", "content-length", "connection", "keep-alive", "transfer-encoding",
@@ -3805,7 +3825,7 @@ async def llm_broker(path: str, request: Request):
               f"mode={HR_BROKER_PATHS}", flush=True)
         if HR_BROKER_PATHS == "enforce":
             raise HTTPException(403, "this path is not available through the model broker")
-    url = f"{base}/{suffix}" if suffix else base
+    url = _broker_upstream_url(base, suffix)
     if request.url.query:
         url = f"{url}?{request.url.query}"
 
@@ -4702,6 +4722,19 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
         "key_hint": "apikey_…",
+    },
+    # Meta's Model API. A key is checked at GET /v1/models (200 with a working key, 401 for a bad one;
+    # measured 2026-09-24). Only the muse base uses it: Muse Code speaks Meta's Model API and nothing
+    # else (its catalog lives at /muse-code/models, beside /v1 rather than under it — see
+    # _broker_upstream_url). A key can list models and still be refused inference with 402
+    # `billing_not_configured` until the account's billing is set up.
+    "meta": {
+        "label": "Meta Model API",
+        "base_url": "https://api.meta.ai/v1",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "API Key",
+        "key_hint": "LLM…",
     },
     "tokenrouter": {
         "label": "TokenRouter",
@@ -6063,6 +6096,10 @@ _VENDOR_MODELS["openrouter"].update({"jev-1.13": "typesafe/jev-1.13", "jev-lates
 # the pinned id stays OpenRouter's alone and the preview stays TypeSafe's: a harness resolves the id
 # it names through the table of the connection that serves it, and nothing is guessed across them.
 _VENDOR_MODELS["typesafe"] = {"jev-latest": "jev-latest", "jev-preview": "jev-preview"}
+# Meta's Model API names Muse Spark by the canonical ids themselves (its /v1/models and the Muse Code
+# catalog, 2026-09-25), the discounted -contributor variants included.
+_VENDOR_MODELS["meta"] = {m: m for m in ("muse-spark-1.3", "muse-spark-1.3-contributor",
+                                         "muse-spark-1.2", "muse-spark-1.2-contributor")}
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -6128,9 +6165,9 @@ _MODEL_ORDER: tuple[str, ...] = (
     "gemini-3-flash-preview",
     # xAI
     "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
-    # Meta
-    "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick",
-    "llama-3.3-70b",
+    # Meta (each -contributor id beside the model it discounts; see _MODEL_CATALOG["muse"])
+    "muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2", "muse-spark-1.2-contributor",
+    "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b",
     # DeepSeek
     "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
     # Moonshot
@@ -6529,6 +6566,16 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # resolves to typesafe/jev-1.13-20260917 there; measured 2026-09-19 and 2026-09-20, see
 # _VENDOR_MODELS). A chat model is not offered here: this base asks typed questions and a text
 # model cannot answer them.
+# muse (Meta's Muse Code): the ids Meta's own catalog serves it (GET /muse-code/models, 2026-09-25),
+# and only on the meta connection — the CLI fetches that Meta-only catalog before every turn, so no
+# aggregator can drive it. Each Muse Spark version comes twice: the standard id, and a `-contributor`
+# id at about a twelfth of the input price whose description says "your content … may be used for
+# product improvement". The standard id is the default because a harness sends the person's own code:
+# the discount is theirs to choose, never ours. MEASURED, all four: the meta column (2026-09-25,
+# a local build of this branch, Linux arm64) ran 20 of 20 scenarios, each served as itself.
+_MODEL_CATALOG["muse"] = {"default": "muse-spark-1.3",
+                          "models": ["muse-spark-1.3", "muse-spark-1.3-contributor",
+                                     "muse-spark-1.2", "muse-spark-1.2-contributor"]}
 _MODEL_CATALOG["systemone"] = {"default": "jev-latest",
                                # jev: TypeSafe's, on both Jev providers; the last three are open-weight
                                # models the hosted service serves, reachable with a HarnessRouter key
@@ -14587,6 +14634,34 @@ _BASE_CATALOG: dict[str, dict] = {
         # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
         # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
         "tool_enforcement": "hard",
+    },
+    "muse": {
+        "label": "Muse Code", "backend": "muse", "status": "ready",
+        "system_prompt": ("You are Muse Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The functions inside the one `muse` namespace tool a live Muse Code 1.4.0-R4161.1 run SENT
+        # ITS PROVIDER under the runner's posture (--yolo, trusted workspace; captured at a local stub,
+        # the request's `tools`), by those exact names — also the names the runner puts on each call
+        # it renders (tool.result's correlation_facts). 1.3.0 sent 23; the subagent_*, monitor and
+        # work_list functions are new in 1.4.0, so a pin bump re-captures this list.
+        "tools": [("bash", "Shell"), ("bash_input", "Shell Input"), ("read_file", "File Read"),
+                  ("write_file", "File Write"), ("edit_file", "Edit"), ("search", "Search"),
+                  ("web_search", "Web Search"), ("read_skill", "Skill"), ("write_todos", "Todo"),
+                  ("workflow", "Workflow"), ("work_status", "Work Status"), ("work_list", "Work List"),
+                  ("work_stop", "Work Stop"), ("monitor", "Monitor"),
+                  ("subagent_spawn", "Subagent"), ("subagent_status", "Subagent Status"),
+                  ("subagent_wait", "Subagent Wait"), ("subagent_send_message", "Subagent Message"),
+                  ("subagent_read_result", "Subagent Result"), ("subagent_cancel", "Subagent Cancel"),
+                  ("report_progress", "Progress"), ("read_memory", "Memory Read"),
+                  ("add_memory", "Memory Add"), ("edit_memory", "Memory Edit"),
+                  ("get_goal", "Get Goal"), ("create_goal", "Create Goal"),
+                  ("update_goal", "Update Goal"), ("cron_create", "Schedule Create"),
+                  ("cron_list", "Schedule List"), ("cron_delete", "Schedule Delete"),
+                  ("snooze_reminder", "Snooze Reminder")],
+        # No documented per-tool switch on the headless surface, so disabling is an instruction to the
+        # model — the qwen/gemini/cline tier. Not "hard" until a switch is found and measured.
+        "tool_enforcement": "instruction",
     },
     "openhands": {
         "label": "OpenHands", "backend": "openhands", "status": "ready",
