@@ -55,7 +55,7 @@ export function BookCallDialog({ open, onClose }: { open: boolean; onClose: () =
       ) : null}
       <div aria-hidden={frameLoaded} className={frameLoaded ? 'book-demo-loading book-demo-loading-done' : 'book-demo-loading'}>
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
-        <img alt="" className="book-demo-loading-mark" src="/brand/harnessrouter-logo-mark-dark.png" width={56} height={56} />
+        <img alt="" className="book-demo-loading-mark" src="/brand/hr-mark-duo-dark.png" width={56} height={56} />
         <p className="book-demo-loading-title">The best agent harnesses as your infrastructure, <em>one conversation away.</em></p>
         <p className="book-demo-loading-subtitle">Finding the best time slots for you…</p>
       </div>

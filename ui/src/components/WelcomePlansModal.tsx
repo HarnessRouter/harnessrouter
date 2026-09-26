@@ -45,7 +45,7 @@ export function WelcomePlansModal({ plans, onClose }: { plans: WelcomePlan[]; on
       <div className="welcome-card">
         <div className="welcome-hero">
           {/* eslint-disable-next-line @next/next/no-img-element -- small static brand asset */}
-          <div className="welcome-badge"><img src="/harnessrouter-logo.svg" alt="HarnessRouter" /></div>
+          <div className="welcome-badge"><img src="/brand/hr-mark-duo-light.svg" alt="HarnessRouter" /></div>
           <div className="welcome-eyebrow"><iconify-icon icon="tabler:sparkles"></iconify-icon>Launch offer</div>
           <h2 className="welcome-title" id="welcome-title">Subscribe, get <b>500 bonus credits</b></h2>
           <p className="welcome-sub">Pick a plan to activate your account. The 500 bonus credits are added on top of your plan&apos;s monthly credits.</p>

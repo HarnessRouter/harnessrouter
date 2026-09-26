@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-21.5 -98.6 1216.7 1216.6999999999998" width="64" height="64" role="img" aria-labelledby="hrT hrD">
+  <title id="hrT">HarnessRouter logo</title>
+  <desc id="hrD">A lowercase h whose shoulder routes into a blue right-pointing arrow.</desc>
+  <g fill="none" stroke="#231815" stroke-width="190" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M73.5 -3.6 L73.5 1023.1"></path>
+    <path d="M73.5 597 A270 270 0 0 1 343.5 327 A270 270 0 0 1 613.5 597"></path>
+  </g>
+  <path d="M613.5 1023.1 L613.5 597 A175 175 0 0 1 788.5 422 L930.2 422" fill="none" stroke="#2247d5" stroke-width="190" stroke-linecap="round" stroke-linejoin="round"></path>
+  <polygon points="930.2,247 1180.2,422 930.2,597" fill="#2247d5" stroke="#2247d5" stroke-width="30" stroke-linejoin="round"></polygon>
+</svg>
