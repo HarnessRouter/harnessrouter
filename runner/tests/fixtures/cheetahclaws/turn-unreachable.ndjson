@@ -1,0 +1,6 @@
+{"m": "__hr_init", "p": {"session_id": "4f0ded51", "resumed": false, "messages": 0}}
+{"m": "notice", "p": {"text": "[Retry 1/3 after 2s \u2014 connection: Connection error.]"}}
+{"m": "notice", "p": {"text": "[Retry 2/3 after 4s \u2014 connection: Connection error.]"}}
+{"m": "notice", "p": {"text": "[Retry 3/3 after 8s \u2014 connection: Connection error.]"}}
+{"m": "notice", "p": {"text": "[Failed \u2014 APIConnectionError: Connection error.. Hint: Network error \u2014 check your internet connection or the API endpoint URL.]"}}
+{"m": "__hr_result", "p": {"ok": false, "subtype": "error", "final": "", "reason": "Failed \u2014 APIConnectionError: Connection error.. Hint: Network error \u2014 check your internet connection or the API endpoint URL.", "session_id": "4f0ded51", "calls": 0, "seconds": 61.03}}
