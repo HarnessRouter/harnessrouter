@@ -856,7 +856,8 @@ def _policy_chain(raw: str) -> list[str]:
 
 _AUTH_FIELDS = ("api_key", "base_url", "aws_region", "aws_access_key_id", "aws_secret_access_key",
                 "aws_session_token", "aws_bearer_token", "gcp_project", "gcp_region",
-                "gcp_sa_json", "wire_api", "api_format", "full_url")
+                "gcp_sa_json", "wire_api", "api_format", "full_url", "namespace_tools",
+                "web_search")
 
 
 # ── LLM egress broker ────────────────────────────────────────────────────────────────────────
@@ -4787,6 +4788,8 @@ _PROVIDER_CATALOG: dict[str, dict] = {
             {"key": "base_url", "label": "Endpoint URL",
              "placeholder": "https://your-api.example.com"},
             {"key": "full_url", "label": "Use Full URL"},
+            {"key": "namespace_tools", "label": "Enable Codex namespace tools"},
+            {"key": "web_search", "label": "Enable Codex web search"},
         ],
         "secret": "api_key",
         "secret_label": "API Key",

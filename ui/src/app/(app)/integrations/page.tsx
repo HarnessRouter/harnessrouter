@@ -425,6 +425,42 @@ export default function IntegrationsPage() {
                             </div>
                           );
                         }
+                        if (isCustom && (f.key === 'namespace_tools' || f.key === 'web_search')) {
+                          // Custom Responses endpoints default to function tools only. Keep these
+                          // Codex-specific capabilities explicit so an endpoint can opt in safely.
+                          if (editing.config['api_format'] !== 'responses') return null;
+                          const enabled = editing.config[f.key] === '1' || editing.config[f.key] === 'true';
+                          const label = f.key === 'namespace_tools' ? 'Enable Codex namespace tools' : 'Enable Codex web search';
+                          const help = f.key === 'namespace_tools'
+                            ? 'Off by default because many Responses endpoints accept function tools only.'
+                            : 'Off by default; enable only when this endpoint accepts Codex web search.';
+                          return (
+                            <div className="field" key={f.key}>
+                              <label>{label}</label>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <button type="button" role="switch" aria-checked={enabled}
+                                  className="toggle-button"
+                                  onClick={() => setEditing({
+                                    ...editing,
+                                    config: { ...editing.config, [f.key]: enabled ? '' : '1' },
+                                  })}
+                                  style={{ minWidth: 44, minHeight: 26, padding: 0, borderRadius: 999,
+                                    border: enabled ? '1px solid var(--accent)' : '1px solid var(--line)',
+                                    background: enabled ? 'var(--accent)' : 'var(--surface-subtle)',
+                                    cursor: 'pointer', position: 'relative', transition: 'background .15s' }}>
+                                  <span style={{ display: 'block', width: 18, height: 18, borderRadius: 999,
+                                    background: enabled ? '#fff' : 'var(--line)',
+                                    position: 'absolute', top: 3, left: enabled ? 21 : 3,
+                                    transition: 'left .15s' }} />
+                                </button>
+                                <span style={{ fontSize: 13, color: enabled ? 'var(--ink)' : 'var(--muted)' }}>
+                                  {enabled ? 'On' : 'Off'}
+                                </span>
+                              </div>
+                              <p className="field-help">{help}</p>
+                            </div>
+                          );
+                        }
                         // Dynamic placeholder for base_url based on full_url toggle
                         let placeholder = f.placeholder || '';
                         if (isCustom && f.key === 'base_url') {
