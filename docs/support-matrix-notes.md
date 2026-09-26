@@ -1355,3 +1355,91 @@ wrote `trace.json` with `config_version: 1` and 61 archived frames; a probe with
 script ran on `script/s1` and finished. The calibration itself (baseline, one change, validation)
 runs on a Calibrator on the claude base with the calibrate package.
 
+
+## The muse backend (Muse Code 1.4.0-R4161.1), and its meta column (2026-09-23..25)
+
+Meta's Muse Code, driven by `muse exec --json`, one process per turn. Everything here was measured
+against Meta's Model API (2026-09-23..25) with a local stub where no API cost was needed, and eight
+paid turns on `muse-spark-1.3-contributor` (under $0.02 in all), before the column below.
+
+**The pinned build moved under the investigation, and the claims say which build they rest on.**
+The vendor's launcher updates the CLI in the background; it replaced 1.3.0-R3401.1 with 1.4.0-R4161.1
+midway. The wire protocol and a 402 failure were first seen on 1.3.0 (the wire re-confirmed on 1.4.0
+at a stub); everything else — the record shapes, resume, trust, skills, the tool list — was measured
+on 1.4.0, which is the pin. The installer fetches the native binary from Meta's release manifest
+rather than the launcher, so a pinned backend cannot update itself. 1.4.0 sends the model 31 tools
+where 1.3.0 sent 23: the list in `_BASE_CATALOG["muse"]` is re-captured on every pin bump.
+
+**Meta's Model API is the only provider it can use.** Its provider enum is `echo|meta`; before every
+turn it fetches `GET /muse-code/models`, a Meta-only catalog, relative to the HOST ROOT (the base
+URL's path is dropped: Meta answers 200 at `/muse-code/models` and 404 at `/v1/muse-code/models`);
+every model call is the OpenAI Responses API, `POST {base}/responses`, streamed, `store: false`, with
+`reasoning.encrypted_content` carried client-side. So the relay and the broker place that one path
+beside `/v1` (`_relay_upstream_url`, `_broker_upstream_url`) and the broker's allowlist names it.
+
+**Every turn is at least three model calls, and the CLI reports one.** Beside the answer, background
+observer agents (a skill reminder, a verify reminder) run on the same model and key. On a one-word
+turn they were 40% of input and 95% of output (main 18,318/86; observers 9,405/819 and 3,170/1,533).
+`exec --json` carries no usage and no served model at all; `muse serve` emits one
+`session/tokenUsage`, for the main call only (`turn/completed.usage` null, the observers' items carry
+none). So the turn rides the loopback relay, which sums the provider's own `response.completed` usage
+over every call and reads `model` off the answers. The relay's Responses support is new with this
+backend: usage nested under `response`, and `input_tokens` GROSS with `input_tokens_details.cached_tokens`
+inside it (26,451 of 31,868 on a follow-up) — read as the Anthropic shape, every cache hit billed as
+fresh input. A debug switch, `MUSE_TRANSPORT_TRACE=1`, also shows every call, but prints full prompts
+to stderr, which the run loop keeps for failure reasons; it is not used.
+
+**A new session id is not an error, so resume is looked up.** `--session-id <unknown>` silently
+CREATES a session; the builder passes the caller's id only when `$HOME/.local/share/muse/sessions/
+<yyyy>/<mm>/<dd>/<id>/session.jsonl` exists, and `_resume_lost` reports the rest. Two turns under one
+id recalled a number the second prompt did not contain, with 83% of input cached.
+
+**Failures are structured, in two places.** A provider refusal inside the run is `run.terminal.failed`
+with the reason and empty text (402 `billing_not_configured`, measured) — never narrated as an answer.
+A rejected key fails earlier, at the catalog fetch, with no record at all: exit 1 and one stderr line,
+which the run loop turns into the reason.
+
+**The posture is `--yolo`.** Without a trusted workspace Muse Code ignores the project `AGENTS.md` and
+skills (its own startup note says so); with it, a token in `AGENTS.md` and a skill's description under
+`~/.agents/skills` both reached the model request. Its OS sandbox needs bubblewrap on Linux; the
+session's own sandbox is the boundary, the codex reasoning.
+
+**What the JSONL does not carry: tool arguments.** A call's record names the tool, the call id and the
+output. The card shows what the result states — bash's `command` from its JSON output, a file edit's
+`path` — and nothing guessed.
+
+**End to end through a local runner** (the real `/turn` path, 1.4.0, contributor id): a turn wrote
+`notes.txt` through `write_file`, obeyed the harness's agent doc, and stamped
+`model: muse-spark-1.3-contributor` and usage 21,066 fresh / 43,076 cached in, 2,650 out; the
+follow-up resumed the same session and recalled the file's line without a tool. The key appeared in
+no log and no workspace file.
+
+**The meta column** (a local build of this branch in Docker — Linux arm64, the image's own installer,
+owner trust, `HR_BACKENDS=muse`): 4 pairs, **20 of 20**, every turn on `integration:meta` and served as
+the id asked for (the switch partner aside). The installer's aarch64 digest matched the binary it
+downloaded. The custom-harness row passed (skill reached, its script ran, the disabled tool unused,
+the deepwiki MCP server called over streamable HTTP), and the plugin matrix 4 of 4 (skill, stdio MCP,
+SSE MCP, streamable-HTTP MCP) on `muse-spark-1.3-contributor`.
+
+**What the column found, before it passed:**
+- *Cancel left the command running.* Muse Code runs every shell command under setsid, so after Stop
+  the group kill took the CLI and `sh -c 'sleep 300 && echo … > slept.txt'` lived on as an orphan of
+  pid 1. The marker sweep did not catch it either, and not only for muse: a session process runs as
+  its own uid, and reading another uid's `/proc/<pid>/environ` needs CAP_SYS_PTRACE, which Docker does
+  not grant, so on a default self-hosted container that sweep reads nothing. `_kill_proc_tree` now
+  kills the CLI's descendants first, found by parent pid in `/proc/<pid>/stat` (world-readable); after
+  Stop nothing of the turn survived. The test fails with the descendant kill removed.
+- *An SSE server was dropped.* Muse Code has no SSE transport; it now takes the runner's stdio bridge,
+  the codex/dsh/goose path, and the SSE column passes. A server's `auth` was also not carried to its
+  Authorization header; it is now.
+- *A shell card showed Muse Code's JSON envelope* (chunk_id, byte counts) instead of what the command
+  printed; it shows the output now, with the exit code when it is not 0.
+
+**Cost, as measured:** a one-page pptx through the console on the default `muse-spark-1.3` was
+56,136 fresh + 173,177 cached input and 5,812 output (about $0.12). The column's own spend was not
+summed (the suite deletes its sessions); it was estimated at ~$0.85 beforehand, and Meta's billing
+page is the record.
+
+**Not yet measured:** a hosted (brokered) turn, where the catalog rides the broker's
+`_broker_upstream_url`; Linux x86_64 (the pinned digest is the manifest's); the console's model picker
+does not say what `-contributor` means, only the notes and the catalog comment do.

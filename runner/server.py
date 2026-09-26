@@ -304,6 +304,9 @@ _SESSION_PRESENT = {
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
+    # muse: _build_muse passes the caller's id only when _muse_has_session found it in the store,
+    # and a fresh uuid otherwise — so the id in argv IS the builder's lookup, as for kimi's -r.
+    "muse": _argv_session_present,
     "aider": _aider_session_present,
     "openhands": _openhands_session_present,
 }
@@ -500,7 +503,17 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # the model is defined from the environment (see _build_kimi).
                       "./.harness/home/.kimi-code/logs",
                       "./.harness/home/.kimi-code/cache",
-                      "./.harness/home/.kimi-code/updates"]
+                      "./.harness/home/.kimi-code/updates",
+                      # Muse Code: sessions/ is what a resume reads and it travels. auth.json is where
+                      # `muse auth`/`muse login` store a key — the runner never writes it (the relay's
+                      # placeholder rides META_API_KEY), but a task that ran either would. The bundled
+                      # skills (~6 MB) are re-materialised from the binary on every run. settings.json
+                      # carries each MCP server's Authorization header (dsh's cordis.yml standing) and
+                      # is rewritten on every turn, so nothing is lost by leaving it out.
+                      "./.harness/home/.config/muse/auth.json",
+                      "./.harness/home/.config/muse/settings.json",
+                      "./.harness/home/.local/share/muse/skills/bundled",
+                      "./.harness/home/.local/share/muse/runtime"]
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
@@ -932,6 +945,13 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # backend wrote — which is a second reason to name the directory explicitly.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    elif backend == "muse":
+        # Muse Code's user skill root ~/.agents/skills (docs: "Skills load from four sources"), under
+        # the turn's $HOME = .harness/home, so the bundle is never a produced file. Deliberately not
+        # the project root's .agents/skills for goose's reason: the workspace root is collected.
+        # Verified on 1.4.0-R4161.1: a skill here was listed to the model with its description.
+        rootrels = [".harness/home/.agents/skills"]
+        entryroot = ".harness/home/.agents/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -1116,10 +1136,11 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Clients without a remote transport of their own: goose 1.50.0's ExtensionConfig has no sse
 # variant, dsh-mcp-client's config is a union of stdio and streamable-http, and codex's client
-# takes streamable HTTP and stdio. Every one of them launches a stdio server, so the runner hands
-# them the bridge (mcp_bridge.py) as one, and the bridge speaks SSE to the remote end. The server
-# reaches the agent on every base the same way; nothing is declared unsupported.
-_NO_SSE_BACKENDS = {"codex", "dsh", "goose"}
+# takes streamable HTTP and stdio; Muse Code's settings transport is stdio or streamable_http. Every
+# one of them launches a stdio server, so the runner hands them the bridge (mcp_bridge.py) as one,
+# and the bridge speaks SSE to the remote end. The server reaches the agent on every base the same
+# way; nothing is declared unsupported.
+_NO_SSE_BACKENDS = {"codex", "dsh", "goose", "muse"}
 _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
 
 
@@ -1273,8 +1294,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # "<!-- From: .../AGENTS.md -->" fence, with a behavioural instruction in it obeyed.
         # aider has no instruction-file convention of its own (no AGENTS.md discovery, no
         # CLAUDE.md): the file is written here and the driver puts it into aider's system message.
+        # muse checks AGENTS.md first at each level (then CLAUDE.md, .agents/AGENTS.md,
+        # .claude/CLAUDE.md), and only in a trusted workspace; _build_muse runs it trusted. Verified
+        # on 1.4.0-R4161.1: a token written in AGENTS.md was in the model request.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi", "aider", "openhands")
+                                   "goose", "kimi", "aider", "openhands", "muse")
         else "CLAUDE.md")
 
 
@@ -3297,6 +3321,15 @@ def _usage_fields(u) -> dict:
         cached = n(det.get("cached_tokens")) if isinstance(det, dict) else 0
         return {"input_tokens": max(n(u.get("prompt_tokens")) - cached, 0),
                 "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached}
+    if isinstance(u.get("input_tokens_details"), dict):
+        # OpenAI Responses: input_tokens is GROSS, the cached part under
+        # input_tokens_details.cached_tokens (measured on Meta's Model API, 2026-09-25: 26,451 of
+        # 31,868). Read as the Anthropic shape below, every cache hit would bill as fresh input.
+        cached = n(u["input_tokens_details"].get("cached_tokens"))
+        out = {"input_tokens": max(n(u.get("input_tokens")) - cached, 0), "cache_read_tokens": cached}
+        if u.get("output_tokens") is not None:
+            out["output_tokens"] = n(u["output_tokens"])
+        return out
     if "input_tokens" in u or "output_tokens" in u:
         out = {}
         for src, dst in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
@@ -3318,8 +3351,11 @@ def _usage_in_doc(doc) -> dict:
     call's usage is the union of what its events said, later values replacing earlier ones."""
     if not isinstance(doc, dict):
         return {}
+    # The Responses API nests it one level down: a non-streamed body is the response itself, but the
+    # stream's response.completed event carries it as {"type": …, "response": {…, "usage": {…}}}.
     for u in (doc.get("usage"), doc.get("usageMetadata"),
-              (doc.get("message") or {}).get("usage") if isinstance(doc.get("message"), dict) else None):
+              (doc.get("message") or {}).get("usage") if isinstance(doc.get("message"), dict) else None,
+              (doc.get("response") or {}).get("usage") if isinstance(doc.get("response"), dict) else None):
         got = _usage_fields(u)
         if got:
             return got
@@ -3497,7 +3533,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         resp = None
         tried_slim = False
         for attempt in (0, 1, 2):
-            req = urllib.request.Request(base.rstrip("/") + tail, data=body,
+            req = urllib.request.Request(_relay_upstream_url(base, tail), data=body,
                                          method=self.command, headers=headers)
             try:
                 resp = urllib.request.urlopen(req, timeout=600)
@@ -3623,7 +3659,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
         else:
             data = resp.read()
-            if not flags.get("served_model"):
+            # Only an inference call (one with a body) says what ran. A listing is not an answer, and
+            # the first "model" the relay sees wins: Muse Code's first request of every turn is GET
+            # /muse-code/models, and a catalog that ever carried a "model" key would otherwise label
+            # the turn with a catalog entry.
+            if body is not None and not flags.get("served_model"):
                 sm = _served_model_in(data[:65536])
                 if sm:
                     flags["served_model"] = sm
@@ -3798,6 +3838,20 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
         _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
                                         {"google_native": True, "model": model, "native_model": native_model})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
+def _relay_upstream_url(base: str, tail: str) -> str:
+    """The provider URL for one relayed request: the client's resource joined onto the route's base.
+
+    One path is not under the base's version segment: Muse Code asks for its model catalog at
+    /muse-code/models relative to the HOST ROOT, and Meta serves it only there (measured 2026-09-25:
+    https://api.meta.ai/muse-code/models 200, https://api.meta.ai/v1/muse-code/models 404). So on a
+    base that ends in /v1 it goes beside the /v1, not under it. On any other base — the hosted
+    broker's /v1/llm — it is joined as usual, and the broker applies the same rule on its side."""
+    b = base.rstrip("/")
+    if tail.startswith("/muse-code/") and b.endswith("/v1"):
+        b = b[: -len("/v1")]
+    return b + tail
 
 
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = ()) -> tuple[str, str]:
@@ -4183,6 +4237,139 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     if skills_dir:
         cmd += ["--skills-dir", skills_dir]
     return cmd
+
+
+# ── muse ─────────────────────────────────────────────────────────────────────────────────────────
+# Meta's Muse Code (1.4.0-R4161.1), driven headless through `muse exec --json`. Its provider is
+# Meta's Model API and nothing else: the CLI's provider enum is `echo|meta`, its startup fetches a
+# Meta-only catalog (GET /muse-code/models, served at the host ROOT, not under /v1) and every model
+# call is the OpenAI Responses API (POST {base}/responses). So one runner provider, `meta`.
+MUSE_PROVIDERS = {"meta"}
+MUSE_DEFAULT_MODEL = os.environ.get("MUSE_DEFAULT_MODEL", "muse-spark-1.3")
+_MUSE_SESSION_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _muse_sessions_root(ws: pathlib.Path) -> pathlib.Path:
+    """Where Muse Code keeps its sessions under the turn's $HOME (.harness/home, so they travel in
+    the checkpoint): $HOME/.local/share/muse/sessions/<yyyy>/<mm>/<dd>/<session id>/session.jsonl,
+    measured on 1.3.0-R3401.1 and 1.4.0-R4161.1."""
+    return ws / ".harness" / "home" / ".local" / "share" / "muse" / "sessions"
+
+
+def _muse_has_session(ws: pathlib.Path, session_id: str) -> bool:
+    """Is this conversation in Muse Code's store? It matters more than on most CLIs because
+    `muse exec --session-id <unknown id>` does not fail: it silently CREATES a session under that id
+    (measured), so a lost history would otherwise read as a completed turn that forgot everything.
+    The store is date-partitioned by the day the session began, so the id is matched exactly as a
+    directory holding the session log, under any date."""
+    sid = (session_id or "").strip().lower()
+    if not _MUSE_SESSION_ID_RE.match(sid):
+        return False
+    return any(_muse_sessions_root(ws).glob(f"*/*/*/{sid}/session.jsonl"))
+
+
+def _muse_settings(ws: pathlib.Path, mcp_servers: list[dict] | None) -> pathlib.Path:
+    """$HOME/.config/muse/settings.json, written on EVERY turn so a server removed from the harness is
+    gone from the next turn. `schema_version: 1` is mandatory (a file without it fails every command).
+
+    MCP per the Muse Code docs: `transport` is `stdio` (command, args, env) or `streamable_http` (url,
+    headers), each with `enabled` and `mode`. `mode: optional` so a server that cannot start is
+    skipped with a warning instead of aborting the whole turn. The CLI has no SSE transport, so an
+    SSE server arrives here already turned into a stdio launcher for the runner's bridge (muse is in
+    _NO_SSE_BACKENDS); one that did not is left out rather than dialled as the wrong protocol. A
+    server's `auth` becomes its Authorization header, as on every other base. Telemetry is off."""
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _skill_dir_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            if str(sv.get("transport") or "").lower() == "sse":
+                print(f"[muse] MCP server {name!r} is SSE, which Muse Code does not speak; left out",
+                      flush=True)
+                continue
+            entry: dict = {"transport": "streamable_http", "url": url}
+            hdrs: dict[str, str] = {}
+            auth = sv.get("auth")
+            if auth:
+                hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            if isinstance(sv.get("headers"), dict):
+                hdrs.update({str(k): str(v) for k, v in sv["headers"].items() if k and v is not None})
+            if hdrs:
+                entry["headers"] = hdrs
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"transport": "stdio", "command": argv[0],
+                     "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        entry.update(enabled=True, mode="optional")
+        servers[name] = entry
+    cfg = ws / ".harness" / "home" / ".config" / "muse"
+    cfg.mkdir(parents=True, exist_ok=True)
+    path = cfg / "settings.json"
+    path.write_text(json.dumps({"schema_version": 1, "telemetry": {"enabled": False},
+                                "mcp_servers": servers}, indent=2))
+    return path
+
+
+def _build_muse(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                max_turns: int | None = None) -> list[str]:
+    """Muse Code (Meta, 1.4.0-R4161.1), one `muse exec --json` process per turn.
+
+    EVERY TURN RIDES THE LOOPBACK RELAY, and here that is what makes the bill honest, not only the
+    key's safety. Each turn is at least three model calls: the answer, plus background observer
+    agents (a skill reminder and a verify reminder) that run on the same model and the same key.
+    Muse Code reports only the main call's usage on every client surface it has (exec's JSONL carries
+    none at all; `muse serve`'s session/tokenUsage names the main call and nothing else — measured,
+    the observers were 40% of input and 95% of output on a one-word turn). The relay sees every call
+    and sums the provider's own counts, and it reads the served `model` off the answers.
+
+    The key is the relay's placeholder in META_API_KEY, the documented variable, so it rides the
+    environment where _relay_served_model and _relay_usage look for it (never argv).
+
+    `--yolo` is the headless posture the docs name for an isolated container: no approval prompt (a
+    headless run has nobody to answer one), no OS sandbox (Linux needs bubblewrap, which the image
+    does not ship, and the session's own sandbox is the boundary, the codex danger-full-access
+    reasoning), and the workspace trusted — without trust Muse Code ignores the project AGENTS.md and
+    skills, so the workspace contract would never arrive.
+
+    Resume is `--session-id`: the runner owns the id. A new conversation gets a fresh uuid; a resumed
+    one passes the caller's id only when the store holds it (see _muse_has_session)."""
+    pr = provider or "meta"
+    if pr not in MUSE_PROVIDERS:
+        raise HTTPException(400, f"unknown muse provider '{pr}' (one of {sorted(MUSE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "muse needs a base_url (none configured)")
+    if not auth.api_key:
+        raise HTTPException(400, "muse needs an API key for Meta's Model API")
+    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+    ws = pathlib.Path(cwd)
+    _muse_settings(ws, mcp_servers)
+    env["META_API_KEY"] = relay_tok
+    env["NO_COLOR"] = "1"
+    # Settings and sessions resolve under $HOME (.harness/home) only when nothing redirects them: an
+    # inherited XDG_* or MUSE_HOME would put the conversation outside the checkpoint.
+    for k in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "MUSE_HOME"):
+        env.pop(k, None)
+    sid = (resume_session_id or "").strip().lower()
+    if not (sid and _muse_has_session(ws, sid)):
+        sid = str(uuid.uuid4())
+    # --no-foreign-personal-context: Muse Code also loads ~/.claude and ~/.codex skills and rules, and
+    # under this $HOME those are trees another backend of the same workspace may have written.
+    cmd = ["muse", "exec", "--json", "--yolo", "--no-foreign-personal-context", "--model", model,
+           "--base-url", relay_base, "--session-id", sid]
+    if max_turns:
+        # Unset is unbounded; reaching the cap ends the run as failed (exit 1), which is loud.
+        cmd += ["--max-model-steps", str(int(max_turns))]
+    # `--` so a prompt that begins with a dash is the prompt, not a flag (measured).
+    return cmd + ["--", prompt]
 
 
 AIDER_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
@@ -6022,6 +6209,135 @@ def _kimi_mcp_unavailable(state: dict) -> list[dict]:
 _kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
 
 
+def _muse_tool_input(name: str, text: str, edit_facts) -> dict:
+    """What a tool card can honestly show for a Muse Code call. exec's JSONL carries NO arguments for
+    any call (measured on 1.4.0-R4161.1: the proposed task names the tool, the result names the call
+    id, the tool and its output, nothing else), so the input is recovered from the facts the result
+    itself states, and left empty rather than guessed: bash's output is a JSON document that names
+    its `command` and `description`; a file edit's `edit_facts` name the `path`."""
+    if name == "bash":
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            doc = None
+        if isinstance(doc, dict) and isinstance(doc.get("command"), str):
+            out = {"command": doc["command"]}
+            if isinstance(doc.get("description"), str):
+                out["description"] = doc["description"]
+            return out
+        return {}
+    if name == "read_skill":
+        m = _MUSE_SKILL_RESULT_RE.match(text or "")
+        return {"name": m.group(1)} if m else {}
+    if isinstance(edit_facts, dict) and isinstance(edit_facts.get("path"), str):
+        return {"path": edit_facts["path"]}
+    return {}
+
+
+# read_skill's output opens with the skill it read: `<read-skill-result name="officecli" status="ok">`.
+_MUSE_SKILL_RESULT_RE = re.compile(r'\s*<read-skill-result name="([^"]{1,200})"')
+
+
+def _muse_tool_output(name: str, text: str) -> str:
+    """What a tool card shows as the result. bash's output is Muse Code's own JSON envelope
+    (chunk_id, command, exit_code, terminal_status, output, byte and token counts, truncated); the
+    reader wants what the command printed, as with every other base's shell card, so the card shows
+    `output`, plus the exit code when it is not 0 and a note when the CLI truncated what the model saw.
+    Anything else, or an envelope that does not parse, is shown as it came."""
+    if name != "bash":
+        return text
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(doc, dict) or not isinstance(doc.get("output"), str):
+        return text
+    out = doc["output"]
+    code = doc.get("exit_code")
+    if isinstance(code, int) and code != 0:
+        out = f"{out}\n[exit code {code}]" if out else f"[exit code {code}]"
+    if doc.get("truncated") is True:
+        out += "\n[output truncated]"
+    return out
+
+
+def _muse_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `muse exec --json` record to zero+ canonical claude events.
+
+    Every line is a record `{schema_version, stream: {kind, id}, payload_type, payload, …}`. Shapes
+    captured live from Muse Code 1.4.0-R4161.1 (the 402 below on 1.3.0-R3401.1):
+
+        session id      any record whose stream.kind is "session": stream.id is the --session-id
+        answer text     payload_type run.output.delta, payload.text (the final answer, streamed)
+        tool call       payload_type tool.result: call_id, text (the output),
+                        correlation_facts {tool_name, outcome}, edit_facts {path, …} on file edits
+        end of run      payload_type run.terminal.<completed|failed|…>: terminal, text, reason
+
+    A provider failure is a STRUCTURED terminal, not narrated prose: a 402 came back as
+    run.terminal.failed with reason "API error 402 [...]: Billing verification failed … (billing_error)"
+    and text "" (measured), so no error-text prefix has to be recognised in the answer. The
+    task.lifecycle.* records are the runtime's own bookkeeping (model calls, observer agents, tool
+    tasks) and carry nothing a reader needs. Usage and the served model are the relay's to stamp:
+    exec reports neither."""
+    out: list[dict] = []
+    stream = obj.get("stream") if isinstance(obj.get("stream"), dict) else {}
+    if stream.get("kind") == "session" and stream.get("id") and not state.get("_muse_sid"):
+        state["_muse_sid"] = str(stream["id"])
+        out.append({"type": "system", "subtype": "init", "session_id": state["_muse_sid"],
+                    "model": state.get("model")})
+    pt = str(obj.get("payload_type") or "")
+    p = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+    if pt == "run.output.delta":
+        txt = str(p.get("text") or "")
+        if txt:
+            state["_muse_text"] = state.get("_muse_text", "") + txt
+            if state.get("partial"):
+                state["_muse_streamed"] = True
+                out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}})
+        return out
+    if pt == "tool.result":
+        facts = p.get("correlation_facts") if isinstance(p.get("correlation_facts"), dict) else {}
+        name = str(facts.get("tool_name") or "tool")
+        tuid = str(p.get("call_id") or "tool")
+        text = p.get("text")
+        text = text if isinstance(text, str) else json.dumps(text, default=str)
+        out.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tuid, "name": name,
+             "input": _muse_tool_input(name, text, p.get("edit_facts"))}]}})
+        out.append({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tuid,
+             "is_error": str(facts.get("outcome") or "success") != "success",
+             "content": _muse_tool_output(name, text)}]}})
+        return out
+    if pt.startswith("run.terminal."):
+        terminal = str(p.get("terminal") or pt.rsplit(".", 1)[-1])
+        if terminal == "completed":
+            final = str(p.get("text") or "") or state.get("_muse_text", "")
+            state["final"] = final
+            if final.strip() and not state.get("_muse_streamed"):
+                out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": final}]}})
+            out.append({"type": "result", "subtype": "success", "is_error": False,
+                        "result": final, "usage": {}})
+        else:
+            reason = str(p.get("reason") or "") or f"muse run ended {terminal}"
+            out.append({"type": "result", "subtype": "error", "is_error": True,
+                        "result": reason, "usage": {}})
+        return out
+    return out
+
+
+def _muse_eof(state: dict, rc: int) -> list[dict]:
+    """The process ended without a run.terminal record: the turn failed. That is not only a crash. A
+    key the provider rejects fails at the catalog fetch, BEFORE the run starts, with no record at all
+    — exit 1 and one line, `failed to fetch model catalog: authentication failed: your API key from
+    META_API_KEY was rejected …` (measured on 1.4.0-R4161.1). The result is left EMPTY so the run loop
+    fills it from that line, which _failure_reason prefers to a sentence of ours."""
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+
+
+_muse_to_claude.eof = _muse_eof   # type: ignore[attr-defined]
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -6143,6 +6459,10 @@ BACKENDS = {
              "normalize": _kimi_to_claude},
     "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
               "normalize": _aider_to_claude},
+    # Muse Code's `exec --json` records are its own schema (a runtime event log), with a structured
+    # run.terminal.* at the end, so it carries its own normaliser — see _muse_to_claude.
+    "muse": {"providers": sorted(MUSE_PROVIDERS), "default_model": MUSE_DEFAULT_MODEL,
+             "normalize": _muse_to_claude},
     "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
                   "default_model": OPENHANDS_DEFAULT_MODEL,
                   "normalize": _openhands_to_claude},
@@ -6250,7 +6570,26 @@ def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
     """SIGKILL the CLI's whole process GROUP (Popen uses start_new_session). Killing only
     the CLI leaves its shell children (e.g. a `sleep`) holding the inherited stdout pipe,
     which keeps the reader loop blocked until the child exits — a cancel/timeout then
-    appears to hang for the child's full duration. Then the stragglers by marker."""
+    appears to hang for the child's full duration. Then the stragglers by marker.
+
+    The CLI's DESCENDANTS go first, found by parent pid while the CLI is still alive to be their
+    parent. A child that started its own session is outside the group: Muse Code runs every shell
+    command under setsid (measured on 1.4.0-R4161.1: `sh -c 'sleep 300 && …'` in its own pgid and sid),
+    so the group kill took the CLI and left the command running as an orphan of pid 1, still able to
+    write into the workspace. The marker sweep does not catch it on a default Docker host either: a
+    session process runs as its own uid, and reading another uid's /proc/<pid>/environ needs
+    CAP_SYS_PTRACE, which Docker does not grant. /proc/<pid>/stat is world-readable, so the tree is.
+    The group is STOPPED first, so the CLI cannot start another command between the listing and the
+    kill; a stopped process still takes SIGKILL."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGSTOP)
+    except Exception:  # noqa: BLE001
+        pass
+    for pid in _descendant_pids(proc.pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001
@@ -6263,6 +6602,35 @@ def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
             _sweep_turn_processes(turn_id)
         except Exception:  # noqa: BLE001
             pass
+
+
+def _descendant_pids(root: int) -> list[int]:
+    """Every live descendant of `root`, from /proc/<pid>/stat's parent pid (field 4, after the
+    parenthesised command name, which may itself contain spaces or parentheses). [] where there is
+    no /proc."""
+    children: dict[int, list[int]] = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            stat = pathlib.Path("/proc", entry, "stat").read_text()
+            ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(int(entry))
+    out: list[int] = []
+    todo = list(children.get(root, []))
+    while todo:
+        pid = todo.pop()
+        if pid in out or pid == root:
+            continue
+        out.append(pid)
+        todo.extend(children.get(pid, []))
+    return out
 
 
 def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
@@ -7437,6 +7805,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_kimi(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
+                          max_turns=req.max_turns)
+    elif backend == "muse":
+        model = model or MUSE_DEFAULT_MODEL
+        cmd = _build_muse(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           max_turns=req.max_turns)
     elif backend == "aider":
         model = model or AIDER_DEFAULT_MODEL

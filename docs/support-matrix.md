@@ -2126,6 +2126,17 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 - hermes x gpt-5.6-sol: not run, not run in this column
 - hermes x gpt-5.6-terra: not run, not run in this column
 
+## Provider: meta
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| muse | muse-spark-1.2 | pass | pass | pass (muse-spark-1.3) | pass | pass | meta |  |
+| muse | muse-spark-1.2-contributor | pass | pass | pass (muse-spark-1.3) | pass | pass | meta |  |
+| muse | muse-spark-1.3 | pass | pass | pass (muse-spark-1.3-contributor) | pass | pass | meta |  |
+| muse | muse-spark-1.3-contributor | pass | pass | pass (muse-spark-1.3) | pass | pass | meta |  |
+
+4 pairs, 20 of 20 scenario runs passed.
+
 ## Provider: omp-anthropic
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
