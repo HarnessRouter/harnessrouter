@@ -80,7 +80,7 @@ export default function SharePage() {
       <div className="page share-page" style={{ maxWidth: 860 }}>
         <div className="page-header">
           <div>
-            <p className="share-brand"><img src="/harnessrouter-logo.svg" alt="" width={20} height={20} /> Shared from <strong>HarnessRouter</strong></p>
+            <p className="share-brand"><img src="/brand/hr-mark-duo-light.svg" alt="" width={20} height={20} /> Shared from <strong>HarnessRouter</strong></p>
             <h1 style={{ fontSize: 24 }}>{meta?.title || 'Shared Task'}</h1>
             <div className="share-meta">
               {meta?.harness_name && <span className="share-tag"><iconify-icon icon="tabler:route"></iconify-icon>{meta.harness_name}</span>}
