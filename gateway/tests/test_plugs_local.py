@@ -49,6 +49,9 @@ def world(monkeypatch):
     for s in list(browser_plane.sessions().values()):
         s.closed = True
     browser_plane.sessions().clear()
+    browser_plane.registry = browser_plane.LocalRegistry()
+    gw._browser_open_locks.clear()
+    gw._plug_trace_handles.clear()
     gw._plug_fields_cache.clear()
     yield ven, posted
 
