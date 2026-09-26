@@ -22,37 +22,37 @@ FAILING = [_r("B-01", Outcome.PASS), _r("B-02", Outcome.FAIL, detail="wrong stat
 
 
 def test_clean_run_is_conformant():
-    d = json.loads(to_json(CLEAN, "http://t", "core"))
+    d = json.loads(to_json(CLEAN, "http://t", "core", required_checks=CLEAN))
     assert d["conformant"] is True
     assert d["conformant_with_skips"] is True
     assert d["skipped_not_verified"] == []
 
 
 def test_a_skip_is_never_a_pass_in_the_json_verdict():
-    d = json.loads(to_json(SKIPPY, "http://t", "core"))
+    d = json.loads(to_json(SKIPPY, "http://t", "core", required_checks=SKIPPY))
     assert d["conformant"] is False
     assert d["conformant_with_skips"] is True
     assert d["skipped_not_verified"] == ["B-02", "B-03"]
 
 
 def test_failures_fail_both_verdicts():
-    d = json.loads(to_json(FAILING, "http://t", "core"))
+    d = json.loads(to_json(FAILING, "http://t", "core", required_checks=FAILING))
     assert d["conformant"] is False
     assert d["conformant_with_skips"] is False
 
 
 def test_report_dates_itself_and_names_the_suite():
-    d = json.loads(to_json(CLEAN, "http://t", "core"))
+    d = json.loads(to_json(CLEAN, "http://t", "core", required_checks=CLEAN))
     assert d["suite_version"] == __version__
     stamped = datetime.strptime(d["generated_at"], "%Y-%m-%dT%H:%M:%SZ")
     assert abs((datetime.now(timezone.utc).replace(tzinfo=None) - stamped).total_seconds()) < 60
 
 
 def test_human_summary_speaks_the_same_vocabulary():
-    out = render(SKIPPY, "http://t", "core", plain=True)
+    out = render(SKIPPY, "http://t", "core", plain=True, required_checks=SKIPPY)
     assert "CONFORMANT WITH SKIPS" in out
     assert "A skip is not a pass." in out
-    clean = render(CLEAN, "http://t", "core", plain=True)
+    clean = render(CLEAN, "http://t", "core", plain=True, required_checks=CLEAN)
     assert "CONFORMANT WITH SKIPS" not in clean
     assert "CONFORMANT" in clean
 
@@ -60,8 +60,47 @@ def test_human_summary_speaks_the_same_vocabulary():
 def test_highest_class_is_strict():
     # "Fully passed" means every check at and below the class ran and passed: fails, errors,
     # skips, and classes with no results at all each break the ladder.
-    assert highest_class(CLEAN) == "core"          # only core ran — full is not creditable
-    assert highest_class(SKIPPY) == ""             # a skipped check was not verified
-    assert highest_class(FAILING) == ""
+    assert highest_class(CLEAN, CLEAN) == "core"          # only core ran — full is not creditable
+    assert highest_class(SKIPPY, SKIPPY) == ""             # a skipped check was not verified
+    assert highest_class(FAILING, FAILING) == ""
     full = [_r(f"{c}-01", Outcome.PASS, cls=c) for c in ("core", "extended", "full")]
-    assert highest_class(full) == "full"
+    assert highest_class(full, full) == "full"
+
+
+def test_selected_success_is_not_a_class_verdict():
+    selected = CLEAN[:1]
+    d = json.loads(to_json(selected, "http://t", "core", required_checks=CLEAN))
+    assert d["conformant"] is False
+    assert d["conformant_with_skips"] is False
+    assert d["highest_class_passed"] == ""
+    assert d["coverage"] == {"complete": False, "required": 2, "reported": 1,
+                             "not_run": ["B-02"], "duplicate_or_unknown": []}
+    out = render(selected, "http://t", "core", plain=True, required_checks=CLEAN)
+    assert "PARTIAL RUN" in out
+    assert "Not run (1):\n      B-02" in out
+    assert "CONFORMANT —" not in out
+
+
+def test_full_core_and_partial_extended_still_credit_core():
+    required = CLEAN + [_r("X-01", Outcome.PASS, "extended"),
+                        _r("X-02", Outcome.PASS, "extended")]
+    selected = CLEAN + required[2:3]
+    d = json.loads(to_json(selected, "http://t", "extended", required_checks=required))
+    assert d["conformant"] is False
+    assert d["highest_class_passed"] == "core"
+    assert d["coverage"]["not_run"] == ["X-02"]
+
+
+def test_repeated_result_does_not_replace_an_unrun_check():
+    results = [CLEAN[0], CLEAN[0]]
+    d = json.loads(to_json(results, "http://t", "core", required_checks=CLEAN))
+    assert d["conformant"] is False
+    assert d["coverage"]["not_run"] == ["B-02"]
+    assert d["coverage"]["duplicate_or_unknown"] == ["B-01"]
+
+
+def test_failed_selected_check_still_shows_missing_coverage_in_terminal():
+    out = render([FAILING[1]], "http://t", "core", plain=True, required_checks=FAILING)
+    assert "NOT CONFORMANT" in out
+    assert "Required coverage: 1/2 checks" in out
+    assert "Not run (1):\n      B-01" in out

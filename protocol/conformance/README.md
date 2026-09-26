@@ -34,9 +34,13 @@ check.
 | `--harness-id` | Run tasks against a specific harness instead of the first one listed. |
 | `--model` | Run tasks with a specific model. Required when the harness named by `--harness-id` has no default model: the suite says so and stops before the first task rather than waiting out the task timeout on each. |
 | `--task-timeout` | Seconds to allow one agent task. Default 300. |
-| `--only` | Comma-separated check ids, for iterating on one failure. |
+| `--only` | Comma-separated check ids, for iterating on one failure. A subset is reported as a partial run, not a class conformance claim. |
 | `--json` | Write a machine-readable report. |
 | `--plain` | No ANSI colour, for CI logs. |
+
+`--only` keeps the exit-code convention for debugging: `0` means the selected checks did not
+fail or error. It does not certify the requested class. Use the JSON `conformant` and `coverage`
+fields, or the terminal summary, when deciding whether to publish a class claim.
 
 Exit code is `0` when nothing failed and `1` otherwise, so it drops into CI unchanged.
 
@@ -123,11 +127,14 @@ lying about the thing it exists to establish.
 The JSON report holds itself to the same rule, because it is the artifact published as evidence
 for a conformance claim and its reader is frequently not the person who ran it:
 
-- `conformant` is `true` only when every check ran and none failed or errored. A single skip
-  makes it `false`.
-- `conformant_with_skips` is `true` when nothing failed or errored — the checks that ran are
-  clean, and the ones that didn't are enumerated in `skipped_not_verified` by id, so the report
-  says exactly what it did not establish.
+- `conformant` is `true` only when every check required by the requested class ran and passed.
+  A skipped or unselected check makes it `false`.
+- `conformant_with_skips` is `true` only when every required check ran and none failed or errored;
+  actual skips are enumerated in `skipped_not_verified`. A partial `--only` run sets this to
+  `false` because unselected checks were not attempted.
+- `coverage` reports whether all required checks ran, their counts, and the IDs that were not run
+  or appeared more than once. A partial run can pass every selected check while still making no
+  conformance claim. `highest_class_passed` credits only fully covered and passing classes.
 - `suite_version` and `generated_at` (UTC) tie the report to the suite revision and the moment
   that produced it. A report without these fields predates suite `2026.8.11.post1`; the
   checked-in reports from earlier runs are of that older shape.

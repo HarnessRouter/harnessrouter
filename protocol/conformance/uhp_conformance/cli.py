@@ -70,7 +70,8 @@ def main(argv=None) -> int:
         print(f"tasks run on harness {a.harness_id} ({r.json.get('name') or 'unnamed'}), model "
               f"{a.model or r.json.get('defaultModel')}", file=sys.stderr)
 
-    selected = checks_for(a.cls)
+    required = checks_for(a.cls)
+    selected = required
     if a.only:
         want = {s.strip().upper() for s in a.only.split(",") if s.strip()}
         selected = [c for c in selected if c.id.upper() in want]
@@ -87,11 +88,13 @@ def main(argv=None) -> int:
         print("\r", end="")
 
     discovery = ctx.state.get("discovery")
-    print(render(results, a.base_url, a.cls, plain=a.plain, discovery=discovery))
+    print(render(results, a.base_url, a.cls, plain=a.plain, discovery=discovery,
+                 required_checks=required))
 
     if a.json_out:
         with open(a.json_out, "w") as f:
-            f.write(to_json(results, a.base_url, a.cls, discovery=discovery, label=a.label) + "\n")
+            f.write(to_json(results, a.base_url, a.cls, discovery=discovery, label=a.label,
+                            required_checks=required) + "\n")
         print(f"  JSON report: {a.json_out}\n")
 
     bad = sum(1 for r in results if r.outcome in (Outcome.FAIL, Outcome.ERROR))
