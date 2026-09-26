@@ -131,6 +131,7 @@ export default function PluginsPage() {
                       placeholder={editing.type === 'browser' ? (k === 'allow_domains' ? 'example.com, docs.example.org (empty means any public site)' : 'ads.example.com') : ''}
                       onChange={(e) => setForm({ ...form, [k]: e.target.value })} /></div>
                 ))}
+                {editing.secrets_needed.length > 0 && <span className="field-help">This plugin runs on the credential you enter here, kept in this instance and never shown again. Every call an agent makes lands in the account that credential belongs to.</span>}
                 {editing.pricing && <span className="field-help">{`Up to ${editing.pricing.session_cap_minutes} minutes of browsing per task, at most $${editing.pricing.session_estimate_usd.toFixed(4)} a task. Private and local addresses are never reachable.`}</span>}
               </div>
               <div className="modal-actions">
