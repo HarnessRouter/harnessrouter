@@ -13888,6 +13888,30 @@ _PLUG_REFUSALS = {
 }
 
 
+# A plug call served when this process holds no trace handle for the session (another replica is
+# running the turn on the hosted service; here, a reaper's stop after the turn's handle is gone)
+# belongs in the session's trace all the same: its chunk goes under the session's own prefix (the
+# vertex names it) with this process's nonce keeping the key unique. Bounded: one handle per session.
+_plug_trace_handles: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+
+
+async def _plug_trace_handle(sid: str) -> dict | None:
+    tr = _plug_trace_handles.get(sid)
+    if tr is None:
+        try:
+            v = await _vertex_get(sid) or {}
+        except Exception:  # noqa: BLE001
+            return None
+        prefix = str(v.get("trace_blob") or "")
+        if not prefix:
+            return None
+        tr = {"prefix": prefix, "org": str(v.get("tenant") or ""), "since": 0, "chunk": 0, "count": 0}
+        _plug_trace_handles[sid] = tr
+        while len(_plug_trace_handles) > 500:
+            _plug_trace_handles.popitem(last=False)
+    return tr
+
+
 async def _plug_call_record(hid: str, sid: str, org: str, workspace: str, plug: str, tool: str, risk: str,
                             started: float, outcome: str, error: str = "", *, unit: str = "call",
                             usd: float = 0.0, detail: dict | None = None) -> None:
@@ -13907,6 +13931,8 @@ async def _plug_call_record(hid: str, sid: str, org: str, workspace: str, plug: 
     with contextlib.suppress(Exception):
         await _vg_upsert(_PLUG_CALL_LABEL, _rid("pcall"), props)
     tr = _session_trace.get(sid)
+    if not (tr and tr.get("prefix")):
+        tr = await _plug_trace_handle(sid)
     if tr and tr.get("prefix"):
         with contextlib.suppress(Exception):
             await _trace_flush(tr, {"events": [{"type": "plug", "plug": plug, "tool": tool, "risk": risk,
@@ -14021,10 +14047,13 @@ async def plugs_mcp(request: Request):
 # address. The browser itself lives in browser_plane.py: one per harness session, opened on the
 # first call, stopped at the turn's end, after idle, or at the cap. Money is the vendor's list
 # price passed through under one unit, browser.usd, on the session's own audit row.
-# One open per session at a time. A CLI that issues tool calls in parallel (pi does) sent navigate
-# and screenshot together as a task's first browser calls; both found no session and both opened
-# a browser at the vendor, one of which nothing ever stopped (hr-test, 2026-09-25: two open rows,
-# one session row). The lock lives as long as the session's browser does.
+# One open per session at a time in this process. A CLI that issues tool calls in parallel (pi
+# does) sent navigate and screenshot together as a task's first browser calls; both found no
+# session and both opened a browser at the vendor, one of which nothing ever stopped (hr-test,
+# 2026-09-25: two open rows, one session row). The lock lives as long as the session's browser does.
+# The record of the browser itself is the plane's registry (browser_plane.registry): one process on
+# a self-hosted instance keeps it in memory; the hosted service keeps it in its control store so
+# every replica the sandbox's calls reach attaches to the one browser instead of opening its own.
 _browser_open_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -14040,28 +14069,41 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
 
     if not browser_plane.configured():
         return await refused("not configured", "The browser service is not set up on this deployment. Tell the person.")
-    s = browser_plane.sessions().get(sid)
-    if s is None:
+    try:
+        rec = await browser_plane.registry.get(sid)
+    except Exception as e:  # noqa: BLE001
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", f"registry: {type(e).__name__}: {e}")
+        return _jsonrpc_result(rid, _tool_text("The browser service could not be reached. Try again.", True))
+    s = None
+    if rec is None:
         async with _browser_open_locks.setdefault(sid, asyncio.Lock()):
-            s = browser_plane.sessions().get(sid)      # the call that waited finds the browser the first one opened
-            if s is None:
+            rec = await browser_plane.registry.get(sid)     # the call that waited finds the browser the first one opened
+            if rec is None:
                 # The first call opens the browser: the estimate is written on the row for the record
                 # (a self-hosted instance keeps no task cost cap; the vendor's own credit is the ceiling).
                 estimate = browser_plane.session_estimate_usd()
                 try:
-                    s = await browser_plane.open_session(sid, hid, org, workspace, allow, deny)
+                    s = await browser_plane.open_session(sid, hid, org, workspace, allow, deny, estimate)
                 except browser_plane.BrowserRefused as e:
                     return await refused(e.code, str(e))
                 except Exception as e:  # noqa: BLE001
                     await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
                                             f"open: {type(e).__name__}: {e}")
                     return _jsonrpc_result(rid, _tool_text(f"The browser could not be started ({type(e).__name__}). Try again.", True))
-                s.reserved = estimate
-                await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
-                                        detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
-                                                "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
+                if s.opened:
+                    await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
+                                            detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
+                                                    "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
+    if s is None:
+        try:
+            s = await browser_plane.attach(rec)             # this process's attachment to the recorded browser
+        except Exception as e:  # noqa: BLE001
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
+                                    f"attach: {type(e).__name__}: {e}")
+            return _jsonrpc_result(rid, _tool_text(f"The browser could not be reached ({type(e).__name__}). Try again.", True))
     if (s.allow, s.deny) != (allow, deny):
         s.allow, s.deny, s.host_cache = list(allow), list(deny), {}      # the workspace changed its lists
+        await browser_plane.registry.bump(sid, allow=list(allow), deny=list(deny))
     async with s.lock:
         if s.closed:
             return await refused("session closed", "The browser for this task was stopped. Call again to open a new one.")
@@ -14098,21 +14140,33 @@ async def _browser_close(sid: str, reason: str) -> None:
     ran and the vendor's dollars for them, metered under browser.usd. Closing the CDP socket alone
     keeps the vendor's meter running, so the stop is explicit and it is in the audit trail."""
     s = browser_plane.sessions().get(sid)
-    if not s or s.closed:
+    try:
+        rec = await browser_plane.registry.get(sid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[browser] {sid}: record not read at {reason}: {type(e).__name__}: {e}", flush=True)
+        return
+    if rec is None or not await browser_plane.registry.delete(sid):
+        # Stopped by another process (or never opened): that one writes the row; ours is only an
+        # attachment to drop.
+        if s is not None:
+            await browser_plane.detach(s)
         return
     _browser_open_locks.pop(sid, None)
     try:
-        fig = await browser_plane.close_session_browser(s)
+        fig = await browser_plane.close_session_browser(rec, s)
     except Exception as e:  # noqa: BLE001
-        fig = {"minutes": s.minutes, "usd": round(s.minutes * browser_plane.PRICES["browser.minute"], 6),
-               "usd_source": "table", "calls": s.calls, "screenshots": s.screenshots, "blocked": [],
-               "stop_error": f"{type(e).__name__}: {str(e)[:120]}"}
+        mins = browser_plane.minutes(rec)
+        fig = {"minutes": mins, "usd": round(mins * browser_plane.PRICES["browser.minute"], 6),
+               "usd_source": "table", "calls": int(rec.get("calls") or 0), "screenshots": int(rec.get("screenshots") or 0),
+               "blocked": [], "stop_error": f"{type(e).__name__}: {str(e)[:120]}"}
     print(f"[browser] {sid}: stopped ({reason}) after {fig['minutes']} min, ${fig['usd']:.6f} ({fig['usd_source']})", flush=True)
-    released = round(max(0.0, s.reserved - float(fig["usd"])), 6)
-    await _plug_call_record(s.hid, sid, s.org, s.workspace, plugs_plane.BROWSER, "session", "session", s.created, "ok", "",
+    reserved = float(rec.get("reserved") or 0.0)
+    released = round(max(0.0, reserved - float(fig["usd"])), 6)
+    await _plug_call_record(str(rec["hid"]), sid, str(rec["org"]), str(rec["workspace"]), plugs_plane.BROWSER, "session", "session",
+                            float(rec.get("created") or time.time()), "ok", "",
                             unit=browser_plane.UNIT, usd=float(fig["usd"]),
-                            detail={"reason": reason, "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id,
-                                    "reserved_usd": s.reserved, "released_usd": released, **fig})
+                            detail={"reason": reason, "vendor": browser_plane.VENDOR, "vendor_session": str(rec.get("vendor_id") or ""),
+                                    "reserved_usd": reserved, "released_usd": released, **fig})
 
 
 @app.on_event("startup")
@@ -14121,9 +14175,11 @@ async def _browser_reaper_start() -> None:
     async def loop() -> None:
         while True:
             await asyncio.sleep(15)
-            for s, why in browser_plane.expired_sessions():
-                with contextlib.suppress(Exception):
-                    await _browser_close(s.sid, why)
+            with contextlib.suppress(Exception):
+                for rec, why in await browser_plane.expired_sessions():
+                    with contextlib.suppress(Exception):
+                        await _browser_close(str(rec["sid"]), why)
+                await browser_plane.sweep_attachments()
     asyncio.get_running_loop().create_task(loop())
 
 
