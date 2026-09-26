@@ -1,8 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title description">
-  <title id="title">HarnessRouter logo</title>
-  <desc id="description">The HarnessRouter mark in greyscale, for the navigation.</desc>
-  <path d="M14 10V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
-  <path d="M14 30Q14 20 24 20Q34 20 34 30V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
-  <path d="M34 36Q34 28 42 28H46" fill="none" stroke="#494949" stroke-width="6" stroke-linecap="round"/>
-  <path d="M45 20.5L56 28L45 35.5Z" fill="#494949"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-21.5 -98.6 1216.7 1216.6999999999998" width="64" height="64" role="img" aria-labelledby="hrT hrD">
+  <title id="hrT">HarnessRouter logo</title>
+  <desc id="hrD">The HarnessRouter mark in one grey, for the navigation.</desc>
+  <g fill="none" stroke="#57534e" stroke-width="190" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M73.5 -3.6 L73.5 1023.1"></path>
+    <path d="M73.5 597 A270 270 0 0 1 343.5 327 A270 270 0 0 1 613.5 597"></path>
+  </g>
+  <path d="M613.5 1023.1 L613.5 597 A175 175 0 0 1 788.5 422 L930.2 422" fill="none" stroke="#57534e" stroke-width="190" stroke-linecap="round" stroke-linejoin="round"></path>
+  <polygon points="930.2,247 1180.2,422 930.2,597" fill="#57534e" stroke="#57534e" stroke-width="30" stroke-linejoin="round"></polygon>
 </svg>

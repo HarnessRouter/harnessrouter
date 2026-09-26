@@ -1,12 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 376 64" role="img" aria-label="HarnessRouter">
   <title>HarnessRouter</title>
-  <!-- icon: a lowercase h routing into a right arrow -->
-  <path d="M14 10V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
-  <path d="M14 30Q14 20 24 20Q34 20 34 30V46" fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round"/>
-  <path d="M34 36Q34 28 42 28H46" fill="none" stroke="#2247D6" stroke-width="6" stroke-linecap="round"/>
-  <path d="M45 20.5L56 28L45 35.5Z" fill="#2247D6"/>
-  <!-- wordmark: harness (ink) + router (brand blue) -->
-  <text x="72" y="42" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="34" font-weight="800" letter-spacing="-0.6" dominant-baseline="alphabetic">
-    <tspan fill="#111111">harness</tspan><tspan fill="#2247D6">router.</tspan>
+  <!-- the mark: a lowercase h whose shoulder routes into a right arrow (the 2026-09 pack) -->
+  <g transform="translate(4 4) scale(0.046026) translate(21.5 98.6)">
+<g fill="none" stroke="#231815" stroke-width="190" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M73.5 -3.6 L73.5 1023.1"></path>
+    <path d="M73.5 597 A270 270 0 0 1 343.5 327 A270 270 0 0 1 613.5 597"></path>
+  </g>
+  <path d="M613.5 1023.1 L613.5 597 A175 175 0 0 1 788.5 422 L930.2 422" fill="none" stroke="#2247d5" stroke-width="190" stroke-linecap="round" stroke-linejoin="round"></path>
+  <polygon points="930.2,247 1180.2,422 930.2,597" fill="#2247d5" stroke="#2247d5" stroke-width="30" stroke-linejoin="round"></polygon>
+  </g>
+  <!-- the wordmark: harness (ink) + router (brand blue) -->
+  <text x="72" y="43" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="34" font-weight="800" letter-spacing="-0.6" dominant-baseline="alphabetic">
+    <tspan fill="#231815">harness</tspan><tspan fill="#2247d5">router.</tspan>
   </text>
 </svg>
