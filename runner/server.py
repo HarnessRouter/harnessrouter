@@ -2545,6 +2545,16 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
             {"type": "tool_result", "tool_use_id": obj.get("toolCallId") or "tool",
              "is_error": bool(obj.get("isError")), "content": content}]}}]
     if t == "agent_end":
+        if obj.get("willRetry"):
+            # pi retries a retryable provider error itself (settings.retry: three attempts by
+            # default), a reply stream cut mid-message among them, and says so on the agent_end it
+            # emits before retrying. That agent_end is not the end of the turn: the attempt's error
+            # and its half-streamed text give way to the retry's. Taking it as the end failed a
+            # GDPval turn whose relay cut the last line of its reply (2026-09-26) while pi retried
+            # and finished; the error also outlived a successful retry, so the true end failed too.
+            state.pop("_pi_error", None)
+            state["_pi_text"] = ""
+            return []
         err = state.get("_pi_error")
         usage = dict(state.get("_pi_usage") or {})
         usage = {k: v for k, v in usage.items() if v}
