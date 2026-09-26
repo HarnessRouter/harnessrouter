@@ -97,7 +97,7 @@ class Vendor:
             body = json.loads(r.content)
             self.created.append(body)
             bid = f"bu_{len(self.created)}"
-            return httpx.Response(201, json={"id": bid, "cdpUrl": CDP, "liveUrl": "https://live.example/x",
+            return httpx.Response(201, json={"id": bid, "cdpUrl": f"{CDP}/{bid}", "liveUrl": "https://live.example/x",
                                              "status": "active", "timeoutAt": "2026-09-24T22:00:00Z"})
         if r.url.path.startswith("/api/v4/browsers/") and r.method == "PATCH":
             bid = r.url.path.rsplit("/", 1)[1]
@@ -276,6 +276,12 @@ browsers: list[Browser] = []
 
 
 async def _connect(cdp):
+    """The vendor's one browser at that address: a second connection (another replica) reaches the
+    same contexts and pages, and a disconnect leaves them as they are."""
+    for b in browsers:
+        if b.cdp == cdp:
+            b.closed = False
+            return b
     b = Browser(cdp)
     browsers.append(b)
     return b
@@ -304,6 +310,9 @@ def world(monkeypatch):
     for s in list(browser_plane.sessions().values()):
         s.closed = True
     browser_plane.sessions().clear()
+    browser_plane.registry = browser_plane.LocalRegistry()
+    gw._browser_open_locks.clear()
+    gw._plug_trace_handles.clear()
     yield reg, ven, posted
     asyncio.run(rc.aclose())
 
@@ -417,7 +426,7 @@ def test_a_turn_browses_and_the_session_is_priced_metered_and_stopped(client, wo
     assert text.startswith("Opened https://example.com/ (Example Domain)") and 'e1 link "More information..." href=https://www.iana.org/domains/example' in text
     assert ven.created == [{"timeout": 20, "proxyCountryCode": None, "solveCaptchas": False, "enableRecording": False,
                             "metadata": {"harness": hid, "session": sid}}]
-    assert browsers[-1].cdp == CDP and browsers[-1].contexts[0].kw == {"accept_downloads": False, "viewport": {"width": 1280, "height": 800}}
+    assert browsers[-1].cdp == f"{CDP}/bu_1" and browsers[-1].contexts[0].kw == {"accept_downloads": False, "viewport": {"width": 1280, "height": 800}}
 
     assert _call(client, tok, "get_url")["content"][0]["text"] == "https://example.com/ (Example Domain)"
     snap = _call(client, tok, "snapshot")["content"][0]["text"]
@@ -558,15 +567,15 @@ def test_caps_and_the_vendor_saying_no(client, world, monkeypatch):
     assert _rows(hid)[-1]["error"] == "timeout"
     monkeypatch.setattr(browser_plane, "CALL_CAP_S", 60.0)
     # idle and the session cap are found by the reaper, and each stop is in the trail
-    s = browser_plane.sessions()[sid]
-    s.last_used -= browser_plane.IDLE_S + 1
-    assert [(x.sid, why) for x, why in browser_plane.expired_sessions()] == [(sid, "idle")]
+    rec = asyncio.run(browser_plane.registry.get(sid))
+    rec["last_used"] -= browser_plane.IDLE_S + 1
+    assert [(x["sid"], why) for x, why in asyncio.run(browser_plane.expired_sessions())] == [(sid, "idle")]
     asyncio.run(gw._browser_close(sid, "idle"))
     assert ven.stopped == ["bu_1"] and json.loads(_rows(hid)[-1]["detail"])["reason"] == "idle"
     assert _call(client, tok, "navigate", url="https://example.com/")["isError"] is False
-    s = browser_plane.sessions()[sid]
-    s.created -= browser_plane.SESSION_CAP_MIN * 60 + 1
-    assert [why for _, why in browser_plane.expired_sessions()] == ["session_cap"]
+    rec = asyncio.run(browser_plane.registry.get(sid))
+    rec["created"] -= browser_plane.SESSION_CAP_MIN * 60 + 1
+    assert [why for _, why in asyncio.run(browser_plane.expired_sessions())] == ["session_cap"]
     asyncio.run(gw._browser_close(sid, "session_cap"))
     assert ven.stopped == ["bu_1", "bu_2"] and json.loads(_rows(hid)[-1]["detail"])["minutes"] == 21
 
@@ -730,3 +739,93 @@ def test_two_first_calls_at_once_open_one_browser(client, world, monkeypatch):
     stops = [r for r in _rows(hid) if r["tool"] == "session"]
     assert len(stops) == 1 and json.loads(stops[0]["detail"])["vendor_session"] == "bu_1"
     assert sid not in gw._browser_open_locks
+
+
+def test_a_call_that_lands_on_another_replica_reaches_the_same_browser(client, world):
+    """The sandbox's tool calls are load-balanced over every gateway replica on the hosted service.
+    The record of a session's browser is one for all of them; a replica that has never seen the
+    session attaches to the recorded browser and finds the page the agent opened, instead of
+    opening its own (four browsers for one turn on 2026-09-25, the agent's screenshot of
+    about:blank among them). A self-hosted instance is one process, and the same code runs it."""
+    reg, ven, posted = world
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid = _session_of(hid)
+    tok = gw._mint_hosted_cred(hid, sid, _key(hid))
+    assert _call(client, tok, "navigate", url="example.com")["isError"] is False
+    first = browser_plane.sessions()[sid]
+    # another replica: no attachment, no open lock, the same records
+    browser_plane.sessions().clear()
+    gw._browser_open_locks.clear()
+    out = _call(client, tok, "get_url")
+    assert out["content"][0]["text"] == "https://example.com/ (Example Domain)", out     # the page the first replica opened
+    assert len(ven.created) == 1 and len(browsers) == 1                                # one browser at the vendor
+    second = browser_plane.sessions()[sid]
+    assert second is not first and second.vendor_id == first.vendor_id == "bu_1"
+    assert second.context is first.context and second.page is first.page                # the browser's own context and tab
+    rec = asyncio.run(browser_plane.registry.get(sid))
+    assert rec["calls"] == 2 and rec["vendor_id"] == "bu_1"                             # the counters are the record's
+    opens = [r for r in _rows(hid) if r["tool"] == "open"]
+    assert len(opens) == 1
+    # the lists changed on the workspace: the attachment and the record both follow
+    reg.record = _record(deny=["example.com"])
+    out = _call(client, tok, "navigate", url="https://example.com/")
+    assert out["isError"] and "not allowed to visit" in out["content"][0]["text"], out
+    assert asyncio.run(browser_plane.registry.get(sid))["deny"] == ["example.com"]
+
+
+def test_the_replica_that_removes_the_record_stops_the_browser_and_writes_its_row(client, world):
+    """A stop can come from any replica (the turn's owner at its end, any reaper at idle or the
+    cap). Whoever removes the record stops the browser at the vendor and writes the session row,
+    once; a replica that finds the record gone only drops its attachment and writes nothing."""
+    reg, ven, posted = world
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid = _session_of(hid)
+    tok = gw._mint_hosted_cred(hid, sid, _key(hid))
+    assert _call(client, tok, "navigate", url="example.com")["isError"] is False
+    mine = browser_plane.sessions()[sid]
+    # another replica's reaper found it idle and stopped it (its record went with it)
+    rec = asyncio.run(browser_plane.registry.get(sid))
+    assert asyncio.run(browser_plane.registry.delete(sid)) is True
+    asyncio.run(browser_plane.close_session_browser(rec, None))
+    assert ven.stopped == ["bu_1"]
+    # this replica's turn end: nothing to stop, nothing to write, the attachment goes
+    before = len(_rows(hid))
+    asyncio.run(gw._browser_close(sid, "turn_end"))
+    assert len(_rows(hid)) == before and mine.closed and sid not in browser_plane.sessions()
+    assert ven.stopped == ["bu_1"]
+    # the reaper's sweep does the same for an attachment whose record is gone
+    assert _call(client, tok, "navigate", url="example.com")["isError"] is False       # a new browser, recorded
+    assert len(ven.created) == 2
+    assert asyncio.run(browser_plane.registry.delete(sid)) is True
+    asyncio.run(browser_plane.sweep_attachments())
+    assert sid not in browser_plane.sessions()
+    # no record, no row: the session rows on the harness are the one the closer wrote
+    assert [r for r in _rows(hid) if r["tool"] == "session"] == []
+
+
+def test_a_row_served_off_the_owning_replica_still_lands_in_the_trace(client, world):
+    """The trace is written by the process running the turn. A plug call served without that
+    handle (another replica on the hosted service; here, a reaper's stop after the turn) goes into
+    the same trace under the session's own prefix, which the session vertex names; the hosted trace
+    held 4 of a turn's 16 rows before this (2026-09-25)."""
+    reg, ven, posted = world
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid = _session_of(hid)
+    prefix = f"{ORG}/000_{sid}"
+    asyncio.run(gw._vg_upsert("HarnessSession", sid, {"trace_blob": prefix}))
+    assert sid not in gw._session_trace                                   # not the owner of any turn here
+    tok = gw._mint_hosted_cred(hid, sid, _key(hid))
+    assert _call(client, tok, "navigate", url="example.com")["isError"] is False
+    chunks = asyncio.run(gw._blob_list_all(f"{prefix}/events/", kb=gw.TRACE_KB))
+    events = []
+    for c in sorted(it["file_id"] for it in chunks):
+        body = asyncio.run(gw._blob_get(c, kb=gw.TRACE_KB)) or b""
+        events += [json.loads(line) for line in body.decode().splitlines() if line.strip()]
+    assert [(e["type"], e["tool"], e["outcome"]) for e in events] == [("plug", "open", "ok"), ("plug", "navigate", "ok")]
+    assert all(gw._TRACE_NONCE in it["file_id"] for it in chunks)        # this process's chunks, unique beside the owner's
