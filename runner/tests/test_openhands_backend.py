@@ -177,8 +177,27 @@ def test_the_relay_token_rides_the_turns_environment_so_the_served_model_and_usa
     cmd = _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"),
                            "gpt-5.4", "hi", d, env)
     job = json.loads(cmd[-1])
-    assert env["OPENAI_API_KEY"].startswith("hr-relay-") and env["OPENAI_API_KEY"] == job["api_key"]
-    assert env["OPENAI_BASE_URL"] == job["base_url"]
+    assert env["LITELLM_PROXY_API_KEY"].startswith("hr-relay-") and env["LITELLM_PROXY_API_KEY"] == job["api_key"]
+    assert env["LITELLM_PROXY_API_BASE"] == job["base_url"]
+    # the pair litellm reads for a litellm_proxy/ id on both its paths; the OpenAI pair is read by
+    # nothing once the id carries that prefix (hr-test venv, 2026-09-27), so it is not set
+    assert "OPENAI_API_KEY" not in env and "OPENAI_BASE_URL" not in env
+
+
+def test_the_model_id_rides_the_litellm_proxy_prefix_so_a_vendor_slug_survives_to_the_wire():
+    """`openai/` was stripped twice between the job and the wire (OpenHands' LLM and litellm each
+    take one off), so an aggregator's openai/gpt-6-sol reached TokenRouter as the bare id and was
+    refused (503 model_not_found, the tokenrouter column of 2026-09-27). litellm's proxy prefix is
+    taken off once and the rest is sent as it is, measured in the openhands venv on hr-test."""
+    from server import Auth, _build_openhands
+    for pid in ("openai/gpt-6-sol", "gpt-6-sol", "anthropic/claude-sonnet-5"):
+        d = tempfile.mkdtemp(); env: dict = {}
+        cmd = _build_openhands("tokenrouter", Auth(api_key="sk-real", base_url="https://api.tokenrouter.com/v1"),
+                               pid, "hi", d, env)
+        job = json.loads(cmd[-1])
+        assert job["model"] == f"litellm_proxy/{pid}"
+        assert not job["model"].startswith("openai/")
+        assert env["LITELLM_PROXY_API_BASE"] == job["base_url"] and env["LITELLM_PROXY_API_KEY"] == job["api_key"]
 
 
 def test_only_the_execution_status_update_sets_the_status():
@@ -435,7 +454,7 @@ def test_the_field_litellm_invents_for_a_known_claude_id_never_reaches_the_provi
     d = tempfile.mkdtemp(); env: dict = {}
     _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://api.anthropic.com"),
                      "claude-haiku-4-5-20251001", "hi", d, env)
-    route = _HERMES_RELAY["routes"][env["OPENAI_API_KEY"]]
+    route = _HERMES_RELAY["routes"][env["LITELLM_PROXY_API_KEY"]]
     assert route[2]["drop_fields"] == ("max_tokens",)
 
 
