@@ -2380,11 +2380,17 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
 
 
 def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
-    """Write $HOME/.pi/agent/mcp.json for pi-mcp-adapter (same input contract as the claude/codex
-    writers: url + optional auth/headers, or command + args for a plugin's stdio server). Returns
-    whether any server was written. The agent-dir
-    location is deliberate: project-local .pi/mcp.json sits behind pi's trust gate; the agent dir
-    does not."""
+    """Write $HOME/.pi/agent/mcp-adapter.json for pi-mcp-adapter (same input contract as the
+    claude/codex writers: url + optional auth/headers, or command + args for a plugin's stdio
+    server). Returns whether any server was written. The agent-dir location is deliberate:
+    project-local .pi/mcp.json sits behind pi's trust gate; the agent dir does not.
+
+    THE FILE IS NAMED FOR ADAPTER 3.x. pi-mcp-adapter 3 reads .mcp.json, ~/.config/mcp/mcp.json
+    and <agent dir>/mcp-adapter.json and, its README says, "does not read Pi's <agent dir>/mcp.json
+    or .pi/mcp.json at all"; 2.x read mcp.json. A volume that installed 2.x at its first boot kept
+    working on the old name while a fresh one resolved 3.x and saw no server at all (hosted,
+    2026-09-27: pi listed no MCP tool and grepped the workspace for the tool's name). The
+    entrypoint pins the adapter's version, so the name here is the one that version reads."""
     entries: dict = {}
     for s in servers or []:
         name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
@@ -2406,7 +2412,7 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
         entries[name] = entry
     if not entries:
         return False
-    path = home / ".pi" / "agent" / "mcp.json"
+    path = home / ".pi" / "agent" / "mcp-adapter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     # directTools: the tools are registered on the agent one by one, as every other CLI lists
     # MCP tools. The adapter's default hides them behind one `mcp` proxy tool (search, then call),

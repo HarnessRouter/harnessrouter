@@ -4563,6 +4563,12 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
     except Exception:  # noqa: BLE001
         pass
+    # The share resolver caches token -> session and session -> shared for _SHARE_TTL seconds; a
+    # link opened inside that window after the delete still answered (R-07 of the conformance
+    # suite, intermittent by timing). The tombstone is not enough: the caches go with it, as they
+    # do on every revoke.
+    _SHARE_STATE_CACHE.pop(sid, None)
+    _SHARE_TOKEN_CACHE.clear()
     # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
     # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
