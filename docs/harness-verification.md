@@ -155,6 +155,11 @@ which fails the type-check, and that is the only one a compiler will find for yo
    of it rather than the last lines — a turn that dies in seconds and is then retried to
    exhaustion ends with `SIGTERM … Shutting down`, and putting that in the record is worse than
    silence, because it reads like a reason.
+   A successful turn can also lose a configured MCP server. Goose 1.50.0 logs `Failed to start
+   extension 'name' ..., continuing without it` on stderr, then emits a successful stream-json
+   result. The runner must preserve this as `system/mcp_unavailable` so the gateway can tell the
+   user which tools were absent. Do not copy the extension's raw stderr into that event; it may
+   contain credentials.
 7. `CHECKPOINT_EXCLUDE` and `_git_ensure`'s ignore list: any file the CLI writes that can hold a
    credential.
 
