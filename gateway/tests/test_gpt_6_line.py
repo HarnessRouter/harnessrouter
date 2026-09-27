@@ -26,7 +26,7 @@ def test_every_provider_we_route_to_names_its_own_id():
 def test_they_sit_with_astra_ahead_of_the_gpt_5_6_line_wherever_it_is_offered():
     for base, cat in gw._MODEL_CATALOG.items():
         models = cat["models"]
-        if "gpt-5.6-sol" in models and base != "goose":               # goose: measured lists only
+        if "gpt-5.6-sol" in models:
             i = models.index("gpt-5.6-sol")
             assert models[i - 2:i] == ["gpt-6-sol", "gpt-6-luna"], base
             if "gpt-6-astra" in models:
@@ -42,7 +42,7 @@ def test_only_astra_is_responses_only():
     assert "gpt-6-astra" in gw.RESPONSES_ONLY_MODELS
     assert not (set(LINE) & gw.RESPONSES_ONLY_MODELS)
     for base in gw.CHAT_ONLY_BACKENDS:
-        if "gpt-5.6-sol" in gw._MODEL_CATALOG[base]["models"] and base != "goose":
+        if "gpt-5.6-sol" in gw._MODEL_CATALOG[base]["models"]:
             assert set(LINE) <= set(gw._MODEL_CATALOG[base]["models"]), base
 
 
