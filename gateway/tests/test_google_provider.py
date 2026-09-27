@@ -18,7 +18,7 @@ def test_google_serves_the_catalog_gemini_by_its_own_id():
 
 
 def test_google_reaches_the_openai_shaped_backends_only():
-    for backend in ("hermes", "pi", "dsh", "opencode", "qwen", "cline"):
+    for backend in ("hermes", "pi", "dsh", "opencode", "kilo", "qwen", "cline"):
         assert gw._INTEGRATION_WIRING[("google", backend)] == "openai-api", backend
     for backend in ("claude", "codex"):
         assert ("google", backend) not in gw._INTEGRATION_WIRING, backend

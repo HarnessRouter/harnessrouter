@@ -985,8 +985,7 @@ and the turn died after 171 s of retries. No other base sets one; aider's own `u
 switch leaves it out.
 
 **Edit markup rendered as the answer.** A file-writing task's reply card read
-`hello.py ```python <<<<<<< SEARCH ======= print("aider") >>>>>>> REPLACE ``` `. That is aider's
-wire format for an edit; the driver strips it from the text (the text event AND the result event,
+`hello.py ```python wire format for an edit; the driver strips it from the text (the text event AND the result event,
 since the gateway stores the latter as the answer) and reports each edited file as an `Edit` card,
 as file edits render on every other base.
 
@@ -1697,3 +1696,67 @@ or the store, the command's output), and the session names the environment.
 first pass judged three answers by their labels rather than their evidence (aider paraphrases the
 printed lines; omp's shell reports `jq --version` as jaq while `which jq` and the sorted output are the
 environment's); the judges now read the evidence, and the two bases rerun clean on 0.26.12.
+
+## The kilo backend: Kilo CLI 7.8.1 (2026-09-26/27) — behaviour measured, NO column yet
+
+Kilo CLI (Kilo-Org/kilocode, MIT) is an opencode fork (its README says so; `packages/opencode` in
+the monorepo), and the runner treats it as one: opencode's `run --format json` events, provider
+block, MCP map and `skills.paths` are unchanged at 7.8.1, so `_build_kilo` reuses opencode's package
+choice, MCP translation and normaliser. There is **no matrix column**: this backend has not been run
+on a deployed instance. What follows was measured on the pinned binary (darwin-arm64 build of the
+same release for the local runs, `kilo --version` = `7.8.1`), against a logging stub and, for three
+turns, through a locally started runner on Vercel.
+
+**Where it differs from opencode, each measured:**
+
+- **It phones home unless told not to.** A turn whose provider was on 127.0.0.1 made CONNECTs to
+  `us.i.posthog.com` (telemetry, x2), `models.dev` (catalog, x1) and `api.kilo.ai` (Kilo's gateway
+  provider, x2), logged at a refusing proxy. `KILO_TELEMETRY_LEVEL=off` and
+  `KILO_DISABLE_MODELS_FETCH=1` removed the first two; `"enabled_providers": ["hr"]` in the config
+  removed the third — zero egress besides the provider. The control arm (defaults) is what shows the
+  proxy sees these calls at all. No Kilo login is needed for anything the runner does.
+- **Scheduling tools that promise a later turn** (`schedule_wakeup`, `cancel_wakeup`, `cron_*`,
+  `goal`: "the harness resumes this session with the prompt you give it"). Every turn here is one
+  process the gateway starts, so the runner denies them on every turn.
+- **`write` and `apply_patch` are gated by the `edit` key.** Measured at the stub: denying `write`
+  left `write` and `apply_patch` in the request; denying `edit` removed all three. The catalog offers
+  `edit` only ("Edit / Write"). opencode shares this code (`permission.disabled`), so the opencode
+  base's separate `write` switch is very likely a no-op too — not changed here, flagged.
+- **Two doors to the shell.** With `bash` denied, `background_process` (which takes a `command`) was
+  still offered, so the runner denies both when bash is switched off.
+- **A dead endpoint never fails.** Kilo's "offline guard" parks a turn whose connection drops, probes
+  connectivity, declares the network restored and retries — the retry budget resets on every retry.
+  Measured on the bare CLI: a refused connection ran ten minutes with a retry every five seconds and
+  no output; a server that accepts and drops the connection, 29 "session offline" cycles in 150 s.
+  Through the relay the same thing happened whenever the relay itself dropped the socket (it did not
+  catch `URLError`). The relay now answers an unreachable upstream with a 502 and the reason, which
+  every client reports: through a local runner the dead-URL turn failed in 76 s (the ai-sdk's retries
+  of a 5xx) with `upstream unreachable: [Errno 61] Connection refused`. A Messages-shape turn does not
+  ride the relay and is only bounded by the runner's turn ceiling.
+
+**Failure reporting (checklist #8), free probes:** a 401 is one structural `error` event (APIError,
+`data.message`, `statusCode`) and exit 1 in 4 s; a 503 is retried 6 times over 73 s and then the same
+event. Kilo never narrates a provider failure as assistant text, so no prefix is stripped, and an
+answer that starts "Error: …" stays an answer (both pinned in runner/tests/test_kilo_backend.py). An
+invalid Vercel key through the runner: `failed` in 6 s with Vercel's own sentence.
+
+**Resume.** SQLite `$HOME/.local/share/kilo/kilo.db`, table `session(id TEXT PRIMARY KEY, ...)`; an
+unknown `--session` exits 1 with nothing on stdout. The builder asks the table (read-only) before
+passing `--session`; a missing session starts fresh and the reply carries the resume_lost note
+(measured through the runner).
+
+**Local E2E through a runner, 2026-09-27 (Vercel, three paid turns, one session):**
+
+| turn | model | result | served_model (relay) | usage (in / out / cache read / cache write) |
+|---|---|---|---|---|
+| 1: remember a word, write hello.py, run it | gpt-5.4-mini | `PELICAN-42: 42`, tools glob, write, bash; hello.py produced | `openai/gpt-5.4-mini` | 11,311 / 636 / 32,256 / 0 |
+| 2: "what was the word?" (resumed) | gpt-5.4-mini | `PELICAN-42` | `openai/gpt-5.4-mini` | 2,265 / 40 / 8,704 / 0 |
+| 3: switch model, bash disabled, run echo | claude-haiku-4.5 | `NO-SHELL. Code word: PELICAN-42`; its bash call refused as "unavailable tool" | **none** | 118 / 81 / 13,154 / 13,406 |
+
+The real key was not in the kilo process's argv or environment on the relay turns (the relay's
+placeholder was), and not in any file under the workspace afterwards. **Turn 3 is the gap:** a
+claude id on an aggregator speaks Anthropic Messages, which opencode's rule keeps OFF the relay
+(the relay speaks bearer auth; Messages clients send x-api-key), so the key is in the CLI's
+environment and nothing reports a served model — matrix rule 2 cannot be evaluated for claude rows
+on this backend, exactly as on opencode today. The cost channel: a one-word follow-up is ~11k input
+tokens (system prompt ~14.7k characters plus 22 tool schemas).

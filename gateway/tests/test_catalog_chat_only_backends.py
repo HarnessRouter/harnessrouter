@@ -14,7 +14,7 @@ import app as gw  # noqa: E402
 # keeps them honest.
 RESPONSES_ONLY = set(gw.RESPONSES_ONLY_MODELS)
 CHAT_ONLY_BACKENDS = gw.CHAT_ONLY_BACKENDS
-RESPONSES_BACKENDS = ("codex", "hermes", "pi", "dsh", "opencode", "omp")
+RESPONSES_BACKENDS = ("codex", "hermes", "pi", "dsh", "opencode", "kilo", "omp")
 
 
 def test_responses_only_models_stay_off_chat_only_harnesses():
