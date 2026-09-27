@@ -265,6 +265,9 @@ def test_registry_agent_doc_skills_and_checkpoint():
     got = _write_skills(d, [{"name": "probe-skill", "content": "---\nname: probe-skill\ndescription: x\n---\n"}], "grok")
     assert got and (_grok_home(pathlib.Path(d)) / "skills" / "probe-skill" / "SKILL.md").is_file()
     for p in ("./.harness/home/.grok/config.toml", "./.harness/home/.grok/auth.json",
+              # the MCP OAuth token store: the runner starts no such flow (measured — a 401 server
+              # does not escalate in a headless session), but a token at rest must not travel
+              "./.harness/home/.grok/mcp_credentials.json",
               "./.harness/home/.grok/logs"):
         assert p in CHECKPOINT_EXCLUDE
     assert not any(p.startswith("./.harness/home/.grok/sessions") for p in CHECKPOINT_EXCLUDE)

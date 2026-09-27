@@ -557,11 +557,14 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       "./.harness/home/.cheetahclaws/logs",
                       # Grok Build: sessions/ is what a resume reads and it travels. config.toml is
                       # rewritten every turn and carries each MCP server's Authorization header;
-                      # auth.json is where `grok login` would keep an xAI credential (the runner
-                      # never logs in, but a task could). logs/ can hold what the CLI was handed;
+                      # auth.json is where `grok login` would keep an xAI credential and
+                      # mcp_credentials.json an MCP server's OAuth tokens, both mode 0600 (the runner
+                      # starts neither flow — see _grok_config — but a task could). logs/ can hold
+                      # what the CLI was handed;
                       # docs/ and bundled/ are re-materialised from the binary on every run.
                       "./.harness/home/.grok/config.toml",
                       "./.harness/home/.grok/auth.json",
+                      "./.harness/home/.grok/mcp_credentials.json",
                       "./.harness/home/.grok/logs",
                       "./.harness/home/.grok/docs",
                       "./.harness/home/.grok/bundled",
@@ -4625,6 +4628,18 @@ def _grok_config(home: pathlib.Path, model: str, base_url: str,
       session_registry off, use_leader off — the two doors to an xAI login (see _grok_has_session).
       compat.claude / compat.cursor off — grok also loads ~/.claude and ~/.cursor skills, rules,
         MCP servers and hooks, and under a shared $HOME those are trees another backend wrote.
+
+    AN OAUTH MCP SERVER DOES NOT START A LOGIN HERE, and that is the headless path's own doing rather
+    than a switch: `grok -p` sends `startupHints.nonInteractive`, and in that mode the OAuth probe
+    resolves to "needs interactive login" without building an OAuth client, so nothing reaches the
+    browser flow (which waits 600 s for a callback) and no tool call can escalate into it — the
+    escalation asks the client whether it has an auth manager first. MEASURED against a local stub
+    that answers 401 with a WWW-Authenticate challenge and serves the whole discovery chain: a
+    headless turn made two MCP requests, fetched no discovery document, attempted no browser (a
+    shimmed `open` recorded nothing), reported the server as `pending` in system/init and finished in
+    1 s; the model calling that server's tool through use_tool was refused ("Tool not found"), also
+    in 1 s. The SENSITIVITY PROOF that the rig could have seen it: the same stub under `grok mcp
+    doctor`, which probes interactively, fetched both well-known documents.
     MCP: a stdio server is command/args/env/cwd; a remote one is url + headers, with `type = "sse"`
     for an SSE server (grok speaks SSE and streamable HTTP itself, so nothing needs the bridge). A
     server's `auth` becomes its Authorization header, as on every other base."""
