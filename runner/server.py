@@ -6104,14 +6104,22 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
     starts a server on loopback, drives ONE turn over its HTTP + WebSocket API and exits — the same
     one-process-per-turn contract as every other backend, and the codex app-server precedent.
 
-    THE MODEL ID IS SENT WITH AN `openai/` PREFIX and the key rides the driver's environment rather
-    than the conversation. Both are forced by what the server persists: base_state.json carries the
-    whole LLM spec with `api_key: None`, so a key passed on the create call reaches the first turn
-    and nothing after it, and without an explicit provider litellm INFERS one from the base url —
-    which is how a relay url produced `Vercel_ai_gatewayException … set the VERCEL_AI_GATEWAY_API_KEY`
-    on a resumed turn. Every turn rides the loopback relay for the qwen reason: the real key never
-    enters the agent's environment and the provider's own `model` passes through for the
-    served-model check."""
+    THE MODEL ID IS SENT WITH A `litellm_proxy/` PREFIX and the key rides the driver's environment
+    rather than the conversation. Both are forced by what the server persists: base_state.json
+    carries the whole LLM spec with `api_key: None`, so a key passed on the create call reaches the
+    first turn and nothing after it, and without an explicit provider litellm INFERS one from the
+    base url — which is how a relay url produced `Vercel_ai_gatewayException … set the
+    VERCEL_AI_GATEWAY_API_KEY` on a resumed turn. The prefix was `openai/` until 2026-09-27, and
+    that one is stripped TWICE on the way to the wire (OpenHands' LLM and litellm 1.94.3 each take
+    one off): a provider-native id that itself starts with `openai/` (openai/gpt-6-sol, what every
+    aggregator calls the OpenAI family) reached TokenRouter as the bare `gpt-6-sol`, which it refuses
+    with 503 model_not_found; Vercel resolves the bare id, which is why the Vercel column passed.
+    Measured against a loopback recorder in the openhands venv on hr-test: openai/openai/gpt-6-sol
+    -> gpt-6-sol, litellm_proxy/openai/gpt-6-sol -> openai/gpt-6-sol, litellm_proxy/gpt-6-sol ->
+    gpt-6-sol. litellm's proxy provider is the documented way to say "an OpenAI-shaped server, send
+    the id as it is", which is what the relay is. Every turn rides the loopback relay for the qwen
+    reason: the real key never enters the agent's environment and the provider's own `model` passes
+    through for the served-model check."""
     pr = provider or "openai-api"
     if pr not in OPENHANDS_PROVIDERS:
         raise HTTPException(400,
@@ -6132,7 +6140,7 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
     # (measured: usage None on three turns whose provider calls the relay had counted).
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_BASE_URL"] = auth.base_url
-    job = {"cwd": cwd, "model": f"openai/{model}", "prompt": prompt,
+    job = {"cwd": cwd, "model": f"litellm_proxy/{model}", "prompt": prompt,
            "base_url": auth.base_url, "api_key": auth.api_key,
            "tools_disabled": list(tools_disabled or []),
            # Declared MCP servers reach the agent itself; a parameter accepted and then dropped is

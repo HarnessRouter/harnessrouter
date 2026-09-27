@@ -181,6 +181,21 @@ def test_the_relay_token_rides_the_turns_environment_so_the_served_model_and_usa
     assert env["OPENAI_BASE_URL"] == job["base_url"]
 
 
+def test_the_model_id_rides_the_litellm_proxy_prefix_so_a_vendor_slug_survives_to_the_wire():
+    """`openai/` was stripped twice between the job and the wire (OpenHands' LLM and litellm each
+    take one off), so an aggregator's openai/gpt-6-sol reached TokenRouter as the bare id and was
+    refused (503 model_not_found, the tokenrouter column of 2026-09-27). litellm's proxy prefix is
+    taken off once and the rest is sent as it is, measured in the openhands venv on hr-test."""
+    from server import Auth, _build_openhands
+    for pid in ("openai/gpt-6-sol", "gpt-6-sol", "anthropic/claude-sonnet-5"):
+        d = tempfile.mkdtemp(); env: dict = {}
+        cmd = _build_openhands("tokenrouter", Auth(api_key="sk-real", base_url="https://api.tokenrouter.com/v1"),
+                               pid, "hi", d, env)
+        job = json.loads(cmd[-1])
+        assert job["model"] == f"litellm_proxy/{pid}"
+        assert not job["model"].startswith("openai/")
+
+
 def test_only_the_execution_status_update_sets_the_status():
     """The event is a generic key/value pair and `last_user_message_id` rides the same shape.
     Reading `value` alone once set the status to a message uuid."""

@@ -6417,10 +6417,12 @@ _MODEL_CATALOG: dict[str, dict] = {
     # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
     # loopback relay), so the list is theirs. Measured 2026-09-18/19: the Vercel column ran 49 of
     # these ids (239 of 245 scenarios) and the Google column ran the eight gemini ids, so the list
-    # is a measured one rather than an offered one. The id is sent with an `openai/` prefix by the
-    # runner, which is load-bearing: without an explicit provider litellm infers one from the base
-    # url, and a relay url inferred as Vercel produced `Missing credentials …
-    # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn.
+    # is a measured one rather than an offered one. The id is sent with a `litellm_proxy/` prefix by
+    # the runner, which is load-bearing: without an explicit provider litellm infers one from the
+    # base url, and a relay url inferred as Vercel produced `Missing credentials …
+    # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn. It was `openai/` until 2026-09-27, which is
+    # stripped twice on the way to the wire, so an aggregator's openai/<id> reached TokenRouter bare
+    # and was refused; the gpt-6 tokenrouter column found it (runner/server.py, _build_openhands).
     "openhands": {"default": "gpt-5.4",
                   "models": [
                       "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
@@ -6605,8 +6607,9 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # kimi speaks chat/completions only: the runner defines its model with provider type `openai`
 # through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
 # sets), so a Responses-API-only id would be a picker row that fails on send.
-# aider and openhands speak chat/completions through litellm's openai provider (the id is sent
-# `openai/<id>`), so a Responses-API-only id would be a picker row that fails on send.
+# aider and openhands speak chat/completions through litellm (aider under its openai provider, the
+# id sent `openai/<id>`; openhands under litellm's proxy provider, the id sent as it is), so a
+# Responses-API-only id would be a picker row that fails on send.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
