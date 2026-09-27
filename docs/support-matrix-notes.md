@@ -1499,6 +1499,48 @@ TokenRouter behind the switch, as `fill-connection.py` stamped them.
   measured, for the rest of its list; and a benchmark column.
 
 
+## The agentzero backend: Agent Zero v2.13 (2026-09-27) — behaviour measured, NO column yet
+
+Agent Zero (agent0ai/agent-zero, MIT) is a framework shipped as a Docker image with a web UI: no CLI,
+no headless mode, no PyPI package, no release assets. `runner/agentzero_driver.py` imports it from
+the tagged source tree (digest-pinned in `install_agentzero`) and runs one message per turn through
+its own `AgentContext.communicate`, the path its `/api_message` endpoint takes. No support-matrix
+column has run on this base; the catalog is openhands' list, offered so the matrix can measure it.
+
+Measured on the pinned v2.13 (macOS for the driver, Linux arm64 `python:3.12-slim` for the install):
+
+- **Provider failures are structural.** A wrong key (401) and a dead base url each raised out of the
+  loop (`HandledException`), with an `error` log item and no response-tool text; no error prose ever
+  reaches the answer, so no prefix regex exists. Through a local runner the wrong-key turn failed in
+  6 s with litellm's sentence as the reason.
+- **An endpoint that never answers held a turn past 900 s** (Agent Zero sets no provider timeout).
+  The driver passes `timeout`/`stream_timeout` 300 s (`HR_AGENTZERO_TIMEOUT`) and collapses three
+  nested retry ladders (the OpenAI client's 2, Agent Zero's 2 transient, its `_error_retry` 1) to
+  four attempts: at a 5 s timeout, 110 s before the reason became 29 s.
+- **The model id reaches the provider unchanged** (loopback recorder): `openai/gpt-6-sol`, `gpt-5.4`,
+  `google/gemini-3.1-flash-lite`, `anthropic/claude-sonnet-4.6` each arrived as sent — the openhands
+  double-strip (#296) does not happen here. One provider call per trivial turn once the
+  always-enabled `_chat_naming` plugin's automatic naming is switched off (it was a second call).
+  The system prompt of a one-word turn is about 25.7 KB; relay usage on the first real turn:
+  13,425 input tokens.
+- **Tool policy is hard**, by Agent Zero's own `_tool_access` plugin (prompt filter + execution gate,
+  which `parallel` goes through too). `input` types into the terminal, so it is withheld with
+  `code_execution_tool`. A disabled MCP tool rides the server's own `disabled_tools`: withheld,
+  asked for anyway, the model answered CANNOT and the token never appeared.
+- **Cancel.** The terminal is a pty bash spawned with `start_new_session=True`; a `nohup … &` it
+  started outlived a group kill until the driver kept the shell in its own group (A/B at a
+  scripted recorder).
+- **Not offered, because they cannot run here:** search_engine (SearXNG only its image runs),
+  document_query and memory (FAISS, local embeddings/torch), browser, scheduler, notify_user,
+  a2a_chat, the A0-connector remote tools. The nodejs runtime of code_execution_tool calls
+  `/exe/node_eval.js`, which exists only in upstream's image — a model that picks it gets an error.
+- **Install**: 83 s, venv 569 MB + source 69 MB (Linux arm64) — not in the default `HR_BACKENDS`.
+- **End to end through a local runner** (Vercel, gemini-3.1-flash-lite, 2026-09-27): a shell call +
+  AGENTS.md codeword, a no-tool recall of the first turn, a skill loaded by `skills_tool` whose
+  script ran, a turn with the shell withheld; every result carried `model` =
+  `google/gemini-3.1-flash-lite` and non-zero relay usage, and neither the key nor the relay token
+  was in the workspace or the turn record.
+
 ## The gpt-6 line: sol and luna beside astra (2026-09-27)
 
 Richard asked whether gpt-6-sol was available and for the line to be expanded at list price on every

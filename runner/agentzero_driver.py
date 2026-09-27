@@ -179,7 +179,16 @@ def mcp_config(servers: list[dict] | None, tools_disabled: list[str] | None = No
     return json.dumps({"mcpServers": out})
 
 
-def presets(model: str, base_url: str) -> list[dict]:
+# The provider call's timeout, in seconds. Agent Zero sets none, so litellm's default applies and an
+# endpoint that accepts the connection and never answers held a turn for 900 s with nothing in its
+# record (measured: killed at the probe's 900 s alarm, no result). With the retries below that is
+# four attempts at most before the reason is reported. 300 s is the read budget
+# cheetahclaws and aider run on; passed as the preset's litellm kwargs, Agent Zero's own door for
+# per-model call parameters.
+PROVIDER_TIMEOUT = int(os.environ.get("HR_AGENTZERO_TIMEOUT", "300") or 300)
+
+
+def presets(model: str, base_url: str, timeout: int | None = None) -> list[dict]:
     """The one preset every turn runs on: main and utility model both the turn's model, through the
     relay. Provider `other` is Agent Zero's "Other OpenAI compatible" (litellm's openai provider with
     an api_base), so the id reaches the provider as written. The embedding slot names Agent Zero's
@@ -187,7 +196,14 @@ def presets(model: str, base_url: str) -> list[dict]:
 
     Written on every turn, so a model switch is a new file and not a frozen agent: Agent Zero
     resolves the model from this file at call time (_model_config), and the chat stores no model."""
-    slot = {"provider": "other", "name": model, "api_base": base_url, "kwargs": {}}
+    timeout = timeout or PROVIDER_TIMEOUT
+    slot = {"provider": "other", "name": model, "api_base": base_url,
+            "kwargs": {"timeout": timeout, "stream_timeout": timeout,
+                       # ONE retry ladder, not three nested ones: the OpenAI client's own two
+                       # retries sat under Agent Zero's two transient retries, under its
+                       # _error_retry plugin's one — 18 calls for one refusal. Measured with a 5 s
+                       # timeout against an endpoint that never answers: 110 s before the reason.
+                       "max_retries": 0, "a0_retry_attempts": 1}}
     return [{"name": "Default",
              "chat": {**slot, "ctx_length": 128000, "ctx_history": 0.7, "vision": False},
              "utility": {**slot, "ctx_length": 128000, "ctx_input": 0.7},
@@ -265,7 +281,7 @@ def write_config(base: pathlib.Path, job: dict, src: pathlib.Path) -> None:
     # JSON is YAML, and Agent Zero reads this file with its YAML loader; written as JSON so this
     # module needs nothing beyond the standard library outside Agent Zero's venv.
     (plug / "_model_config" / "presets.yaml").write_text(
-        json.dumps(presets(job["model"], job["base_url"]), indent=1))
+        json.dumps(presets(job["model"], job["base_url"], job.get("provider_timeout")), indent=1))
     for p in DISABLED_PLUGINS:
         (plug / p).mkdir(parents=True, exist_ok=True)
         (plug / p / ".toggle-0").write_text("")

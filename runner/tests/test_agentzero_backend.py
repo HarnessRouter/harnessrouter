@@ -83,6 +83,14 @@ def test_the_model_is_provider_other_through_the_given_base():
     assert "api_key" not in json.dumps(p)
 
 
+def test_every_provider_call_is_bounded_and_retried_once():
+    """MEASURED: with no timeout an endpoint that never answers held a turn past 900 s, and with a
+    5 s timeout but the three nested retry ladders the reason came after 110 s; with these, 29 s."""
+    kw = drv.presets("m", "http://r/v1", 300)[0]["chat"]["kwargs"]
+    assert kw["timeout"] == 300 and kw["stream_timeout"] == 300
+    assert kw["max_retries"] == 0 and kw["a0_retry_attempts"] == 1
+
+
 # ── the terminal ──
 def _fake_src(tmp: pathlib.Path) -> pathlib.Path:
     src = tmp / "src"
