@@ -2,6 +2,23 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.9.12.post3 (2026-09-27)
+
+The protocol is unchanged; the suite that measures it is.
+
+- The plugin checks point a plugin at a server that resolves and answers. A host may refuse an
+  MCP server it cannot reach at configuration time and record that in `skipped`; with the
+  unresolvable placeholder the checks used before, such a host failed P-02, P-04, P-06 and P-07
+  for refusing the placeholder rather than for anything about plugins (the hosted HarnessRouter,
+  2026-09-27). The suite ships the server (`uhp-conformance-fixture`, `pip install
+  "uhp-conformance[fixture]"`), defaults to a public copy of it, and takes `--plugin-mcp-url`
+  for a copy the host under test can reach.
+- **P-11**, new: a plugin's MCP server answers the agent's tool call. The agent is asked to call
+  the fixture's tool with a nonce and the fixture's answer, a function of the nonce, must come
+  back. It is the only plugin check that runs a task, and the only one that shows an agent
+  reaching a plugin's server rather than a server deriving and refusing correctly.
+- Measured implementations are re-measured under this suite before their badges are shown again.
+
 ## 2026-09-12
 
 Additive to `2026-08-11`: every request and object valid under the previous version is valid
