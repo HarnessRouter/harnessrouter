@@ -60,7 +60,9 @@ jobs:
       # runner itself does not, so it stays out of requirements.txt and lives with pytest here.
       # The System One Harness is on the runner's venv in the image (docker/entrypoint.sh pins the tag);
       # the driver's tests import it, and skip without it, so the suite installs the same pin.
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0"
+      # CheetahClaws the same way: its driver tests run the pinned package against a stub endpoint
+      # (they skip without it), and it resolves beside the runner's own pins (pip check is clean).
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0" "cheetahclaws==3.5.88"
       - run: python -m pytest runner/tests -q
 
   conformance:
