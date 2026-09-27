@@ -630,8 +630,9 @@ includes the plugin, and the workspace still has to have connected it.
 **Watching and taking over.** When a task opens a browser, the console slides a **Browser** pane
 in on the right and streams the vendor's live view of it, with a blue glow around the screen
 while the agent is driving. Click the screen to take it over: the view becomes yours to click and
-type in, and the agent's browser calls are held and told so until you choose **Hand back to the
-agent**. Closing the pane leaves the browser running; the **Browser** chip in the conversation bar
+type in, and the agent pauses: its next browser call waits for you (without spending tokens) and
+runs the moment you choose **Hand back to the agent**; after 45 seconds of waiting the call answers
+that you still have the browser and the agent may keep waiting or go on without it. Closing the pane leaves the browser running; the **Browser** chip in the conversation bar
 brings it back, and the next browser the agent opens brings it back on its own. Behind it:
 `GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which is a
 credential and is served only to the session's owner) and

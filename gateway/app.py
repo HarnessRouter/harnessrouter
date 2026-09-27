@@ -14159,6 +14159,10 @@ async def session_browser_control(sid: str, body: BrowserControlBody, request: R
 
 
 _browser_open_locks: dict[str, asyncio.Lock] = {}
+# How long one held browser call waits for the person to hand the browser back before answering
+# that it is still theirs (under the MCP clients' 60 s request timeout), and how often it looks.
+BROWSER_HOLD_SLICE_S = float(os.environ.get("HR_BROWSER_HOLD_SLICE_S", "45"))
+BROWSER_HOLD_POLL_S = 0.5
 
 
 def _browser_notice(sid: str, kind: str, hid: str = "", org: str = "", **extra) -> None:
@@ -14222,15 +14226,31 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
     if (s.allow, s.deny) != (allow, deny):
         s.allow, s.deny, s.host_cache = list(allow), list(deny), {}      # the workspace changed its lists
         await browser_plane.registry.bump(sid, allow=list(allow), deny=list(deny))
-    # THE PERSON MAY HAVE THE BROWSER. The console's live view lets them take over with a click;
-    # from then on the agent's calls are held, not run, and each says so, until they hand it back.
-    # Read from the record on every call: the takeover is a write from another request, on
-    # another replica when there are several.
+    # THE PERSON MAY HAVE THE BROWSER. The console's live view lets them take over with a click,
+    # and a takeover pauses the agent rather than ending its work: the call WAITS here, without a
+    # token spent, and runs the moment they hand the browser back. Read from the record, since the
+    # takeover is a write from another request (another replica when there are several). A wait
+    # is bounded below the MCP clients' own request timeouts (60 s in the reference SDKs): past
+    # the bound the tool answers, not as an error, that the person still has the browser and the
+    # agent may call again to keep waiting. Measured on hr-test 0.25.7-rc.4 before this: a refusal
+    # made pi end its turn early with "the browser is under user control, so I can't continue".
     current = await browser_plane.registry.get(sid) if not (rec is None and s.opened) else None
     if (current or {}).get("control") == "user":
         _browser_notice(sid, "held", hid=hid, org=org, tool=tool)
-        return await refused("held", "The person using this task has taken over the browser. Wait for them to "
-                                     "hand it back, then try again.")
+        waited = 0.0
+        while (current or {}).get("control") == "user" and waited < BROWSER_HOLD_SLICE_S:
+            await asyncio.sleep(BROWSER_HOLD_POLL_S)
+            waited += BROWSER_HOLD_POLL_S
+            current = await browser_plane.registry.get(sid)
+        if current is None:
+            return await refused("session closed", "The browser for this task was stopped while the person had it. "
+                                                   "Call again to open a new one.")
+        if current.get("control") == "user":
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "held", "still held",
+                                    detail={"waited_s": round(waited, 1)})
+            return _jsonrpc_result(rid, _tool_text(
+                "The person using this task still has the browser. Call this tool again to keep waiting for it, "
+                "or continue without the browser."))
     async with s.lock:
         if s.closed:
             return await refused("session closed", "The browser for this task was stopped. Call again to open a new one.")
