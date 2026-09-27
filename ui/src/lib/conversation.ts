@@ -221,13 +221,16 @@ function busUpdateLast(sid: string, fn: (a: AsstMsg) => void) {
   });
 }
 function applyBusEvent(sid: string, responseId: string, ev: Record<string, unknown>, replay = false) {
-  if (!sid || _busSuppress.has(sid)) return;        // initiating tab's POST stream owns this one
+  if (!sid) return;
+  const t = ev.type as string;
+  // The tab that runs the turn ignores the feed's copy of its own deltas (its POST stream owns
+  // them), but the browser notices travel on the feed alone: they pass, they are state, not deltas.
+  if (_busSuppress.has(sid) && !t.startsWith('browser.')) return;        // initiating tab's POST stream owns this one
   // History catch-up frames are dropped: an in-flight turn's progress-so-far is loaded from the
   // authoritative durable trace via GET /v1/sessions/{sid}/turns (msgsFromTurns). Re-applying the
   // same events off the bus would double-render (append the same text/tools twice). The bus is the
   // live-FORWARD channel only; the trace snapshot + the reconcile poll own history + repair.
   if (replay) return;
-  const t = ev.type as string;
   switch (t) {
     case 'harness.turn.started': {
       // Ignore a REPLAYED start of a turn we've already finished (its response_id is our last prevId):

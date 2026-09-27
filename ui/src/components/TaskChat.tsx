@@ -495,7 +495,9 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
     fetchBrowser(liveSid).then((i) => { if (alive) seedBrowserState(liveSid, i); });
     return () => { alive = false; };
   }, [liveSid]);
-  const browserShown = !!browser?.open && browserHidden !== browser.epoch && !preview;
+  // The pane stays through the browser's close (it says so) until the person closes it, and a new
+  // browser (a new epoch) brings it back on its own.
+  const browserShown = !!browser && browserHidden !== browser.epoch && !preview;
   const [modelOpen, setModelOpen] = useState(false);
   const modelBtnRef = useRef<HTMLElement>(null);
   const [previewW, onPreviewResize] = useHResize(520, 340, 1100, true);
