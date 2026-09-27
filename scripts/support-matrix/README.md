@@ -33,6 +33,20 @@ Rows that fail must carry the reproduced provider error text; a verified list is
 from another instance, since each reaches providers by its own path. Retest a bare `incomplete`
 before excluding a model.
 
+## The family tour
+
+One conversation, every model family in turn, on one deliverable (see "The family tour" in
+docs/harness-verification.md). Through the console, like `run.mjs`:
+
+```
+export BASE=https://your-instance HR_USER=harnessrouter HR_PASS=...
+HARNESS=cheetahclaws RESULTS=tour-cheetahclaws.json node family-tour.mjs
+SID=hsess... HARNESS=cheetahclaws node family-tour.mjs     # retest a person's own conversation
+```
+
+`FAMILIES` (comma list of model ids, one per family) overrides the default list; a model the
+instance does not serve is skipped and recorded as not offered. Exit 0 when every family passed.
+
 ## The plugin matrix
 
 `plugins/run-matrix.py` proves the plugin path on every base, one base at a time: a harness is
