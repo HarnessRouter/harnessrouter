@@ -216,20 +216,60 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 - pi x gpt-6-astra: not run, not run in this column
 - qwen x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
-## Provider: cheetahclaws-custom
+## Provider: cheetahclaws-tokenrouter
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| cheetahclaws | coder-pool | pass | pass | pass (tools-pool) | FAIL | FAIL | lab-chat | served as fast-pool, local-floor (finding below) ; artifact: no file card (files: none); Create a file named hello-cheetahclaws.txt containing exactly the word HELLO, then reply DONE. CHEETAHCLAWS ; recycle: answered without M1-coder-pool: What exact word did I ask you to reply with in my very first message of this task? Reply with just that word ; retested once; first try: recycle answered without M1-coder-pool: What exact word did I ask you to reply with in m |
-| cheetahclaws | fast-pool | pass | pass | pass (tools-pool) | pass | FAIL | lab-chat | served as local-floor (finding below) ; recycle: answered without M1-fast-pool: What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. ; retested once; first try: artifact no file card (files: none); Create a file named hello-cheetahclaws.txt containin; recycle answered without M1-fast-pool: What exact word did I ask you to reply with in my |
-| cheetahclaws | tools-pool | pass | pass | pass (fast-pool) | pass | pass | lab-chat | retested once; first try: recycle answered without M1-tools-pool: What exact word did I ask you to reply with in m |
+| cheetahclaws | claude-sonnet-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter |  |
+| cheetahclaws | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | My TokenRouter | served as gpt-5.4-2026-03-05 (the provider's alias of the same model) |
+| cheetahclaws | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | Custom OpenAI Chat, My TokenRouter | served as gpt-5.4-mini-2026-03-17 (the provider's alias of the same model) |
 
-3 pairs, 5 of 5 scenario runs passed; 2 pairs served by another connection or as another model are findings, not counted.
+3 pairs, 15 of 15 scenario runs passed.
 
-Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
+Not run in this column, 42 pairs the provider serves that the harness did not run, with the reason:
 
-- cheetahclaws x coder-pool: served as fast-pool, local-floor (the CLI reports the model it ran)
-- cheetahclaws x fast-pool: served as local-floor (the CLI reports the model it ran)
+- cheetahclaws x claude-fable-5: not run, not run in this column
+- cheetahclaws x claude-fable-5-1: not run, not run in this column
+- cheetahclaws x claude-haiku-4.5: not run, not run in this column
+- cheetahclaws x claude-opus-4.7: not run, not run in this column
+- cheetahclaws x claude-opus-4.8: not run, not run in this column
+- cheetahclaws x claude-opus-5: not run, not run in this column
+- cheetahclaws x claude-sonnet-4.6: not run, not run in this column
+- cheetahclaws x deepseek-v4-flash: not run, not run in this column
+- cheetahclaws x deepseek-v4-pro: not run, not run in this column
+- cheetahclaws x deepseek-v4.1-flash: not run, not run in this column
+- cheetahclaws x gemini-3-flash-preview: not run, not run in this column
+- cheetahclaws x gemini-3.1-pro-preview: not run, not run in this column
+- cheetahclaws x gemini-3.5-flash: not run, not run in this column
+- cheetahclaws x gemini-3.5-flash-lite: not run, not run in this column
+- cheetahclaws x gemini-3.6-flash: not run, not run in this column
+- cheetahclaws x gemini-3.7-flash: not run, not run in this column
+- cheetahclaws x gemini-3.8-flash: not run, not run in this column
+- cheetahclaws x glm-5.3: not run, not run in this column
+- cheetahclaws x glm-5.3-flash: not run, not run in this column
+- cheetahclaws x gpt-5.2: not run, not run in this column
+- cheetahclaws x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- cheetahclaws x gpt-5.5: not run, not run in this column
+- cheetahclaws x gpt-5.6-luna: not run, not run in this column
+- cheetahclaws x gpt-5.6-sol: not run, not run in this column
+- cheetahclaws x gpt-5.6-terra: not run, not run in this column
+- cheetahclaws x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- cheetahclaws x grok-4.20: not run, not run in this column
+- cheetahclaws x grok-4.3: not run, not run in this column
+- cheetahclaws x grok-4.5: not run, not run in this column
+- cheetahclaws x grok-4.6: not run, not run in this column
+- cheetahclaws x grok-build-0.1: not run, not run in this column
+- cheetahclaws x hunyuan-4-preview: not run, not run in this column
+- cheetahclaws x kimi-k2.7-code: not run, not run in this column
+- cheetahclaws x kimi-k3: not run, not run in this column
+- cheetahclaws x mistral-medium-3.5: not run, not run in this column
+- cheetahclaws x nemotron-3-super: not run, not run in this column
+- cheetahclaws x nemotron-3.5-lightning: not run, not run in this column
+- cheetahclaws x qwen3.7-max: not run, not run in this column
+- cheetahclaws x qwen3.7-plus: not run, not run in this column
+- cheetahclaws x qwen3.8-flash: not run, not run in this column
+- cheetahclaws x qwen3.8-max: not run, not run in this column
+- cheetahclaws x step-3.7-flash: not run, not run in this column
 
 ## Provider: codex-azure-e2
 

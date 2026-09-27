@@ -1420,32 +1420,33 @@ driven in process and every event is re-emitted as it is yielded, `__hr_init` fi
 
 ### Versions and the column
 
-Measured on a self-hosted instance built from this branch (main at d54ebf8 plus the change,
-default build arguments), one container, `HR_BACKENDS=cheetahclaws`, a fresh volume; CheetahClaws
-3.5.88 installed by the entrypoint (wheel digest verified, import check passed, `pip check` clean).
-One `custom` connection in the OpenAI format to an OpenAI-compatible gateway whose model ids are
-pool aliases, each routed over several upstream models with fallbacks between pools; the three
-aliases it serves are the column's models. The instance has no egress beyond that gateway, so the
-public MCP probe was not reachable.
+The column in `docs/support-matrix.md` is `cheetahclaws-tokenrouter`, measured on hr-test
+(harnessrouter/harnessrouter:0.25.0, the release that carries this base; one container, the default
+`HR_BACKENDS`, the live data volume) on 2026-09-27, after the author's own measurements on a lab
+gateway (kept in the PR, #264). CheetahClaws 3.5.88 was installed by the entrypoint at boot (wheel
+digest verified, import check passed). The instance's own connections served the turns: TokenRouter
+for gpt-5.4 and claude-sonnet-5, and gpt-5.4-mini through the Custom OpenAI Chat connection with
+TokenRouter behind the switch, as `fill-connection.py` stamped them.
 
-- **Conformance** (`uhp-conformance` 2026.9.12.post2 from this tree, `--class full`, tools-pool):
-  75/75, CONFORMANT (full).
-- **Console column** `cheetahclaws-custom`, two passes of the five scenarios on each alias; the table
-  keeps the second and the first try in its notes. tools-pool 5/5 (the first pass missed the recall
-  by answering "Thought process"). fast-pool and coder-pool answer the recall with `M-<alias>` or
-  the previous turn's `DONE`: their histories were intact (same session file before and after the
-  recycle, and the same scenario through the API recalled M1 on tools-pool), so this is the
-  recall of the small models behind those aliases. coder-pool's artifact turn wrote no file in one
-  of two passes. The rows marked "served as" are the gateway's fallback between its own pools,
-  which rule 2 rightly counts as a substitution.
-- **Custom harness** (`custom-harness.mjs`, `MCP_URL=off`, the base's default id mapped to
-  tools-pool on the connection): the stamp skill read, its script run from the workspace,
-  `stamp.txt` produced, WebSearch withheld and unused, 15 s. One earlier run had no settled turn in
-  the script's 420 s window; not reproduced, cause not established.
-- **Plugin matrix** (`plugins/run-matrix.py`, tools-pool): skills 1/1, stdio MCP 1/1
-  (`PLUGIN_MCP_OK`, through the CLI's own MCP client). The SSE and streamable-HTTP columns need the
-  public probe and were not run.
-- **Not measured here:** the hosted provider columns (OpenRouter, TokenRouter, Vercel, the hosted
-  HarnessRouter API), so `_MODEL_CATALOG["cheetahclaws"]` is offered, not measured; and a benchmark
-  column.
+- **Conformance** (`uhp-conformance` 2026.9.12.post2 from this tree, `--class full`, a harness on
+  the base with `--model gpt-5.4`): 75/75, CONFORMANT (full).
+- **Console column** (`run.mjs`, `HARNESSES=cheetahclaws`, three models): 3 pairs, 15 of 15
+  scenario runs passed, first turn to recycle. Two rows are served as the provider's dated alias of
+  the id asked for (`gpt-5.4-2026-03-05`, `gpt-5.4-mini-2026-03-17`), which the table notes and
+  rule 2 does not count against the pair.
+- **Custom harness** (`custom-harness.mjs`, `BASES=cheetahclaws`, the public MCP probe reachable
+  from hr-test): the stamp skill read, its script run from the workspace, `stamp.txt` produced,
+  WebSearch withheld and unused, MCP reached, 28 s.
+- **Plugin matrix** (`plugins/run-matrix.py --bases cheetahclaws --mode all`): skills 1/1, stdio
+  MCP 1/1, SSE 1/1 through the CLI's own client. Streamable HTTP 0/1 on 0.25.0: the CLI's own
+  streamable-HTTP client (`mcp_client/client.py`, `HttpTransport`) is answered 400 on `initialize`
+  by the probe, the same server its SSE end and the runner's bridge reach, so the turn ran without
+  the server and said so. Since 0.25.1 a streamable-HTTP server reaches this base through the
+  runner's stdio bridge (`_BRIDGED_TRANSPORTS`, the mechanism codex, dsh and goose use for SSE),
+  the way every other base reaches it; the CLI's client keeps SSE and stdio.
+- **In the browser** (the console on hr-test, the system harness, gpt-5.4): a task that writes a
+  file and runs a command completed in 15 s with the file card and the byte count in the answer.
+- **Not measured here:** the other provider columns (OpenRouter, Vercel, the hosted HarnessRouter
+  API) beyond the three pairs above, so `_MODEL_CATALOG["cheetahclaws"]` stays offered, not
+  measured, for the rest of its list; and a benchmark column.
 
