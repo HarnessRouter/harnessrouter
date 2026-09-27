@@ -1534,7 +1534,10 @@ Measured on the pinned v2.13 (macOS for the driver, Linux arm64 `python:3.12-sli
   document_query and memory (FAISS, local embeddings/torch), browser, scheduler, notify_user,
   a2a_chat, the A0-connector remote tools. The nodejs runtime of code_execution_tool calls
   `/exe/node_eval.js`, which exists only in upstream's image — a model that picks it gets an error.
-- **Install**: 83 s, venv 569 MB + source 69 MB (Linux arm64) — not in the default `HR_BACKENDS`.
+- **Install**: 83 s, venv 569 MB + source 69 MB (Linux arm64). Over the 300 MB bar and in the default
+  `HR_BACKENDS` all the same — the call aider's review already made (see above): the console offers
+  every base the catalogue lists, so a base outside the default install is a base whose first task
+  fails, and the operator's switch is `HR_BACKENDS` itself.
 - **End to end through a local runner** (Vercel, gemini-3.1-flash-lite, 2026-09-27): a shell call +
   AGENTS.md codeword, a no-tool recall of the first turn, a skill loaded by `skills_tool` whose
   script ran, a turn with the shell withheld; every result carried `model` =

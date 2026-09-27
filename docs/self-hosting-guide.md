@@ -850,18 +850,20 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,agentzero,systemone,cheetahclaws ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
-Aider and OpenHands are the largest of the set: each environment is about 700 MB and takes a minute
-or two to install on a fresh volume. Leave either out of `HR_BACKENDS` if you will not use it.
+Aider, OpenHands and Agent Zero are the largest of the set: each environment is 600-700 MB and takes
+a minute or two to install on a fresh volume. All three are in the default list anyway, because the
+console offers every base the catalogue lists and a base that did not install fails on its first
+task; leave any of them out of `HR_BACKENDS` if you will not use it.
 
-Agent Zero (`agentzero`) is NOT in the default set: name it in `HR_BACKENDS` to install it. It is a
-framework rather than a CLI, so it is installed from its tagged source archive (digest-pinned) into a
-virtualenv (about 640 MB with its source, 80-odd seconds on a fresh volume; measured on Linux arm64) with upstream's own dependency pins, minus the packages that serve only
-what this base switches off (local embeddings and speech, which would bring torch; document
-parsing; the browser; its messaging integrations).
+Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
+archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv
+and 69 MB of source, 83 seconds on a fresh volume (measured on Linux arm64). It takes upstream's own
+dependency pins, minus the packages that serve only what this base switches off (local embeddings and
+speech, which would bring torch; document parsing; the browser; its messaging integrations).
 
 A backend that fails to install is not fatal: the others still work. The console offers every
 base the gateway's catalogue lists, so a task on a backend that did not install fails on its
