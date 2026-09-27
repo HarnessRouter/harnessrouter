@@ -125,6 +125,9 @@ class Req:
 
 
 class Locator:
+    async def bounding_box(self):
+        return {"x": 100.0, "y": 200.0, "width": 50.0, "height": 20.0}
+
     def __init__(self, page, sel):
         self.page, self.sel, self.first = page, sel, self
 

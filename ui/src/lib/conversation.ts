@@ -10,7 +10,7 @@
 // The split that makes sharing work: this module owns the turn lifecycle (send, stream, reconcile,
 // stop, settle) and owns NO composer state. `send(text, files)` takes what to send as arguments, so
 // one composer can drive one column or six.
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { streamResponse, subscribeHarnessEvents, loadSessionTurns, cancelSession,
          type RespFile, type SessionTurn } from '@/lib/chat';
 import { getCurrentWorkspaceRef } from '@/lib/workspace';
@@ -146,7 +146,9 @@ export function livePending(harness: string, cards: TraceCard[] | null): Pending
  *  agent last acted. `epoch` counts openings, so a pane the person closed stays closed for THAT
  *  browser and comes back on its own for the next one. The live URL is not here: the pane reads it
  *  through the session's own route, because whoever holds it controls the browser. */
-export type BrowserState = { open: boolean; control: 'agent' | 'user'; lastCallAt: number; lastTool: string; held: boolean; epoch: number };
+export type BrowserState = { open: boolean; control: 'agent' | 'user'; lastCallAt: number; lastTool: string; held: boolean; epoch: number;
+  /** where the agent last acted on the page (the element's centre) and the page's viewport, for the ghost cursor */
+  point?: { x: number; y: number } | null; viewport?: { w: number; h: number } };
 export type ConvState = { msgs: Msg[]; busy: boolean; prevId: string | null; firstTurn: boolean; loaded: boolean; browser?: BrowserState };
 export const convStore = createConversationStore();
 export function getConvState(key: string): ConvState { return convStore.get(key) as ConvState; }
@@ -287,12 +289,30 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
     case 'browser.call':
     case 'browser.held':
       setConvState(sid, (st) => ({ browser: { ...(st.browser ?? { control: 'agent', epoch: 1 }), open: true,
-                                              lastCallAt: Number(ev.at) * 1000 || Date.now(), lastTool: String(ev.tool || ''), held: t === 'browser.held' } as BrowserState })); break;
+                                              lastCallAt: Number(ev.at) * 1000 || Date.now(), lastTool: String(ev.tool || ''), held: t === 'browser.held',
+                                              ...(ev.point && typeof ev.point === 'object' ? { point: ev.point as { x: number; y: number } } : {}),
+                                              ...(ev.viewport && typeof ev.viewport === 'object' ? { viewport: ev.viewport as { w: number; h: number } } : {}) } as BrowserState })); break;
     case 'browser.control':
       setConvState(sid, (st) => (st.browser ? { browser: { ...st.browser, control: ev.control === 'user' ? 'user' : 'agent', held: false } } : {})); break;
     case 'browser.closed':
       setConvState(sid, (st) => (st.browser ? { browser: { ...st.browser, open: false, held: false } } : {})); break;
   }
+}
+/** The browser pane on a harness page: whether it is showing, how (docked beside the conversation,
+ *  full screen, or floating over the page), where a floating one sits, and which browsers the
+ *  person closed (by session and epoch) so a closed pane stays closed for that browser and comes
+ *  back for the next. The page header's Browser control and the conversation share this state. */
+export type PaneMode = 'docked' | 'full' | 'float';
+export type PaneState = { open: boolean; mode: PaneMode; float: { x: number; y: number; w: number; h: number }; dismissed: Record<string, number> };
+const _pane = new Map<string, PaneState>();
+const _paneSubs = new Set<() => void>();
+const _paneDefault: PaneState = { open: false, mode: 'docked', float: { x: -1, y: -1, w: 560, h: 400 }, dismissed: {} };
+export function getPaneState(h: string): PaneState { return _pane.get(h) ?? _paneDefault; }
+export function setPaneState(h: string, patch: Partial<PaneState>): void {
+  _pane.set(h, { ...getPaneState(h), ...patch }); _paneSubs.forEach((f) => f());
+}
+export function usePaneState(h: string): PaneState {
+  return useSyncExternalStore((f) => { _paneSubs.add(f); return () => { _paneSubs.delete(f); }; }, () => getPaneState(h), () => _paneDefault);
 }
 /** What the session's route says about its browser, folded into the store (the feed keeps it fresh
  *  from there). Called when a task is opened, so a browser that was already running shows. */

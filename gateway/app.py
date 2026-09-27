@@ -1092,6 +1092,8 @@ _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_
 # base), the model list it serves, and the connect flow that hands a key to this instance.
 HR_HOSTED_BASE = os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai").rstrip("/")
 HR_HOSTED_PROVIDER_BASE = f"{HR_HOSTED_BASE}/v1/provider"
+# The hosted console, where a HarnessRouter API key's credit is bought and topped up.
+HR_HOSTED_CONSOLE = os.environ.get("HR_HOSTED_CONSOLE", "https://app.harnessrouter.ai").rstrip("/")
 HR_HOSTED_MODELS_URL = f"{HR_HOSTED_BASE}/v1/models"
 HR_HOSTED_BALANCE_URL = f"{HR_HOSTED_BASE}/v1/balance"
 HR_HOSTED_CONNECT_URL = f"{HR_HOSTED_BASE}/v1/connect"
@@ -5024,6 +5026,7 @@ async def admin_integrations_get(request: Request) -> dict:
                 if row.get("name") == hosted.get("name"):
                     row["balance"] = bal
     return {"integrations": public,
+            "hosted_console": HR_HOSTED_CONSOLE,
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
@@ -14268,7 +14271,7 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
                                     f"{type(e).__name__}: {e}")
             return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
     await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool)
-    _browser_notice(sid, "call", hid=hid, org=org, tool=tool)
+    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=browser_plane.viewport_of(s))
     if isinstance(out, tuple) and out[0] == "image":
         png, caption = out[1], out[2]
         stored = None

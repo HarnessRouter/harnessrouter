@@ -235,6 +235,7 @@ class Session:
         self.lock = asyncio.Lock()
         self.closed = False
         self.opened = False                     # this call made the browser at the vendor: the caller writes the open row once
+        self.pointer: dict | None = None        # where the agent last acted on the page (the element's centre), for the console's ghost cursor
 
 
 def minutes(rec: dict) -> int:
@@ -630,12 +631,34 @@ async def _settled(s: Session) -> None:
             pass
 
 
+async def _mark(s: Session, loc) -> None:
+    """Remember the centre of the element about to be acted on, in page coordinates, so the console
+    can show a ghost cursor going there. Best effort: a locator that cannot be measured leaves the
+    last point standing."""
+    try:
+        box = await loc.bounding_box()
+    except Exception:  # noqa: BLE001
+        return
+    if isinstance(box, dict) and box.get("width") is not None:
+        s.pointer = {"x": round(float(box["x"]) + float(box["width"]) / 2, 1), "y": round(float(box["y"]) + float(box["height"]) / 2, 1)}
+
+
+def viewport_of(s: Session) -> dict:
+    """The page's viewport, the coordinate space of `pointer`."""
+    try:
+        v = s.page.viewport_size if s.page is not None else None
+    except Exception:  # noqa: BLE001
+        v = None
+    return {"w": int((v or {}).get("width") or 1280), "h": int((v or {}).get("height") or 800)}
+
+
 async def call(s: Session, name: str, args: dict):
     """Run one tool on this session. Returns text, or ("image", png bytes, caption) for a
     screenshot the caller stores. Raises BrowserToolError with a sentence the agent can act on."""
     await registry.bump(s.sid, last_used=time.time(), calls=1)
     page = s.page
     if name == "navigate":
+        s.pointer = None
         url = str(args.get("url") or "").strip()
         if not url:
             raise BrowserToolError("Give a web address to open.")
@@ -664,6 +687,7 @@ async def call(s: Session, name: str, args: dict):
         return text[:cap] + (f"\n… {len(text) - cap} more characters" if len(text) > cap else "")
     if name == "click":
         loc = _target(s, args)
+        await _mark(s, loc)
         try:
             await loc.click(timeout=15000)
         except Exception as e:  # noqa: BLE001
@@ -672,6 +696,7 @@ async def call(s: Session, name: str, args: dict):
         return f"Clicked. Now at {await _where(s)}"
     if name == "type":
         loc = _target(s, args)
+        await _mark(s, loc)
         text = str(args.get("text") or "")
         try:
             await loc.fill(text, timeout=15000)

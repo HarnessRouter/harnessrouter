@@ -949,85 +949,102 @@ body.hr-resizing iframe { pointer-events: none; }
    record actually knows the cause. */
 .wbx-incomplete-why { font-size: 12.5px; color: var(--mut, #6b7280); margin: 4px 0 0 2px; }
 
-/* ── the task's browser, live in the right pane ──────────────────────────────────────────────
-   The frame glows the brand blue while the agent has the browser and breathes faster while it is
-   acting; a click on the screen takes it over, after which the frame is the person's (a calm
-   green edge, no overlay). Reduced motion keeps the colours and drops the animation. */
-.wbx-browser { position: relative; }
-.wbx-browser-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); min-height: 48px; }
-.wbx-browser-title { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 1.2; }
+/* ── the task's browser: one floating card ──────────────────────────────────────────────────
+   The right slot holds a rounded card lifted off the page; its top row carries every action and
+   the vendor's live view fills the rest. The card's edge glows the brand blue while the agent has
+   the browser and ripples spread from it while the agent acts; the person's card has a calm green
+   edge. Reduced motion keeps the colours and drops the animation. The card also fills the window
+   (full) or floats over the page (float), dragged by its top row. */
+.wbx-browser-pane { background: transparent; padding: 12px 12px 12px 0; }
+.wbx-browser-card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 auto;
+  border-radius: 16px; background: var(--surface); box-shadow: 0 1px 2px rgba(17, 19, 23, .06), 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1px var(--line);
+  overflow: visible; transition: box-shadow .4s ease; }
+.wbx-browser-card.is-full { position: fixed; inset: 12px; z-index: 80; }
+.wbx-browser-card.is-float { position: fixed; z-index: 80; min-width: 320px; min-height: 220px; resize: both; overflow: hidden; }
+/* the card's edge says who has the browser, quietly: a thin blue or green line, no motion outside */
+.wbx-browser-card.is-agent { box-shadow: 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1.5px var(--brand); }
+.wbx-browser-card.is-user { box-shadow: 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1.5px #1f9d63; }
+/* inside the screen: the edges tint blue and breathe, the middle stays clear; while the agent acts,
+   rings travel inward from the edge and fade, like ripples on water */
+.wbx-browser-veil { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: inherit;
+  background: radial-gradient(ellipse 70% 62% at 50% 50%, transparent 0%, transparent 60%, color-mix(in srgb, var(--brand) 9%, transparent) 84%, color-mix(in srgb, var(--brand) 26%, transparent) 100%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 45%, transparent), inset 0 0 36px color-mix(in srgb, var(--brand) 22%, transparent);
+  animation: wbx-veil 3.2s ease-in-out infinite; }
+.wbx-browser-veil.is-acting { animation-duration: 1.9s; }
+@keyframes wbx-veil { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+.wbx-browser-ring { position: absolute; inset: 0; border: 2px solid color-mix(in srgb, var(--brand) 70%, transparent); border-radius: inherit; opacity: 0;
+  animation: wbx-ring 2.6s cubic-bezier(.2, .5, .3, 1) infinite; }
+.wbx-browser-ring:nth-child(2) { animation-delay: .87s; }
+.wbx-browser-ring:nth-child(3) { animation-delay: 1.73s; }
+@keyframes wbx-ring {
+  0%   { inset: -2px; opacity: .6; border-width: 3px; }
+  60%  { opacity: .18; }
+  100% { inset: 26px; opacity: 0; border-width: 1px; }
+}
+/* the ghost cursor: where the agent last acted, gliding there along an arc; a ring on a click */
+.wbx-ghost { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; z-index: 2;
+  filter: drop-shadow(0 2px 4px rgba(17, 19, 23, .35)); }
+.wbx-ghost svg { display: block; margin: -3px 0 0 -4px; }
+.wbx-ghost-ring { position: absolute; left: -10px; top: -10px; width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--brand);
+  opacity: 0; animation: wbx-ghost-ring .7s ease-out 1; }
+@keyframes wbx-ghost-ring { 0% { transform: scale(.3); opacity: .8; } 100% { transform: scale(1.6); opacity: 0; } }
+/* the action row */
+.wbx-browser-bar { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; min-height: 46px; border-bottom: 1px solid var(--line);
+  border-radius: 16px 16px 0 0; background: var(--surface); }
+.wbx-browser-bar.is-draggable { cursor: grab; user-select: none; }
+.wbx-browser-bar.is-draggable:active { cursor: grabbing; }
+.wbx-browser-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .wbx-browser-title b { font-size: 13px; font-weight: 600; color: var(--ink); }
 .wbx-browser-status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wbx-browser-btn { flex: 0 0 auto; height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+.wbx-browser-bar-gap { flex: 1 1 auto; }
+.wbx-browser-btn { flex: 0 0 auto; height: 30px; padding: 0 12px; margin-left: 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
   color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .wbx-browser-btn:hover { background: var(--brand-50); }
 .wbx-browser-btn.is-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .wbx-browser-btn.is-primary:hover { background: var(--brand-hover); }
 .wbx-browser-btn:disabled { opacity: .6; cursor: default; }
-.wbx-browser-close { flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+.wbx-browser-ic { flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
-.wbx-browser-close:hover { background: var(--brand-50); color: var(--ink); }
-/* The frame is the browser's own shape (the plug opens it at 1280 x 800), centred in the pane, so
-   the glow hugs the screen rather than a dark field under it; it takes the pane's width and never
-   more than its height. */
-.wbx-browser { display: flex; flex-direction: column; }
-.wbx-browser-frame { position: relative; flex: 0 0 auto; width: calc(100% - 24px); aspect-ratio: 16 / 10; max-height: calc(100% - 72px);
-  margin: auto 12px; border-radius: 12px; overflow: hidden; background: #0f1115; box-shadow: 0 0 0 1px var(--line); transition: box-shadow .4s ease; }
+.wbx-browser-ic:hover { background: var(--brand-50); color: var(--ink); }
+/* the stream fills the card below the row */
+.wbx-browser-stream { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 0 0 16px 16px; overflow: hidden; background: #0f1115; }
 .wbx-browser-view, .wbx-browser-view iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
 .wbx-browser-view[inert] iframe { pointer-events: none; }
 .wbx-browser-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #aab1bd; font-size: 13px; }
-/* the agent's frame: a blue edge that breathes, and a light that sweeps the glass while it acts */
-.wbx-browser-frame.is-agent { box-shadow: 0 0 0 2px var(--brand), 0 0 18px 2px color-mix(in srgb, var(--brand) 38%, transparent);
-  animation: wbx-browser-breathe 2.8s ease-in-out infinite; }
-.wbx-browser-frame.is-agent.is-acting { animation: wbx-browser-pulse 1.15s ease-in-out infinite; }
-.wbx-browser-frame.is-agent::after { content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; opacity: 0;
-  background: linear-gradient(115deg, transparent 35%, color-mix(in srgb, var(--brand) 16%, transparent) 50%, transparent 65%);
-  background-size: 260% 100%; }
-.wbx-browser-frame.is-agent.is-acting::after { opacity: 1; animation: wbx-browser-sweep 2.4s linear infinite; }
-/* the person's frame: quiet, theirs */
-.wbx-browser-frame.is-user { box-shadow: 0 0 0 2px #1f9d63, 0 0 14px 1px rgba(31, 157, 99, .28); }
-@keyframes wbx-browser-breathe {
-  0%, 100% { box-shadow: 0 0 0 2px var(--brand), 0 0 14px 1px color-mix(in srgb, var(--brand) 30%, transparent); }
-  50%      { box-shadow: 0 0 0 2px var(--brand), 0 0 26px 4px color-mix(in srgb, var(--brand) 48%, transparent); }
-}
-@keyframes wbx-browser-pulse {
-  0%, 100% { box-shadow: 0 0 0 2px var(--brand), 0 0 18px 2px color-mix(in srgb, var(--brand) 42%, transparent); }
-  50%      { box-shadow: 0 0 0 3px var(--brand), 0 0 34px 8px color-mix(in srgb, var(--brand) 62%, transparent); }
-}
-@keyframes wbx-browser-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
-/* the one control while the agent drives: the whole screen, "take over" */
-.wbx-browser-takeover { position: absolute; inset: 0; border: 0; background: transparent; cursor: pointer; padding: 0; display: flex;
-  align-items: flex-end; justify-content: center; }
+.wbx-browser-takeover { position: absolute; inset: 0; border: 0; background: transparent; cursor: pointer; padding: 0; }
 .wbx-browser-takeover:focus-visible { outline: 3px solid var(--brand); outline-offset: -3px; }
-.wbx-browser-pill { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 8px;
-  padding: 7px 12px 7px 10px; border-radius: 999px; background: rgba(15, 17, 21, .78); color: #fff; font-size: 12.5px; font-weight: 500;
-  backdrop-filter: blur(6px); white-space: nowrap; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); pointer-events: none; }
-.wbx-browser-pill em { font-style: normal; color: #cfd8ff; padding-left: 8px; border-left: 1px solid rgba(255, 255, 255, .25); }
-.wbx-browser-takeover:hover .wbx-browser-pill { background: var(--brand); }
-.wbx-browser-takeover:hover .wbx-browser-pill em { color: #fff; }
-.wbx-browser-pill.is-user { background: rgba(31, 157, 99, .92); }
+/* the empty state: a small window on a soft glow */
 .wbx-browser-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
-  padding: 24px; color: var(--muted); font-size: 13px; gap: 4px; }
-.wbx-browser-empty b { color: var(--ink); font-weight: 600; }
-.wbx-browser-empty p { margin: 0; }
+  padding: 24px 28px; color: var(--muted); font-size: 13px; line-height: 1.5; gap: 6px; }
+.wbx-browser-empty p { margin: 0; max-width: 380px; }
+.wbx-browser-empty-title { color: var(--ink); font-weight: 600; font-size: 14px; margin-top: 8px !important; }
+.wbx-browser-empty-art { position: relative; margin-bottom: 4px; }
+.wbx-browser-empty-art::before { content: ''; position: absolute; inset: -30px -40px; border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--brand) 14%, transparent), transparent 70%); }
+.wbx-browser-empty-art svg { position: relative; }
+.wbx-browser-empty-art .art-window { fill: var(--surface); stroke: color-mix(in srgb, var(--brand) 55%, var(--line)); stroke-width: 1.5; }
+.wbx-browser-empty-art .art-line { stroke: var(--line); stroke-width: 1.5; }
+.wbx-browser-empty-art .art-dot { fill: color-mix(in srgb, var(--brand) 45%, var(--line)); }
+.wbx-browser-empty-art .art-bar { fill: var(--brand-50); }
+.wbx-browser-empty-art .art-text { fill: color-mix(in srgb, var(--ink) 18%, var(--surface)); }
+.wbx-browser-empty-art .art-text.is-light { fill: color-mix(in srgb, var(--ink) 9%, var(--surface)); }
+.wbx-browser-empty-art .art-cursor { fill: var(--brand); stroke: var(--surface); stroke-width: 1.5; stroke-linejoin: round; }
 /* the live dot: blue and pulsing while the agent acts, green when the person has the browser */
 .wbx-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
 .wbx-live-dot.is-idle { background: var(--brand); opacity: .55; }
 .wbx-live-dot.is-on { background: var(--brand); box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); animation: wbx-dot 1.4s ease-out infinite; }
 .wbx-live-dot.is-user { background: #1f9d63; }
 @keyframes wbx-dot { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 55%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
-/* the chip in the conversation bar that brings the pane back */
-.wbx-browser-chip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.wbx-browser-chip:hover { background: var(--brand-50); }
-.wbx-browser-chip.is-shown { border-color: var(--brand); color: var(--brand); }
-.wbx-browser-chip.is-live { border-color: color-mix(in srgb, var(--brand) 50%, var(--line)); }
+/* the header's Browser control */
+.wbx-browser-hbtn { position: relative; }
+.wbx-browser-hbtn .wbx-live-dot { position: absolute; right: 4px; top: 4px; width: 7px; height: 7px; background: transparent; }
+.wbx-browser-hbtn.is-on { color: var(--brand); border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
 @media (prefers-reduced-motion: reduce) {
-  .wbx-browser-frame.is-agent, .wbx-browser-frame.is-agent.is-acting, .wbx-browser-frame.is-agent.is-acting::after, .wbx-live-dot.is-on { animation: none; }
+  .wbx-browser-veil, .wbx-browser-ring, .wbx-ghost-ring, .wbx-live-dot.is-on { animation: none; }
 }
-/* phones: the pane is the screen */
+/* phones: the docked card is the screen; a floating one is too */
 @media (max-width: 720px) {
-  .wbx-conv.split .wbx-browser-pane { position: absolute; inset: 0; width: 100% !important; max-width: none; flex: none !important; z-index: 30; }
-  .wbx-browser-frame { width: calc(100% - 16px); margin: auto 8px; border-radius: 10px; }
+  .wbx-conv.split .wbx-browser-pane { position: absolute; inset: 0; width: 100% !important; max-width: none; flex: none !important; z-index: 30; padding: 8px; }
+  .wbx-browser-card.is-float { inset: 8px !important; width: auto !important; height: auto !important; resize: none; }
   .wbx-browser-btn { padding: 0 10px; }
 }

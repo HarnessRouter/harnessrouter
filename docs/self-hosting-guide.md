@@ -627,18 +627,22 @@ curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses/$HID/servers/plugs" \
 plugin with `"requires": {"plugs": ["browser"]}` in its `plugin.json`; the harness it lands on
 includes the plugin, and the workspace still has to have connected it.
 
-**Watching and taking over.** When a task opens a browser, the console slides a **Browser** pane
-in on the right and streams the vendor's live view of it, with a blue glow around the screen
-while the agent is driving. Click the screen to take it over: the view becomes yours to click and
-type in, and the agent pauses: its next browser call waits for you (without spending tokens) and
-runs the moment you choose **Hand back to the agent**; after 45 seconds of waiting the call answers
-that you still have the browser and the agent may keep waiting or go on without it. Closing the pane leaves the browser running; the **Browser** chip in the conversation bar
-brings it back, and the next browser the agent opens brings it back on its own. Behind it:
-`GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which is a
-credential and is served only to the session's owner) and
+**Watching and taking over.** When a task opens a browser, the console brings up a Browser card
+beside the conversation and streams the vendor's live view of it; the edges of the screen tint
+blue while the agent has the browser and ripple inward while it acts, and a ghost cursor glides to
+wherever the agent last clicked or typed. The card's top row carries every action: **Take over**
+(or a click on the screen) makes the view yours to click and type in and pauses the agent, whose
+next browser call waits for you without spending tokens and runs the moment you choose **Hand back
+to the agent** (after 45 seconds of waiting the call answers that you still have the browser and
+the agent may keep waiting or go on without it); **Full screen** fills the window, **Float** lifts
+the card over the page where you can drag it by its top row, and **Close** puts it away. The card
+closes itself when the browser closes; the **Browser** button in the task header, there whenever
+the harness includes the browser plugin, opens it at any time, with or without a browser in it.
+Behind it: `GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which
+is a credential and is served only to the session's owner) and
 `POST /v1/sessions/{sid}/browser/control` with `{"control": "user"}` or `{"control": "agent"}`;
-the harness event feed carries `browser.opened`, `browser.call`, `browser.held`,
-`browser.control` and `browser.closed` events (never the address).
+the harness event feed carries `browser.opened`, `browser.call` (with the point the agent acted on
+and the page's viewport), `browser.held`, `browser.control` and `browser.closed` (never the address).
 
 **The browser.** The browser runs in Browser Use Cloud and is driven from this instance; the agent
 never holds the browser's address or the key. Set the key in the container's environment:

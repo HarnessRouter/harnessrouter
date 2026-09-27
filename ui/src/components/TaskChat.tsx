@@ -28,7 +28,7 @@ import { withText, withReasoning, withStep, withResult, asstText } from 'reifyui
 import {
   // The conversation controller and its module-level singletons now live in one place so Tasks and
   // Arena share a single store, one realtime bus wiring and one turn lifecycle (see lib/conversation).
-  useConversationTurn, useHarnessBus, useConvState, getConvState, setConvState, convStore, seedBrowserState,
+  useConversationTurn, useHarnessBus, useConvState, getConvState, setConvState, convStore, seedBrowserState, usePaneState, setPaneState, getPaneState,
   msgsFromTurns, turnIndexOf, trackTaskFinished, isInternalOutput,
   addPendingCard, setPendingSid, dropPending, livePending,
   _busSuppress, _runningSids,
@@ -488,16 +488,31 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   // open unless the person closed it for THAT browser (epoch), and the chip brings it back.
   const liveSid = sessionId ?? liveSessionId ?? null;
   const browser = useConvState(liveSid ?? '').browser;
-  const [browserHidden, setBrowserHidden] = useState(0);     // the epoch the person closed
+  const pane = usePaneState(harnessId);
   useEffect(() => {
     if (!liveSid) return;
     let alive = true;
     fetchBrowser(liveSid).then((i) => { if (alive) seedBrowserState(liveSid, i); });
     return () => { alive = false; };
   }, [liveSid]);
-  // The pane stays through the browser's close (it says so) until the person closes it, and a new
-  // browser (a new epoch) brings it back on its own.
-  const browserShown = !!browser && browserHidden !== browser.epoch && !preview;
+  // A browser opening brings the pane up on its own unless the person closed it for that very
+  // browser; a browser closing takes the pane down. The header's Browser control opens it at any
+  // time, with or without a browser in it.
+  const epoch = browser?.open ? browser.epoch : 0;
+  useEffect(() => {
+    if (!liveSid || !epoch) return;
+    if (getPaneState(harnessId).dismissed[liveSid] !== epoch) setPaneState(harnessId, { open: true });
+  }, [liveSid, epoch, harnessId]);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    const open = !!browser?.open;
+    if (wasOpen.current && !open) setPaneState(harnessId, { open: false });
+    wasOpen.current = open;
+  }, [browser?.open, harnessId]);
+  const closeBrowserPane = () => setPaneState(harnessId, { open: false, mode: 'docked',
+    dismissed: liveSid && browser?.open ? { ...getPaneState(harnessId).dismissed, [liveSid]: browser.epoch } : getPaneState(harnessId).dismissed });
+  const browserShown = pane.open && !preview;
+  const browserDocked = browserShown && pane.mode === 'docked';
   const [modelOpen, setModelOpen] = useState(false);
   const modelBtnRef = useRef<HTMLElement>(null);
   const [previewW, onPreviewResize] = useHResize(520, 340, 1100, true);
@@ -529,22 +544,14 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   const convRef = useRef<HTMLDivElement>(null);
   const canAttach = !!target.backend && !busy;
   return (
-    <div ref={convRef} className={'wbx-conv' + (preview || browserShown ? ' split' : '')}>
+    <div ref={convRef} className={'wbx-conv' + (preview || browserDocked ? ' split' : '')}>
       {/* A fresh draft centers on what it is for: the harness, named under its base's mark, with
           the composer right under it. The first message turns it into the running thread. */}
       <div className={'wbx-conv-main' + (!loading && msgs.length === 0 && !busy ? ' is-hero' : '')}>
       {/* The bar exists for one thing: the header-values gear of a harness with declared headers.
           The host page names the harness above; nothing else belongs here. */}
-      {(declared.length > 0 || !!browser?.open) && (
+      {declared.length > 0 && (
       <div className="wbx-conv-bar">
-        {!!browser?.open && (
-          <button type="button" className={'wbx-browser-chip' + (browserShown ? ' is-shown' : '') + (browser.control === 'user' ? ' is-user' : busy ? ' is-live' : '')}
-            aria-pressed={browserShown} title={browserShown ? 'Hide the browser view' : 'Show the browser the agent is using'}
-            onClick={() => setBrowserHidden(browserShown ? browser.epoch : 0)}>
-            <span className={'wbx-live-dot' + (browser.control === 'user' ? ' is-user' : busy ? ' is-on' : ' is-idle')} aria-hidden="true" />
-            Browser
-          </button>
-        )}
         {declared.length > 0 && (
           <button className="wbx-hdr-gear" title="Header values for this preview"
             aria-haspopup="dialog" aria-expanded={hdrOpen}
@@ -732,12 +739,15 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
           <FilePreview file={preview} onClose={() => setPreview(null)} />
         </div>
       </>}
-      {browserShown && liveSid && browser && <>
+      {browserDocked && <>
         <div className="wbx-vresize" onMouseDown={onPreviewResize} title="Drag to resize" />
         <div className="wbx-preview-pane wbx-browser-pane" style={{ width: previewW, flex: '0 0 auto' }}>
-          <BrowserPane sessionId={liveSid} live={browser} busy={busy} onClose={() => setBrowserHidden(browser.epoch)} />
+          <BrowserPane harnessId={harnessId} sessionId={liveSid ?? ''} live={browser} busy={busy} mode="docked" onClose={closeBrowserPane} />
         </div>
       </>}
+      {browserShown && pane.mode !== 'docked' && (
+        <BrowserPane harnessId={harnessId} sessionId={liveSid ?? ''} live={browser} busy={busy} mode={pane.mode} onClose={closeBrowserPane} />
+      )}
       {outOfCredits && (
         <InsufficientCreditsModal balance={outOfCredits.balance}
           onClose={clearOutOfCredits} />
