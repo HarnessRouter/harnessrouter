@@ -36,15 +36,30 @@ export interface UserMsg { role: 'user'; text: string; attachments?: { name: str
 export interface ToolStep { name: string; args: string; result?: string; callId?: string }
 // An assistant turn is an ORDERED list of blocks appended as events arrive, so tool activity is
 // interleaved with prose in real time (not all tools hoisted to the top).
-export type Block = { kind: 'text'; text: string } | { kind: 'tools'; reasoning: string; steps: ToolStep[] };
+export type Block = { kind: 'text'; text: string; error?: true } | { kind: 'tools'; reasoning: string; steps: ToolStep[] };
 
-// The failure sentence reaches a message on two paths, the turn's own stream and the settled
-// read of the turns feed, and the second arrival must not print it twice: a message that already
-// ends with this exact error keeps it once (seen as "Error: X Error: X" under a refused turn).
-function withError(blocks: Block[], msg: string): Block[] {
+// The failure sentence is its own block, marked, and it stays LAST. It reaches a message on two
+// paths, the turn's own stream and the settled read of the turns feed, and the second arrival must
+// not print it twice (seen as "Error: X Error: X" under a refused turn). And a turn's text and tool
+// steps can still arrive after the failed event (the trace chunk that carries them lands after
+// the status): appended blindly they glued onto the error line and the feed then wrote the error
+// again ("...from the provider20pt", a CheetahClaws turn on 2026-09-27), so every append below
+// goes in front of a trailing error block.
+const isErrorBlock = (b: Block | undefined): boolean => !!b && b.kind === 'text' && b.error === true;
+function beforeError(blocks: Block[], apply: (rest: Block[]) => Block[]): Block[] {
   const last = blocks[blocks.length - 1];
-  if (last && last.kind === 'text' && last.text.trimEnd().endsWith('Error: ' + msg)) return blocks;
-  return withText(blocks, '\n\nError: ' + msg);
+  return isErrorBlock(last) ? [...apply(blocks.slice(0, -1)), last as Block] : apply(blocks);
+}
+const addText = (blocks: Block[], d: string): Block[] => beforeError(blocks, (r) => withText(r, d));
+const addReasoning = (blocks: Block[], d: string): Block[] => beforeError(blocks, (r) => withReasoning(r, d));
+const addStep = (blocks: Block[], step: ToolStep): Block[] => beforeError(blocks, (r) => withStep(r, step));
+const addResult = (blocks: Block[], callId: string, output: string): Block[] => beforeError(blocks, (r) => withResult(r, callId, output));
+function errorBlock(blocks: Block[], msg: string): Block {
+  return { kind: 'text', text: (blocks.length ? '\n\n' : '') + 'Error: ' + msg, error: true };
+}
+function withError(blocks: Block[], msg: string): Block[] {
+  if (blocks.some((b) => isErrorBlock(b) && b.kind === 'text' && b.text.trimEnd().endsWith('Error: ' + msg))) return blocks;
+  return [...blocks, errorBlock(blocks, msg)];
 }
 export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]; status: 'running' | 'done' | 'failed' | 'cancelled' | 'incomplete';
   /** Why an incomplete turn is incomplete (max_steps | timeout | interrupted) — from the
@@ -78,7 +93,7 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
     if (t.assistant) blocks.push({ kind: 'text', text: t.assistant });
     // a failed turn's reason, the line the live stream appended as its error event
     const why = (t as { error?: string }).error;
-    if (why && (t.status === 'failed' || t.status === 'error')) blocks.push({ kind: 'text', text: (t.assistant ? '\n\n' : '') + 'Error: ' + why });
+    if (why && (t.status === 'failed' || t.status === 'error')) blocks.push(errorBlock(blocks, why));
     const st: AsstMsg['status'] = t.status === 'failed' || t.status === 'error' ? 'failed'
       : t.status === 'cancelled' ? 'cancelled'
       : (t.status === 'incomplete' || t.status === 'max_turns' || t.status === 'timeout') ? 'incomplete'
@@ -225,19 +240,19 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
       break;
     }
     case 'response.reasoning_summary_text.delta':
-      busUpdateLast(sid, (a) => { a.blocks = withReasoning(a.blocks, ev.delta as string); }); break;
+      busUpdateLast(sid, (a) => { a.blocks = addReasoning(a.blocks, ev.delta as string); }); break;
     case 'response.output_item.added': {
       const item = ev.item as Record<string, unknown>;
       if (item?.type === 'function_call') _busFn[`${sid}:${ev.output_index}`] = { name: item.name as string, callId: (item.call_id as string) || '' };
-      else if (item?.type === 'function_call_output') busUpdateLast(sid, (a) => { a.blocks = withResult(a.blocks, (item.call_id as string) || '', String(item.output ?? '')); });
+      else if (item?.type === 'function_call_output') busUpdateLast(sid, (a) => { a.blocks = addResult(a.blocks, (item.call_id as string) || '', String(item.output ?? '')); });
       break;
     }
     case 'response.function_call_arguments.done': {
       const fn = _busFn[`${sid}:${ev.output_index}`] || { name: 'tool', callId: '' };
-      busUpdateLast(sid, (a) => { a.blocks = withStep(a.blocks, { name: fn.name, args: (ev.arguments as string) || '', callId: fn.callId }); }); break;
+      busUpdateLast(sid, (a) => { a.blocks = addStep(a.blocks, { name: fn.name, args: (ev.arguments as string) || '', callId: fn.callId }); }); break;
     }
     case 'response.output_text.delta':
-      busUpdateLast(sid, (a) => { a.blocks = withText(a.blocks, ev.delta as string); }); break;
+      busUpdateLast(sid, (a) => { a.blocks = addText(a.blocks, ev.delta as string); }); break;
     case 'response.output_text.annotation.added': {
       const a = ev.annotation as Record<string, unknown>;
       if (a?.type === 'container_file_citation') busUpdateLast(sid, (m) => { m.files = withFile(m.files, { container_id: a.container_id as string, file_id: a.file_id as string, filename: a.filename as string }); });
@@ -527,10 +542,10 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
             }
             onSession?.(sid);
           },
-          onReasoningDelta: (d) => updateLast((a) => { a.blocks = withReasoning(a.blocks, d); }),
-          onToolCall: (name, args, callId) => updateLast((a) => { a.blocks = withStep(a.blocks, { name, args, callId }); }),
-          onToolResult: (callId, output) => updateLast((a) => { a.blocks = withResult(a.blocks, callId, output); }),
-          onTextDelta: (d) => updateLast((a) => { a.blocks = withText(a.blocks, d); }),
+          onReasoningDelta: (d) => updateLast((a) => { a.blocks = addReasoning(a.blocks, d); }),
+          onToolCall: (name, args, callId) => updateLast((a) => { a.blocks = addStep(a.blocks, { name, args, callId }); }),
+          onToolResult: (callId, output) => updateLast((a) => { a.blocks = addResult(a.blocks, callId, output); }),
+          onTextDelta: (d) => updateLast((a) => { a.blocks = addText(a.blocks, d); }),
           onFile: (f) => updateLast((a) => { a.files = withFile(a.files, f); }),
           onError: (msg) => updateLast((a) => { a.blocks = withError(a.blocks, msg); }),
           onDone: (status, response) => {

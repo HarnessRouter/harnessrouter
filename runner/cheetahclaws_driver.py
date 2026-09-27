@@ -217,14 +217,18 @@ class Pairing:
         return f"cc{self.n}"
 
 
-def verdict(messages: list, start: int, notices: list[str], budget_hit: bool) -> dict:
+def verdict(messages: list, completions: int, notices: list[str], budget_hit: bool) -> dict:
     """How the turn ended, read off the history the loop left behind.
 
-    `start` is the index of the user message this turn appended. The loop appends an assistant
-    message only for a completion that came back, and its own loop guards append one of their own
-    whose text is the guard's notice; anything else that ends the loop (a failed provider call, an
-    open circuit breaker) leaves the history ending on the user's message or on a tool result."""
-    last = messages[-1] if len(messages) > start else None
+    `completions` is how many assistant messages the loop appended this turn (its TurnDone events).
+    The loop appends one only for a completion that came back, and its own loop guards append one
+    of their own whose text is the guard's notice; anything else that ends the loop (a failed
+    provider call, an open circuit breaker) leaves the history ending on the user's message or on
+    a tool result. The history is read from its end and never by position: the loop compacts
+    and REPLACES `state.messages` when the context is full (agent.py maybe_compact and
+    _force_compact), so an index taken before the turn points nowhere after it; a muse-spark turn
+    that answered in full was reported as "no completion" that way (hr-test, 2026-09-27)."""
+    last = messages[-1] if completions and messages else None
     role = (last or {}).get("role")
     content = (last or {}).get("content")
     text = content if isinstance(content, str) else ""
@@ -332,7 +336,6 @@ def main() -> int:
     calls = {"n": 0}
     pairing = Pairing()
     notices: list[str] = []
-    start = len(state.messages)
     try:
         with contextlib.redirect_stdout(sys.stderr):
             events = run(job["prompt"], state, config, system_prompt,
@@ -373,7 +376,7 @@ def main() -> int:
     budget_hit = bool(budget) and calls["n"] >= budget and (
         not state.messages or state.messages[-1].get("role") != "assistant"
         or bool(state.messages[-1].get("tool_calls")))
-    out = verdict(state.messages, start, notices, budget_hit)
+    out = verdict(state.messages, calls["n"], notices, budget_hit)
     _save(cc_session, state, config)
     _emit("__hr_result", {**out, "session_id": sid, "calls": calls["n"],
                           "seconds": round(time.time() - _T0, 2)})

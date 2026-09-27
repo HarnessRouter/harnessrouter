@@ -101,23 +101,31 @@ def test_a_hint_that_names_the_clis_slash_commands_is_cut_from_the_reason():
 
 def test_the_verdict_is_the_historys_shape_not_the_text():
     user = {"role": "user", "content": "hi"}
-    # a model that WRITES a failure line is still an answer
+    # a model that WRITES a failure line is still an answer (one completion came back)
     said = [user, {"role": "assistant", "content": "[Failed — AuthenticationError: quoted]"}]
-    assert drv.verdict(said, 0, [], False)["ok"] is True
-    # a call that never came back leaves the history on the user's message
+    assert drv.verdict(said, 1, [], False)["ok"] is True
+    # a call that never came back leaves the history on the user's message, no completion counted
     v = drv.verdict([user], 0, ["[Failed — APIConnectionError: Connection error.. Hint: x]"], False)
     assert v["ok"] is False and v["reason"].startswith("Failed — APIConnectionError")
-    # or on a tool result, when the call after a tool failed
+    # or on a tool result, when the call after a tool failed (one completion, then nothing)
     tool = [user, {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "name": "Bash", "input": {}}]},
             {"role": "tool", "tool_call_id": "1", "content": "x"}]
-    assert drv.verdict(tool, 0, [], False)["ok"] is False
+    assert drv.verdict(tool, 1, [], False)["ok"] is False
     # the loop guard's own message is the CLI stopping the model, not an answer
     lg = [user, {"role": "assistant", "content": "[Loop guard] Same tool call repeated 3 times — stopping."}]
-    v = drv.verdict(lg, 0, [], False)
+    v = drv.verdict(lg, 1, [], False)
     assert v["ok"] is False and v["reason"].startswith("Loop guard")
-    # a resumed history's earlier answer is not this turn's answer
+    # a resumed history's earlier answer is not this turn's answer: no completion this turn
     resumed = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "old answer"}, user]
-    assert drv.verdict(resumed, 2, [], False)["ok"] is False
+    assert drv.verdict(resumed, 0, [], False)["ok"] is False
+    # the loop compacted and REPLACED the history during the turn (agent.py maybe_compact /
+    # _force_compact): the list is shorter than it was when the turn began, and its last message
+    # is this turn's answer all the same. Read by position it looked like no completion; a
+    # muse-spark turn on hr-test that answered in full was failed that way (2026-09-27).
+    compacted = [{"role": "assistant", "content": "Understood. I have the context from the previous conversation. Let's continue."},
+                 user, {"role": "assistant", "content": "Updated the deck with the refined text style."}]
+    v = drv.verdict(compacted, 2, [], False)
+    assert v["ok"] is True and v["final"].startswith("Updated the deck")
 
 
 def test_the_step_budget_ends_the_turn_as_max_turns():
