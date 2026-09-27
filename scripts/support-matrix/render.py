@@ -28,6 +28,8 @@ def not_run(label, rows):
         for m in sorted(served - ran):
             if m in gw.RESPONSES_ONLY_MODELS and backend in gw.CHAT_ONLY_BACKENDS:
                 why = "the model answers on the Responses API only and this harness speaks chat/completions only"
+            elif (vendor, backend) not in gw._INTEGRATION_WIRING:
+                why = "this harness is not wired to this provider (the gateway's integration wiring)"
             elif m not in offered:
                 why = "not in this harness's catalog (unmeasured or excluded, see the catalog's note)"
             else:

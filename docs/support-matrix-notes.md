@@ -1476,3 +1476,89 @@ TokenRouter behind the switch, as `fill-connection.py` stamped them.
   API) beyond the three pairs above, so `_MODEL_CATALOG["cheetahclaws"]` stays offered, not
   measured, for the rest of its list; and a benchmark column.
 
+
+## The gpt-6 line: sol and luna beside astra (2026-09-27)
+
+Richard asked whether gpt-6-sol was available and for the line to be expanded at list price on every
+harness that can run it. Read the same day: OpenAI's pricing page names gpt-6-astra, gpt-6-sol and
+gpt-6-luna and no terra; Azure's catalog has sol and luna at model version 2026-09-22 (deployed on
+our resource that day, GlobalStandard, beside astra's 2026-09-03 deployment); OpenRouter, TokenRouter,
+Vercel and llmtr list both as `openai/<id>` (OpenRouter and TokenRouter added them on 2026-09-22).
+List prices per 1M tokens, no markup: sol $2 in, $0.20 cached, $2.50 cache write, $10 out; luna
+$0.10, $0.01, $0.125, $0.50; astra $10, $1, $12.50, $50; above 272k prompt tokens input and cached
+input double and output is 1.5x, the rule the gpt-5.x line carries. Batch and Flex are half, fast
+mode double.
+
+**What decides which bases offer them.** OpenAI refuses function tools on /v1/chat/completions for
+the whole line unless `reasoning_effort` is `none` ("Function tools with reasoning_effort are not
+supported for gpt-6-sol in /v1/chat/completions. To use function tools, use /v1/responses or set
+reasoning_effort to 'none'", TokenRouter, 2026-09-27). sol and luna take `none` and then answer with
+a tool call (2.8 s and 1.8 s); the runner's relay already retries on exactly that sentence and
+remembers the fix per model, so the chat-only bases (aider, kimi, openhands, cheetahclaws, qwen,
+cline) run them the way they run the gpt-5.6 line. astra does not take `none` ("Supported values
+are: 'low', 'medium', 'high', and 'xhigh'"), so it stays on the Responses bases alone. Both sol and
+luna describe a red PNG as "Red", so hermes's vision auditing may use them. 0.25.4 carries all of
+it (#295); a model-support extension is a patch release, Richard's rule.
+
+**The columns.** One per connection on hr-test, the four ids routed at that connection through the
+model map and put back afterwards, twelve bases (codex, hermes, dsh, opencode, pi, omp, aider, kimi,
+openhands, cheetahclaws, qwen, cline; goose waits for cline's rows, which are what its list mirrors;
+systemone never), all five scenarios, `EXPECT_CONNECTION` set so a turn served elsewhere is a finding.
+cheetahclaws is wired to OpenRouter, TokenRouter and Vercel only, so its OpenAI and Azure rows are
+not run by design.
+
+**Results (0.25.4, one retest of every miss on the 0.25.5 candidate, the same code as 0.25.5):**
+146 pairs, 727 of 730 scenario runs.
+
+| Column | Pairs | After the retest | First run | What missed the first time |
+|---|---|---|---|---|
+| tokenrouter | 30 | 150 of 150 | 136 of 142 | openhands on both ids (the prefix defect below); gpt-6-luna's recycle recall on codex, hermes and qwen; gpt-6-luna's artifact on aider |
+| openrouter | 30 | 149 of 150 | 149 of 150 | aider x gpt-6-sol recycle, reproduced |
+| vercel | 30 | 150 of 150 | 148 of 150 | gpt-6-luna's recycle recall on codex and on aider |
+| openai | 28 | 139 of 140 | 139 of 140 | codex x gpt-6-luna recycle, reproduced |
+| azure-e2 | 28 | 139 of 140 | 138 of 140 | gpt-6-luna's recycle recall on codex (passed the retest) and on aider (reproduced) |
+
+Every gpt-6-astra pair passes on the six Responses bases on all five connections (30 pairs). Every
+gpt-6-sol and gpt-6-luna first, follow-up, switch and artifact scenario passes on every base and
+connection that ran; the three misses that stand are all the recycle recall, below. openhands
+passed on all five connections after the fix, rerun through the agent server, not the recorder.
+cheetahclaws has no OpenAI or Azure rows: the map's fall-through served its turns on a TokenRouter
+integration when the column's connection cannot drive it, and a pair served elsewhere is not a
+row for that column, so the bullet says not wired. Azure serves the ids as `gpt-6-sol-2026-09-22`
+and the aggregators as `openai/<id>`; both are the provider's alias of the same model, noted, not
+substitutions.
+
+- **openhands sent a bare id to TokenRouter** (fixed in 0.25.5). The builder prefixed the model
+  with `openai/`, and that prefix is taken off twice between the job and the wire (OpenHands' LLM
+  and litellm 1.94.3 each strip one), so an aggregator's `openai/gpt-6-sol` reached TokenRouter as
+  `gpt-6-sol`, refused with `503 model_not_found: No available channel for model gpt-6-sol under
+  group default`. OpenRouter and Vercel resolve a bare OpenAI id, which is why the earlier Vercel
+  column and this run's OpenRouter and Vercel rows passed, and openhands had never been measured
+  on TokenRouter. Measured against a loopback recorder in the openhands venv: `litellm_proxy/<id>`
+  is taken off once and the rest sent as it is, so the builder uses that prefix; and because
+  litellm's proxy provider reads LITELLM_PROXY_API_BASE and LITELLM_PROXY_API_KEY (its Responses
+  path does not fall back to the OpenAI pair: "api_base not set for LiteLLM Proxy responses API",
+  the first hosted turn on gpt-5.4, whose api_mode resolves to responses), the driver hands it
+  that pair and no other. Same fix on hosted (56308ad9), where openhands then passed the family
+  tour on the platform channel with receipts at list price.
+- **gpt-6-luna's recall after a recycle on codex.** The recycle scenario asks, after the sandbox
+  is recycled and the thread resumed, for the codeword of the task's first message; luna answered
+  the harness's completion phrase ("CODEX DONE") instead, first time on four of five connections,
+  twice on OpenAI direct, and passed the retest on TokenRouter, Vercel and Azure. hermes and qwen
+  did it once each on TokenRouter and passed the retest. The turn completes and the thread is
+  intact (the same question on gpt-6-sol and astra is answered everywhere), so this is the
+  cheapest tier's recall, recorded as FAIL where it reproduced and the model stays offered.
+- **aider answers nothing after the restore, sometimes.** aider's recycle resumes with its own
+  chat history; on the gpt-6 line it answered the recall with no text at all ("AIDER None") on
+  gpt-6-sol twice on OpenRouter, on gpt-6-luna twice on Azure, and once each on TokenRouter and
+  Vercel (passed the retest). Every other aider scenario passes on every connection. An open item
+  on aider's restore path with this line, not a catalog change.
+- **The console opened on a placeholder default** (fixed in 0.25.5, hosted b71f427b ported):
+  the placeholder lists and defaults in the console are regenerated from the gateway's catalog
+  byte for byte, the default helper reads the server's answer before the placeholder and never a
+  list's first entry, and a test fails the suite when the lists drift. Measured on the candidate:
+  a fresh page on codex, hermes, claude-code, omp, openhands, aider, kimi and dsh opens on the
+  gateway's default.
+- The 0.25.5 candidate was built from the branch so the openhands rerun could be measured end to
+  end before the tag; 0.25.5 is the same code from main, and the candidate's image and tag were
+  removed after the swap.
