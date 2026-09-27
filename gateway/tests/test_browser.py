@@ -863,7 +863,7 @@ def test_the_person_takes_the_browser_over_and_the_agent_waits(client, world):
         assert client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json()["control"] == "user"
         assert [p["ev"]["type"] for p in published][-2:] == ["browser.control", "browser.held"]
         held_rows = [r for r in _rows(hid) if r["outcome"] == "refused"]
-        assert held_rows and held_rows[-1]["tool"] == "get_url" and held_rows[-1]["detail"] == "held"
+        assert held_rows and held_rows[-1]["tool"] == "get_url" and held_rows[-1]["error"] == "held"
         # an invalid hand is refused; a hand-back lets the agent go on
         assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "nobody"}, headers=HEADERS).status_code == 400
         assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "agent"}, headers=HEADERS).json()["control"] == "agent"
