@@ -967,8 +967,12 @@ body.hr-resizing iframe { pointer-events: none; }
 .wbx-browser-close { flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .wbx-browser-close:hover { background: var(--brand-50); color: var(--ink); }
-.wbx-browser-frame { position: relative; flex: 1 1 auto; min-height: 0; margin: 12px; border-radius: 12px; overflow: hidden;
-  background: #0f1115; box-shadow: 0 0 0 1px var(--line); transition: box-shadow .4s ease; }
+/* The frame is the browser's own shape (the plug opens it at 1280 x 800), centred in the pane, so
+   the glow hugs the screen rather than a dark field under it; it takes the pane's width and never
+   more than its height. */
+.wbx-browser { display: flex; flex-direction: column; }
+.wbx-browser-frame { position: relative; flex: 0 0 auto; width: calc(100% - 24px); aspect-ratio: 16 / 10; max-height: calc(100% - 72px);
+  margin: auto 12px; border-radius: 12px; overflow: hidden; background: #0f1115; box-shadow: 0 0 0 1px var(--line); transition: box-shadow .4s ease; }
 .wbx-browser-view, .wbx-browser-view iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
 .wbx-browser-view[inert] iframe { pointer-events: none; }
 .wbx-browser-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #aab1bd; font-size: 13px; }
@@ -1024,6 +1028,6 @@ body.hr-resizing iframe { pointer-events: none; }
 /* phones: the pane is the screen */
 @media (max-width: 720px) {
   .wbx-conv.split .wbx-browser-pane { position: absolute; inset: 0; width: 100% !important; max-width: none; flex: none !important; z-index: 30; }
-  .wbx-browser-frame { margin: 8px; border-radius: 10px; }
+  .wbx-browser-frame { width: calc(100% - 16px); margin: auto 8px; border-radius: 10px; }
   .wbx-browser-btn { padding: 0 10px; }
 }
