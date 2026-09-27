@@ -1422,7 +1422,7 @@ driven in process and every event is re-emitted as it is yielded, `__hr_init` fi
 
 The column in `docs/support-matrix.md` is `cheetahclaws-tokenrouter`, measured on hr-test
 (harnessrouter/harnessrouter:0.25.0, the release that carries this base; one container, the default
-`HR_BACKENDS`, the live data volume) on 2026-09-27, after the author's own measurements on a lab
+`HR_BACKENDS`, the live data volume) on 2026-09-26, after the author's own measurements on a lab
 gateway (kept in the PR, #264). CheetahClaws 3.5.88 was installed by the entrypoint at boot (wheel
 digest verified, import check passed). The instance's own connections served the turns: TokenRouter
 for gpt-5.4 and claude-sonnet-5, and gpt-5.4-mini through the Custom OpenAI Chat connection with
@@ -1446,6 +1446,26 @@ TokenRouter behind the switch, as `fill-connection.py` stamped them.
   the way every other base reaches it; the CLI's client keeps SSE and stdio. Measured on 0.25.1
   (hr-test, the same probe): skills 1/1, stdio 1/1, SSE 1/1, streamable HTTP 1/1
   (`PROBE-HTTP-ef8e44614954`, 11.1 s).
+- **The family tour** (`family-tour.mjs`, 0.25.2, on Richard's own five-turn conversation, `SID=`
+  continued, one model per family, three runs on 2026-09-26): 12 of 14 families passed, first
+  edit to recycle of the same deck. gpt-5.4-mini 13 s, claude-sonnet-5 81 s, gemini-3.5-flash 20 s,
+  grok-4.5 16 s, deepseek-v4-flash 155 s (served as v4.1-flash), kimi-k3 40 s, qwen3.8-flash 20 s,
+  glm-5.3-flash 46 s, mistral-medium-3.5 20 s, step-3.7-flash 49 s, hunyuan-4-preview 33 s,
+  nemotron-3.5-lightning 33 s. Two families fail on this base:
+  - **muse-spark** (1.1 twice, 1.3 once): the CLI compacts the conversation for the model's smaller
+    context, and after the compaction the model runs the one edit into a loop of ninety-odd tool
+    calls (`ls`, `cat hello-world.md`, `TaskList`, re-deciding the original "convert the md to a
+    deck" from the summary, "Auto-fanout" sub-summaries of every result), never finishes, and is
+    stopped at the tour's ten-minute cap. No two calls are identical, so the CLI's loop guard does
+    not fire. The line is excluded from the base's catalog with that note.
+  - **llama-3.3-70b**: refused with `400 ... 'Provider returned error' ... "The request was
+    rejected as malformed."` in 7 s, twice, on this compacted conversation; the same model on a
+    fresh harness of the base completes in 11 s, as it does on pi. The provider's own text is cut
+    off by the CLI, and the relay keeps it in its log since 0.25.3; the shape of the compacted
+    history that a strict provider refuses is the open item.
+  - kimi-k3 and qwen3.8-flash failed the second run's rows without a defect: the edits repeated
+    ones earlier families had made and both rightly wrote nothing. The tour stamps every edit
+    since, and both pass.
 - **In the browser** (the console on hr-test, the system harness, gpt-5.4): a task that writes a
   file and runs a command completed in 15 s with the file card and the byte count in the answer.
 - **Not measured here:** the other provider columns (OpenRouter, Vercel, the hosted HarnessRouter

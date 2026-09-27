@@ -6430,7 +6430,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
                          "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
                          "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
-                         "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
+                         # muse-spark 1.1 and 1.3 are excluded: on the family tour (hr-test,
+                         # 2026-09-26, three attempts) each ran the same edit into a loop of 90-odd
+                         # tool calls after the CLI compacted the conversation, never finished, and
+                         # was stopped at the ten-minute cap; 1.2 sits between them and is not offered
+                         # either. muse-glimmer-30b is untested here and stays offered.
+                         "muse-glimmer-30b",
                          "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
