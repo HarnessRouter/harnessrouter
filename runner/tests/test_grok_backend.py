@@ -268,3 +268,40 @@ def test_registry_agent_doc_skills_and_checkpoint():
               "./.harness/home/.grok/logs"):
         assert p in CHECKPOINT_EXCLUDE
     assert not any(p.startswith("./.harness/home/.grok/sessions") for p in CHECKPOINT_EXCLUDE)
+
+
+# ── the relay repairs grok's tool declarations need on a gemini model ───────────
+def test_a_gemini_model_on_a_grok_route_gets_the_normalised_declarations():
+    """Captured grok 1.0.41 declarations; through Vercel a gemini model refused both shapes."""
+    from server import _HERMES_RELAY, _gemini_schema
+    timeout = {"description": "Optional timeout", "type": ["integer", "null"], "format": "uint64",
+               "minimum": 0, "default": 120000, "maximum": 36000000}
+    status = {"type": ["string", "null"], "enum": ["pending", "in_progress", "completed", "cancelled", None]}
+    t = _gemini_schema(timeout)
+    assert t["type"] == "integer" and t["nullable"] is True and "anyOf" not in t
+    s = _gemini_schema(status)
+    assert s["enum"] == ["pending", "in_progress", "completed", "cancelled"] and s["nullable"] is True
+    _, _, env = _argv()
+    route = _HERMES_RELAY["routes"][env["HR_GROK_API_KEY"]]
+    assert route[2]["gemini_schemas"] is True
+
+
+def test_cancel_kills_the_commands_grok_runs_in_their_own_session():
+    """grok runs each shell command under its own session (measured on Linux, 1.0.41): the group
+    kill alone left `sleep` running after a cancel. The descendants are killed first."""
+    import os
+    import subprocess
+    import time
+    import pytest
+    from server import _descendant_pids, _kill_proc_tree
+    if not os.path.isdir("/proc") or not os.path.exists("/usr/bin/setsid"):
+        pytest.skip("needs /proc and setsid (Linux)")
+    proc = subprocess.Popen(["sh", "-c", "setsid sleep 97 & wait"], start_new_session=True)
+    time.sleep(0.5)
+    kids = _descendant_pids(proc.pid)
+    assert kids
+    _kill_proc_tree(proc)
+    proc.wait()
+    time.sleep(0.3)
+    for pid in kids:
+        assert not os.path.exists(f"/proc/{pid}") or "Z" in open(f"/proc/{pid}/stat").read().split(")")[1][:3]

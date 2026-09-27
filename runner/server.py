@@ -3422,6 +3422,14 @@ def _gemini_schema(node):
         elif members:
             out = {**members[0], **out}
             out.setdefault("type", members[0].get("type") or "string")
+    if isinstance(out.get("enum"), list) and None in out["enum"]:
+        # A nullable enum spelled the JSON-schema way ({"type": ["string", "null"], "enum": [..., null]},
+        # grok's todo_write status) is refused whole: "Enum values must share one supported primitive
+        # type" (gemini-3.5-flash-lite through Vercel, 2026-09-27). The null member is `nullable`.
+        out["enum"] = [x for x in out["enum"] if x is not None]
+        out["nullable"] = True
+        if not out["enum"]:
+            out.pop("enum")
     if "type" not in out and "anyOf" not in out:
         out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
     if out.get("type") == "array" and "items" not in out:
@@ -3797,7 +3805,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
             headers["content-length"] = str(len(body))
-        if (_gemini_channel(base) and "gemini" in str(_body_model).lower()
+        if ((_gemini_channel(base) or flags.get("gemini_schemas")) and "gemini" in str(_body_model).lower()
                 and body is not None and self.path.endswith("/chat/completions")):
             # TokenRouter's Gemini channels hand a harness's JSON-schema tool declarations to Google's
             # validator as sent; the broker does the same normalisation for brokered traffic
@@ -4127,13 +4135,15 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 
 
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
-                        stream_usage: bool = False) -> tuple[str, str]:
+                        stream_usage: bool = False, gemini_schemas: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
     the harness never asked for; they are removed before the provider sees them (the same list the
     relay grows by itself when a provider names an unknown field). `stream_usage` asks the provider
-    for a streamed call's usage when the client does not (_request_stream_usage)."""
+    for a streamed call's usage when the client does not (_request_stream_usage). `gemini_schemas`
+    normalises a gemini model's tool declarations on this route whatever the channel (see
+    _build_grok for the one client that needs it)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -4148,7 +4158,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         # (its own path is built in _bedrock_anthropic).
         _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key,
                                         {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
-                                         "stream_usage": bool(stream_usage)})
+                                         "stream_usage": bool(stream_usage),
+                                         "gemini_schemas": bool(gemini_schemas)})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -4701,7 +4712,14 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         raise HTTPException(400, "grok needs a base_url (none configured)")
     if not auth.api_key:
         raise HTTPException(400, "grok needs an API key")
-    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+    # gemini_schemas: grok declares nullable parameters as a JSON-schema type LIST (run_terminal_command's
+    # `timeout` is {"type": ["integer", "null"], "format": "uint64", "minimum": 0, …}). Through
+    # Vercel a gemini model took the first request of a turn and refused the next one, the one
+    # carrying the tool result: "`run_terminal_command` functionDeclaration `parameters.timeout`
+    # schema specified other fields alongside any_of" (gemini-3.5-flash-lite, measured 2026-09-27),
+    # so a gemini turn died at its first tool call. The relay's Gemini normaliser (a type list
+    # becomes one type plus nullable) is applied on this route for gemini ids on every channel.
+    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, gemini_schemas=True)
     ws = pathlib.Path(cwd)
     home = _grok_home(ws)
     _grok_config(home, model, relay_base, mcp_servers)
@@ -7103,7 +7121,26 @@ def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
     """SIGKILL the CLI's whole process GROUP (Popen uses start_new_session). Killing only
     the CLI leaves its shell children (e.g. a `sleep`) holding the inherited stdout pipe,
     which keeps the reader loop blocked until the child exits — a cancel/timeout then
-    appears to hang for the child's full duration. Then the stragglers by marker."""
+    appears to hang for the child's full duration. Then the stragglers by marker.
+
+    The CLI's DESCENDANTS go first, found by parent pid while the CLI is still alive to be their
+    parent. A child that started its own session is outside the group: Grok Build runs every shell
+    command that way (measured on 1.0.41: `sh -c 'sleep 90 && …'` in its own pgid, and after a
+    cancel the sleep was still running with the turn marked cancelled; SIGTERM to grok leaves it too),
+    and so does Muse Code. The marker sweep does not catch it on a default Docker host either: a
+    session process runs as its own uid, and reading another uid's /proc/<pid>/environ needs
+    CAP_SYS_PTRACE, which Docker does not grant. /proc/<pid>/stat is world-readable, so the tree is.
+    The group is STOPPED first, so the CLI cannot start another command between the listing and the
+    kill; a stopped process still takes SIGKILL."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGSTOP)
+    except Exception:  # noqa: BLE001
+        pass
+    for pid in _descendant_pids(proc.pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001
@@ -7116,6 +7153,35 @@ def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
             _sweep_turn_processes(turn_id)
         except Exception:  # noqa: BLE001
             pass
+
+
+def _descendant_pids(root: int) -> list[int]:
+    """Every live descendant of `root`, from /proc/<pid>/stat's parent pid (field 4, after the
+    parenthesised command name, which may itself contain spaces or parentheses). [] where there is
+    no /proc."""
+    children: dict[int, list[int]] = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            stat = pathlib.Path("/proc", entry, "stat").read_text()
+            ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(int(entry))
+    out: list[int] = []
+    todo = list(children.get(root, []))
+    while todo:
+        pid = todo.pop()
+        if pid in out or pid == root:
+            continue
+        out.append(pid)
+        todo.extend(children.get(pid, []))
+    return out
 
 
 def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
