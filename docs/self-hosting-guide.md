@@ -627,6 +627,18 @@ curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses/$HID/servers/plugs" \
 plugin with `"requires": {"plugs": ["browser"]}` in its `plugin.json`; the harness it lands on
 includes the plugin, and the workspace still has to have connected it.
 
+**Watching and taking over.** When a task opens a browser, the console slides a **Browser** pane
+in on the right and streams the vendor's live view of it, with a blue glow around the screen
+while the agent is driving. Click the screen to take it over: the view becomes yours to click and
+type in, and the agent's browser calls are held and told so until you choose **Hand back to the
+agent**. Closing the pane leaves the browser running; the **Browser** chip in the conversation bar
+brings it back, and the next browser the agent opens brings it back on its own. Behind it:
+`GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which is a
+credential and is served only to the session's owner) and
+`POST /v1/sessions/{sid}/browser/control` with `{"control": "user"}` or `{"control": "agent"}`;
+the harness event feed carries `browser.opened`, `browser.call`, `browser.held`,
+`browser.control` and `browser.closed` events (never the address).
+
 **The browser.** The browser runs in Browser Use Cloud and is driven from this instance; the agent
 never holds the browser's address or the key. Set the key in the container's environment:
 

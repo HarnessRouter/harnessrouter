@@ -829,3 +829,49 @@ def test_a_row_served_off_the_owning_replica_still_lands_in_the_trace(client, wo
         events += [json.loads(line) for line in body.decode().splitlines() if line.strip()]
     assert [(e["type"], e["tool"], e["outcome"]) for e in events] == [("plug", "open", "ok"), ("plug", "navigate", "ok")]
     assert all(gw._TRACE_NONCE in it["file_id"] for it in chunks)        # this process's chunks, unique beside the owner's
+
+
+def test_the_person_takes_the_browser_over_and_the_agent_waits(client, world):
+    """The console's live view: a click hands the browser to the person, the agent's calls are held
+    and told so, the session's route says who has it (and carries the live URL, nowhere else), and
+    a hand-back lets the agent go on. The feed carries the notices without the URL."""
+    reg, ven, posted = world
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid = _session_of(hid)
+    tok = gw._mint_hosted_cred(hid, sid, _key(hid))
+    published: list[dict] = []
+    orig = gw._bus_publish
+    gw._bus_publish = lambda org, h, member, s_, rid, ev: published.append({"harness": h, "sid": s_, "ev": ev})
+    try:
+        # no browser yet: the route says so, and nothing can be handed over
+        assert client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json() == {"session_id": sid, "open": False}
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "user"}, headers=HEADERS).status_code == 404
+        # the first call opens the browser: the feed learns it, the route carries the live URL
+        assert _call(client, tok, "navigate", url="example.com")["isError"] is False
+        kinds = [p["ev"]["type"] for p in published]
+        assert kinds == ["browser.opened", "browser.call"], kinds
+        assert all(p["harness"] == hid and p["sid"] == sid and "live_url" not in p["ev"] for p in published)
+        info = client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json()
+        assert info["open"] is True and info["control"] == "agent" and info["last_tool"] == "navigate"
+        assert info["live_url"].startswith("http") and info["session_minutes"] == gw.browser_plane.SESSION_CAP_MIN
+        # the person takes over: the agent's next call is held and told so; the record says who has it
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "user"}, headers=HEADERS).json()["control"] == "user"
+        out = _call(client, tok, "get_url")
+        assert out["isError"] is True and "taken over the browser" in out["content"][0]["text"], out
+        assert client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json()["control"] == "user"
+        assert [p["ev"]["type"] for p in published][-2:] == ["browser.control", "browser.held"]
+        held_rows = [r for r in _rows(hid) if r["outcome"] == "refused"]
+        assert held_rows and held_rows[-1]["tool"] == "get_url" and held_rows[-1]["detail"] == "held"
+        # an invalid hand is refused; a hand-back lets the agent go on
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "nobody"}, headers=HEADERS).status_code == 400
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "agent"}, headers=HEADERS).json()["control"] == "agent"
+        assert _call(client, tok, "get_url")["content"][0]["text"] == "https://example.com/ (Example Domain)"
+        assert [p["ev"]["type"] for p in published][-2:] == ["browser.control", "browser.call"]
+        # another org cannot read the live URL or take the browser
+        other = {**HEADERS, "x-harness-org": "someoneelse"}
+        assert client.get(f"/v1/sessions/{sid}/browser", headers=other).status_code in (403, 404)
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "user"}, headers=other).status_code in (403, 404)
+    finally:
+        gw._bus_publish = orig

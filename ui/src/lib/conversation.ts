@@ -142,7 +142,12 @@ export function livePending(harness: string, cards: TraceCard[] | null): Pending
 // so switching is just a re-view and N concurrent turns all keep streaming.
 // The store mechanics live in UI Core (createConversationStore); these thin typed wrappers keep
 // every call site unchanged.
-export type ConvState = { msgs: Msg[]; busy: boolean; prevId: string | null; firstTurn: boolean; loaded: boolean };
+/** The browser a task is using, as the harness feed reports it: open or not, who has it, when the
+ *  agent last acted. `epoch` counts openings, so a pane the person closed stays closed for THAT
+ *  browser and comes back on its own for the next one. The live URL is not here: the pane reads it
+ *  through the session's own route, because whoever holds it controls the browser. */
+export type BrowserState = { open: boolean; control: 'agent' | 'user'; lastCallAt: number; lastTool: string; held: boolean; epoch: number };
+export type ConvState = { msgs: Msg[]; busy: boolean; prevId: string | null; firstTurn: boolean; loaded: boolean; browser?: BrowserState };
 export const convStore = createConversationStore();
 export function getConvState(key: string): ConvState { return convStore.get(key) as ConvState; }
 export function setConvState(key: string, patch: Partial<ConvState> | ((s: ConvState) => Partial<ConvState>)): void {
@@ -272,7 +277,29 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
     }
     case 'error':
       busUpdateLast(sid, (a) => { a.blocks = withError(a.blocks, (ev.message as string) || 'stream error'); }); break;
+    // ── the task's browser (the browser plug's live view) ──
+    case 'browser.opened':
+      setConvState(sid, (st) => ({ browser: { open: true, control: 'agent', lastCallAt: Number(ev.at) * 1000 || Date.now(), lastTool: '', held: false,
+                                              epoch: (st.browser?.epoch ?? 0) + 1 } })); break;
+    case 'browser.call':
+    case 'browser.held':
+      setConvState(sid, (st) => ({ browser: { ...(st.browser ?? { control: 'agent', epoch: 1 }), open: true,
+                                              lastCallAt: Number(ev.at) * 1000 || Date.now(), lastTool: String(ev.tool || ''), held: t === 'browser.held' } as BrowserState })); break;
+    case 'browser.control':
+      setConvState(sid, (st) => (st.browser ? { browser: { ...st.browser, control: ev.control === 'user' ? 'user' : 'agent', held: false } } : {})); break;
+    case 'browser.closed':
+      setConvState(sid, (st) => (st.browser ? { browser: { ...st.browser, open: false, held: false } } : {})); break;
   }
+}
+/** What the session's route says about its browser, folded into the store (the feed keeps it fresh
+ *  from there). Called when a task is opened, so a browser that was already running shows. */
+export function seedBrowserState(sid: string, info: { open: boolean; control?: string; last_call_at?: number | null; last_tool?: string } | null): void {
+  if (!sid || !info) return;
+  setConvState(sid, (st) => {
+    if (!info.open) return st.browser ? { browser: { ...st.browser, open: false } } : {};
+    return { browser: { open: true, control: info.control === 'user' ? 'user' : 'agent', lastCallAt: (Number(info.last_call_at) || 0) * 1000,
+                        lastTool: String(info.last_tool || ''), held: false, epoch: st.browser?.epoch || 1 } };
+  });
 }
 export function useHarnessBus(harnessId: string, onActivity?: () => void) {
   useEffect(() => {

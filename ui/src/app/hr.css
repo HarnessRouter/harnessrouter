@@ -948,3 +948,82 @@ body.hr-resizing iframe { pointer-events: none; }
 /* Why an incomplete turn is incomplete — one quiet line under the neutral badge, only when the
    record actually knows the cause. */
 .wbx-incomplete-why { font-size: 12.5px; color: var(--mut, #6b7280); margin: 4px 0 0 2px; }
+
+/* ── the task's browser, live in the right pane ──────────────────────────────────────────────
+   The frame glows the brand blue while the agent has the browser and breathes faster while it is
+   acting; a click on the screen takes it over, after which the frame is the person's (a calm
+   green edge, no overlay). Reduced motion keeps the colours and drops the animation. */
+.wbx-browser { position: relative; }
+.wbx-browser-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); min-height: 48px; }
+.wbx-browser-title { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 1.2; }
+.wbx-browser-title b { font-size: 13px; font-weight: 600; color: var(--ink); }
+.wbx-browser-status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wbx-browser-btn { flex: 0 0 auto; height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.wbx-browser-btn:hover { background: var(--brand-50); }
+.wbx-browser-btn.is-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.wbx-browser-btn.is-primary:hover { background: var(--brand-hover); }
+.wbx-browser-btn:disabled { opacity: .6; cursor: default; }
+.wbx-browser-close { flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.wbx-browser-close:hover { background: var(--brand-50); color: var(--ink); }
+.wbx-browser-frame { position: relative; flex: 1 1 auto; min-height: 0; margin: 12px; border-radius: 12px; overflow: hidden;
+  background: #0f1115; box-shadow: 0 0 0 1px var(--line); transition: box-shadow .4s ease; }
+.wbx-browser-view, .wbx-browser-view iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+.wbx-browser-view[inert] iframe { pointer-events: none; }
+.wbx-browser-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #aab1bd; font-size: 13px; }
+/* the agent's frame: a blue edge that breathes, and a light that sweeps the glass while it acts */
+.wbx-browser-frame.is-agent { box-shadow: 0 0 0 2px var(--brand), 0 0 18px 2px color-mix(in srgb, var(--brand) 38%, transparent);
+  animation: wbx-browser-breathe 2.8s ease-in-out infinite; }
+.wbx-browser-frame.is-agent.is-acting { animation: wbx-browser-pulse 1.15s ease-in-out infinite; }
+.wbx-browser-frame.is-agent::after { content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; opacity: 0;
+  background: linear-gradient(115deg, transparent 35%, color-mix(in srgb, var(--brand) 16%, transparent) 50%, transparent 65%);
+  background-size: 260% 100%; }
+.wbx-browser-frame.is-agent.is-acting::after { opacity: 1; animation: wbx-browser-sweep 2.4s linear infinite; }
+/* the person's frame: quiet, theirs */
+.wbx-browser-frame.is-user { box-shadow: 0 0 0 2px #1f9d63, 0 0 14px 1px rgba(31, 157, 99, .28); }
+@keyframes wbx-browser-breathe {
+  0%, 100% { box-shadow: 0 0 0 2px var(--brand), 0 0 14px 1px color-mix(in srgb, var(--brand) 30%, transparent); }
+  50%      { box-shadow: 0 0 0 2px var(--brand), 0 0 26px 4px color-mix(in srgb, var(--brand) 48%, transparent); }
+}
+@keyframes wbx-browser-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--brand), 0 0 18px 2px color-mix(in srgb, var(--brand) 42%, transparent); }
+  50%      { box-shadow: 0 0 0 3px var(--brand), 0 0 34px 8px color-mix(in srgb, var(--brand) 62%, transparent); }
+}
+@keyframes wbx-browser-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+/* the one control while the agent drives: the whole screen, "take over" */
+.wbx-browser-takeover { position: absolute; inset: 0; border: 0; background: transparent; cursor: pointer; padding: 0; display: flex;
+  align-items: flex-end; justify-content: center; }
+.wbx-browser-takeover:focus-visible { outline: 3px solid var(--brand); outline-offset: -3px; }
+.wbx-browser-pill { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px 7px 10px; border-radius: 999px; background: rgba(15, 17, 21, .78); color: #fff; font-size: 12.5px; font-weight: 500;
+  backdrop-filter: blur(6px); white-space: nowrap; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); pointer-events: none; }
+.wbx-browser-pill em { font-style: normal; color: #cfd8ff; padding-left: 8px; border-left: 1px solid rgba(255, 255, 255, .25); }
+.wbx-browser-takeover:hover .wbx-browser-pill { background: var(--brand); }
+.wbx-browser-takeover:hover .wbx-browser-pill em { color: #fff; }
+.wbx-browser-pill.is-user { background: rgba(31, 157, 99, .92); }
+.wbx-browser-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  padding: 24px; color: var(--muted); font-size: 13px; gap: 4px; }
+.wbx-browser-empty b { color: var(--ink); font-weight: 600; }
+.wbx-browser-empty p { margin: 0; }
+/* the live dot: blue and pulsing while the agent acts, green when the person has the browser */
+.wbx-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.wbx-live-dot.is-idle { background: var(--brand); opacity: .55; }
+.wbx-live-dot.is-on { background: var(--brand); box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); animation: wbx-dot 1.4s ease-out infinite; }
+.wbx-live-dot.is-user { background: #1f9d63; }
+@keyframes wbx-dot { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 55%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
+/* the chip in the conversation bar that brings the pane back */
+.wbx-browser-chip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.wbx-browser-chip:hover { background: var(--brand-50); }
+.wbx-browser-chip.is-shown { border-color: var(--brand); color: var(--brand); }
+.wbx-browser-chip.is-live { border-color: color-mix(in srgb, var(--brand) 50%, var(--line)); }
+@media (prefers-reduced-motion: reduce) {
+  .wbx-browser-frame.is-agent, .wbx-browser-frame.is-agent.is-acting, .wbx-browser-frame.is-agent.is-acting::after, .wbx-live-dot.is-on { animation: none; }
+}
+/* phones: the pane is the screen */
+@media (max-width: 720px) {
+  .wbx-conv.split .wbx-browser-pane { position: absolute; inset: 0; width: 100% !important; max-width: none; flex: none !important; z-index: 30; }
+  .wbx-browser-frame { margin: 8px; border-radius: 10px; }
+  .wbx-browser-btn { padding: 0 10px; }
+}

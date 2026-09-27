@@ -14113,7 +14113,59 @@ async def plugs_mcp(request: Request):
 # The record of the browser itself is the plane's registry (browser_plane.registry): one process on
 # a self-hosted instance keeps it in memory; the hosted service keeps it in its control store so
 # every replica the sandbox's calls reach attaches to the one browser instead of opening its own.
+
+# ── the browser's live view ──────────────────────────────────────────────────────────────────
+# What the console shows while a task browses: the vendor's live view of the session's browser,
+# who has control, and when the agent last acted. The live URL is a credential (whoever opens it
+# controls the browser), so it is read through the owned-session route and never put on the feed.
+
+
+@app.get("/v1/sessions/{sid}/browser")
+async def session_browser(sid: str, request: Request) -> dict:
+    await _owned_session(request, sid)
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        return {"session_id": sid, "open": False}
+    return {"session_id": sid, "open": True, "live_url": str(rec.get("live_url") or ""),
+            "control": str(rec.get("control") or "agent"), "opened_at": rec.get("created"),
+            "last_call_at": rec.get("last_call"), "last_tool": str(rec.get("last_tool") or ""),
+            "calls": int(rec.get("calls") or 0), "session_minutes": browser_plane.SESSION_CAP_MIN}
+
+
+class BrowserControlBody(BaseModel):
+    control: str
+
+
+@app.post("/v1/sessions/{sid}/browser/control")
+async def session_browser_control(sid: str, body: BrowserControlBody, request: Request) -> dict:
+    """Hand the browser to the person (`user`) or back to the agent (`agent`). While the person
+    has it, the agent's browser calls are held and told so; nothing is stopped or lost."""
+    await _owned_session(request, sid)
+    who = (body.control or "").strip().lower()
+    if who not in ("user", "agent"):
+        raise HTTPException(400, "control is 'user' or 'agent'")
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        raise HTTPException(404, "this task has no open browser")
+    await browser_plane.registry.bump(sid, control=who, control_at=time.time())
+    _browser_notice(sid, "control", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), control=who)
+    return {"session_id": sid, "open": True, "control": who}
+
+
 _browser_open_locks: dict[str, asyncio.Lock] = {}
+
+
+def _browser_notice(sid: str, kind: str, hid: str = "", org: str = "", **extra) -> None:
+    """One event on the harness feed for the console's live view: the browser opened, a call ran,
+    a call was held because the person has the browser, control changed hands, or it closed. The
+    in-flight turn's org, harness, member and response id tag it (so it replays to a viewer that
+    connects mid-turn and stays with the member whose session it is); a notice after the turn
+    (the reaper closing an idle browser) carries the record's harness. NEVER the live URL: whoever
+    holds that URL controls the browser, so it travels only through the owned-session route."""
+    buf = _turn_buffers.get(sid) or {}
+    ev = {"type": f"browser.{kind}", "session_id": sid, "at": time.time(), **extra}
+    _bus_publish(org or str(buf.get("org") or ""), hid or str(buf.get("harness") or ""),
+                 str(buf.get("member") or ""), sid, str(buf.get("rid") or ""), ev)
 
 
 async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, tool: str, spec: dict, args: dict,
@@ -14153,6 +14205,7 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
                     await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
                                             detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
                                                     "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
+                    _browser_notice(sid, "opened", hid=hid, org=org, vendor=browser_plane.VENDOR)
     if s is None:
         try:
             s = await browser_plane.attach(rec)             # this process's attachment to the recorded browser
@@ -14163,6 +14216,15 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
     if (s.allow, s.deny) != (allow, deny):
         s.allow, s.deny, s.host_cache = list(allow), list(deny), {}      # the workspace changed its lists
         await browser_plane.registry.bump(sid, allow=list(allow), deny=list(deny))
+    # THE PERSON MAY HAVE THE BROWSER. The console's live view lets them take over with a click;
+    # from then on the agent's calls are held, not run, and each says so, until they hand it back.
+    # Read from the record on every call: the takeover is a write from another request, on
+    # another replica when there are several.
+    current = await browser_plane.registry.get(sid) if not (rec is None and s.opened) else None
+    if (current or {}).get("control") == "user":
+        _browser_notice(sid, "held", hid=hid, org=org, tool=tool)
+        return await refused("held", "The person using this task has taken over the browser. Wait for them to "
+                                     "hand it back, then try again.")
     async with s.lock:
         if s.closed:
             return await refused("session closed", "The browser for this task was stopped. Call again to open a new one.")
@@ -14179,6 +14241,8 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
             await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
                                     f"{type(e).__name__}: {e}")
             return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
+    await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool)
+    _browser_notice(sid, "call", hid=hid, org=org, tool=tool)
     if isinstance(out, tuple) and out[0] == "image":
         png, caption = out[1], out[2]
         stored = None
@@ -14211,6 +14275,7 @@ async def _browser_close(sid: str, reason: str) -> None:
             await browser_plane.detach(s)
         return
     _browser_open_locks.pop(sid, None)
+    _browser_notice(sid, "closed", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), reason=reason)
     try:
         fig = await browser_plane.close_session_browser(rec, s)
     except Exception as e:  # noqa: BLE001
