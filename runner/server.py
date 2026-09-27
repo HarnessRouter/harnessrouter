@@ -6135,11 +6135,17 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
                                                     drop_fields=_OPENHANDS_DROP_FIELDS)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     # The relay token rides the turn's ENVIRONMENT as well as the job: _relay_served_model and
-    # _relay_usage find the turn's route by the placeholder bearer in env, and a token that lived
-    # only in the driver's argv left every openhands turn with no served model and no usage
-    # (measured: usage None on three turns whose provider calls the relay had counted).
-    env["OPENAI_API_KEY"] = auth.api_key or ""
-    env["OPENAI_BASE_URL"] = auth.base_url
+    # _relay_usage find the turn's route by the placeholder bearer in env (any variable, they scan
+    # the values), and a token that lived only in the driver's argv left every openhands turn with
+    # no served model and no usage (measured: usage None on three turns whose provider calls the
+    # relay had counted). The PAIR IS THE PROXY PROVIDER'S, because that is what litellm reads for
+    # a `litellm_proxy/` id: its chat path falls back to OPENAI_BASE_URL / OPENAI_API_KEY, its
+    # Responses path does not ("api_base not set for LiteLLM Proxy responses API", the first hosted
+    # turn on gpt-5.4, whose api_mode resolves to responses), and nothing else in the stack reads
+    # the OpenAI pair once the id carries the proxy prefix (measured in the openhands venv on
+    # hr-test, 2026-09-27, both paths, each pair alone and both together). One pair, one reader.
+    env["LITELLM_PROXY_API_KEY"] = auth.api_key or ""
+    env["LITELLM_PROXY_API_BASE"] = auth.base_url
     job = {"cwd": cwd, "model": f"litellm_proxy/{model}", "prompt": prompt,
            "base_url": auth.base_url, "api_key": auth.api_key,
            "tools_disabled": list(tools_disabled or []),
