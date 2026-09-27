@@ -1355,3 +1355,97 @@ wrote `trace.json` with `config_version: 1` and 61 archived frames; a probe with
 script ran on `script/s1` and finished. The calibration itself (baseline, one change, validation)
 runs on a Calibrator on the claude base with the calibrate package.
 
+## The cheetahclaws backend: CheetahClaws 3.5.88 (2026-09-24)
+
+CheetahClaws (SAIL-Research-Lab/cheetahclaws, PyPI `cheetahclaws`, Apache-2.0), a Python
+reimplementation of the Claude Code agent loop, as the sixteenth base (#229). The turn process is
+`runner/cheetahclaws_driver.py` inside a pinned venv: the CLI's own agent loop
+(`cheetahclaws.agent.run`, the generator its REPL and its headless bridge runner consume) is
+driven in process and every event is re-emitted as it is yielded, `__hr_init` first and
+`__hr_result` last, normalised by `_cheetahclaws_to_claude`.
+
+### Behaviour measured before the column ran (3.5.88, against a stub and the live instance)
+
+- **No event stream, and the session file is not one.** `cheetahclaws -p` prints the final answer
+  and ANSI tool cards; `session_latest.json` is rewritten by `autosave_session` once per USER turn,
+  after `run_query` returns, never between messages. Tailing it would give a silent turn and then
+  everything at once. In process the loop's own events stream: conformance S-09 passed with "events
+  spread over 5.1s", and the console renders text deltas and tool cards as they happen.
+- **Provider failures are prose and exit 0.** Against a stub, `cheetahclaws -p` printed
+  `[Failed — APIConnectionError: Connection error.. Hint: …]` (unreachable),
+  `[Failed — AuthenticationError: Error code: 401 - {…}. Hint: Check your API key: /config …]`
+  (bad key) and `[Retry 1/3 after 6s — rate_limit: …]` ×3 then `[Failed — RateLimitError: Error
+  code: 429 …]`, exit 0 each time. The driver's verdict is the history's shape instead (the loop
+  appends an assistant message only for a completion that came back); the `[Failed — …]` sentence is
+  kept as the reason, minus a hint that names a slash command. Recorded, and pinned, in
+  `runner/tests/fixtures/cheetahclaws/`. Live: a key the gateway refuses failed the turn with
+  `Failed — BadRequestError: Error code: 400 - {… 'No connected db.' …}` (the gateway's own answer
+  to an unknown key), 27 s.
+- **A dead endpoint hung the turn.** The CLI builds its OpenAI client with the SDK's 600 s timeout
+  and two retries of its own under the loop's three: a turn aimed at an address the instance's
+  firewall drops was still `running` at 600 s with nothing in its record. The driver now gives every
+  client a 300 s read timeout (`HR_CHEETAHCLAWS_TIMEOUT`, aider's budget) and no SDK retries, so the
+  loop's ladder is the only one: the same turn failed at 581 s with `Failed — APIConnectionError:
+  Connection error.`, and an endpoint that accepts and never answers fails in 23 s at a 2 s timeout
+  (`Failed — APITimeoutError: Request timed out.`, pinned by a test).
+- **Resume.** No resume flag: `-p` always starts from an empty state, and continuing is the REPL's
+  `/resume`. The driver loads the session file (the CLI's own `_migrate_session`) when it names the
+  requested id and writes it back with the CLI's own `autosave_session`, the id held fixed per
+  session. `_resume_lost` asks the same file. Recycle through the API: two turns, the sandbox
+  recycled (hydrated from the checkpoint), the session file identical, the recall turn answered
+  `M1-tools-pool`.
+- **Instructions and skills.** The CLI reads `CLAUDE.md` only (walking up from the cwd, plus
+  `~/.claude/CLAUDE.md`); there is no AGENTS.md discovery in the package, so with both present only
+  CLAUDE.md is loaded. It drops the whole file when a line matches its prompt-injection scan; the
+  driver says so in the record. Skills land in the project-level `.cheetahclaws/skills/`, which the
+  loader reads first; `.cheetahclaws/` is CLI state (its `tasks.json` tracker too) and never a
+  produced file, and the tracker is not checkpointed.
+- **Tool policy is hard, measured with a control.** The driver sets the CLI's `disabled_tools`: the
+  tool leaves the schema the provider receives (stub capture) and a call to it is refused at
+  execution. Live, with Bash, Write, Edit, NotebookEdit and Agent withheld, the model still called
+  Bash and Write by name; each came back `Error: tool 'Bash' is not enabled by the 'full' tool
+  profile for this turn.`, no file was written, and the answer said it had no write tool. The same
+  request with nothing withheld wrote the file through Write. AskUserQuestion (it blocks on a
+  terminal nobody is at), ReadEmail/SendEmail (no mailbox is configured) and the tools of optional
+  extras the bare install lacks (WebBrowse, ReadPDF, ReadSpreadsheet, ReadImage) are withheld on
+  every turn and not offered as toggles.
+- **Served model and usage come from the relay's taps.** The session file carries gross prompt
+  tokens with no cache split and no model. The CLI's `custom/` client streams without
+  `stream_options`, so the relay asks for the usage chunk on this route (`stream_usage`, pinned
+  against an upstream that sends usage only when asked); a live turn's Response carried
+  `input_tokens` 9118 / `output_tokens` 31 off the relay, and conformance T-03 read the served
+  model the same way.
+- **MCP** connects in a background thread at import in `-p`, racing the first model call; the
+  driver waits for it, and a server that does not connect becomes `mcp_unavailable`.
+
+### Versions and the column
+
+Measured on a self-hosted instance built from this branch (main at d54ebf8 plus the change,
+default build arguments), one container, `HR_BACKENDS=cheetahclaws`, a fresh volume; CheetahClaws
+3.5.88 installed by the entrypoint (wheel digest verified, import check passed, `pip check` clean).
+One `custom` connection in the OpenAI format to an OpenAI-compatible gateway whose model ids are
+pool aliases, each routed over several upstream models with fallbacks between pools; the three
+aliases it serves are the column's models. The instance has no egress beyond that gateway, so the
+public MCP probe was not reachable.
+
+- **Conformance** (`uhp-conformance` 2026.9.12.post2 from this tree, `--class full`, tools-pool):
+  75/75, CONFORMANT (full).
+- **Console column** `cheetahclaws-custom`, two passes of the five scenarios on each alias; the table
+  keeps the second and the first try in its notes. tools-pool 5/5 (the first pass missed the recall
+  by answering "Thought process"). fast-pool and coder-pool answer the recall with `M-<alias>` or
+  the previous turn's `DONE`: their histories were intact (same session file before and after the
+  recycle, and the same scenario through the API recalled M1 on tools-pool), so this is the
+  recall of the small models behind those aliases. coder-pool's artifact turn wrote no file in one
+  of two passes. The rows marked "served as" are the gateway's fallback between its own pools,
+  which rule 2 rightly counts as a substitution.
+- **Custom harness** (`custom-harness.mjs`, `MCP_URL=off`, the base's default id mapped to
+  tools-pool on the connection): the stamp skill read, its script run from the workspace,
+  `stamp.txt` produced, WebSearch withheld and unused, 15 s. One earlier run had no settled turn in
+  the script's 420 s window; not reproduced, cause not established.
+- **Plugin matrix** (`plugins/run-matrix.py`, tools-pool): skills 1/1, stdio MCP 1/1
+  (`PLUGIN_MCP_OK`, through the CLI's own MCP client). The SSE and streamable-HTTP columns need the
+  public probe and were not run.
+- **Not measured here:** the hosted provider columns (OpenRouter, TokenRouter, Vercel, the hosted
+  HarnessRouter API), so `_MODEL_CATALOG["cheetahclaws"]` is offered, not measured; and a benchmark
+  column.
+

@@ -179,7 +179,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -202,6 +202,7 @@ backend_bin() {
     aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
+    cheetahclaws) echo "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready" ;;
   esac
 }
 
@@ -288,6 +289,70 @@ if aider.__version__ != want:
   # what the boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
   printf '#!/bin/sh\necho %s\n' "$AIDER_PIN" > "$TOOLS/aider-venv/bin/aider-ready" \
     && chmod +x "$TOOLS/aider-venv/bin/aider-ready"
+}
+
+# CheetahClaws, Apache-2.0 (SAIL-Research-Lab/cheetahclaws, PyPI `cheetahclaws`), pinned to 3.5.88.
+#
+# Its own venv, the aider/openhands precedent: runner/cheetahclaws_driver.py drives the CLI's agent
+# loop IN PROCESS, so this venv's interpreter is what the runner starts, and the package's own
+# dependency tree (anthropic, openai, httpx, rich, pyte, prompt_toolkit) stays off the runner's.
+# The BARE package: its `files` extra brings pymupdf, which is AGPL-3.0, and `browser` brings
+# playwright with a Chromium of its own; the driver withholds the four tools those extras serve
+# (WebBrowse, ReadPDF, ReadSpreadsheet, ReadImage) for as long as they are absent.
+#
+# VERIFIED, not only pinned. PyPI publishes the wheel's sha256, so the wheel is downloaded on its
+# own, compared against the digest pinned here (computed from the 3.5.88 release's
+# cheetahclaws-3.5.88-py3-none-any.whl, and equal to the one PyPI lists), and installed from that
+# file; an index entry can be replaced, a digest cannot. An operator who overrides the version
+# supplies HR_CHEETAHCLAWS_SHA256 for it, or is told the wheel is unverified (install_backends).
+# The import check then asserts the symbols the driver reaches for, so an upstream refactor fails
+# the install here rather than the first live turn.
+CHEETAHCLAWS_PIN="${HR_CHEETAHCLAWS_VERSION:-3.5.88}"
+if [ "$CHEETAHCLAWS_PIN" = "3.5.88" ]; then
+  CHEETAHCLAWS_SHA256="${HR_CHEETAHCLAWS_SHA256:-6e9b46c0e2d125f700cc0b609464efe1a3fe0914cbd0ecad8e405a1c0fc4f9c0}"
+else
+  CHEETAHCLAWS_SHA256="${HR_CHEETAHCLAWS_SHA256:-}"
+fi
+install_cheetahclaws() {
+  cc_py="${HR_CHEETAHCLAWS_BASE_PYTHON:-python3}"
+  rm -rf "$TOOLS/cheetahclaws-venv"
+  "$cc_py" -m venv "$TOOLS/cheetahclaws-venv" || return 1
+  cc_tmp="$(mktemp -d)"
+  "$TOOLS/cheetahclaws-venv/bin/pip" download -q --disable-pip-version-check --no-deps \
+    --only-binary=:all: -d "$cc_tmp" "cheetahclaws==$CHEETAHCLAWS_PIN" || { rm -rf "$cc_tmp"; return 1; }
+  cc_whl="$cc_tmp/cheetahclaws-$CHEETAHCLAWS_PIN-py3-none-any.whl"
+  [ -f "$cc_whl" ] || { echo "cheetahclaws $CHEETAHCLAWS_PIN: no wheel was downloaded"; rm -rf "$cc_tmp"; return 1; }
+  if [ -n "$CHEETAHCLAWS_SHA256" ]; then
+    cc_have="$(sha256sum "$cc_whl" | awk '{print $1}')"
+    if [ "$CHEETAHCLAWS_SHA256" != "$cc_have" ]; then
+      echo "cheetahclaws $CHEETAHCLAWS_PIN: wheel digest mismatch (want $CHEETAHCLAWS_SHA256, have $cc_have)"
+      rm -rf "$cc_tmp"; return 1
+    fi
+  fi
+  "$TOOLS/cheetahclaws-venv/bin/pip" install -q --disable-pip-version-check "$cc_whl" \
+    || { rm -rf "$cc_tmp"; return 1; }
+  rm -rf "$cc_tmp"
+  "$TOOLS/cheetahclaws-venv/bin/python" -c '
+import sys, importlib.metadata as md
+want = sys.argv[1]
+have = md.version("cheetahclaws")
+if have != want:
+    sys.exit("cheetahclaws %s installed, wanted %s" % (have, want))
+# every name runner/cheetahclaws_driver.py imports, from the modules it imports them from
+from cheetahclaws.agent import AgentState, run, TextChunk, ThinkingChunk, ToolStart, ToolEnd, TurnDone, PermissionRequest  # noqa: F401
+from cheetahclaws.commands.session import autosave_session, _migrate_session  # noqa: F401
+from cheetahclaws.config import load_config, MR_SESSION_DIR  # noqa: F401
+from cheetahclaws.context import build_system_prompt  # noqa: F401
+from cheetahclaws.mcp_client.tools import initialize_mcp  # noqa: F401
+from cheetahclaws.tool_registry import get_all_tools  # noqa: F401
+import cheetahclaws.commands.session as s
+if not hasattr(s, "_autosave_sid"):
+    sys.exit("cheetahclaws %s: commands.session has no _autosave_sid" % have)
+' "$CHEETAHCLAWS_PIN" || return 1
+  # Written LAST, after the install and the checks proved the venv good: the marker is what the
+  # boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
+  printf '#!/bin/sh\necho %s\n' "$CHEETAHCLAWS_PIN" > "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready" \
+    && chmod +x "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready"
 }
 
 # Kimi Code CLI, MIT (MoonshotAI/kimi-code), pinned to 2.0.0.
@@ -664,6 +729,21 @@ install_backends() {
   if wanted systemone && [ -x "$TOOLS/systemone-venv/bin/playwright" ]; then
     chromium_libs || echo "[harnessrouter]   WARNING: Chromium's system libraries could not be installed; the System One base's browser environments will not start until they are (retried on the next start)"
   fi
+
+  # In the default set, for the reason aider is: the console offers every base the gateway's
+  # catalogue lists, and a listed base that is not installed fails on its first task. ~90 MB.
+  # The marker names the version the venv was built for, so a pin bump rebuilds it on a volume
+  # that already has one; the session lives in the workspace, not in the venv.
+  if wanted cheetahclaws && [ "$("$(backend_bin cheetahclaws)" 2>/dev/null)" != "$CHEETAHCLAWS_PIN" ]; then
+    echo "[harnessrouter] installing CheetahClaws $CHEETAHCLAWS_PIN (Apache-2.0)…"
+    if [ -z "$CHEETAHCLAWS_SHA256" ]; then
+      # Said HERE, outside try_install, which keeps an installer's output only when it fails.
+      echo "[harnessrouter] WARN: HR_CHEETAHCLAWS_VERSION=$CHEETAHCLAWS_PIN overrides the pinned 3.5.88, and no"
+      echo "[harnessrouter]       HR_CHEETAHCLAWS_SHA256 was given — this cheetahclaws wheel is UNVERIFIED."
+    fi
+    try_install "CheetahClaws" install_cheetahclaws || true
+  fi
+  [ -x "$TOOLS/cheetahclaws-venv/bin/python" ] && export HR_CHEETAHCLAWS_PYTHON="$TOOLS/cheetahclaws-venv/bin/python"
 
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
