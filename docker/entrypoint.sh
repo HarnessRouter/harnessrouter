@@ -204,7 +204,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,minimax,aider,openhands,systemone,cheetahclaws}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -224,6 +224,7 @@ backend_bin() {
     omp)    echo "$TOOLS/bin/omp" ;;
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
+    minimax) echo "$TOOLS/bin/mcode" ;;
     aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
@@ -400,6 +401,27 @@ if not hasattr(s, "_autosave_sid"):
 # from KIMI_MODEL_* alone, -r refusing an unknown session, agent files matching tool NAMES,
 # $KIMI_CODE_HOME/mcp.json, the exit-1 failure line) was measured on THIS version.
 KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
+# MiniMax Code, MIT (MiniMax-AI/minimax-code; its sandbox-runtime part Apache-2.0), pinned to 0.5.4.
+#
+# The GitHub release archive, an npm package tarball (@minimax-ai/code, bin `mcode`) built from the
+# tagged public source, installed with npm the way upstream's release notes say. Not the vendor's
+# install script (it installs a launcher and a Node runtime of its own and follows the npm channel)
+# and not the registry name: an asset under a tag can be pinned by digest. One archive for every
+# platform, so one digest. Upstream publishes it three times (a .sha256 beside the asset, the release
+# notes, GitHub's asset digest) and all three agree with the value below, which was computed from the
+# downloaded archive (2026-09-26). It is pinned HERE for kimi's reason: a checksum served from the
+# artifact's own origin adds nothing against a compromised origin.
+#
+# The digest covers the package. Its three dependencies (better-sqlite3 12.11.1, @vscode/ripgrep
+# 1.18.0, @larksuiteoapi/node-sdk 1.73.3) are exact versions resolved from npm at install time; their
+# own dependencies float within npm ranges, as for every npm-installed backend here. About 105 MB
+# installed, so it is in the default set. Requires Node >= 22.19 (the image's nodesource 22.x).
+#
+# Everything runner/server.py's minimax code relies on (the exec stream-json schema, the
+# custom_provider selector, --session refusing an unknown id, the sqlite session store, the config
+# keys agents.default / skills.external, the two instruction files, the rm shim's trash) was
+# measured on THIS version.
+MINIMAX_PIN="${HR_MINIMAX_VERSION:-0.5.4}"; MINIMAX_PIN="${MINIMAX_PIN#v}"
 # OpenHands V1, MIT (OpenHands/agent-sdk), pinned to 1.49.2 — the AGENT SERVER, not the CLI.
 #
 # PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
@@ -553,6 +575,39 @@ install_kimi() {
   rm -rf "$km_tmp"
 }
 
+
+install_minimax() {
+  mm_sha="b83a27e2f8373c755f26a1dc02cf8ba1c1f1a1a9d889d752ff5527fb5af2f1c0"
+  if [ "$MINIMAX_PIN" != "0.5.4" ]; then
+    # kimi's contract: an operator who overrides the version supplies the digest, or is TOLD the
+    # archive is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_MINIMAX_SHA256:-}" ]; then
+      mm_sha="$HR_MINIMAX_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_MINIMAX_VERSION=$MINIMAX_PIN overrides the pinned 0.5.4, and no"
+      echo "[harnessrouter]       HR_MINIMAX_SHA256 was given — this MiniMax Code archive is UNVERIFIED."
+      mm_sha=""
+    fi
+  fi
+  mm_tmp="$(mktemp -d)"
+  mm_tgz="$mm_tmp/minimax-code-${MINIMAX_PIN}.tar.gz"
+  curl -fsSL --proto '=https' \
+    "https://github.com/MiniMax-AI/minimax-code/releases/download/v${MINIMAX_PIN}/minimax-code-${MINIMAX_PIN}.tar.gz" \
+    -o "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
+  if [ -n "$mm_sha" ]; then
+    mm_have="$(sha256sum "$mm_tgz" | awk '{print $1}')"
+    if [ "$mm_sha" != "$mm_have" ]; then
+      echo "minimax $MINIMAX_PIN: archive digest mismatch (want $mm_sha, have $mm_have)"
+      rm -rf "$mm_tmp"; return 1
+    fi
+  fi
+  # Upstream's install form: optional deps included, install scripts allowed for better-sqlite3 (its
+  # prebuilt native binding; the CLI's session store is sqlite). An npm that predates allow-scripts
+  # warns about the flag and runs scripts anyway.
+  npm install -g --prefix "$TOOLS" --no-audit --no-fund --include=optional \
+    --allow-scripts=better-sqlite3 "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
+  rm -rf "$mm_tmp"
+}
 
 install_goose() {
   case "$(uname -m)" in
@@ -785,6 +840,13 @@ install_backends() {
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
     try_install "Kimi Code CLI" install_kimi || true
+  fi
+
+  # `mcode --version` prints the bare version ("0.5.4"), so a volume holding another one is moved
+  # to the pin in place.
+  if wanted minimax && [ "$("$(backend_bin minimax)" --version 2>/dev/null | head -n 1)" != "$MINIMAX_PIN" ]; then
+    echo "[harnessrouter] installing MiniMax Code $MINIMAX_PIN (MIT, version-pinned)…"
+    try_install "MiniMax Code" install_minimax || true
   fi
 
   # The largest install of the set: ~735 MB and about ninety seconds on a fresh volume

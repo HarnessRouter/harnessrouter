@@ -985,8 +985,7 @@ and the turn died after 171 s of retries. No other base sets one; aider's own `u
 switch leaves it out.
 
 **Edit markup rendered as the answer.** A file-writing task's reply card read
-`hello.py ```python <<<<<<< SEARCH ======= print("aider") >>>>>>> REPLACE ``` `. That is aider's
-wire format for an edit; the driver strips it from the text (the text event AND the result event,
+`hello.py ```python wire format for an edit; the driver strips it from the text (the text event AND the result event,
 since the gateway stores the latter as the answer) and reports each edited file as an `Edit` card,
 as file edits render on every other base.
 
@@ -1697,3 +1696,85 @@ or the store, the command's output), and the session names the environment.
 first pass judged three answers by their labels rather than their evidence (aider paraphrases the
 printed lines; omp's shell reports `jq --version` as jaq while `which jq` and the sorted output are the
 environment's); the judges now read the evidence, and the two bases rerun clean on 0.26.12.
+
+## The minimax backend: MiniMax Code 0.5.4 — behaviour measured, columns NOT yet run (2026-09-26/27)
+
+No `minimax` column exists in `docs/support-matrix.md`: a column needs a deployed instance running
+one provider at a time. What was measured, on the 0.5.4 release archive (`mcode --version` = 0.5.4):
+
+- **Through a local runner** (this branch, macOS arm64, real providers): minimax-m3 and gpt-5.4-mini
+  on Vercel, gemini-3.5-flash-lite on Google, each served as itself per the relay (`minimax/minimax-m3`,
+  `openai/gpt-5.4-mini`, `gemini-3.5-flash-lite`), relay usage non-zero on every turn; a bash tool call
+  rendered as tool_use/tool_result; a follow-up recalled a number from the first turn through
+  `--session`; the harness instructions (global `AGENTS.md`) reached the model; a stdio MCP server's
+  tool was called with bash disabled and bash absent; a cancel during `sleep 241` left no process
+  behind; no provider key in the CLI's argv, the agent shell's environment or the workspace.
+- **Provider failures are structural** (invalid key, 401/503 at a stub and a real Vercel 401):
+  `turn.failed` with the provider's sentence, exit 4, nothing narrated as assistant text.
+- **The retry storm has no off switch, and that was established by walking the surface, not assumed.**
+  0.5.4 retries EVERY error class five times — 6 upstream requests, measured at a stub for 401, 429 and
+  503 — so a bad key is reported after 20-28 s. `DEFAULT_LLM_RETRY_POLICY` is
+  `{maxRetries 5, baseDelayMs 1000, maxDelayMs 30000, maxRetryElapsedMs 120000}`, and the elapsed cap
+  bounds the worst case: a 429 answered with `Retry-After: 90` still ended in 23 s, because
+  `retryDelayMs` clamps Retry-After to `maxDelayMs` and the loop stops once the next delay would pass
+  the 120 s window. What was checked, so nobody redoes it: (1) the config schema —
+  `packages/config/src/config.ts`'s top-level parse is a whitelist of `parse*` calls that IGNORES
+  unknown keys, and the only retry/timeout-ish keys in the whole schema are
+  `goal.{subagent,evaluator}.{timeoutSeconds,maxRetries}` (goal-mode evaluation, not LLM transport),
+  `permission.classifierTimeoutMs`, `tui.*.timeoutMs` and `ProviderOptions.{timeout,chunkTimeout}`,
+  whose consumer is not in the published tree; (2) the 131 `process.env.*` names in the shipped
+  bundle — none retry-, backoff- or timeout-related; (3) every flag of every subcommand on the pinned
+  binary — only `exec --timeout`, a whole-run cap; (4) the code path — `withLLMRetry(inner, {policy?})`
+  is the single hook and BOTH hosts pass no policy (`resolveLlmRetry: () => ({ observer })`,
+  local-runtime-v2 `services.ts`; `llmRetry: { observer }`, local-runtime `host.ts`), so the default
+  always applies and `policy` is reachable only by an embedder. Measured negatives: a top-level
+  `llmRetry: {maxRetries: 0}`, `custom_provider.<id>.options.maxRetries: 0` and
+  `options.{timeout,chunkTimeout}` each left the count at 6 requests.
+  **`exec --timeout` is NOT used to bound it**, and that is deliberate: `--timeout 8s` against the 401
+  stub did cut the run to 4 requests, but the record became `status: timeout` with an EMPTY error
+  message — the provider's 401 sentence was gone. A bounded turn that cannot say why it failed is
+  worse than a slow one that can.
+- **Cost channel:** a trivial first turn is ~9k input tokens on minimax-m3 (most cached on Vercel) and
+  ~17k on Google (no cache there). MCP tools, bundled skills, web search and website deploy are off
+  or withheld, which halved the system prompt measured at a stub (14.7k -> 7.8k characters).
+- The CLI fetches a public model catalog once per run (`models.dev`, with `MAVIS_REGION=en`); no
+  login, telemetry or update check happens in `exec`.
+### The disabled-tool claim, measured against `bash` (2026-09-28)
+
+`disabled_tool_unused` passes VACUOUSLY on this base, as it does on kilo, qwen, gemini, cline, kimi
+and aider: the shared dimension disables the fixed id `WebSearch` and none of them has a tool by that
+name. So it was measured directly instead, with an oracle no answer can fake — `HR_MX_STAMP` set in
+the TURN'S ENVIRONMENT and never in the prompt, the task being to write that value into a file. Only
+a process that ran with the turn's environment can produce it.
+
+- **Control** (all tools): `bash` called, the stamp lands in the file. **Treatment** (`bash`
+  disabled): the CLI sends 11 tools with no shell among them — `edit get_goal glob grep read skill
+  task_stop todowrite update_goal web_fetch write`, read off its own `llm-call.json` — and the stamp
+  appears in NO file in the workspace. Repeated on `minimax-m3` and on `gpt-5.4-mini` under explicit
+  pressure to try every tool, delegate and spawn.
+- **BOTH ERROR DIRECTIONS.** Neither model came back empty-handed: one wrote `proof.txt` containing
+  `HR_MX_STAMP: <unavailable>`, the other `<unresolved>`. A file-existence oracle would have reported
+  a shell escape that never happened. Disabling `bash` withholds EXECUTION; it does not withhold file
+  writing (`write`/`edit` stay) and it does not withhold network egress (`web_fetch` stays — it even
+  answered a loopback HTTP beacon in the treatment arm, which is why a beacon is not a sound witness
+  of "a shell ran" and the env stamp is).
+- **The subagent is a genuine second door, and closing it is load-bearing.** With `bash` withheld but
+  `features.delegation` left ON, the agent called `task`, the subagent had a shell, and the file came
+  back holding the env stamp. So a subagent does not inherit the main agent's denial: withholding the
+  named tool alone would have left `tool_enforcement: "hard"` false. That is why the runner turns
+  delegation off whenever anything is withheld — a positive control for the line, not decoration.
+  (In that run the model's prose denied having env access while the stamp sat in the file: narration
+  is not evidence in either direction.)
+- **"The script actually ran" is fakeable.** A skill whose `SKILL.md` says to run `scripts/stamp.py`,
+  the script holding its own token and writing `$HR_MX_STAMP`: with the shell withheld the agent read
+  the script and hand-wrote `stamp.txt` as `SKILLTOK-8842QF|<no-env>`. The bundle's token is there, so
+  a claim keyed on it passes with no execution; the env stamp is absent, which is what proves nothing
+  ran. This settles the question the kimi work left open — as judged today that claim is judged by
+  something an agent can fake, and an env stamp is the cheapest form it cannot.
+
+- **The output cap and the context window DO have a hook, unlike the retries.** Every request carries
+  `max_completion_tokens: 16384` and an unknown model's window defaults to 200,000 — the CLI's
+  unknown-model defaults, since the runner sets neither per id (kimi's `KIMI_CONTEXT_WINDOW` question).
+  Measured: with `custom_provider.<id>.models.<model>.limit: {context: 32768, output: 4096}` the same
+  request carried `max_completion_tokens: 4096`, so a per-id table would work whenever there are
+  measured windows to put in it.

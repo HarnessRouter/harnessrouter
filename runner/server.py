@@ -345,6 +345,10 @@ _SESSION_PRESENT = {
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
+    # minimax: _build_minimax asks the CLI's own sqlite store and passes --session only when the
+    # conversation is there, so the id in argv IS that lookup's conclusion (an unknown id would be
+    # a hard exit 4 on this CLI, never a silent new conversation).
+    "minimax": _argv_session_present,
     "aider": _aider_session_present,
     "openhands": _openhands_session_present,
     "cheetahclaws": _cheetahclaws_session_present,
@@ -551,7 +555,25 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # never at rest: the CLI is handed the relay's placeholder in its env.
                       "./.cheetahclaws/tasks.json",
                       "./.harness/home/.cheetahclaws/mcp.json",
-                      "./.harness/home/.cheetahclaws/logs"]
+                      "./.harness/home/.cheetahclaws/logs",
+                      # MiniMax Code: v2/sqlite + v2/sessions are what a --session resume reads and
+                      # they travel. config.yaml holds the relay's per-turn placeholder as a literal
+                      # apiKey (the CLI reads no env reference) and mcp.json can carry MCP auth
+                      # headers; auth/ is its own login store (never used here, a credential if it
+                      # were). Logs, background-command output, caches and the 12 MB of bundled
+                      # skills it re-seeds on every start do not need to travel.
+                      "./.harness/home/.minimax/config.yaml",
+                      "./.harness/home/.minimax/mcp.json",
+                      "./.harness/home/.minimax/auth",
+                      "./.harness/home/.minimax/v2/observability",
+                      "./.harness/home/.minimax/background-tasks",
+                      "./.harness/home/.minimax/cache",
+                      "./.harness/home/.minimax/.builtin-skills",
+                      # ...and its agent bash puts an `rm` shim first on PATH that MOVES a deleted
+                      # file to the XDG trash under $HOME (measured on 0.5.4: shims/rm ->
+                      # bin/mavis-trash -> ~/.local/share/Trash on Linux). HOME is in the checkpoint,
+                      # so without this every file the agent ever deleted would travel with it.
+                      "./.harness/home/.local/share/Trash"]
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
@@ -568,6 +590,8 @@ DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
+# MiniMax Code runs any OpenAI-compatible model; its vendor's own is the natural default.
+MINIMAX_DEFAULT_MODEL = os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax-m3")
 AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
@@ -1005,6 +1029,14 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # backend wrote — which is a second reason to name the directory explicitly.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    elif backend == "minimax":
+        # $MINIMAX_DATA_DIR/skills/<name>/SKILL.md, the CLI's user-global root (skills/roots.ts,
+        # 0.5.4). Measured at a stub: the skill's description reached the system prompt and its body
+        # did not (loaded on demand through the `skill` tool). External discovery — the workspace's
+        # .minimax/.claude/.agents skills with walk-up, and the home ones — is switched off in
+        # config.yaml, so a tree another backend wrote is not swept in (kimi's reason).
+        rootrels = [".harness/home/.minimax/skills"]
+        entryroot = ".harness/home/.minimax/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -1338,6 +1370,14 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     if backend == "gemini":
         return pathlib.Path(cwd) / "GEMINI.md"   # gemini-cli's own context.fileName default
+    if backend == "minimax":
+        # MiniMax Code reads TWO instruction files and merges them: the GLOBAL $MINIMAX_DATA_DIR/
+        # AGENTS.md, and ONE project file — the workspace's CLAUDE.md if it has content, else its
+        # AGENTS.md (static-prompt-reader.ts, 0.5.4; both measured reaching the system prompt). A
+        # root AGENTS.md would therefore be silently SHADOWED by any CLAUDE.md in the workspace,
+        # the user's own or one another harness left there. The global file is read whatever the
+        # workspace holds, and it sits under .harness/, so it is never a produced file.
+        return _minimax_home(pathlib.Path(cwd)) / "AGENTS.md"
     return pathlib.Path(cwd) / (
         # goose reads AGENTS.md natively and first: its default context-file list is
         # ["AGENTS.md", ".goosehints"], overridable only via CONTEXT_FILE_NAMES.
@@ -1401,6 +1441,8 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
     body = ((base + "\n\n") if base else "") + block
     try:
+        # minimax's file lives in the CLI's home, which does not exist before its first turn.
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body if body.endswith("\n") else body + "\n")
     except Exception:  # noqa: BLE001
         pass
@@ -4498,6 +4540,236 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     return cmd
 
 
+# ── minimax (MiniMax Code, `mcode`) ────────────────────────────────────────────────
+MINIMAX_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+# The provider id the runner gives the connection inside MiniMax Code's config. The CLI's model
+# selector for a config-defined endpoint is `custom_provider:<id>/<model>`, and that prefix is not
+# decoration: measured on 0.5.4, `<id>/<model>` resolves to the "configured_provider" route and the
+# turn dies with `Model "hr/…" is not available for the "configured_provider" route` before any
+# request (model-availability.ts). Everything after the first "/" is the model id, sent to the
+# provider verbatim — `custom_provider:hr/minimax/minimax-m3` reached a stub as
+# "model":"minimax/minimax-m3".
+_MINIMAX_PROVIDER_ID = "hr"
+
+# The built-in tools this runner can WITHHOLD, by the names the model sees them under. Measured on
+# 0.5.4 from the `tools` array of a live request at a stub: read, write, edit, bash, grep, glob,
+# todowrite, skill, web_fetch, web_search, task, task_append, task_query, task_output, task_stop,
+# website_deploy, update_goal, get_goal (+ mcp__<server>__<tool> per MCP tool).
+#   - the first eight are the config's `agents.default.tools` allowlist ids (AGENT_BUILTIN_TOOL_IDS);
+#     a tool left out of the list is absent from the request — measured with bash;
+#   - `task` (with task_append) is the delegation FEATURE, `features.delegation: false` removes both,
+#     and it is withheld with anything else: a subagent carries its own tool list, the hole kimi's
+#     agent file had to close the same way;
+#   - web_search and website_deploy need a MiniMax account (search and hosting are MiniMax's own
+#     services) and are never enabled, so they are not offered; nor are skill, update_goal and
+#     get_goal, which have no switch. task_query/task_output/task_stop control background shell
+#     commands and go with bash.
+# test_catalog_minimax_tools.py pins _BASE_CATALOG["minimax"]'s ids equal to this tuple.
+_MINIMAX_TOOLS = ("bash", "read", "write", "edit", "grep", "glob", "todowrite", "web_fetch", "task")
+_MINIMAX_BASH_COMPANIONS = ("task_query", "task_output", "task_stop")
+
+
+def _minimax_home(ws: pathlib.Path) -> pathlib.Path:
+    """MINIMAX_DATA_DIR for this workspace: config, the session store (sqlite + transcripts), the
+    global AGENTS.md, skills, mcp.json, logs. Under .harness/home so the sessions travel with the
+    checkpoint (a resume survives a recycled sandbox) and nothing of it is a produced file. It is
+    also the CLI's own default ($HOME/.minimax) under the runner's redirected HOME."""
+    return ws / ".harness" / "home" / ".minimax"
+
+
+def _minimax_has_session(home: pathlib.Path, session_id: str) -> bool:
+    """Is this conversation in the store? ASK THE STORE (checklist #10): MiniMax Code keeps sessions
+    in `v2/sqlite/runtime-state.sqlite`, table `local_runtime_sessions`, keyed by `session_id`
+    (0.5.4). It matters because `mcode exec --session <unknown id>` is a hard failure — exit 4,
+    `Session not found: <id>`, nothing on stdout (measured) — so an id the store does not hold must
+    never be passed. Read-only, and sqlite reads the WAL itself."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return False
+    db = home / "v2" / "sqlite" / "runtime-state.sqlite"
+    if not db.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{urllib.parse.quote(str(db))}?mode=ro", uri=True, timeout=5)
+        try:
+            row = con.execute("SELECT 1 FROM local_runtime_sessions WHERE session_id = ? LIMIT 1",
+                              (sid,)).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _minimax_tool_policy(tools_disabled: list[str] | None) -> dict:
+    """`agents.default` for the config: which built-in tools, features and bundled capabilities the
+    main agent has. Unknown names are ignored — an id outside _MINIMAX_TOOLS would be a toggle that
+    disables nothing, and the catalog test keeps the console from offering one.
+
+    THE ALLOWLIST CANNOT WITHHOLD ALL THREE TASK-CONTROL TOOLS, and that is the CLI's rule, not a
+    choice here: its tolerant parser (parseTolerantAgentCapabilityConfig, the one `agents.default`
+    goes through) does `if (!TASK_CONTROL_IDS.some(id => tools.includes(id))) tools.push(...ids)` —
+    a list naming NONE of task_query/task_output/task_stop gets ALL THREE back, to preserve their
+    old availability "even with tools: [] or delegation disabled". Measured on 0.5.4: a first
+    attempt that simply dropped them with bash saw the CLI send all three to the provider. So one is
+    named deliberately, and the other two are then excluded. task_stop is the one chosen because it
+    is the only one that can neither start nor read anything: task_query lists background tasks and
+    task_output reads their output logs, which on a session whose EARLIER turn had bash would hand a
+    later bash-less turn the output of a command it was not allowed to run. None of the three can
+    execute anything (a background task is created by the bash tool, which is withheld), so this is
+    a smaller surface rather than a repaired hole."""
+    off = {(t or "").split(" (")[0].strip().lower() for t in tools_disabled or []}
+    allowed = [t for t in _MINIMAX_TOOLS if t != "task" and t not in off]
+    allowed += list(_MINIMAX_BASH_COMPANIONS) if "bash" in allowed else ["task_stop"]
+    return {
+        "tools": allowed,
+        # MiniMax's hosted media tools (image/video/speech generation and understanding) and its
+        # bundled skills: the first need a MiniMax account; the second would sit beside the
+        # harness's own skill bundles and cost prompt on every turn (18 skills, 12 MB seeded).
+        "builtinTools": [],
+        "skills": [],
+        "features": {"webSearch": False,
+                     # A subagent brings its own tools back: off whenever anything is withheld.
+                     "delegation": not (off & set(_MINIMAX_TOOLS))},
+    }
+
+
+def _minimax_mcp_config(home: pathlib.Path, mcp_servers: list[dict] | None) -> pathlib.Path:
+    """$MINIMAX_DATA_DIR/mcp.json, the PROFILE file. The project-level `.mcp.json` would have to sit
+    at the workspace root, where it is a produced file handed back to the user on every turn.
+    Written on EVERY turn, empty included, so a server removed from the harness is gone.
+
+    Shapes per the runtime's own parser (0.5.4, service/mcp/runtime/config.ts): `command`/`args`/
+    `env` is stdio; `type` http | streamable-http | sse with `url` and `headers` is remote. The
+    declared transport travels (kimi's rule); a url with no declared transport is streamable HTTP.
+    A bearer the gateway resolved (`auth`) becomes the Authorization header, as for claude."""
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "http",
+                           "url": url}
+            hdrs: dict = {}
+            auth = sv.get("auth")
+            if auth:
+                hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            if isinstance(sv.get("headers"), dict):
+                hdrs.update({str(k): str(v) for k, v in sv["headers"].items() if k and v is not None})
+            if hdrs:
+                entry["headers"] = hdrs
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": str(argv[0]),
+                     "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        servers[name] = entry
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "mcp.json"
+    path.write_text(json.dumps({"mcpServers": servers}, indent=2))
+    return path
+
+
+def _minimax_config(home: pathlib.Path, base_url: str, api_key: str, model: str,
+                    tools_disabled: list[str] | None) -> pathlib.Path:
+    """$MINIMAX_DATA_DIR/config.yaml, rewritten on every turn.
+
+    MiniMax Code takes a third-party endpoint only as a `custom_provider` entry in this file, and
+    the key only as a literal `options.apiKey`: `provider add --api-key-env` copies the variable's
+    VALUE into the file, and nothing in 0.5.4 reads an environment reference. What lands here is the
+    relay's per-turn placeholder, never the provider key, and the file is kept out of every
+    checkpoint (CHECKPOINT_EXCLUDE). The base URL is the relay's too, and a new runner means a new
+    relay port — safe because a session stores neither: its record holds the workspace and nothing
+    of the provider (measured), so a follow-up after a redeploy reads this turn's file.
+
+    `openai-completions` is the api: the relay carries OpenAI chat/completions, and the id reaches
+    the provider as written. External skill discovery is off (the workspace's .claude/.agents/
+    .minimax skills and the home ones, with walk-up): the harness names its skills itself, in this
+    home's skills/, which is kimi's --skills-dir reason. Telemetry is off in the file as well as by
+    MCODE_DISABLE_TELEMETRY; it defaults off in 0.5.4 anyway."""
+    cfg = {
+        "defaultModel": f"custom_provider:{_MINIMAX_PROVIDER_ID}/{model}",
+        "custom_provider": {_MINIMAX_PROVIDER_ID: {
+            "name": "HarnessRouter", "kind": "custom", "enabled": True,
+            "api": "openai-completions",
+            "options": {"apiKey": api_key, "baseURL": base_url, "authMode": "api-key"},
+            "models": {model: {}},
+        }},
+        "agents": {"default": _minimax_tool_policy(tools_disabled)},
+        "skills": {"external": {"enabled": False}},
+        "telemetry": {"enabled": False, "metrics": False, "diagnostics": False},
+    }
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "config.yaml"
+    # 0600 from the first byte: the CLI itself refuses a group/other-readable main config.
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(yaml.safe_dump(cfg, sort_keys=False))
+    os.chmod(path, 0o600)
+    return path
+
+
+def _build_minimax(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                   resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                   tools_disabled: list[str] | None = None, max_turns: int | None = None) -> list[str]:
+    """MiniMax Code (MiniMax-AI/minimax-code, MIT, the `mcode` CLI, 0.5.4) through `mcode exec`.
+
+    Every turn rides the loopback relay, the kimi rationale unchanged: the real key never enters the
+    sandbox, and the provider's own `model` and usage pass through for the served-model check and
+    billing. The relay token is in the ENVIRONMENT as well as in config.yaml, because
+    _relay_served_model and _relay_usage find the turn's route by the bearer in env (checklist #19).
+
+    One conversation per harness session: the CLI mints the id (`mvs_…`) on the first turn and the
+    stream announces it on every line; the next turn passes it back with --session, but only once
+    the store holds it (_minimax_has_session), because an unknown id is a hard failure here."""
+    pr = provider or "openai-api"
+    if pr not in MINIMAX_PROVIDERS:
+        raise HTTPException(400, f"unknown minimax provider '{pr}' (one of {sorted(MINIMAX_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "minimax needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    ws = pathlib.Path(cwd)
+    home = _minimax_home(ws)
+    # NO --timeout. It is a whole-run cap, and it is the wrong tool for this CLI's retry storm: with
+    # `--timeout 8s` against a stub answering 401 the run did stop early, and the record became
+    # `status: timeout` with an EMPTY error message — the provider's own sentence was lost. The turn's
+    # cap is the runner's (_run_turn_bg's killer), which does not rewrite the reason. 0.5.4 retries
+    # every error class five times with no setting anywhere to change it (the whole configurable
+    # surface was walked: see docs/support-matrix-notes.md), so a refusal takes 20-28 s to arrive.
+    _minimax_config(home, auth.base_url or "", auth.api_key or "", model, tools_disabled)
+    _minimax_mcp_config(home, mcp_servers)
+    env["MINIMAX_DATA_DIR"] = str(home)
+    env["MCODE_PROVIDER_API_KEY"] = auth.api_key or ""   # the relay placeholder, read back by the relay helpers
+    env["MCODE_DISABLE_TELEMETRY"] = "1"
+    # The one request an exec run makes on its own is a public model catalog (no credential). The
+    # release is built for region "cn", which fetches it from agent.minimax.cn; "en" takes it from
+    # models.dev itself (measured with a connect/fetch logger, 0.5.4). Nothing else in exec differs.
+    env["MAVIS_REGION"] = "en"
+    env["NO_COLOR"] = "1"
+    # --permission full: the sandbox is the boundary (claude --dangerously-skip-permissions, kimi
+    # --yolo). The default `smart` also runs an LLM classifier on tool calls — extra provider calls
+    # nobody asked for. stream-json is the versioned JSONL contract (schemaVersion 1).
+    cmd = ["mcode", "exec", "--output-format", "stream-json", "--permission", "full",
+           "--cwd", cwd, "--model", f"custom_provider:{_MINIMAX_PROVIDER_ID}/{model}"]
+    if max_turns:
+        # THE BUDGET: unset means unlimited. Reaching it is structural, status limit_exceeded.
+        cmd += ["--max-steps", str(int(max_turns))]
+    if resume_session_id and _minimax_has_session(home, resume_session_id):
+        cmd += ["--session", resume_session_id]
+    # `--` ends the options: a prompt that starts with "-" is still the prompt.
+    return cmd + ["--", prompt]
+
+
 AIDER_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 AIDER_PYTHON = os.environ.get("HR_AIDER_PYTHON", "/data/agent-tools/aider-venv/bin/python")
 AIDER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aider_driver.py")
@@ -6545,6 +6817,132 @@ def _kimi_mcp_unavailable(state: dict) -> list[dict]:
 _kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
 
 
+def _minimax_text(v) -> str:
+    """A tool output's text: MiniMax Code's tool results are `{content: [{type: text, text}], details}`
+    (pi's shape); anything else is kept as JSON rather than dropped."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict) and isinstance(v.get("content"), list):
+        parts = [str(p.get("text") or "") for p in v["content"]
+                 if isinstance(p, dict) and p.get("type") == "text"]
+        if parts:
+            return "".join(parts)
+    if v is None:
+        return ""
+    return json.dumps(v, default=str)
+
+
+def _minimax_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `mcode exec --output-format stream-json` line to zero+ canonical claude events.
+
+    The stream is MiniMax Code's versioned exec contract (schemaVersion 1, packages/tui/src/headless/
+    events.ts in 0.5.4), confirmed line by line against a stub:
+
+        exec.started / session.started | session.resumed / turn.started      every line: sessionId
+        item.started | item.updated | item.completed  item.type agent_message | reasoning | tool_call
+        turn.completed {model, usage, usageSource}  |  turn.failed {status, error{category,message}}
+        exec.completed {result: {status, output, error, …}}                   always the last line
+
+    Only COMPLETED items are rendered: a tool call's completed item carries its input, its output
+    and its status together (1 start, 2 finished, 3 failed, 4 preparing, 5 prepared).
+
+    A PROVIDER FAILURE IS STRUCTURAL here (checklist #8, measured with a 401 and a 503 at a stub):
+    turn.failed carries `BYOK provider … upstream error: 401 …`, exit 4, and no agent_message at all
+    — nothing is narrated as assistant text, so no prefix regex is needed, and one would only ever
+    turn an answer that mentions an error into a failure.
+
+    The result carries NO model and NO usage on purpose. The CLI's `model` is the id it was asked
+    for, not what the provider served, and a result with a model is never checked against the relay
+    (_run_turn_bg only fills an empty one): rule 2 would compare the request with itself. Both come
+    from the relay, which reads the provider's own bytes."""
+    t = obj.get("type")
+    out: list[dict] = []
+    sid = obj.get("sessionId")
+    if sid and not state.get("_mm_init"):
+        # _run_turn_bg records the conversation id only from a system/init event; without it every
+        # follow-up would silently start a new conversation (the recycle lesson).
+        state["_mm_init"] = True
+        out.append({"type": "system", "subtype": "init", "session_id": str(sid),
+                    "model": state.get("model")})
+    if t == "item.completed":
+        item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
+        it = item.get("type")
+        if it == "agent_message":
+            txt = item.get("content")
+            if isinstance(txt, str) and txt.strip():
+                state["final"] = txt
+                out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}})
+        elif it == "reasoning":
+            txt = item.get("content")
+            if isinstance(txt, str) and txt.strip():
+                out.append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": txt}]}})
+        elif it == "tool_call":
+            call = item.get("toolCall") if isinstance(item.get("toolCall"), dict) else {}
+            tuid = str(call.get("id") or item.get("id") or "tool")
+            seen = state.setdefault("_mm_tools", set())
+            if tuid in seen:
+                return out
+            seen.add(tuid)
+            args = call.get("input")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {"arguments": args}
+            if not isinstance(args, dict):
+                args = {}
+            failed = call.get("status") == 3 or bool(call.get("error"))
+            body = _minimax_text(call.get("error") if failed and call.get("error") else call.get("output"))
+            out.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tuid, "name": str(call.get("name") or "tool"), "input": args}]}})
+            out.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tuid, "is_error": failed, "content": body}]}})
+        return out
+    if t == "turn.failed":
+        err = obj.get("error") if isinstance(obj.get("error"), dict) else {}
+        state["_mm_error"] = str(err.get("message") or "")
+        return out
+    if t == "exec.completed":
+        res = obj.get("result") if isinstance(obj.get("result"), dict) else {}
+        status = res.get("status")
+        state["_mm_done"] = True
+        if status == "succeeded":
+            answer = res.get("output")
+            if not isinstance(answer, str):
+                answer = state.get("final") or ("" if answer is None else json.dumps(answer, default=str))
+            state["final"] = answer or state.get("final", "")
+            out.append({"type": "result", "subtype": "success", "is_error": False,
+                        "result": state["final"], "usage": {}})
+            return out
+        err = res.get("error") if isinstance(res.get("error"), dict) else {}
+        msg = str(err.get("message") or state.get("_mm_error") or "")
+        if status == "limit_exceeded":
+            out.append({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                        "result": msg or "the run reached its step limit (--max-steps)", "usage": {}})
+        else:
+            if not msg and status == "timeout":
+                msg = "the run timed out"
+            out.append({"type": "result", "subtype": "error", "is_error": True, "result": msg,
+                        "usage": {}})
+        return out
+    return out
+
+
+def _minimax_eof(state: dict, rc: int) -> list[dict]:
+    """The process ended without an exec.completed line: a failure before the stream began
+    (`Session not found: <id>`, an invalid config, a crash) prints one line on stderr and exits
+    non-zero. The result is left EMPTY so the run loop fills it from that line — a placeholder here
+    would shadow the real reason, as in _kimi_eof."""
+    if rc == 0 and state.get("final"):
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state["final"], "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": state.get("_mm_error", ""), "usage": {}}]
+
+
+_minimax_to_claude.eof = _minimax_eof   # type: ignore[attr-defined]
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -6664,6 +7062,11 @@ BACKENDS = {
     # normaliser and an eof rather than the passthrough qwen's claude-shaped stream can use.
     "kimi": {"providers": sorted(KIMI_PROVIDERS), "default_model": KIMI_DEFAULT_MODEL,
              "normalize": _kimi_to_claude},
+    # MiniMax Code's exec stream is its own versioned schema (schemaVersion 1) — see
+    # _minimax_to_claude — with a terminal exec.completed line, so the eof only covers a run that
+    # died before the stream began.
+    "minimax": {"providers": sorted(MINIMAX_PROVIDERS), "default_model": MINIMAX_DEFAULT_MODEL,
+                "normalize": _minimax_to_claude},
     "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
               "normalize": _aider_to_claude},
     "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
@@ -8056,6 +8459,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
                           max_turns=req.max_turns)
+    elif backend == "minimax":
+        model = model or MINIMAX_DEFAULT_MODEL
+        # Skills are already on disk in the home _write_skills chose, which the CLI discovers itself;
+        # the agent doc is its global AGENTS.md (see _agent_doc_path).
+        cmd = _build_minimax(req.provider, auth, model, req.prompt, cwd, env,
+                             resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                             tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "aider":
         model = model or AIDER_DEFAULT_MODEL
         # aider has no skill loader and no instruction-file convention: the driver puts the agent
