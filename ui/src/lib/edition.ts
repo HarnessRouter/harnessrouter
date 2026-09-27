@@ -32,7 +32,7 @@ export const LOCAL_MEMBER = 'local@localhost';
  *  API Keys is here because the box mints and serves them itself: /keys worked in every CE
  *  release and only the entry was missing, so the README sent people to the URL by hand. The
  *  key is how a product calls its own instance, which is the point of self-hosting. */
-export const SELF_HOSTED_NAV = ['/kits', '/harnesses', '/tasks', '/keys', '/integrations'];
+export const SELF_HOSTED_NAV = ['/kits', '/harnesses', '/tasks', '/plugins', '/keys', '/integrations'];
 
 /** Orgs allowed to see platform-admin surfaces (global model routing).
  *

@@ -2402,7 +2402,14 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
         return False
     path = home / ".pi" / "agent" / "mcp.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
+    # directTools: the tools are registered on the agent one by one, as every other CLI lists
+    # MCP tools. The adapter's default hides them behind one `mcp` proxy tool (search, then call),
+    # and a model that is not told to search answers that it has no such tool: a harness with the
+    # browser plugin included said "I can't directly control a browser here" to Richard on
+    # 2026-09-25 while all thirteen tools sat in the adapter's cache. The proxy goes with it, so
+    # the model has one way to a tool, not two.
+    path.write_text(json.dumps({"settings": {"directTools": True, "disableProxyTool": True},
+                                "mcpServers": entries}, indent=2))
     return True
 
 
@@ -7370,7 +7377,15 @@ def _produced_list(ws: str) -> list[dict]:
         path = path.strip().strip('"')
         if _produced_keep(status, path):
             seen.setdefault(path, status.strip() or "?")
-    return [{"path": k, "status": v} for k, v in seen.items()]
+    # mtime rides on each item so a reader can put the newest first: a response carries at most
+    # HARNESS_RESP_MAX_FILES of them, and git's path order handed a Mario run its first 24 frames
+    # of 1,400 (hosted, 2026-09-25). 0 when the file is gone (a deletion) or cannot be stat'ed.
+    def _mtime(rel: str) -> float:
+        try:
+            return float(os.stat(os.path.join(ws, rel)).st_mtime)
+        except OSError:
+            return 0.0
+    return [{"path": k, "status": v, "mtime": _mtime(k)} for k, v in seen.items()]
 
 
 def _produced_ack(ws: str) -> str:

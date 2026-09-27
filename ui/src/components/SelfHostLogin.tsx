@@ -39,7 +39,7 @@ export function SelfHostLogin({ next }: { next: string }) {
     <div className="sh-login">
       <form className="sh-login-card" onSubmit={submit}>
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no layout shift */}
-        <img className="sh-login-mark" src="/harnessrouter-wordmark.svg" alt="HarnessRouter" />
+        <img className="sh-login-mark" src="/brand/hr-horizontal-duo-light.png" alt="HarnessRouter" />
         <p className="sh-login-sub">Sign in to this instance.</p>
 
         {err ? <div className="notice error" role="alert">{err}</div> : null}

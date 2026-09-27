@@ -354,6 +354,7 @@ a { color: inherit; text-decoration: none; }
 
 /* output file cards (under the answer) */
 .wbx-files { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-width: 560px; }
+.wbx-files-more { font-size: 12px; color: var(--muted, #6b6560); margin: 2px 0 4px; }
 /* One-click "everything from this turn" zip row under the file cards. */
 .wbx-zipall { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start;
   font-size: 12.5px; font-weight: 600; font-family: inherit; color: var(--brand); padding: 6px 12px;

@@ -11,6 +11,7 @@ import {
   OOB, oobById, oobDefaultModel, oobModels, useModelCatalog, modelAvailable, modelAvailability, availabilityNote, useBases, getCustom, saveCustom, deleteCustom, createCustom, getSkillFiles, storeMcpSecret, pluginSchemas,
   type CustomHarness, type OobHarness, type HarnessPlugin, getPluginFiles,
   useRuntimeDefaults,
+  listPlugs, getHarnessPlugs, setHarnessPlugs, PLUGS_ENTRY_ID, type Plug, type HarnessPlugs,
 } from '@/lib/harness';
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
@@ -73,6 +74,35 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   // Plugins: which row is expanded (by name, so removing another row cannot move it), the folder
   // picker, the export in flight, and a notice that belongs to this section rather than to Save.
   const [pluginOpen, setPluginOpen] = useState<string | null>(null);
+  // The workspace's plugins and which of them this Harness includes; both read from the server.
+  const [wsPlugs, setWsPlugs] = useState<Plug[] | null>(null);
+  const [included, setIncluded] = useState<HarnessPlugs | null | undefined>(undefined);
+  const [plugBusy, setPlugBusy] = useState('');
+  const [plugErr, setPlugErr] = useState('');
+  useEffect(() => {
+    if (!id || oob) { setIncluded(null); return; }
+    let alive = true;
+    listPlugs().then((d) => { if (alive) setWsPlugs(d.plugs); }).catch(() => { if (alive) setWsPlugs([]); });
+    getHarnessPlugs(id).then((p) => { if (alive) setIncluded(p); }).catch(() => { if (alive) setIncluded(null); });
+    return () => { alive = false; };
+  }, [id, oob]);
+  // What the one list shows: the workspace's connected plugins (built-in harnesses take none) and
+  // the packages installed on this Harness; the count is the list's length.
+  const wsConnected = oob ? [] : (wsPlugs || []).filter((p) => p.status !== 'missing');
+  const pluginCount = wsConnected.length + (draft?.plugins || []).length;
+  // The plugins binding is an MCP entry on the record (the gateway's own plugs server), but it is
+  // the Plugins section's, not a custom server: the Tools section neither lists it (its address is
+  // ours, and its switch would be a second one) nor counts it.
+  const ownServers = (draft?.mcpServers || []).map((m, idx) => ({ m, idx })).filter(({ m }) => m.id !== PLUGS_ENTRY_ID);
+  const togglePlug = async (type: string) => {
+    if (!id) return;
+    const have = included?.plugs || [];
+    const next = have.includes(type) ? have.filter((t) => t !== type) : [...have, type];
+    setPlugBusy(type); setPlugErr('');
+    try { setIncluded(await setHarnessPlugs(id, next)); setDraft(await getCustom(id)); }
+    catch (e) { setPlugErr(e instanceof Error ? e.message : 'The plugin was not changed. Try again.'); }
+    finally { setPlugBusy(''); }
+  };
   const [pluginBusy, setPluginBusy] = useState(false);
   const [pluginNote, setPluginNote] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const pluginDirRef = useRef<HTMLInputElement>(null);
@@ -88,7 +118,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
     try {
       let total = 0;
       for (let i = 0; i < list.length; i++) total += list[i].size;
-      if (total > PLUGIN_PACKAGE_MAX) throw new Error(`That folder is ${fmtMb(total)}; a plugin package can be at most ${fmtMb(PLUGIN_PACKAGE_MAX)}.`);
+      if (total > PLUGIN_PACKAGE_MAX) throw new Error(`That folder is ${fmtMb(total)}; a package can be at most ${fmtMb(PLUGIN_PACKAGE_MAX)}.`);
       const files: NonNullable<HarnessPlugin['files']> = [];
       for (let i = 0; i < list.length; i++) {
         const f = list[i];
@@ -98,7 +128,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
         files.push(await readSkillUpload(f, path));
       }
       const manifestFile = files.find((f) => f.path === 'plugin.json');
-      if (!manifestFile || manifestFile.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a plugin package.');
+      if (!manifestFile || manifestFile.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a package.');
       let manifest: (HarnessPlugin['manifest'] & { $schema?: string }) = {};
       try { manifest = JSON.parse(manifestFile.content) as typeof manifest; } catch { throw new Error('plugin.json is not valid JSON.'); }
       const name = String(manifest?.name || '');
@@ -303,7 +333,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           <section className="form-section">
             <div><h3>Tools</h3><p>Control inherited tools and add MCP servers for external capabilities.</p></div>
             <div className="field-stack">
-              <div className="section-actions"><strong>{baseTools.length + (draft?.mcpServers?.length || 0)} configured tools</strong>
+              <div className="section-actions"><strong>{baseTools.length + ownServers.length} configured tools</strong>
                 {!readOnly && <button className="button small" type="button" onClick={() => setMcpModal({ idx: null })}><iconify-icon icon="tabler:plus"></iconify-icon>Add MCP</button>}</div>
               <div className="capability-list">
                 {baseTools.map((t) => (
@@ -319,7 +349,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                     </div>
                   </div>
                 ))}
-                {(draft?.mcpServers || []).map((m, idx) => (
+                {ownServers.map(({ m, idx }) => (
                   <div key={m.id || idx} className="capability-row">
                     <span className="capability-icon"><iconify-icon icon="tabler:world-www"></iconify-icon></span>
                     <div className="capability-copy"><strong>{m.name}</strong><span>Custom MCP · {m.url || 'endpoint'}</span></div>
@@ -419,9 +449,9 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           )}
 
           <section className="form-section">
-            <div><h3>Plugins</h3><p>A plugin is a package of tools and Skills in the Agent Plugins format. What it brings joins this Harness's own tools and Skills on every Task.</p></div>
+            <div><h3>Plugins</h3><p>Tools and Skills this Harness carries beyond its own: the services this workspace connected, and the packages installed here in the Agent Plugins format. What they bring joins every Task.</p></div>
             <div className="field-stack">
-              <div className="section-actions plugin-head"><strong>{(draft?.plugins || []).length} installed {(draft?.plugins || []).length === 1 ? 'plugin' : 'plugins'}</strong>
+              <div className="section-actions plugin-head"><strong>{pluginCount} {pluginCount === 1 ? 'plugin' : 'plugins'}</strong>
                 {!readOnly && <button className="button small" type="button" disabled={pluginBusy} onClick={() => pluginDirRef.current?.click()}>
                   <iconify-icon icon="tabler:plus"></iconify-icon>Install from folder</button>}
                 <input ref={pluginDirRef} type="file" hidden onChange={(e) => void installPluginFolder(e.target.files)}
@@ -429,6 +459,23 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
               </div>
               {pluginNote && <div className={'plugin-note is-' + pluginNote.kind} role={pluginNote.kind === 'error' ? 'alert' : 'status'}>{pluginNote.text}</div>}
               <div className="capability-list plugin-list">
+                {!oob && wsPlugs === null && <div className="capability-row"><span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span><div className="capability-copy"><strong>Reading the workspace's plugins</strong></div></div>}
+                {!oob && wsConnected.map((p) => {
+                  const on = (included?.plugs || []).includes(p.type);
+                  return (
+                    <div key={'ws:' + p.type} className={'capability-row plugin-row' + (on ? '' : ' is-off')}>
+                      <span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span>
+                      <div className="capability-copy">
+                        <strong className="plugin-title">{p.label}{p.official && <span className="status neutral">Official</span>}</strong>
+                        <span className="plugin-facts">{p.status === 'connected' ? `${p.tools} ${p.tools === 1 ? 'tool' : 'tools'}` : p.status === 'disabled' ? 'Turned off for the workspace' : 'Needs credentials on the Plugins page'}{p.pricing ? ` \u00b7 $${p.pricing.usd_per_unit.toFixed(2)} per ${p.pricing.unit}` : ''}</span>
+                      </div>
+                      <div className="capability-actions">
+                        <button className="toggle-button" type="button" disabled={readOnly || plugBusy === p.type} aria-pressed={on} onClick={() => void togglePlug(p.type)}>
+                          {on ? 'Included' : 'Not included'}</button>
+                      </div>
+                    </div>
+                  );
+                })}
                 {(draft?.plugins || []).map((p, idx) => {
                   const servers = p.mcpServers || [], skls = p.skills || [], skipped = p.skipped || [];
                   const pending = Boolean(p.files && p.files.length && !p.blob);
@@ -476,16 +523,18 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                     </div>
                   );
                 })}
-                {(draft?.plugins || []).length === 0 && (
+                {pluginCount === 0 && (oob || wsPlugs !== null) && (
                   <div className="capability-row">
-                    <span className="capability-icon"><iconify-icon icon="tabler:puzzle"></iconify-icon></span>
-                    <div className="capability-copy"><strong>No plugins installed</strong>
+                    <span className="capability-icon"><iconify-icon icon="lucide:plug"></iconify-icon></span>
+                    <div className="capability-copy"><strong>No plugins yet</strong>
                       <span>{readOnly
-                        ? 'A built-in Harness carries no plugins. Create a Harness of your own to install packages of tools and Skills.'
-                        : 'A plugin is a folder with a plugin.json at its root, tools in mcp.json and Skills under skills. Install one to add all of it at once.'}</span></div>
+                        ? 'A built-in Harness carries no plugins. Create a Harness of your own to include the services this workspace connects and install packages of tools and Skills.'
+                        : 'Connect a service on the Plugins page and include it here, or install a package: a folder with a plugin.json at its root, tools in mcp.json and Skills under skills.'}</span></div>
+                    {!readOnly && <div className="capability-actions"><button className="button small" type="button" onClick={() => router.push('/plugins')}>Open Plugins</button></div>}
                   </div>
                 )}
               </div>
+              {plugErr && <span className="field-help" role="alert">{plugErr}</span>}
             </div>
           </section>
 
@@ -599,7 +648,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
         <CloudUploadDialog
           items={[{ id: draft.id, name: draft.name, uploaded: !!cloud?.uploaded,
                     includes: ['instructions', draft.defaultModel, (draft.skills || []).length ? `${draft.skills.length} skill${draft.skills.length === 1 ? '' : 's'}` : '',
-                               (draft.mcpServers || []).length ? `${draft.mcpServers.length} MCP server${draft.mcpServers.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') }]}
+                               ownServers.length ? `${ownServers.length} MCP server${ownServers.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') }]}
           onClose={() => setUploading(false)}
           onDone={() => { statusOne(draft.id).then(setCloud).catch(() => null); }} />
       )}
