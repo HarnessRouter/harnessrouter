@@ -3617,9 +3617,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     body = effort
                     headers["content-length"] = str(len(body))
                     continue
-                if google and e.code == 400:
-                    # the harness shows this as "400 (no body)"; the refusal is here
-                    print(f"[relay] google refused {tail} model={_body_model}: {data[:300]!r}", flush=True)
+                if e.code in (400, 422):
+                    # The provider's own words, kept here for every provider: a harness shows a
+                    # refusal as "400 (no body)" (Gemini CLI) or cuts it to a few dozen characters
+                    # (CheetahClaws), and a matrix row that fails must carry the reproduced text
+                    # (docs/harness-verification.md). A llama-3.3-70b turn on a compacted history
+                    # was refused as "malformed" on 2026-09-27 with the reason cut off.
+                    print(f"[relay] {'google' if google else 'provider'} refused {tail} model={_body_model} "
+                          f"status={e.code}: {data[:300]!r}", flush=True)
                 if (attempt < 2 and e.code == 400 and b"thought_signature" in data
                         and not flags.get("thought_signature") and body is not None):
                     # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
