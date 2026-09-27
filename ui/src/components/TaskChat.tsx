@@ -225,7 +225,7 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
   const [draft, setDraft] = useState<CustomHarness | null>(ch);
   useEffect(() => setDraft(ch), [ch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useModelCatalog();   // server catalog is the source of truth for the picker
+  const catalog = useModelCatalog();   // server catalog is the source of truth for the picker and the default
   const models = oobModels(oob).length ? oobModels(oob) : oobModels(oobById(draft?.base || ''));
   // The safe fallback is the BACKEND DEFAULT (gpt-5.4 / sonnet-4.6), never models[0], the lists
   // lead with the newest/priciest entries (gpt-5.6-*, fable-5) and those must never be picked
@@ -269,7 +269,10 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
       : ms.includes(dm.replace(/^claude-/, '')) ? dm.replace(/^claude-/, '')
       : (oobDefaultModel(base0) || dm);
     setModel(pick);
-  }, [harnessId, ch?.defaultModel, ch?.base, deepSid]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `catalog` is a dep so the pick follows the server's default the moment the catalog lands: the
+    // placeholder default stands in for a second or two, and nothing can be picked in that window
+    // (the options stay disabled until availability is read), so the re-sync clobbers no choice.
+  }, [harnessId, ch?.defaultModel, ch?.base, deepSid, catalog]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [recentsKey, setRecentsKey] = useState(0);
   // Realtime broadcast: subscribe ONCE per harness. Every session's live events flow into the conv
