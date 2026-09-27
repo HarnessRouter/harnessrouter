@@ -1161,26 +1161,32 @@ _PLUGIN_PLACEHOLDER = re.compile(r"\$\{PLUGIN_(ROOT|DATA)\}")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-# Clients without a remote transport of their own: goose 1.50.0's ExtensionConfig has no sse
-# variant, dsh-mcp-client's config is a union of stdio and streamable-http, and codex's client
-# takes streamable HTTP and stdio. Every one of them launches a stdio server, so the runner hands
-# them the bridge (mcp_bridge.py) as one, and the bridge speaks SSE to the remote end. The server
-# reaches the agent on every base the same way; nothing is declared unsupported.
-_NO_SSE_BACKENDS = {"codex", "dsh", "goose"}
+# Remote transports a client cannot reach on its own, by backend: goose 1.50.0's ExtensionConfig
+# has no sse variant, dsh-mcp-client's config is a union of stdio and streamable-http, codex's
+# client takes streamable HTTP and stdio, and CheetahClaws 3.5.88's own streamable-HTTP client is
+# answered 400 on initialize by a standard server (the public probe; its SSE and stdio work).
+# Every one of them launches a stdio server, so the runner hands them the bridge (mcp_bridge.py)
+# as one, and the bridge speaks the remote transport with the reference SDK. The server reaches
+# the agent on every base the same way; nothing is declared unsupported.
+_BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "cheetahclaws": ("http",)}
 _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
 
 
 def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dict]:
-    """Each SSE server, for a backend whose client cannot speak SSE, becomes a stdio launcher that
-    runs the bridge with the url and headers in its environment (never on the command line, where
-    a ps listing would show an Authorization header). Other servers and backends pass untouched."""
-    if backend not in _NO_SSE_BACKENDS:
+    """Each remote server whose transport this backend's client cannot reach becomes a stdio
+    launcher that runs the bridge with the url, the transport and the headers in its environment
+    (never on the command line, where a ps listing would show an Authorization header). A url
+    without a transport is streamable HTTP, as everywhere else in this file. Other servers and
+    backends pass untouched."""
+    bridged = _BRIDGED_TRANSPORTS.get(backend)
+    if not bridged:
         return list(servers or [])
     out: list[dict] = []
     for s in servers or []:
         s = s or {}
         url = str(s.get("url") or "").strip()
-        if not url or str(s.get("transport") or "").lower() != "sse":
+        transport = str(s.get("transport") or "http").lower()
+        if not url or transport not in bridged:
             out.append(s)
             continue
         name = _mcp_name(str(s.get("name") or s.get("id") or "mcp"))
@@ -1193,8 +1199,8 @@ def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dic
         bdir = pathlib.Path(_safe_join(cwd, ".harness/mcp-bridge"))
         bdir.mkdir(parents=True, exist_ok=True)
         launcher = bdir / f"{name}.sh"
-        lines = ["#!/bin/sh", "# written by the harness runner: this client has no SSE transport, so the bridge speaks it over stdio",
-                 f"export HR_MCP_URL={shlex.quote(url)}", "export HR_MCP_TRANSPORT=sse",
+        lines = ["#!/bin/sh", f"# written by the harness runner: this client cannot reach a {transport} server, so the bridge speaks it over stdio",
+                 f"export HR_MCP_URL={shlex.quote(url)}", f"export HR_MCP_TRANSPORT={transport}",
                  f"export HR_MCP_HEADERS={shlex.quote(json.dumps(headers))}",
                  f"exec python3 {shlex.quote(_MCP_BRIDGE)}", ""]
         if launcher.is_symlink() or (launcher.exists() and not launcher.is_file()):
