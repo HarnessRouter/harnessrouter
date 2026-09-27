@@ -38,7 +38,8 @@ the top for LOCAL embeddings, which pull torch; the only consumer, the memory pl
 
 The event protocol is dsh_driver's: one {"m": method, "p": payload} JSON object per line on stdout,
 normalised by _agentzero_to_claude in server.py. Agent Zero prints its own console output with
-print(), so stdout is re-pointed at stderr for the whole run and the events go to the real fd 1.
+print(), so fds 1 and 2 are re-pointed at a console log in the workspace scratch for the whole run
+and the events go to a duplicate of the real fd 1.
 """
 from __future__ import annotations
 
@@ -80,11 +81,10 @@ _STATE_DIRS = {"usr", "tmp", ".git", ".github"}
 #   _desktop         an Xpra/Xfce desktop
 #   _a0_connector    remote tools that need Agent Zero's CLI connected to a running server
 #   _time_travel     snapshots workspaces inside /a0/usr, a path that exists only in its image
-#   _chat_naming     a utility-model call per chat to name it for a sidebar nobody sees
 #   _email_integration / _telegram_integration / _whatsapp_integration / _kokoro_tts / _whisper_stt /
 #   _oauth / _migrate_agents / _orchestrator: server-side integrations with no place in one turn
 DISABLED_PLUGINS = ("_memory", "_document_query", "_browser", "_office", "_desktop", "_a0_connector",
-                    "_time_travel", "_chat_naming", "_email_integration", "_telegram_integration",
+                    "_time_travel", "_email_integration", "_telegram_integration",
                     "_whatsapp_integration", "_kokoro_tts", "_whisper_stt", "_oauth",
                     "_migrate_agents", "_orchestrator")
 
@@ -269,6 +269,13 @@ def write_config(base: pathlib.Path, job: dict, src: pathlib.Path) -> None:
     for p in DISABLED_PLUGINS:
         (plug / p).mkdir(parents=True, exist_ok=True)
         (plug / p / ".toggle-0").write_text("")
+    # _chat_naming is ALWAYS-ENABLED (its toggle file is ignored), and by default it makes a
+    # utility-model call at the end of every turn to name the chat for a sidebar nobody sees —
+    # measured at a recorder: a one-word turn was two provider calls, the second this one. Its own
+    # switch turns the automatic naming off.
+    (plug / "_chat_naming").mkdir(parents=True, exist_ok=True)
+    (plug / "_chat_naming" / "config.json").write_text(json.dumps(
+        {"automatic_naming": False, "automatic_naming_mode": "always"}))
     (plug / "_code_execution").mkdir(parents=True, exist_ok=True)
     (plug / "_code_execution" / "config.json").write_text(json.dumps(code_execution_config(src)))
     # The harness's AGENTS.md reaches the system prompt through Agent Zero's own include plugin:
@@ -517,14 +524,17 @@ def keep_children_in_group() -> None:
 
     Its terminal is a bash on a pty spawned with start_new_session=True
     (plugins/_code_execution/helpers/tty_session.py), which takes it OUT of the group the runner
-    kills on cancel and timeout — the openhands tmux defect of checklist item 21, where a cancelled
-    turn's `sleep 240` kept running. The runner's marker sweep is only a second net: it reads other
-    uids' /proc/<pid>/environ, which default Docker (no CAP_SYS_PTRACE) refuses. A parent-death
-    signal is not the answer either, because Linux delivers it when the forking THREAD exits and
-    Agent Zero spawns from short-lived task threads. So the new session is simply not created: the
+    kills on cancel and timeout — the shape of the openhands tmux defect (checklist item 21). A
+    FOREGROUND command dies anyway (the driver's death closes the pty master and the session gets
+    SIGHUP), but anything the agent put in the background with nohup outlived the kill. Measured
+    with a scripted provider that asked for `nohup sleep 188 … & sleep 60`, the runner's own
+    killpg on the driver's group: without this, `sleep 188` survived; with it, nothing did. The
+    runner's marker sweep is only a second net: it reads other uids' /proc/<pid>/environ, which
+    default Docker (no CAP_SYS_PTRACE) refuses. So the new session is simply not created: the
     shell still runs on its pty (prompt detection and output reading are unchanged), without a
-    controlling terminal and therefore without job control, and everything it starts stays in the
-    group the runner's killpg reaches."""
+    controlling terminal and therefore without job control, so everything it starts stays in the
+    group the runner's killpg reaches. tty_session is the only caller of create_subprocess_shell in
+    the pinned tree."""
     real = asyncio.create_subprocess_shell
 
     async def create_subprocess_shell(cmd, *a, **k):
@@ -544,9 +554,17 @@ def main(argv: list[str]) -> int:
     install_hooks(base)
     _STATE["max_turns"] = job.get("max_turns") or None
     _set_env(job, src)
-    # Agent Zero's console output goes where the runner collects stderr; fd 1 is the event channel.
-    os.dup2(2, 1)
-    sys.stdout = sys.stderr
+    # Agent Zero's console goes to a log in the workspace scratch (never checkpointed), NOT to the
+    # runner's stderr: it prints every exception with its full traceback, and the runner takes the
+    # first stderr line that looks like a provider refusal as the turn's reason — measured with a
+    # wrong key, the record's reason became `File ".../litellm/llms/openai/openai.py", line 1113,
+    # in async_streaming` while the result event carried the real sentence. The driver's result
+    # event states the reason; fd 1 is the event channel.
+    console = os.open(str(cwd / "tmp" / "agentzero" / "console.log"),
+                      os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # this turn's
+    os.dup2(console, 1)
+    os.dup2(console, 2)
+    sys.stdout = sys.stderr = open(console, "w", buffering=1, closefd=False)
     sys.modules["hr_agentzero_driver"] = sys.modules[__name__]
     keep_children_in_group()
     stub = types.ModuleType("sentence_transformers")

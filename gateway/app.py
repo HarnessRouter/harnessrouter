@@ -6584,27 +6584,16 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
                          "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
                          "nemotron-3-super"]},
-    # agentzero (Agent Zero v2.13): the same relay reach as openhands (litellm's openai provider
-    # through the loopback relay, the id sent as written), so the list is openhands'. OFFERED SO THE
-    # MATRIX CAN MEASURE IT HERE, not measured: no column has run on this base yet. What HAS run,
-    # through a local runner on 2026-09-27: vercel's google/gemini-2.5-flash-lite (not in this list;
-    # the cheapest probe model), served as itself per the relay. Agent Zero adds no model-id
-    # rewriting of its own: provider `other` becomes litellm's `openai/<id>`, and litellm strips its
-    # own prefix and nothing else.
-    "agentzero": {"default": "gpt-5.4",
-                  "models": [
-                      "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-                      "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
-                      "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                      "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                      "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
-                      "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
-                      "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
-                      "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
-                      "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
-                      "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
-                      "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # agentzero (Agent Zero v2.13): the same relay reach as openhands (chat/completions through the
+    # loopback relay), so the list is openhands'. OFFERED SO THE MATRIX CAN MEASURE IT HERE, not
+    # measured: no column has run on this base. What HAS run, through a local runner on 2026-09-27:
+    # gemini-3.1-flash-lite on Vercel, five turns, each served as itself per the relay. The id
+    # reaches the provider EXACTLY as the connection names it, and that was measured rather than
+    # assumed, because openhands lost a prefix here (#296): at a loopback recorder,
+    # openai/gpt-6-sol, gpt-5.4, google/gemini-3.1-flash-lite and anthropic/claude-sonnet-4.6 each
+    # arrived as `model` unchanged (Agent Zero's provider `other` hands litellm `openai/<id>`, and
+    # litellm 1.88.1 takes off that one prefix and nothing else).
+    "agentzero": {"default": "gpt-5.4", "models": []},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -6723,6 +6712,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+_MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13

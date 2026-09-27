@@ -859,7 +859,7 @@ or two to install on a fresh volume. Leave either out of `HR_BACKENDS` if you wi
 
 Agent Zero (`agentzero`) is NOT in the default set: name it in `HR_BACKENDS` to install it. It is a
 framework rather than a CLI, so it is installed from its tagged source archive (digest-pinned) into a
-virtualenv of about 400 MB with upstream's own dependency pins, minus the packages that serve only
+virtualenv (about 640 MB with its source, 80-odd seconds on a fresh volume; measured on Linux arm64) with upstream's own dependency pins, minus the packages that serve only
 what this base switches off (local embeddings and speech, which would bring torch; document
 parsing; the browser; its messaging integrations).
 

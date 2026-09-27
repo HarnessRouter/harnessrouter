@@ -503,7 +503,8 @@ if have != sys.argv[1]:
 # models.py imports sentence_transformers at the top; the driver stubs that one module (and the
 # check below does the same), because the only thing that would call it is the memory plugin.
 #
-# Own venv on the data volume like openhands and aider. About 400 MB installed, so it is NOT in the
+# Own venv on the data volume like openhands and aider. Measured on Linux arm64 (python:3.12-slim):
+# 83 s, venv 569 MB + source 69 MB, so it is NOT in the
 # default HR_BACKENDS (the 300 MB rule): name it to install it.
 AGENTZERO_PIN="${HR_AGENTZERO_VERSION:-2.13}"; AGENTZERO_PIN="${AGENTZERO_PIN#v}"
 AGENTZERO_EXCLUDE='^(kokoro|openai-whisper|sentence-transformers|unstructured|unstructured-client|langchain-unstructured|faiss-cpu|liteparse|newspaper3k|patchright|docker|duckduckgo-search|pyreqwest-impersonate|exchangelib|imapclient|boto3|flaredantic|pypdf|pymupdf|pytesseract|pdf2image|soundfile|pywinpty)([=<>~!; []|$)'
@@ -870,7 +871,7 @@ install_backends() {
   fi
   [ -x "$TOOLS/cheetahclaws-venv/bin/python" ] && export HR_CHEETAHCLAWS_PYTHON="$TOOLS/cheetahclaws-venv/bin/python"
   if wanted agentzero && [ "$("$TOOLS/agentzero-venv/bin/agentzero-ready" 2>/dev/null)" != "$AGENTZERO_PIN" ]; then
-    echo "[harnessrouter] installing Agent Zero $AGENTZERO_PIN (MIT) — ~400 MB, this takes a minute…"
+    echo "[harnessrouter] installing Agent Zero $AGENTZERO_PIN (MIT) — ~640 MB, this takes a minute or two…"
     try_install "Agent Zero" install_agentzero || true
   fi
 
