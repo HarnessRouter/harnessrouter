@@ -210,6 +210,17 @@ def test_a_client_without_sse_gets_the_server_through_the_stdio_bridge(tmp_path)
     # the writers then see a stdio entry, as for any plugin server
     ext = rn._goose_extensions(rn._sse_bridges(str(tmp_path), [sse, http], "goose"), None)
     assert ext["probe_sse"]["type"] == "stdio" and ext["probe_http"]["type"] == "streamable_http"
+    # the other way round for CheetahClaws 3.5.88: its client speaks SSE and stdio, and its own
+    # streamable-HTTP client is answered 400 on initialize by a standard server (the public probe,
+    # 2026-09-27), so the streamable-HTTP server is the one that rides the bridge; a url with no
+    # transport is streamable HTTP too
+    bare = {"name": "probe_bare", "url": "https://probe.example.invalid/mcp"}
+    out = rn._sse_bridges(str(tmp_path), [sse, http, bare], "cheetahclaws")
+    assert out[0] == sse
+    for b, u in ((out[1], "https://probe.example.invalid/mcp"), (out[2], "https://probe.example.invalid/mcp")):
+        assert "url" not in b and b["args"] == []
+        text = pathlib.Path(b["command"]).read_text()
+        assert f"HR_MCP_URL={u}" in text and "HR_MCP_TRANSPORT=http" in text
 
 def test_dsh_job_keeps_a_stdio_server(tmp_path):
     """_build_dsh hands the driver a job whose server list kept only urls, from before plugins:
