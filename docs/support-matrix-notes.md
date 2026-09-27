@@ -1443,7 +1443,9 @@ TokenRouter behind the switch, as `fill-connection.py` stamped them.
   by the probe, the same server its SSE end and the runner's bridge reach, so the turn ran without
   the server and said so. Since 0.25.1 a streamable-HTTP server reaches this base through the
   runner's stdio bridge (`_BRIDGED_TRANSPORTS`, the mechanism codex, dsh and goose use for SSE),
-  the way every other base reaches it; the CLI's client keeps SSE and stdio.
+  the way every other base reaches it; the CLI's client keeps SSE and stdio. Measured on 0.25.1
+  (hr-test, the same probe): skills 1/1, stdio 1/1, SSE 1/1, streamable HTTP 1/1
+  (`PROBE-HTTP-ef8e44614954`, 11.1 s).
 - **In the browser** (the console on hr-test, the system harness, gpt-5.4): a task that writes a
   file and runs a command completed in 15 s with the file card and the byte count in the answer.
 - **Not measured here:** the other provider columns (OpenRouter, Vercel, the hosted HarnessRouter
