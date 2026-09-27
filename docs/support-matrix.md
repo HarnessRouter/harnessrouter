@@ -107,14 +107,14 @@ Not run in this column, 7 pairs the provider serves that the harness did not run
 | dsh | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
 | dsh | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | dsh | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| goose | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
+| goose | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Azure OpenAI E2 |  |
 | hermes | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
 | hermes | gpt-5.3-codex | pass | pass | pass (gpt-5.5) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
 | hermes | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
 | hermes | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
 | hermes | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
 | hermes | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
-| hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
-| hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "API |
 | hermes | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
 | hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
@@ -123,17 +123,19 @@ Not run in this column, 7 pairs the provider serves that the harness did not run
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | opencode | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
 | opencode | gpt-5.3-codex | pass | pass | pass (gpt-5.5) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
 | opencode | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
 | opencode | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
 | opencode | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
 | opencode | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
-| opencode | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
-| opencode | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Res |
 | opencode | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
 | opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
+| openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Azure OpenAI E2 |  |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Azure OpenAI E2 |  |
 | pi | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Ope |
@@ -142,9 +144,9 @@ Not run in this column, 7 pairs the provider serves that the harness did not run
 | pi | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Ope |
 | pi | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Ope |
 | pi | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Ope |
-| pi | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Ope |
-| pi | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: first [{"connection": "integration:Azure OpenAI E2", "status": "failed", "error": "Ope |
 | pi | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 |  |
+| pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
+| pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
 | qwen | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-gpt-5.2: What exact word did I ask you to reply with in my v |
@@ -152,12 +154,12 @@ Not run in this column, 7 pairs the provider serves that the harness did not run
 | qwen | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-gpt-5.4-mini: What exact word did I ask you to reply with in |
 | qwen | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-gpt-5.5: What exact word did I ask you to reply with in my v |
 | qwen | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in |
-| qwen | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-gpt-5.6-sol: What exact word did I ask you to reply with in  |
-| qwen | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 | re-run with the E2 base carrying /openai/v1 ; retested once; first try: artifact no file card (files: none); Create a file named hello-qwen.txt containing exactl; recycle answered without M1-gpt-5.6-terra: What exact word did I ask you to reply with i |
+| qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 | served as gpt-6-luna-2026-09-22 (the provider's alias of the same model) |
+| qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Azure OpenAI E2 | served as gpt-6-sol-2026-09-22 (the provider's alias of the same model) |
 | qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Azure OpenAI E2 | served as gpt-6-luna-2026-09-22 (the provider's alias of the same model) |
 | qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Azure OpenAI E2 | served as gpt-6-sol-2026-09-22 (the provider's alias of the same model) |
 
-82 pairs, 406 of 410 scenario runs passed.
+84 pairs, 416 of 420 scenario runs passed.
 
 Not run in this column, 9 pairs the provider serves that the harness did not run, with the reason:
 
@@ -170,6 +172,7 @@ Not run in this column, 9 pairs the provider serves that the harness did not run
 - openhands x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - cheetahclaws x gpt-6-luna: not run, this harness is not wired to this provider (the gateway's integration wiring)
 - cheetahclaws x gpt-6-sol: not run, this harness is not wired to this provider (the gateway's integration wiring)
+- goose x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
 ## Provider: azure-openai
 
@@ -2512,14 +2515,14 @@ Not run in this column, 6 pairs the provider serves that the harness did not run
 | dsh | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
 | dsh | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | dsh | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| goose | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
+| goose | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenAI |  |
 | hermes | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | hermes | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | hermes | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | hermes | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | hermes | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | hermes | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
-| hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenAI |  |
-| hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | hermes | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
 | hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
@@ -2528,17 +2531,19 @@ Not run in this column, 6 pairs the provider serves that the harness did not run
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | opencode | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | opencode | gpt-5.3-codex | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | opencode | gpt-5.4 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | opencode | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | opencode | gpt-5.5 | pass | pass | n/a | pass | pass | OpenAI | retested once; first try: artifact no file card (files: none); Create a file named hello-opencode.txt containing ex |
 | opencode | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
-| opencode | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenAI |  |
-| opencode | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | opencode | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
 | opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
+| openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenAI |  |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenAI |  |
 | pi | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
@@ -2547,9 +2552,9 @@ Not run in this column, 6 pairs the provider serves that the harness did not run
 | pi | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | pi | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | pi | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
-| pi | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenAI |  |
-| pi | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | pi | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
+| pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
+| pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
 | qwen | gpt-5.2 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
@@ -2558,12 +2563,12 @@ Not run in this column, 6 pairs the provider serves that the harness did not run
 | qwen | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | qwen | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
 | qwen | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
-| qwen | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenAI |  |
-| qwen | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+| qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
+| qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenAI |  |
 | qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenAI |  |
 | qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenAI |  |
 
-83 pairs, 406 of 413 scenario runs passed.
+85 pairs, 416 of 423 scenario runs passed.
 
 Not run in this column, 8 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2575,6 +2580,7 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 - openhands x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - cheetahclaws x gpt-6-luna: not run, this harness is not wired to this provider (the gateway's integration wiring)
 - cheetahclaws x gpt-6-sol: not run, this harness is not wired to this provider (the gateway's integration wiring)
+- goose x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
 ## Provider: openrouter
 
@@ -2636,6 +2642,8 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 | dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| goose | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| goose | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | hermes | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | claude-opus-4.7 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
@@ -2655,9 +2663,9 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 | hermes | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
-| hermes | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenRouter |  |
-| hermes | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter |  |
+| hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
+| hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
@@ -2688,11 +2696,11 @@ session_id: 20260913_060549_70cbeb |
 | hermes | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| hermes | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
-| hermes | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | kimi | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | kimi | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-astra (the provider's alias of the same model) |
+| omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | opencode | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
@@ -2714,9 +2722,9 @@ session_id: 20260913_060549_70cbeb |
 | opencode | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | opencode | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | opencode | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
-| opencode | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenRouter |  |
-| opencode | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | opencode | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-astra (the provider's alias of the same model) |
+| opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | opencode | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as x-ai/grok-4.20 (the provider's alias of the same model) |
@@ -2740,8 +2748,8 @@ session_id: 20260913_060549_70cbeb |
 | opencode | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as qwen/qwen3.7-plus (the provider's alias of the same model) |
 | opencode | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as qwen/qwen3.8-27b (the provider's alias of the same model) |
 | opencode | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as qwen/qwen3.8-flash (the provider's alias of the same model) |
-| opencode | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
-| opencode | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
+| openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | pi | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | retested once; first try:  |
@@ -2763,9 +2771,9 @@ session_id: 20260913_060549_70cbeb |
 | pi | gpt-5.4-mini | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | pi | gpt-5.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | pi | gpt-5.6-luna | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
-| pi | gpt-5.6-sol | pass | pass | pass (gpt-5.6-terra) | pass | pass | OpenRouter |  |
-| pi | gpt-5.6-terra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | pi | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-astra (the provider's alias of the same model) |
+| pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | pi | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as x-ai/grok-4.20 (the provider's alias of the same model) |
@@ -2809,8 +2817,8 @@ session_id: 20260913_060549_70cbeb |
 | qwen | gpt-5.4-mini | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | qwen | gpt-5.5 | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | qwen | gpt-5.6-luna | pass | pass | pass (qwen3.7-max) | pass | FAIL | OpenRouter | recycle: answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in my very first message of this task? Reply with just that wo ; retested once; first try: recycle answered without M1-gpt-5.6-luna: What exact word did I ask you to reply with in |
-| qwen | gpt-5.6-sol | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
-| qwen | gpt-5.6-terra | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
+| qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | qwen | grok-4.20 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | served as x-ai/grok-4.20 (the provider's alias of the same model) |
@@ -2837,7 +2845,7 @@ session_id: 20260913_060549_70cbeb |
 | qwen | qwen3.8-max | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | qwen | step-3.7-flash | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 
-254 pairs, 1264 of 1270 scenario runs passed.
+256 pairs, 1274 of 1280 scenario runs passed.
 
 Not run in this column, 124 pairs the provider serves that the harness did not run, with the reason:
 
@@ -2965,6 +2973,7 @@ Not run in this column, 124 pairs the provider serves that the harness did not r
 - cheetahclaws x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - kimi x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - openhands x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- goose x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
 ## Provider: tokenrouter
 
@@ -2996,10 +3005,12 @@ Not run in this column, 124 pairs the provider serves that the harness did not r
 | dsh | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | dsh | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | dsh | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
+| goose | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
+| goose | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | My TokenRouter |  |
 | hermes | claude-sonnet-4.6 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| hermes | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| hermes | gpt-5.4 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | hermes | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
+| hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
+| hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | hermes | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
@@ -3010,17 +3021,17 @@ Not run in this column, 124 pairs the provider serves that the harness did not r
 | hermes | hunyuan-4-preview | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | hermes | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | hermes | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| hermes | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| hermes | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | kimi | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | kimi | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | My TokenRouter |  |
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | served as openai/gpt-6-astra (the provider's alias of the same model) |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
+| omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | opencode | claude-sonnet-4.6 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| opencode | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as deepseek-flash (the provider's alias of the same model) |
-| opencode | gpt-5.4 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | opencode | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
+| opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
+| opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
 | opencode | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as x-ai/grok-4.20 (the provider's alias of the same model) |
@@ -3031,14 +3042,14 @@ Not run in this column, 124 pairs the provider serves that the harness did not r
 | opencode | hunyuan-4-preview | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as tencent/hy4-preview (the provider's alias of the same model) |
 | opencode | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as nvidia/nemotron-3-super-120b-a12b (the provider's alias of the same model) |
 | opencode | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
-| opencode | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as qwen/qwen3.7-plus (the provider's alias of the same model) |
-| opencode | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
+| openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
+| openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | My TokenRouter |  |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | My TokenRouter |  |
 | pi | claude-sonnet-4.6 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as anthropic/claude-sonnet-4.6 (the provider's alias of the same model) |
-| pi | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
-| pi | gpt-5.4 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-5.4 (the provider's alias of the same model) |
 | pi | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | served as openai/gpt-6-astra (the provider's alias of the same model) |
+| pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | pi | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as x-ai/grok-4.20-beta (the provider's alias of the same model) |
@@ -3052,8 +3063,8 @@ Not run in this column, 124 pairs the provider serves that the harness did not r
 | pi | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as qwen/qwen3.7-plus (the provider's alias of the same model) |
 | pi | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter | served as qwen/qwen3.8-flash (the provider's alias of the same model) |
 | qwen | claude-sonnet-4.6 | pass | pass | pass (qwen3.7-max) | pass | pass | My TokenRouter | served as claude-sonnet-4-6 (the provider's alias of the same model) |
-| qwen | deepseek-v4.1-flash | pass | pass | pass (qwen3.7-max) | pass | pass | My TokenRouter | served as deepseek-flash (the provider's alias of the same model) |
-| qwen | gpt-5.4 | pass | pass | pass (qwen3.7-max) | pass | pass | My TokenRouter | served as gpt-5.4-2026-03-05 (the provider's alias of the same model) |
+| qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
+| qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | My TokenRouter |  |
 | qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | My TokenRouter |  |
 | qwen | grok-4.20 | pass | pass | pass (gpt-5.6-sol) | FAIL | pass | My TokenRouter | served as x-ai/grok-4.20 (the provider's alias of the same model) ; artifact: no file card (files: none); Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE DONE |
@@ -3067,7 +3078,7 @@ Not run in this column, 124 pairs the provider serves that the harness did not r
 | qwen | qwen3.7-plus | pass | pass | pass (qwen3.7-max) | pass | pass | My TokenRouter | served as qwen/qwen3.7-plus (the provider's alias of the same model) |
 | qwen | qwen3.8-flash | pass | pass | pass (qwen3.7-max) | pass | pass | My TokenRouter |  |
 
-96 pairs, 479 of 480 scenario runs passed.
+98 pairs, 489 of 490 scenario runs passed.
 
 Not run in this column, 204 pairs the provider serves that the harness did not run, with the reason:
 
@@ -3276,6 +3287,7 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 - cheetahclaws x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - kimi x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - openhands x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- goose x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
 ## Provider: vercel
 
@@ -3313,8 +3325,10 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | dsh | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway |  |
 | dsh | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | dsh | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| hermes | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
+| goose | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | hermes | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway |  |
+| hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
+| hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
@@ -3336,15 +3350,15 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | hermes | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| hermes | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| hermes | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | kimi | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | kimi | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
-| opencode | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
+| omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | opencode | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
+| opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | opencode | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | opencode | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | opencode | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) |
@@ -3364,12 +3378,12 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | opencode | nemotron-3-super | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as nvidia/nemotron-3-super-120b-a12b (the provider's alias of the same model) |
 | opencode | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
 | opencode | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-plus (the provider's alias of the same model) |
-| opencode | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
-| opencode | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
-| pi | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
+| openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | pi | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
+| pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | pi | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | pi | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | pi | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) |
@@ -3390,8 +3404,8 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | pi | nemotron-3.5-lightning | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) |
 | pi | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-plus (the provider's alias of the same model) |
 | pi | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
-| pi | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
-| qwen | deepseek-v4.1-flash | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
+| qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
+| qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | qwen | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | qwen | grok-4.1-fast | FAIL | n/a | n/a | n/a | n/a | Vercel AI Gateway | served as spacexai/grok-4.1-fast-reasoning (finding below) ; first: The turn failed: API Error: Stream error occurred |
@@ -3414,7 +3428,7 @@ Not run in this column, 204 pairs the provider serves that the harness did not r
 | qwen | qwen3.8-27b | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
 | qwen | qwen3.8-flash | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
 
-132 pairs, 593 of 612 scenario runs passed; 3 pairs served by another connection or as another model are findings, not counted.
+134 pairs, 603 of 622 scenario runs passed; 3 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -3623,4 +3637,5 @@ Not run in this column, 198 pairs the provider serves that the harness did not r
 - cheetahclaws x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - kimi x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - openhands x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- goose x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
