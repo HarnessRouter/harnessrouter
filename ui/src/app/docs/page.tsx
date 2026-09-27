@@ -5,7 +5,7 @@ export default function Docs() {
     <div className="hr-wrap">
       <nav className="lp-nav" style={{ padding: 0, marginBottom: 12 }}>
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
-        <Link href="/" className="hr-brand" aria-label="HarnessRouter"><img className="hr-brand-logo" src="/harnessrouter-wordmark.png" alt="HarnessRouter" /></Link>
+        <Link href="/" className="hr-brand" aria-label="HarnessRouter"><img className="hr-brand-logo" src="/brand/hr-horizontal-duo-light.png" alt="HarnessRouter" /></Link>
         <span className="sp" /><Link href="/login" className="hr-btn primary">Get API key</Link>
       </nav>
       <h2 className="hr-h2">Docs</h2>

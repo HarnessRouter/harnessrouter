@@ -143,7 +143,10 @@ def test_pi_adapter_gets_a_stdio_command_entry(tmp_path):
                 "args": ["--data", "/ws/.harness/plugin-data/hr_probe"], "plugin": "hr-probe"},
                {"name": "remote", "url": "https://mcp.example.invalid/mcp", "headers": {"X-Team": "t"}}]
     assert rn._pi_write_mcp(home, servers) is True
-    cfg = json.loads((home / ".pi" / "agent" / "mcp.json").read_text())["mcpServers"]
+    doc = json.loads((home / ".pi" / "agent" / "mcp.json").read_text())
+    # the tools are registered one by one, as on every other CLI; not behind the adapter's proxy
+    assert doc["settings"] == {"directTools": True, "disableProxyTool": True}
+    cfg = doc["mcpServers"]
     assert cfg["probe"] == {"command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
                             "args": ["--data", "/ws/.harness/plugin-data/hr_probe"]}
     assert cfg["remote"] == {"url": "https://mcp.example.invalid/mcp", "headers": {"X-Team": "t"}}

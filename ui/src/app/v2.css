@@ -94,7 +94,7 @@ body {
 /* The wordmark sits in a clipping box: when the nav is dragged narrower than the mark, the mark
    is cropped on its right and the toggle keeps its place inside the nav. */
 .v2-title .v2-brand { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
-.v2-title .v2-brand-full { height: 28px; width: auto; max-width: none; flex: none; }
+.v2-title .v2-brand-full { height: 20px; width: auto; max-width: none; flex: none; }   /* the pack's lettering at 20px reads as the 14.5px title; 28px read as 21px (Richard, 2026-09-26) */
 .v2-title .v2-brand-icon { width: 22px; height: 22px; display: none; }
 .v2-title .v2-searchbtn {
   margin-left: auto; border: 0; background: none; color: var(--v2-cap); cursor: pointer;
