@@ -1175,6 +1175,17 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "kimi"): "tokenrouter",
     ("custom", "kimi"): "openai-api",
     ("google", "kimi"): "openai-api",
+    # grok (Grok Build) reaches every provider the same way: the runner defines one custom
+    # chat/completions model in its config.toml pointed at the loopback relay, so these rows are
+    # kimi's. xAI's own models ride the aggregators (Vercel serves them as spacexai/grok-*); there is
+    # no first-party xAI integration, and the CLI's xAI login is never used.
+    ("anthropic", "grok"): "anthropic",        ("openai", "grok"): "openai",
+    ("azure-foundry", "grok"): "azure",
+    ("openrouter", "grok"): "openai-api",
+    ("tokenrouter", "grok"): "tokenrouter",    ("vercel", "grok"): "tokenrouter",
+    ("llmtr", "grok"): "tokenrouter",
+    ("custom", "grok"): "openai-api",
+    ("google", "grok"): "openai-api",
     # openhands reaches every provider the same way: the driver points the agent-server's LLM at
     # the loopback relay, so whatever the relay fronts is what the agent talks to.
     ("anthropic", "openhands"): "anthropic",   ("openai", "openhands"): "openai",
@@ -1256,6 +1267,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
     ("harnessrouter", "kimi"): "tokenrouter",
+    ("harnessrouter", "grok"): "tokenrouter",
     ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "openhands"): "tokenrouter",
     ("harnessrouter", "cheetahclaws"): "tokenrouter",
@@ -4962,7 +4974,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands", "cheetahclaws"},
+               "openhands", "cheetahclaws", "grok"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
@@ -6526,6 +6538,26 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # grok (Grok Build): the same relay reach as kimi (one custom chat/completions model through the
+    # loopback relay), so the list is kimi's, xAI's own family (its default) included. The id
+    # reaches the provider verbatim (the config's `model`, captured at a stub on 1.0.41), so there is
+    # no client-side substitution to prune for.
+    # OFFERED, NOT YET MEASURED: no column has run on this base. One local end-to-end turn set per
+    # id named in the PR body is the whole of the evidence; the matrix decides the rest of the list.
+    "grok": {"default": "grok-4.6",
+             "models": [
+                 "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
+                 "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                 "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
+                 "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-spark-1.3", "muse-spark-1.2",
+                 "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
+                 "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
+                 "nemotron-3.5-lightning", "nemotron-3-super"]},
     # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
     # loopback relay), so the list is theirs. Measured 2026-09-18/19: the Vercel column ran 49 of
     # these ids (239 of 245 scenarios) and the Google column ran the eight gemini ids, so the list
@@ -6726,7 +6758,9 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # id sent `openai/<id>`; openhands under litellm's proxy provider, the id sent as it is), so a
 # Responses-API-only id would be a picker row that fails on send.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
+# grok: the runner's one custom model is `api_backend = "chat_completions"` (Grok Build can speak the
+# Responses and Messages APIs too, but that is not the model the runner defines).
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws", "grok")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -15246,6 +15280,30 @@ _BASE_CATALOG: dict[str, dict] = {
         # through the product). It matches by exact tool NAME and a name it does not know
         # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
         # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
+        "tool_enforcement": "hard",
+    },
+    "grok": {
+        "label": "Grok Build", "backend": "grok", "status": "ready",
+        "system_prompt": ("You are Grok Build, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The names in the `tools` array a live Grok Build 1.0.41 run SENT ITS PROVIDER (captured at a
+        # local stub), limited to the ones that can be withheld ALONE: read_file cannot (search_replace
+        # requires a read tool and the session then refuses to start), nor the plan-mode or scheduler
+        # tools. The media tools (xAI Imagine models) and send_feedback (reports to xAI) are withheld on
+        # every turn by the runner and are not offered. test_catalog_grok_tools.py pins these ids equal
+        # to the runner's _GROK_TOOL_POLICY_IDS, which carries the one name that differs on the policy
+        # side (the shell is `run_terminal_cmd` there).
+        "tools": [("run_terminal_command", "Shell"), ("search_replace", "Edit"), ("write", "File Write"),
+                  ("list_dir", "List"), ("grep", "Search"), ("todo_write", "Todo"),
+                  ("spawn_subagent", "Subagent"), ("monitor", "Monitor"), ("workflow", "Workflow"),
+                  ("ask_user_question", "Question"), ("search_tool", "MCP Search"),
+                  ("use_tool", "MCP Call")],
+        # "hard": --disallowed-tools removes a tool from the toolset the model is given (measured on
+        # 1.0.41: the request's `tools` no longer carries it). Withheld by omission, the openhands
+        # standing. Subagent withholds the whole family through the CLI's `Agent` entry, so a withheld
+        # tool cannot come back by delegation. MCP tools reach the model only through search_tool and
+        # use_tool; withholding use_tool withholds every MCP tool.
         "tool_enforcement": "hard",
     },
     "openhands": {

@@ -345,6 +345,9 @@ _SESSION_PRESENT = {
     "opencode": _argv_session_present,
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
+    # grok: _build_grok passes -r only when _grok_has_session found the id in the store, and a fresh
+    # -s uuid otherwise, so the id in argv IS the builder's lookup.
+    "grok": _argv_session_present,
     "aider": _aider_session_present,
     "openhands": _openhands_session_present,
     "cheetahclaws": _cheetahclaws_session_present,
@@ -551,7 +554,18 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # never at rest: the CLI is handed the relay's placeholder in its env.
                       "./.cheetahclaws/tasks.json",
                       "./.harness/home/.cheetahclaws/mcp.json",
-                      "./.harness/home/.cheetahclaws/logs"]
+                      "./.harness/home/.cheetahclaws/logs",
+                      # Grok Build: sessions/ is what a resume reads and it travels. config.toml is
+                      # rewritten every turn and carries each MCP server's Authorization header;
+                      # auth.json is where `grok login` would keep an xAI credential (the runner
+                      # never logs in, but a task could). logs/ can hold what the CLI was handed;
+                      # docs/ and bundled/ are re-materialised from the binary on every run.
+                      "./.harness/home/.grok/config.toml",
+                      "./.harness/home/.grok/auth.json",
+                      "./.harness/home/.grok/logs",
+                      "./.harness/home/.grok/docs",
+                      "./.harness/home/.grok/bundled",
+                      "./.harness/home/.grok/downloads"]
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
@@ -568,6 +582,7 @@ DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
+GROK_DEFAULT_MODEL = os.environ.get("GROK_DEFAULT_MODEL", "grok-4.6")
 AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
@@ -1005,6 +1020,12 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # backend wrote — which is a second reason to name the directory explicitly.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    elif backend == "grok":
+        # $GROK_HOME/skills/<name>/SKILL.md, grok's user skill root, with GROK_HOME redirected to
+        # .harness/home/.grok. Verified on 1.0.41: a skill here was listed to the model with its
+        # description. Not the project's .grok/skills: the workspace root is collected.
+        rootrels = [".harness/home/.grok/skills"]
+        entryroot = ".harness/home/.grok/skills"
     elif backend == "opencode":
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
@@ -1351,8 +1372,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # walking up from the cwd, plus ~/.claude/CLAUDE.md; no source hit for AGENTS.md in
         # 3.5.88), so it takes the CLAUDE.md branch below, and an AGENTS.md in the workspace is
         # never loaded whether or not a CLAUDE.md is there.
+        # grok loads AGENTS.md (and CLAUDE.md, AGENT.md …) at every level from the repo root down to
+        # the cwd, once the folder is trusted; _build_grok sets GROK_FOLDER_TRUST=0. Verified on
+        # 1.0.41: a token written in AGENTS.md was in the model request.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi", "aider", "openhands")
+                                   "goose", "kimi", "aider", "openhands", "grok")
         else "CLAUDE.md")
 
 
@@ -4498,6 +4522,223 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     return cmd
 
 
+# ── grok ─────────────────────────────────────────────────────────────────────────────────────────
+# Grok Build (xai-org/grok-build, Apache-2.0), the `grok` binary 1.0.41, one headless `grok -p`
+# process per turn. Everything below was measured against that binary at a logging stub (no xAI
+# account, no login), and the internals it relies on are read from the Apache-2.0 source.
+GROK_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+# The model's window, for grok's auto-compaction. A custom model with none declared is planned
+# against 200k; one value for the catalog is kimi's and codex's approximation, for their reason:
+# being wrong changes WHEN the agent compacts, never whether it answers.
+GROK_CONTEXT_WINDOW = os.environ.get("GROK_CONTEXT_WINDOW", "272000")
+# The one catalog key the runner defines. A fixed NEUTRAL name, never the model id: a key equal to a
+# built-in id (grok-4.6) is an OVERRIDE of that built-in, which keeps every field this file does not
+# set from xAI's own entry (its wire API among them). What the key names — model, base_url — is
+# rewritten on every turn and read from this file on every turn, a resumed session included
+# (measured: turn 2 of one session went to a different model, port and key after a rewrite), so
+# neither a model switch nor a relay port that changed with a redeploy is frozen into the session.
+_GROK_MODEL_KEY = "harness"
+_GROK_KEY_ENV = "HR_GROK_API_KEY"
+_GROK_SESSION_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+# The console's tool ids are the names the model sees (the `tools` of a live 1.0.41 request); the
+# CLI's --disallowed-tools matches its INTERNAL id, which is the same name except for the shell:
+# the model calls `run_terminal_command`, the policy knows it as `run_terminal_cmd`, and the wire
+# name matches nothing (measured: disallowing it left the tool in place). Only the tools that can be
+# withheld ALONE are offered: read_file cannot (search_replace requires a read tool and the session
+# then refuses to start), nor enter_plan_mode (exit_plan_mode requires it), nor the scheduler trio.
+# spawn_subagent is withheld through the CLI's `Agent` entry, which removes the whole subagent family
+# (spawn, its output and kill, and the scheduler that runs them) — measured.
+# gateway/tests/test_catalog_grok_tools.py pins _BASE_CATALOG["grok"]'s ids equal to this mapping's keys.
+_GROK_TOOL_POLICY_IDS = {
+    "run_terminal_command": "run_terminal_cmd", "search_replace": "search_replace",
+    "write": "write", "list_dir": "list_dir", "grep": "grep", "todo_write": "todo_write",
+    "spawn_subagent": "Agent", "monitor": "monitor", "workflow": "workflow",
+    "ask_user_question": "ask_user_question", "search_tool": "search_tool", "use_tool": "use_tool",
+}
+# Withheld on every turn, whatever the harness says. The media tools call xAI's Imagine models by an
+# xAI id at the turn's endpoint, which no other provider serves; send_feedback reports to xAI.
+_GROK_ALWAYS_WITHHELD = ("image_gen", "image_edit", "image_to_video", "reference_to_video",
+                         "send_feedback")
+
+
+def _grok_home(ws: pathlib.Path) -> pathlib.Path:
+    """GROK_HOME for this workspace: config.toml, sessions, skills and logs all resolve under it. It
+    sits under .harness/home so the sessions travel in the checkpoint and a resume survives a
+    recycled sandbox, and nothing of it is ever a produced file."""
+    return ws / ".harness" / "home" / ".grok"
+
+
+def _grok_has_session(home: pathlib.Path, session_id: str) -> bool:
+    """Is this conversation in grok's store, asked the way the CLI asks it?
+
+    Sessions live at sessions/<url-encoded cwd>/<id>/, and a directory is a resumable session only
+    when it holds summary.json (the CLI's own is_persisted_session_dir predicate). The id is matched
+    under ANY cwd key rather than re-encoding a path this code does not own; the CLI itself falls
+    back to "found locally under a different cwd" the same way.
+
+    This lookup is not only about continuity. `grok -r <id>` for an id the store does not hold
+    tries to restore the conversation FROM xAI's servers and starts an xAI login (a device-code
+    page) to do it — measured on 1.0.41. The runner therefore never passes -r for an id it did not
+    find here, and session_registry off turns the remote restore off besides (measured: the same
+    miss then fails in 0 s, "Session does not exist locally")."""
+    sid = (session_id or "").strip().lower()
+    if not _GROK_SESSION_ID_RE.match(sid):
+        return False
+    return any((home / "sessions").glob(f"*/{sid}/summary.json"))
+
+
+def _toml_str(s) -> str:
+    """A TOML basic string. JSON's string escapes are a subset of TOML's (with ensure_ascii every
+    non-ASCII character becomes a \\uXXXX escape, which TOML accepts), so json.dumps is exact."""
+    return json.dumps(str(s))
+
+
+def _grok_config(home: pathlib.Path, model: str, base_url: str,
+                 mcp_servers: list[dict] | None) -> pathlib.Path:
+    """$GROK_HOME/config.toml, written on EVERY turn (a server removed from the harness is gone from
+    the next turn; a model switch reaches a resumed session). It never holds the key: the model's
+    `env_key` names the variable the relay's placeholder rides in.
+
+    Each switch below is measured on 1.0.41 against a stub, and each one is here for a reason:
+      remote_fetch/managed_config/campaigns off — no fetch of xAI's model catalog, managed policy or
+        remote patches; with them off a run under a sandbox that DENIES all non-loopback network
+        completed normally. telemetry off is the product-analytics master switch.
+      session_summary = the same key — the session title is a side call that otherwise goes to a
+        hard-coded `grok-4.6` AT THIS ENDPOINT: a 404 on any other provider, a second model's bill
+        on xAI's. It is one short call on the first turn of a conversation, metered by the relay.
+      turn_summary/title_refresh/session_recap off — a "dashboard line" call after EVERY turn and a
+        title regeneration on early turns, each a full-history request nobody here reads. Measured:
+        the environment variables of the same names did NOT stop them; these config keys do.
+      max_retries = 2 — see _build_grok's retry note.
+      session_registry off, use_leader off — the two doors to an xAI login (see _grok_has_session).
+      compat.claude / compat.cursor off — grok also loads ~/.claude and ~/.cursor skills, rules,
+        MCP servers and hooks, and under a shared $HOME those are trees another backend wrote.
+    MCP: a stdio server is command/args/env/cwd; a remote one is url + headers, with `type = "sse"`
+    for an SSE server (grok speaks SSE and streamable HTTP itself, so nothing needs the bridge). A
+    server's `auth` becomes its Authorization header, as on every other base."""
+    lines = [
+        "[features]", "telemetry = false", "remote_fetch = false", "managed_config = false",
+        "campaigns = false", "turn_summary = false", "title_refresh = false", "session_recap = false",
+        "", "[telemetry]", "trace_upload = false", "mixpanel_enabled = false",
+        "", "[cli]", "auto_update = false", "session_registry = false", "use_leader = false",
+        "", "[models]", f"default = {_toml_str(_GROK_MODEL_KEY)}",
+        f"session_summary = {_toml_str(_GROK_MODEL_KEY)}", "max_retries = 2",
+        "", f"[model.{_GROK_MODEL_KEY}]", f"model = {_toml_str(model)}",
+        f"base_url = {_toml_str(base_url)}", f"env_key = {_toml_str(_GROK_KEY_ENV)}",
+        f"name = {_toml_str(model)}", 'api_backend = "chat_completions"',
+        f"context_window = {int(GROK_CONTEXT_WINDOW)}",
+    ]
+    for vendor in ("claude", "cursor"):
+        lines += ["", f"[compat.{vendor}]"] + [f"{cell} = false" for cell in
+                                               ("skills", "rules", "agents", "mcps", "hooks")]
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        block = ["", f"[mcp_servers.{name}]"]
+        if url:
+            block.append(f"url = {_toml_str(url)}")
+            if str(sv.get("transport") or "").lower() == "sse":
+                block.append('type = "sse"')
+            hdrs: dict[str, str] = {}
+            auth = sv.get("auth")
+            if auth:
+                hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            if isinstance(sv.get("headers"), dict):
+                hdrs.update({str(k): str(v) for k, v in sv["headers"].items() if k and v is not None})
+            if hdrs:
+                block.append("headers = { " + ", ".join(f"{_toml_str(k)} = {_toml_str(v)}"
+                                                         for k, v in hdrs.items()) + " }")
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            args = [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]
+            block.append(f"command = {_toml_str(argv[0])}")
+            block.append("args = [" + ", ".join(_toml_str(a) for a in args) + "]")
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                block.append("env = { " + ", ".join(f"{_toml_str(k)} = {_toml_str(v)}"
+                                                     for k, v in envv.items()) + " }")
+            if sv.get("cwd"):
+                block.append(f"cwd = {_toml_str(sv['cwd'])}")
+        else:
+            continue
+        lines += block
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "config.toml"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                tools_disabled: list[str] | None = None, max_turns: int | None = None,
+                partial: bool = False) -> list[str]:
+    """Grok Build (1.0.41), headless: `grok -p … --output-format streaming-messages-json`, which is
+    Claude Code's stream-json (system/init with session_id, assistant/user messages, a terminal
+    result), so the normaliser is the claude passthrough plus two repairs (see _grok_to_claude).
+
+    EVERY TURN RIDES THE LOOPBACK RELAY, for the qwen/kimi reasons and one of grok's own: its only
+    usage report excludes side calls (the session title), so the relay's count of every call the
+    provider answered is the bill. The placeholder rides HR_GROK_API_KEY, which the config's
+    env_key names — the environment, where _relay_served_model and _relay_usage look for it. The
+    model is a custom chat/completions entry; grok sends the configured id verbatim (no client-side
+    rewriting, captured at the stub).
+
+    No xAI login, ever: a key-only run needs none, and the two paths that would start one are shut
+    (see _grok_has_session). stdin is not read in headless mode, so nothing can wait on it.
+
+    Retries: the defaults stack a sampler retry loop under a turn-level transient retry (3 more
+    attempts, backoff up to 35 s); a provider answering 500 every time took 29 requests and more
+    than nine minutes to fail. max_retries = 2 plus GROK_TURN_TRANSIENT_RETRY=0: 3 requests, 3 s,
+    and the provider's own sentence as the reason. A 401 or an unreachable endpoint fails in 1 s."""
+    pr = provider or "openai-api"
+    if pr not in GROK_PROVIDERS:
+        raise HTTPException(400, f"unknown grok provider '{pr}' (one of {sorted(GROK_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "grok needs a base_url (none configured)")
+    if not auth.api_key:
+        raise HTTPException(400, "grok needs an API key")
+    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+    ws = pathlib.Path(cwd)
+    home = _grok_home(ws)
+    _grok_config(home, model, relay_base, mcp_servers)
+    env["GROK_HOME"] = str(home)
+    env[_GROK_KEY_ENV] = relay_tok
+    # The global fallbacks grok would read for an xAI model: never the turn's credential.
+    for k in ("XAI_API_KEY", "GROK_CODE_XAI_API_KEY", "GROK_MODELS_BASE_URL", "GROK_DEPLOYMENT_KEY"):
+        env.pop(k, None)
+    env["GROK_DISABLE_AUTOUPDATER"] = "1"
+    env["GROK_TELEMETRY_ENABLED"] = "0"
+    env["GROK_SESSION_REGISTRY"] = "0"
+    env["GROK_TURN_TRANSIENT_RETRY"] = "0"
+    # Cross-session memory is grok's own store outside the conversation; the harness's memory is the
+    # session. Folder trust gates the workspace's AGENTS.md and skills behind an interactive grant a
+    # headless run cannot give (docs: "Headless startup with these sources requires --trust"); the
+    # sandbox is the trust boundary, the codex/qwen --yolo reasoning.
+    env["GROK_MEMORY"] = "0"
+    env["GROK_FOLDER_TRUST"] = "0"
+    env["NO_COLOR"] = "1"
+    sid = (resume_session_id or "").strip().lower()
+    resumed = bool(sid) and _grok_has_session(home, sid)
+    # `--single=<prompt>` so a prompt that begins with a dash is the prompt, not a flag (measured).
+    cmd = ["grok", f"--single={prompt}", "-m", _GROK_MODEL_KEY,
+           "--output-format", "streaming-messages-json", "--always-approve"]
+    # The runner owns the conversation id: -s names a NEW session (a uuid the store must not hold),
+    # -r continues one the store holds. The init event reports it, and the gateway sends it back.
+    cmd += ["-r", sid] if resumed else ["-s", str(uuid.uuid4())]
+    withheld = [_GROK_TOOL_POLICY_IDS[t] for t in (tools_disabled or []) if t in _GROK_TOOL_POLICY_IDS]
+    cmd += ["--disallowed-tools", ",".join(list(_GROK_ALWAYS_WITHHELD) + withheld)]
+    if max_turns:
+        # Unset is unbounded; reaching it ends the run as `error_max_turns`, which reads as failed.
+        cmd += ["--max-turns", str(int(max_turns))]
+    if partial:
+        cmd.append("--include-partial-messages")
+    return cmd
+
+
 AIDER_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 AIDER_PYTHON = os.environ.get("HR_AIDER_PYTHON", "/data/agent-tools/aider-venv/bin/python")
 AIDER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aider_driver.py")
@@ -6626,6 +6867,86 @@ def _openhands_eof(state: dict, rc: int) -> list[dict]:
 _openhands_to_claude.eof = _openhands_eof   # type: ignore[attr-defined]
 
 
+def _grok_tool_output(content):
+    """What a tool card shows for a grok tool result. The CLI serialises two envelopes into the
+    tool_result's content string (measured on 1.0.41): the shell's record — {"type": "Bash",
+    "output": [bytes…], "output_for_prompt": "exit: 0\\n<what it printed>", "exit_code", "command", …}
+    — and ACP content blocks, [{"type": "content", "content": {"type": "text", "text": …}}], which is
+    how a refused or failed call comes back. The reader wants the text the model was given, as on
+    every other base's card; anything else is shown as it came."""
+    if not isinstance(content, str):
+        return content
+    try:
+        doc = json.loads(content)
+    except ValueError:
+        return content
+    if isinstance(doc, dict) and isinstance(doc.get("output_for_prompt"), str):
+        return doc["output_for_prompt"]
+    if isinstance(doc, list) and doc and all(isinstance(b, dict) for b in doc):
+        texts = []
+        for b in doc:
+            inner = b.get("content") if isinstance(b.get("content"), dict) else b
+            if isinstance(inner.get("text"), str):
+                texts.append(inner["text"])
+        if texts:
+            return "\n".join(texts)
+    return content
+
+
+def _grok_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `grok --output-format streaming-messages-json` line to canonical claude events.
+
+    The stream IS Claude Code's stream-json (measured on 1.0.41): system/init with the session id,
+    assistant messages holding text/thinking/tool_use, user messages holding tool_result, and one
+    terminal result — so every line goes through the claude passthrough, with two repairs to the
+    result:
+
+      A failure carries its reason in `errors[]` and no `result` at all. A provider failure is
+      STRUCTURED, never narrated as assistant text: 401, 500 after retries and an unreachable
+      endpoint each ended `subtype: error_during_execution, is_error: true, errors: ["Internal
+      error: …Unauthorized (401) from …: Incorrect API key …"]` and exit 1 (all measured at a stub).
+      So no error prefix has to be recognised in an answer — an answer that merely talks about an
+      error is an answer — and the reason is lifted into `result`, where the run loop reads it.
+
+      `usage` is dropped so the relay's count stamps the row. grok's own figure excludes side calls
+      (the session title on a conversation's first turn: "Compaction and other side-model calls are
+      excluded"), and the relay saw every call the provider answered. `model` is absent on the
+      result and the init's `model` is the runner's catalog KEY, so the served model is the relay's
+      too."""
+    t = obj.get("type")
+    if t == "system" and obj.get("subtype") == "init":
+        # The init names the runner's catalog key ("harness"), not a model: say what was asked for.
+        obj = {**obj, "model": state.get("model") or obj.get("model")}
+    elif t == "user":
+        content = (obj.get("message") or {}).get("content")
+        if isinstance(content, list):
+            fixed = [{**c, "content": _grok_tool_output(c.get("content"))}
+                     if isinstance(c, dict) and c.get("type") == "tool_result" else c for c in content]
+            obj = {**obj, "message": {**(obj.get("message") or {}), "content": fixed}}
+    elif t == "result":
+        obj = {k: v for k, v in obj.items() if k not in ("usage", "modelUsage", "total_cost_usd")}
+        if obj.get("is_error") and not str(obj.get("result") or "").strip():
+            errs = [str(e) for e in (obj.get("errors") or []) if str(e).strip()]
+            reason = "; ".join(errs) or f"grok run ended {obj.get('subtype') or 'in error'}"
+            obj["result"] = reason[:2000]
+        obj["usage"] = {}
+    return _claude_passthrough(obj, state)
+
+
+def _grok_eof(state: dict, rc: int) -> list[dict]:
+    """The process ended without a result line: a crash or a kill. A failure that happens before the
+    session exists still writes its result (a refused --disallowed-tools set did, measured), so this
+    is the rarer path. The result is left EMPTY so the run loop fills it from the captured stderr
+    (`Error: …`), which _failure_reason prefers to a sentence of ours."""
+    if rc == 0:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+
+
+_grok_to_claude.eof = _grok_eof   # type: ignore[attr-defined]
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -6666,6 +6987,10 @@ BACKENDS = {
              "normalize": _kimi_to_claude},
     "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
               "normalize": _aider_to_claude},
+    # Grok Build's streaming-messages-json is Claude Code's stream-json; the normaliser is the
+    # passthrough with its result repaired (the reason lifted out of errors[], usage left to the relay).
+    "grok": {"providers": sorted(GROK_PROVIDERS), "default_model": GROK_DEFAULT_MODEL,
+             "normalize": _grok_to_claude},
     "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
                   "default_model": OPENHANDS_DEFAULT_MODEL,
                   "normalize": _openhands_to_claude},
@@ -8056,6 +8381,14 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
                           max_turns=req.max_turns)
+    elif backend == "grok":
+        model = model or GROK_DEFAULT_MODEL
+        # Skills are already on disk under $GROK_HOME/skills (_write_skills), where grok's loader
+        # looks; nothing names them here.
+        cmd = _build_grok(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                          partial=bool(req.partial_messages))
     elif backend == "aider":
         model = model or AIDER_DEFAULT_MODEL
         # aider has no skill loader and no instruction-file convention: the driver puts the agent
