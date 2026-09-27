@@ -1458,11 +1458,15 @@ TokenRouter behind the switch, as `fill-connection.py` stamped them.
     deck" from the summary, "Auto-fanout" sub-summaries of every result), never finishes, and is
     stopped at the tour's ten-minute cap. No two calls are identical, so the CLI's loop guard does
     not fire. The line is excluded from the base's catalog with that note.
-  - **llama-3.3-70b**: refused with `400 ... 'Provider returned error' ... "The request was
-    rejected as malformed."` in 7 s, twice, on this compacted conversation; the same model on a
-    fresh harness of the base completes in 11 s, as it does on pi. The provider's own text is cut
-    off by the CLI, and the relay keeps it in its log since 0.25.3; the shape of the compacted
-    history that a strict provider refuses is the open item.
+  - **llama-3.3-70b**: refused in 7 s, three times (the third on 0.25.3, where the relay logs the
+    body the CLI cuts off): `400 "This model only supports single tool-calls at once!"` from
+    CoreWeave, the provider serving the model. The conversation holds one assistant message with
+    two tool calls (gpt-5.4-mini's Glob and Grep, issued together on the tour's first edit), and
+    that endpoint refuses every later request that replays it. llama alone never writes such a
+    message, so a fresh harness of the base completes in 11 s, as on pi. The model stays offered
+    with this note; whether the relay should rewrite a parallel-call message into consecutive
+    single-call ones for such a provider, or the catalog should drop the model on bases whose
+    CLIs call tools in parallel, is Richard's call.
   - kimi-k3 and qwen3.8-flash failed the second run's rows without a defect: the edits repeated
     ones earlier families had made and both rightly wrote nothing. The tour stamps every edit
     since, and both pass.
