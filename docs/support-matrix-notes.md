@@ -1562,3 +1562,9 @@ substitutions.
 - The 0.25.5 candidate was built from the branch so the openhands rerun could be measured end to
   end before the tag; 0.25.5 is the same code from main, and the candidate's image and tag were
   removed after the swap.
+
+**goose (0.25.6).** goose's list is the set of paths cline's rows earned, and cline passed both ids
+on every connection, so 0.25.6 lists gpt-6-sol and gpt-6-luna on goose and its own ten pairs ran
+the same way: 50 of 50 after one retest (first run 48 of 50: gpt-6-luna's recycle recall on
+Vercel and gpt-6-sol's on OpenAI, both answering "GOOSE DONE", both passing the retest). The
+same recall flake as above, on the base that resumes through the relay like cline does.
