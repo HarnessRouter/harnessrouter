@@ -129,8 +129,9 @@ uhp-conformance --base-url https://your-uhp-server --api-key "$UHP_API_KEY" --cl
 
 It is a streamable-HTTP MCP server with two tools: `uhp_echo`, whose answer is a function of its
 input (the prefix `UHP-FIXTURE:` and the text reversed), which is how P-11 proves the agent called
-it; and `uhp_time`. A run defaults to a public copy of the same code (`DEFAULT_PLUGIN_MCP_URL` in
-the package; `fixture/Dockerfile` is how it is built), reachable from any host with outbound HTTPS.
+it; and `uhp_time`. A run defaults to a public copy of the same code at `https://uhp-fixture.harnessrouter.ai/mcp`
+(`DEFAULT_PLUGIN_MCP_URL` in the package; `fixture/Dockerfile` is how it is built), reachable from
+any host with outbound HTTPS.
 A host under test whose agents cannot reach the public internet needs a copy it can reach, and the
 address goes on `--plugin-mcp-url`.
 
