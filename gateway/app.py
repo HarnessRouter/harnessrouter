@@ -6542,6 +6542,9 @@ _MODEL_CATALOG: dict[str, dict] = {
     # unlabelled (_served_model_in / _relay_served_model, runner/server.py, pinned by
     # runner/tests/test_relay_served_model.py). cline and qwen gain the same check for free.
     # So these rows say "the id served it", not merely "the id completed a turn".
+    # gpt-6-sol and gpt-6-luna joined on 2026-09-27 after cline's rows passed all five scenarios on
+    # every connection of the gpt-6 columns (tokenrouter, openrouter, vercel, openai, azure-e2), the
+    # bar this list has always used; goose's own rows follow in the matrix.
     "goose": {"default": "gpt-5.4",
               # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
               # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
@@ -6563,7 +6566,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               # 2026-09-12; the aggregators forward that answer unchanged, so every column showed it (0 of 8
               # artifact/recall checks). The other Claude ids continue such a history. The Responses-only
               # ids stay out: goose is chat-only.
-              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+              "models": ["gpt-5.4", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
