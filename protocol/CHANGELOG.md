@@ -2,6 +2,11 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.9.12.post4 (2026-09-27)
+
+- The public fixture answers at `https://uhp-fixture.harnessrouter.ai/mcp`, the suite's new default;
+  post3 pointed at the container's own address.
+
 ## Conformance suite 2026.9.12.post3 (2026-09-27)
 
 The protocol is unchanged; the suite that measures it is.
