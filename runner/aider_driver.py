@@ -272,6 +272,10 @@ def _install(coder, gate: _Gate) -> None:
     io.confirm_ask = confirm_ask
 
 
+REFLECT_ASK = ("Continue the task with this output. If more commands or edits are needed, propose "
+               "them now; otherwise write your answer for the user, stating what the output shows.")
+
+
 def _run_shell_commands_reporting(coder, gate: _Gate, reflect: bool = True):
     """Wrap Coder.run_shell_commands so each approved command's OUTPUT is reported too.
 
@@ -302,7 +306,11 @@ def _run_shell_commands_reporting(coder, gate: _Gate, reflect: bool = True):
             # it cannot report a token the script produced, and every other backend here can.
             # Setting the reflection gives aider the same in-turn loop, using aider's own mechanism
             # and its own max_reflections bound rather than a loop of ours.
-            coder.reflected_message = str(out)
+            # With an ask, as aider's own lint and test reflections carry one ("Fix any errors
+            # below"): the bare output reflected as the next message got "Ok" from gpt-5.4 after
+            # the browser column's tool calls, and the person's answer was the plan plus "Ok"
+            # (hosted, 2026-09-28).
+            coder.reflected_message = str(out).rstrip() + "\n\n" + REFLECT_ASK
         return out
 
     coder.run_shell_commands = wrapped
