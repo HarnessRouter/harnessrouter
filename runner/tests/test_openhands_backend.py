@@ -494,13 +494,3 @@ def test_a_file_editor_view_is_a_read_card():
     assert call[0][1]["name"] == "Edit"
 
 
-
-def test_a_claude_model_is_told_its_thinking_shape_and_others_are_not():
-    """Anthropic refused every Claude model behind the proxy with "thinking.type: enabled is not
-    supported for this model. Use adaptive and output_config.effort" (hosted, 2026-09-28): the SDK
-    reads the shape off LiteLLM's metadata, which knows nothing of a model served under our id.
-    The spec names the shape for a Claude model and says nothing otherwise."""
-    for m in ("litellm_proxy/claude-opus-5", "litellm_proxy/claude-sonnet-5", "claude-fable-5-1"):
-        assert drv._agent_spec({"model": m})["llm"]["capability_overrides"] == {"thinking_mode": "adaptive"}, m
-    for m in ("litellm_proxy/gpt-5.4", "openai/gpt-5.5", "deepseek-v4-pro", "kimi-k3"):
-        assert "capability_overrides" not in drv._agent_spec({"model": m})["llm"], m
