@@ -434,11 +434,37 @@ async def attach(rec: dict) -> Session:
         pages = list(getattr(s.context, "pages", None) or [])
         s.page = pages[0] if pages else await s.context.new_page()
         s.page.set_default_timeout(30000)
+        on = getattr(s.context, "on", None)
+        if callable(on):
+            on("page", lambda pg: asyncio.ensure_future(_follow_new_tab(s, sid, pg)))
     except Exception:
         await detach(s)
         raise
     _SESSIONS[sid] = s
     return s
+
+
+async def _follow_new_tab(s: Session, sid: str, pg) -> None:
+    """A link the person opened in a new tab while they have the browser is followed in the tab the
+    live view shows: the new page's address goes to the shown page and the new page closes, so the
+    view stays with them (the console's live view shows one tab, and a link marked to open in a new
+    one looked like a click that did nothing: the LinkedIn and X icons on a directory page,
+    2026-09-27). Only while the person has the browser: the agent's own tabs are its to manage
+    (list_tabs, switch_tab)."""
+    try:
+        rec = await registry.get(sid)
+        if (rec or {}).get("control") != "user" or pg is s.page:
+            return
+        try:
+            await pg.wait_for_load_state("domcontentloaded", timeout=8000)
+        except Exception:  # noqa: BLE001
+            pass
+        url = str(getattr(pg, "url", "") or "")
+        if url and url != "about:blank":
+            await s.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await pg.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def detach(s: Session) -> None:
