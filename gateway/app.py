@@ -7508,6 +7508,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     if translator.usage:
         rec["usage"] = translator.usage
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
+    await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
