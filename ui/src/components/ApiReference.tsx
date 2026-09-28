@@ -356,8 +356,9 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
   -d '{"name": "Content Studio", "entry": "python3 run.py --episode <id>"}'`} />
       </Endpoint>
       <Endpoint method="PUT" path="/v1/environments/{id}/files/{path}">
-        <p className="hr-meta">Write one file (the body is its bytes); a path ending in <code>/</code> makes a directory.
-          <code> GET</code> reads it back, <code>DELETE</code> removes a file or a folder, and <code>GET /v1/environments/&#123;id&#125;/files</code>
+        <p className="hr-meta">Write one file (the body is its bytes; its folders are made on the way).
+          <code> GET</code> reads it back, <code>DELETE</code> removes a file or a folder, <code>POST /v1/environments/&#123;id&#125;/directories</code>
+          with <code>{`{"path": "assets/brand"}`}</code> makes an empty folder, and <code>GET /v1/environments/&#123;id&#125;/files</code>
           lists the tree. Editing changes nothing a run sees until the next build.</p>
         <CodeBlock code={`curl -X PUT "$BASE/v1/environments/$ENV/files/scripts/render.py" -H "Authorization: Bearer $KEY" \\
   --data-binary @scripts/render.py`} />

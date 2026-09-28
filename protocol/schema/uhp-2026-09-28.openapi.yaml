@@ -339,14 +339,14 @@ paths:
     put:
       tags: [Environments]
       operationId: putEnvironmentFile
-      summary: Write one file, or make a directory
+      summary: Write one file
       description: |
-        The body is the file's bytes. A path ending in `/` makes a directory and takes an empty body.
-        A server MUST reject a path that escapes the root with `environment_invalid`, and an
-        oversized file with `file_too_large` rather than truncating it. Writing the source changes
-        nothing a session sees until the next build.
+        The body is the file's bytes; the directories on its path are made. A server MUST reject a
+        path that escapes the root with `environment_invalid`, and an oversized file with
+        `file_too_large` rather than truncating it. Writing the source changes nothing a session
+        sees until the next build. An empty directory is made with `POST …/directories`.
       requestBody:
-        required: false
+        required: true
         content:
           '*/*':
             schema: { type: string, format: binary }
@@ -379,6 +379,36 @@ paths:
                   path: { type: string }
                   deleted: { type: boolean }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/environments/{environment_id}/directories:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    post:
+      tags: [Environments]
+      operationId: makeEnvironmentDirectory
+      summary: Make an empty directory
+      description: Its own request rather than a trailing slash on a file path, which a proxy may normalise away.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, description: Relative to the environment's root. }
+      responses:
+        '200':
+          description: Made
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+                  dir: { type: boolean, const: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
 
   /v1/environments/{environment_id}/import:
     parameters:

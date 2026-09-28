@@ -15546,22 +15546,35 @@ async def environment_file(env_id: str, path: str, request: Request) -> Response
 
 @app.put("/v1/environments/{env_id}/files/{path:path}")
 async def environment_put_file(env_id: str, path: str, request: Request) -> dict:
-    """One file, its bytes as the body. A directory is made with PUT to `<path>/` (an empty body)."""
+    """One file, its bytes as the body; its directories are made on the way."""
     await _owned_environment(request, env_id)
     declared = int(request.headers.get("content-length") or 0)
     if declared > _ENV_FILE_MAX:
         raise uhp_error(413, "file_too_large", f"A file may be at most {_ENV_FILE_MAX} bytes.", "path",
                         {"max_bytes": _ENV_FILE_MAX})
-    if path.endswith("/"):
-        r = await _env_runner("POST", f"/environments/{env_id}/mkdir", env_id, params={"path": path.rstrip("/")})
-    else:
-        data = await request.body()
-        if len(data) > _ENV_FILE_MAX:
-            raise uhp_error(413, "file_too_large", f"A file may be at most {_ENV_FILE_MAX} bytes.", "path",
-                            {"max_bytes": _ENV_FILE_MAX})
-        r = await _env_runner("PUT", f"/environments/{env_id}/source", env_id, params={"path": path}, content=data)
+    data = await request.body()
+    if len(data) > _ENV_FILE_MAX:
+        raise uhp_error(413, "file_too_large", f"A file may be at most {_ENV_FILE_MAX} bytes.", "path",
+                        {"max_bytes": _ENV_FILE_MAX})
+    r = await _env_runner("PUT", f"/environments/{env_id}/source", env_id, params={"path": path.rstrip("/")}, content=data)
     if r.status_code != 200:
         raise _env_runner_error(r, "the file could not be written")
+    await _vg_upsert("Environment", env_id, {"updated_at": str(int(time.time() * 1000))})
+    return r.json()
+
+
+class EnvironmentDirectoryBody(BaseModel):
+    path: str
+
+
+@app.post("/v1/environments/{env_id}/directories")
+async def environment_make_directory(env_id: str, body: EnvironmentDirectoryBody, request: Request) -> dict:
+    """An empty directory, by name. Its own request rather than a trailing slash on PUT: a proxy that
+    normalises paths turns `scripts/` into `scripts`, and the result was a 0-byte file (rc.1)."""
+    await _owned_environment(request, env_id)
+    r = await _env_runner("POST", f"/environments/{env_id}/mkdir", env_id, params={"path": str(body.path or "").strip("/")})
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the directory could not be made")
     await _vg_upsert("Environment", env_id, {"updated_at": str(int(time.time() * 1000))})
     return r.json()
 
