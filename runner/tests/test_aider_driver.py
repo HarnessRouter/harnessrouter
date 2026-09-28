@@ -337,6 +337,12 @@ def test_a_reply_that_announces_work_and_does_none_is_nudged_once():
     the person types "go ahead". The nudge is that, once, only for a reply that reads as an
     announcement; a plain answer, a reply that acted, and a second announcement get none."""
     a = aider_driver._announces_without_acting
+    # the typographic apostrophe gpt-5.4 writes, a need stated instead of met, and a paragraph
+    # that says the task is not finished (three aider browser turns on hr-test 0.25.13, 2026-09-28)
+    assert a("I’ll open the page in the browser, click its only link, then report the destination URL.")
+    assert a("I need to use the browser for this, not edit any files.")
+    assert a("The browser output shows example.com loaded.\n\nTo complete the task, I still need to click the link.")
+    assert not a("Done. The page I’ll leave as it is; the file you need to edit is notes.csv.")
     assert a("I'll create a one-page PowerPoint deck about SFO and save it in the workspace.")
     assert a("Sure, I will build the deck now.") and a("Let me start by reading the skill.")
     assert a("Okay. I'm going to write the outline first.") and a("Here's the plan:\n1. read")
