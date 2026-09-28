@@ -232,3 +232,28 @@ def test_dsh_job_keeps_a_stdio_server(tmp_path):
     cmd = rn._build_dsh("deepseek", rn.Auth(api_key="k", base_url="https://api.deepseek.com"), "deepseek-v4-pro", "x", str(tmp_path), env, mcp_servers=servers)
     job = json.loads(cmd[2])
     assert [s["name"] for s in job["mcp_servers"]] == ["probe", "remote"]
+
+
+def test_a_servers_auth_reaches_every_base_as_its_authorization_header(tmp_path):
+    """One helper gives every writer a server's headers, `auth` first as Authorization and the
+    declared headers over it. Eight writers took only the declared headers, so the hosted plugs
+    server (auth minted per turn) answered 401 to kimi, aider, opencode, qwen, gemini, goose,
+    openhands and cline, and those bases had no browser (hr-test browser column, 2026-09-27)."""
+    import json
+    assert rn._mcp_headers({"auth": "tok"}) == {"Authorization": "Bearer tok"}
+    assert rn._mcp_headers({"auth": "bearer tok"}) == {"Authorization": "bearer tok"}
+    assert rn._mcp_headers({"auth": "tok", "headers": {"X-Team": "t", "Authorization": "Bearer mine"}}) == {"Authorization": "Bearer mine", "X-Team": "t"}
+    assert rn._mcp_headers({"headers": {"X": None}}) == {} and rn._mcp_headers(None) == {}
+    sv = [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs", "transport": "http", "auth": "tok"}]
+    want = {"Authorization": "Bearer tok"}
+    assert rn._opencode_mcp(sv)["plugs"]["headers"] == want
+    assert rn._goose_extensions(sv, None)["plugs"]["headers"] == want
+    assert rn._openhands_mcp_config(sv)["plugs"]["headers"] == want
+    assert rn._aider_mcp_servers(sv)["plugs"]["headers"] == want
+    assert rn._hermes_mcp_section(sv)["plugs"]["headers"] == want
+    assert json.loads(rn._kimi_mcp_config(tmp_path / "kimi", sv).read_text())["mcpServers"]["plugs"]["headers"] == want
+    rn._qwen_settings(tmp_path / "qwen", sv)
+    assert json.loads((tmp_path / "qwen" / ".qwen" / "settings.json").read_text())["mcpServers"]["plugs"]["headers"] == want
+    rn._gemini_settings(tmp_path / "gemini", sv)
+    assert json.loads((tmp_path / "gemini" / ".gemini" / "settings.json").read_text())["mcpServers"]["plugs"]["headers"] == want
+    assert 'http_headers = { "Authorization" = "Bearer tok" }' in rn._codex_mcp_toml(sv)
