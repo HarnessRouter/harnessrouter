@@ -1608,3 +1608,39 @@ three defects stood between it and the result, each measured on its own build:
 
 Tools seen per base differ by style, not by ability: some snapshot before clicking, some read the
 URL after, cline waits for the load; every one navigated and clicked through the plugin.
+
+## The bugfix round of 2026-09-28: 0.25.13 to 0.25.15
+
+Three releases carried the contributor PRs and what verifying them on hr-test turned up. 0.25.13
+(c0ebe8c) is #265, #270, #285, #286, #290, #291, #292, #312 and #314; 0.25.14 is the Starter Kits
+page from the console design (#313); 0.25.15 is #315 and #316, the two fixes below. Every release
+was swapped onto hr-test with the fresh-volume check and the checks here were run against the
+container by the API and the console.
+
+**openhands x claude-opus-5 still failed on 0.25.13, with #312 in it.** The turn ended in 16 s
+with TokenRouter's refusal of the thinking shape ('"thinking.type: enabled" is not supported for
+this model. Use "thinking.type: adaptive"'). #312 put the retry in the broker, which is the path
+brokered traffic takes; a self-hosted install in owner trust sends the sandbox's request through
+the runner RELAY (`[relay] provider refused ...` in the container log), which has its own ladder of
+"the provider named the fix" retries and had no rung for this one. #315 adds it: the relay drops
+`reasoning_effort` for that model on that route, remembers it, and sends again at the model's own
+default. On 0.25.15 the same turn completes in 16 s.
+
+**The aider row of the browser column failed four times on 0.25.13, with #314 in it.** Each trace
+was a reply that announced work and did none, which is what the driver's once-per-turn nudge is
+for, and each slipped past it: "I’ll open the page in the browser" (gpt-5.4 writes the
+typographic apostrophe; the regex knew only the straight one), "I need to use the browser for
+this, not edit any files" (a need stated instead of met), and "To complete the task, I still need
+to click the link" as a paragraph after the first browser output. A fourth run clicked with a
+selector that timed out and navigated to the destination instead, which the column does not count
+as a click. #316 lets the nudge match either apostrophe and a stated need, and adds the
+stops-short paragraph. On 0.25.15 aider passes in 27 s and openhands in 34 s (open, navigate,
+click, get_url; the answer names the iana.org page; the session's stop row is billed). goose (28 s)
+and openhands (40 s) had passed on 0.25.13 as well, and the CSV preview of #292 was checked there
+through the console: three logical rows, a quoted comma, a doubled quote and a newline kept in one
+cell.
+
+**Reading a failed row.** `plugs/browser.py --bases <base> --keep --out row.json` leaves the harness
+in place and writes the session id; `GET /v1/traces/{sid}/all?compact=0` is the trace, one JSON
+object per line, and `GET /v1/sessions?limit=N` lists the recent sessions when the id was not
+kept. A hosted install has the broker path only; the relay finding is the self-hosted image's.
