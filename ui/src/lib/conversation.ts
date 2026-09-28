@@ -298,15 +298,14 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
       setConvState(sid, (st) => (st.browser ? { browser: { ...st.browser, open: false, held: false } } : {})); break;
   }
 }
-/** The browser pane on a harness page: whether it is showing, how (docked beside the conversation,
- *  full screen, or floating over the page), where a floating one sits, and which browsers the
- *  person closed (by session and epoch) so a closed pane stays closed for that browser and comes
+/** The browser pane on a harness page: whether it is showing, how (docked beside the conversation
+ *  or full screen), and which browsers the person closed (by session and epoch) so a closed pane stays closed for that browser and comes
  *  back for the next. The page header's Browser control and the conversation share this state. */
-export type PaneMode = 'docked' | 'full' | 'float';
-export type PaneState = { open: boolean; mode: PaneMode; float: { x: number; y: number; w: number; h: number }; dismissed: Record<string, number> };
+export type PaneMode = 'docked' | 'full';
+export type PaneState = { open: boolean; mode: PaneMode; dismissed: Record<string, number> };
 const _pane = new Map<string, PaneState>();
 const _paneSubs = new Set<() => void>();
-const _paneDefault: PaneState = { open: false, mode: 'docked', float: { x: -1, y: -1, w: 560, h: 400 }, dismissed: {} };
+const _paneDefault: PaneState = { open: false, mode: 'docked', dismissed: {} };
 export function getPaneState(h: string): PaneState { return _pane.get(h) ?? _paneDefault; }
 export function setPaneState(h: string, patch: Partial<PaneState>): void {
   _pane.set(h, { ...getPaneState(h), ...patch }); _paneSubs.forEach((f) => f());

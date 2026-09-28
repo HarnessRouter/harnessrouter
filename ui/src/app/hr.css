@@ -441,7 +441,9 @@ a { color: inherit; text-decoration: none; }
     z-index: 30; box-shadow: -10px 0 30px rgba(17, 19, 23, 0.14);
   }
   .wbx-conv.split .wbx-vresize { display: none; }
-  .wbx-conv.split .wbx-browser-pane { box-shadow: none; }
+  /* the browser card is not an overlay: it keeps a narrower column of its own and the conversation
+     is squeezed to the left of it (Richard, 2026-09-27) */
+  .wbx-conv.split .wbx-browser-pane { position: static; width: 46% !important; min-width: 240px; max-width: 62%; box-shadow: none; padding: 12px 12px 12px 0; }
 }
 .fp-head { height: 50px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }
 .fp-ic { flex-shrink: 0; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--brand-50, #f2f0ff); }
@@ -955,7 +957,7 @@ body.hr-resizing iframe { pointer-events: none; }
    the vendor's live view fills the rest. The card's edge glows the brand blue while the agent has
    the browser and the tint breathes faster while the agent acts; the person's card has a calm green
    edge. Reduced motion keeps the colours and drops the animation. The card also fills the window
-   (full) or floats over the page (float), dragged by its top row. */
+   (full). */
 /* the column the docked card sits in is invisible (no surface, no edge, no shadow) and lets the
    page beneath be used around the card, which floats in it, centred (Richard, 2026-09-27) */
 .wbx-browser-pane { background: transparent; padding: 12px 12px 12px 0; align-items: center; pointer-events: none; }
@@ -964,7 +966,6 @@ body.hr-resizing iframe { pointer-events: none; }
   border-radius: 16px; background: var(--surface); box-shadow: 0 1px 2px rgba(17, 19, 23, .06), 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1px var(--line);
   overflow: visible; transition: box-shadow .4s ease; }
 .wbx-browser-card.is-full { position: fixed; inset: 12px; z-index: 80; }
-.wbx-browser-card.is-float { position: fixed; z-index: 80; min-width: 320px; min-height: 220px; resize: both; overflow: hidden; }
 /* the card's edge says who has the browser, quietly: a thin blue or green line, no motion outside */
 .wbx-browser-card.is-agent { box-shadow: 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1.5px var(--brand); }
 .wbx-browser-card.is-user { box-shadow: 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1.5px #1f9d63; }
@@ -986,8 +987,6 @@ body.hr-resizing iframe { pointer-events: none; }
 /* the action row */
 .wbx-browser-bar { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; min-height: 46px; border-bottom: 1px solid var(--line);
   border-radius: 16px 16px 0 0; background: var(--surface); }
-.wbx-browser-bar.is-draggable { cursor: grab; user-select: none; }
-.wbx-browser-bar.is-draggable:active { cursor: grabbing; }
 .wbx-browser-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .wbx-browser-title b { font-size: 13px; font-weight: 600; color: var(--ink); }
 .wbx-browser-status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1003,7 +1002,7 @@ body.hr-resizing iframe { pointer-events: none; }
 .wbx-browser-ic:hover { background: var(--brand-50); color: var(--ink); }
 /* the screen: the browser's own shape (landscape, whatever the card's), fitted inside the card and
    centred; the card's surface, never black, is what shows around it. Beside the conversation the
-   card takes only the height the screen needs; full screen and floating fit the screen to the card. */
+   card takes only the height the screen needs; full screen fits the screen to the card. */
 .wbx-browser-stream { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 0 0 16px 16px; overflow: hidden; background: var(--surface);
   display: flex; align-items: center; justify-content: center; }
 .wbx-browser-screen { position: relative; width: 100%; aspect-ratio: var(--sw, 16) / var(--sh, 10); overflow: hidden; background: var(--line); }
@@ -1044,9 +1043,11 @@ body.hr-resizing iframe { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
   .wbx-browser-veil, .wbx-ghost-ring, .wbx-live-dot.is-on { animation: none; }
 }
-/* phones: the docked card is the screen; a floating one is too */
+/* phones: the card is a sheet under the conversation, full width at the height the screen needs,
+   and the conversation keeps the rest of the screen above it */
 @media (max-width: 720px) {
-  .wbx-conv.split .wbx-browser-pane { position: absolute; inset: 0; width: 100% !important; max-width: none; flex: none !important; z-index: 30; padding: 8px; }
-  .wbx-browser-card.is-float { inset: 8px !important; width: auto !important; height: auto !important; resize: none; }
+  .wbx-conv.split:has(.wbx-browser-pane) { flex-direction: column; }
+  .wbx-conv.split .wbx-browser-pane { position: static; width: 100% !important; min-width: 0; max-width: none; height: auto; flex: 0 0 auto !important; padding: 0 8px 8px; }
+  .wbx-browser-card.is-docked { width: 100%; }
   .wbx-browser-btn { padding: 0 10px; }
 }

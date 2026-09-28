@@ -1,9 +1,9 @@
 // The task's browser, live, as one floating card: an action row on top (who has it, take over or
-// hand back, full screen, float, close) and the vendor's live view filling the rest. The card glows
+// hand back, full screen, close) and the vendor's live view filling the rest. The card glows
 // the brand blue while the agent has the browser, breathing while it acts; a click on the screen
 // or the button takes it over, after which the view is the person's and the agent's next browser
-// call waits for the hand-back. The card docks beside the conversation, fills the window, or
-// floats over the page and can be dragged by its top row.
+// call waits for the hand-back. The card floats beside the conversation, centred in an invisible
+// column that squeezes the conversation to the left (under it on a phone), or fills the window.
 //
 // The live URL is a credential (whoever holds it controls the browser): it is read through the
 // session's own route, kept in component state, and never written anywhere else.
@@ -47,8 +47,6 @@ const ICONS = {
   close: 'M6 6l12 12M18 6L6 18',
   full: 'M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3',
   restore: 'M9 3H4v5M15 3h5v5M9 21H4v-5M15 21h5v-5',
-  float: 'M4 8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-2M4 12h8a2 2 0 0 1 2 2v6H4z',
-  dock: 'M4 5h16v14H4zM14 5v14',
 };
 
 /** A cursor that stands where the agent last acted and glides there along a small arc when the
@@ -140,30 +138,6 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
   };
   const setMode = (m: PaneMode) => setPaneState(harnessId, { mode: m });
 
-  // Floating: dragged by its top row, kept inside the window.
-  const pane = getPaneState(harnessId);
-  const [pos, setPos] = useState(() => pane.float);
-  useEffect(() => {
-    if (mode !== 'float') return;
-    const p = getPaneState(harnessId).float;
-    const w = Math.min(p.w, window.innerWidth - 24), h = Math.min(p.h, window.innerHeight - 24);
-    const x = p.x < 0 ? window.innerWidth - w - 24 : Math.min(p.x, window.innerWidth - w), y = p.y < 0 ? window.innerHeight - h - 24 : Math.min(p.y, window.innerHeight - h);
-    setPos({ x, y, w, h });
-  }, [mode, harnessId]);
-  const drag = useRef<{ dx: number; dy: number } | null>(null);
-  const onBarPointerDown = (e: React.PointerEvent) => {
-    if (mode !== 'float' || (e.target as HTMLElement).closest('button')) return;
-    drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
-  const onBarPointerMove = (e: React.PointerEvent) => {
-    if (!drag.current) return;
-    const x = Math.max(0, Math.min(e.clientX - drag.current.dx, window.innerWidth - pos.w));
-    const y = Math.max(0, Math.min(e.clientY - drag.current.dy, window.innerHeight - 48));
-    setPos((p) => ({ ...p, x, y }));
-  };
-  const onBarPointerUp = () => { if (drag.current) { drag.current = null; setPaneState(harnessId, { float: pos }); } };
-
   const status = !open ? 'Not open'
     : control === 'user' ? (held ? 'You have the browser. The agent is waiting.' : 'You have the browser.')
     : acting ? (live?.lastTool ? `The agent is browsing (${live.lastTool})` : 'The agent is browsing')
@@ -171,10 +145,8 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
 
   const card = (
     <div className={'wbx-browser-card is-' + mode + (open ? (control === 'user' ? ' is-user' : ' is-agent') : ' is-empty') + (acting ? ' is-acting' : '')}
-         role="region" aria-label="Browser"
-         style={mode === 'float' ? { left: pos.x, top: pos.y, width: pos.w, height: pos.h } : undefined}>
-      <div className={'wbx-browser-bar' + (mode === 'float' ? ' is-draggable' : '')}
-           onPointerDown={onBarPointerDown} onPointerMove={onBarPointerMove} onPointerUp={onBarPointerUp} onPointerCancel={onBarPointerUp}>
+         role="region" aria-label="Browser">
+      <div className="wbx-browser-bar">
         <span className={'wbx-live-dot' + (acting ? ' is-on' : control === 'user' && open ? ' is-user' : open ? ' is-idle' : '')} aria-hidden="true" />
         <div className="wbx-browser-title">
           <b>Browser</b>
@@ -187,12 +159,6 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
           <button type="button" className="wbx-browser-btn" onClick={takeOver} disabled={pending}>Take over</button>
         )}
         <span className="wbx-browser-bar-gap" aria-hidden="true" />
-        {mode !== 'full' && (
-          <button type="button" className="wbx-browser-ic" onClick={() => setMode(mode === 'float' ? 'docked' : 'float')}
-            title={mode === 'float' ? 'Dock beside the conversation' : 'Float over the page'} aria-label={mode === 'float' ? 'Dock beside the conversation' : 'Float over the page'}>
-            <Icon d={mode === 'float' ? ICONS.dock : ICONS.float} />
-          </button>
-        )}
         <button type="button" className="wbx-browser-ic" onClick={() => setMode(mode === 'full' ? 'docked' : 'full')}
           title={mode === 'full' ? 'Exit full screen' : 'Full screen'} aria-label={mode === 'full' ? 'Exit full screen' : 'Full screen'}>
           <Icon d={mode === 'full' ? ICONS.restore : ICONS.full} />

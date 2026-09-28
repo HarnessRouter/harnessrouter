@@ -632,13 +632,14 @@ beside the conversation and streams the vendor's live view of it; the edges of t
 blue while the agent has the browser and breathe while it acts, and a ghost cursor glides along a
 small arc to wherever the agent last clicked or typed. The browser's screen is landscape whatever
 the card's shape: the card shows the whole screen at the largest size that fits, with its own
-surface around it, and beside the conversation it takes only the height the screen needs (drag
-the divider, float or go full screen for a larger view). The card's top row carries every action: **Take over**
+surface around it; beside the conversation it floats, centred, at the height the screen needs,
+with the conversation squeezed to its left (on a phone it sits under the conversation instead;
+drag the divider or go full screen for a larger view). The card's top row carries every action: **Take over**
 (or a click on the screen) makes the view yours to click and type in and pauses the agent, whose
 next browser call waits for you without spending tokens and runs the moment you choose **Hand back
 to the agent** (after 45 seconds of waiting the call answers that you still have the browser and
-the agent may keep waiting or go on without it); **Full screen** fills the window, **Float** lifts
-the card over the page where you can drag it by its top row, and **Close** puts it away. The card
+the agent may keep waiting or go on without it); **Full screen** fills the window and **Close**
+puts the card away. The card
 closes itself when the browser closes; the **Browser** button in the task header, there whenever
 the harness includes the browser plugin, opens it at any time, with or without a browser in it.
 Behind it: `GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which
