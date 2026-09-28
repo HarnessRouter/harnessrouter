@@ -1,0 +1,7 @@
+{"m": "__hr_init", "p": {"session_id": "426953bd", "resumed": false, "messages": 0}}
+{"m": "tool_start", "p": {"id": "call_1", "name": "Bash", "input": {"command": "echo PROBE-OUT"}}}
+{"m": "tool_end", "p": {"id": "call_1", "name": "Bash", "result": "PROBE-OUT", "permitted": true}}
+{"m": "text", "p": {"text": "Hello "}}
+{"m": "text", "p": {"text": "from "}}
+{"m": "text", "p": {"text": "the stub."}}
+{"m": "__hr_result", "p": {"ok": true, "subtype": "success", "final": "Hello from the stub.", "reason": "", "session_id": "426953bd", "calls": 2, "seconds": 0.93}}

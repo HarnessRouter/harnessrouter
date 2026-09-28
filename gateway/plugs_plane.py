@@ -112,16 +112,30 @@ def tools_of(plug: str) -> list[dict]:
     return list(_TOOLS.get(_ALIAS.get(plug, plug), []))
 
 
+def split_name(name: str, plugs: list[str]) -> tuple[str, str]:
+    """(plug, tool) for an MCP tool name `<plug>_<tool>`, the plug being the longest of `plugs`
+    the name starts with (a plug's own name may carry an underscore: github_app). ("", "") when
+    none does."""
+    for plug in sorted(plugs, key=len, reverse=True):
+        if name.startswith(plug + "_"):
+            return plug, name[len(plug) + 1:]
+    return "", ""
+
+
 def tool_list(plugs: list[str], enabled: dict | None = None) -> list[dict]:
-    """MCP tool descriptors for the plugs a harness is bound to, `<plug>.<tool>` each, narrowed to
-    the names `enabled` lists for a plug when it lists any."""
+    """MCP tool descriptors for the plugs a harness is bound to, `<plug>_<tool>` each, narrowed to
+    the names `enabled` lists for a plug when it lists any. An underscore, not a dot: the model
+    APIs allow no dot in a function name (OpenAI's pattern is ^[a-zA-Z0-9_-]+$), and while
+    Claude Code, Codex and pi rewrite an MCP tool's name before offering it, OpenHands passes it
+    through and the Responses API refused the replay of a `browser.navigate` call (hr-test,
+    2026-09-27)."""
     out = []
     for plug in plugs:
         allow = (enabled or {}).get(plug)
         for t in tools_of(plug):
             if allow is not None and t["name"] not in allow:
                 continue
-            out.append({"name": f"{plug}.{t['name']}",
+            out.append({"name": f"{plug}_{t['name']}",
                         "description": f"[{TYPES.get(plug, plug)}, {t['risk']}] {t['description']}",
                         "inputSchema": t["inputSchema"],
                         "annotations": {"readOnlyHint": t["risk"] == "read",

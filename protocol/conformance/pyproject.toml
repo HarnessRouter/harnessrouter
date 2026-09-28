@@ -1,14 +1,18 @@
 [project]
 name = "uhp-conformance"
-version = "2026.9.12.post2"
+version = "2026.9.12.post4"
 description = "Conformance suite for the Unified Harness Protocol (UHP)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = ["jsonschema>=4.0"]
 
+[project.optional-dependencies]
+fixture = ["mcp>=1.10,<2"]
+
 [project.scripts]
 uhp-conformance = "uhp_conformance.cli:main"
+uhp-conformance-fixture = "uhp_conformance.fixture:main"
 
 [build-system]
 requires = ["setuptools>=68"]

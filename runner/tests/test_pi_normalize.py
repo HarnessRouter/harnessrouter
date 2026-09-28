@@ -209,7 +209,7 @@ def test_build_mcp_writes_config_and_flags_extension(tmp_path, monkeypatch):
     cmd, _ = _cmdline(tmp_path, mcp_servers=[
         {"name": "wiki", "url": "https://mcp.example/mcp", "auth": "tok123",
          "headers": {"X-Org": "o1"}}])
-    mcp = json.loads((tmp_path / "home" / ".pi" / "agent" / "mcp.json").read_text())
+    mcp = json.loads((tmp_path / "home" / ".pi" / "agent" / "mcp-adapter.json").read_text())
     assert mcp["mcpServers"]["wiki"]["url"] == "https://mcp.example/mcp"
     assert mcp["mcpServers"]["wiki"]["headers"]["Authorization"] == "Bearer tok123"
     assert mcp["mcpServers"]["wiki"]["headers"]["X-Org"] == "o1"

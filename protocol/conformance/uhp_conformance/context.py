@@ -10,7 +10,7 @@ try:
 except ImportError:  # pragma: no cover
     jsonschema = None
 
-from . import UHP_VERSION
+from . import DEFAULT_PLUGIN_MCP_URL, UHP_VERSION
 from .client import Client
 
 SCHEMA_RESOURCE = resources.files("uhp_conformance").joinpath(f"uhp-{UHP_VERSION}.schema.json")
@@ -22,6 +22,8 @@ class Context:
     harness_id: str = ""
     model: str = ""
     task_timeout: float = 300.0
+    # A reachable MCP server for the plugin checks (see DEFAULT_PLUGIN_MCP_URL).
+    plugin_mcp_url: str = DEFAULT_PLUGIN_MCP_URL
     state: dict = field(default_factory=dict)
     _schema: dict | None = None
 
