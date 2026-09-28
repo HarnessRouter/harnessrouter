@@ -514,6 +514,7 @@ body {
 /* ── the conversation, per the design: captions above turns, a tinted user bubble, the agent's
       reply as plain text (no card), file cards with an extension badge and a plain Preview link ── */
 .run-layout.is-embedded .wbx-conv-main { background: var(--v2-bg); }
+.run-layout.is-embedded .wbx-browser-pane { background: var(--v2-bg); }   /* the browser card's column: no seam beside the conversation */
 .run-layout.is-embedded .wbx-conv-msgs { --uic-cap: var(--v2-cap); --uic-mono: var(--v2-mono); --uic-bubble-max-w: 640px; gap: 20px; }
 .run-layout.is-embedded .wbx-turn.user .wbx-bubble-user { background: #f0f3fe; color: var(--v2-ink); border-radius: 12px; padding: 13px 17px; font-size: 15px; line-height: 1.65; text-wrap: pretty; }
 .run-layout.is-embedded .wbx-turn.asst > * { max-width: 640px; }

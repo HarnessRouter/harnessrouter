@@ -1092,6 +1092,8 @@ _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_
 # base), the model list it serves, and the connect flow that hands a key to this instance.
 HR_HOSTED_BASE = os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai").rstrip("/")
 HR_HOSTED_PROVIDER_BASE = f"{HR_HOSTED_BASE}/v1/provider"
+# The hosted console, where a HarnessRouter API key's credit is bought and topped up.
+HR_HOSTED_CONSOLE = os.environ.get("HR_HOSTED_CONSOLE", "https://app.harnessrouter.ai").rstrip("/")
 HR_HOSTED_MODELS_URL = f"{HR_HOSTED_BASE}/v1/models"
 HR_HOSTED_BALANCE_URL = f"{HR_HOSTED_BASE}/v1/balance"
 HR_HOSTED_CONNECT_URL = f"{HR_HOSTED_BASE}/v1/connect"
@@ -4563,6 +4565,12 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
     except Exception:  # noqa: BLE001
         pass
+    # The share resolver caches token -> session and session -> shared for _SHARE_TTL seconds; a
+    # link opened inside that window after the delete still answered (R-07 of the conformance
+    # suite, intermittent by timing). The tombstone is not enough: the caches go with it, as they
+    # do on every revoke.
+    _SHARE_STATE_CACHE.pop(sid, None)
+    _SHARE_TOKEN_CACHE.clear()
     # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
     # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
@@ -4857,15 +4865,6 @@ _CUSTOM_FORMAT_BACKENDS = {
 }
 
 
-def _custom_can_drive(backend: str) -> bool:
-    """Whether ANY custom-endpoint format can run this backend. A custom integration's models are
-    shown greyed on a backend its format cannot drive, so the reader learns why a model they
-    configured is not pickable there; on a backend no custom format drives at all (systemone runs
-    System One models only, and a custom endpoint speaks OpenAI or Anthropic text shapes) the row
-    is not an explanation but a chat model offered on a harness that cannot use one."""
-    return any(backend in bs for bs in _CUSTOM_FORMAT_BACKENDS.values())
-
-
 def _integration_serves_backend(integ: dict, backend: str) -> bool:
     """Can this integration actually run a turn on `backend`? For a custom provider this is
     gated by its api_format (see _CUSTOM_FORMAT_BACKENDS); every other provider just needs a
@@ -5018,6 +5017,7 @@ async def admin_integrations_get(request: Request) -> dict:
                 if row.get("name") == hosted.get("name"):
                     row["balance"] = bal
     return {"integrations": public,
+            "hosted_console": HR_HOSTED_CONSOLE,
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
@@ -6864,17 +6864,8 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
             models.append({"id": canonical, "label": canonical, "backend": backend,
                            "available": True, "default": canonical == default})
             seen.add(canonical)
-    # A custom model whose api_format this backend can't speak is still LISTED so the operator
-    # can see it exists, but greyed out (available=False) rather than silently omitted — the
-    # picker must not offer a choice that fails at the first call.
-    for canonical, iname in eff_map.items():
-        if canonical in seen:
-            continue
-        integ = integrations.get(iname)
-        if integ and str(integ.get("provider") or "").lower() == "custom" and _custom_can_drive(backend):
-            models.append({"id": canonical, "label": canonical, "backend": backend,
-                           "available": False, "default": canonical == default})
-            seen.add(canonical)
+    # A custom model whose api_format this backend cannot speak is not listed here at all (it
+    # was greyed once, as an explanation; read as the backend offering it: Richard, 2026-09-27).
     if default and default not in seen:
         models.insert(0, {"id": default, "label": default, "backend": backend,
                           "available": ok(default), "default": True})
@@ -7191,7 +7182,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # The harness's configured instructions are the agent's CLAUDE.md (claude) / AGENTS.md (codex) —
     # written into the workspace by the runner, NOT injected as a system prompt. The model keeps the
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
-    agent_doc = str((hv or {}).get("system_prompt") or "")
+    agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
+                                      await _harness_plug_types(harness_id, org, hv))
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -13515,6 +13507,45 @@ async def _media_session_purge(sid: str) -> None:
 # that the record names a WORKSPACE, because that is what a plug belongs to.
 _PLUGS_SERVER = "plugs"
 _PLUGS_ENTRY = {"name": "plugs", "id": "mcp.plugs"}
+
+# What the agent's doc (AGENTS.md / CLAUDE.md) says about the browser when the harness includes
+# it. Codex 0.154 keeps MCP tools behind its tool search, so without a word about them it opened
+# a page with web search and curl while the person watched an empty Browser card (hr-test,
+# 2026-09-27); pi found the tools on its own. Every base reads its doc, so every base gets it.
+_BROWSER_GUIDE = (
+    "## Browser\n"
+    "This task has a live browser that the person can watch and take over. Its tools are on the "
+    "`plugs` server: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, "
+    "browser_scroll, browser_extract_text, browser_screenshot, browser_wait_for, browser_back, "
+    "browser_get_url, browser_list_tabs, browser_switch_tab. Use them for anything on the web: "
+    "opening a page, reading it, filling a form, clicking through. Do not fetch a page with curl, "
+    "wget or a web search instead: the person is watching the browser, and a page fetched another "
+    "way never appears there. If these tools are not in your tool list, look them up (they may be "
+    "deferred) before touching the web any other way.")
+
+
+def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
+    """The harness's instructions plus a section for each included plugin that needs one."""
+    parts = [agent_doc.strip()] if agent_doc and agent_doc.strip() else []
+    if "browser" in plug_types:
+        parts.append(_BROWSER_GUIDE)
+    return "\n\n".join(parts)
+
+
+async def _harness_plug_types(hid: str, org: str, hv: dict | None) -> list[str]:
+    """The plugins a harness includes, by type, from its plugs server's record: [] when it has
+    no enabled plugs entry, or the record cannot be read (the turn runs without the section)."""
+    if not hid or not hv:
+        return []
+    try:
+        servers = _mcp_list(hv)
+        entry = next((e for e in servers if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
+        if not entry or str(entry.get("enabled", True)) in ("False", "false", "0"):
+            return []
+        _, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, servers, entry_id=_PLUGS_ENTRY["id"])
+    except Exception:  # noqa: BLE001
+        return []
+    return [str(x) for x in (rec.get("plugs") or []) if x]
 _PLUG_CALL_LABEL = "PlugCall"
 # The registry that holds plug records: the engine's door on the platform edge (the engine's own
 # ingress admits no in-environment caller). Empty = no registry, so every plug reads as missing.
@@ -14053,8 +14084,8 @@ async def plugs_mcp(request: Request):
 
     name = str(params.get("name") or "")
     args = params.get("arguments") or {}
-    plug, _, tool = name.partition(".")
-    spec = plugs_plane.find(plug, tool) if plug in plugs else None
+    plug, tool = plugs_plane.split_name(name, plugs)
+    spec = plugs_plane.find(plug, tool) if plug else None
     if spec is None or (enabled and enabled.get(plug) is not None and tool not in enabled[plug]):
         return _jsonrpc_result(rid, _tool_text(f"No tool named {name!r} on this server.", True))
     workspace = str(rec.get("workspace") or "")
@@ -14113,7 +14144,63 @@ async def plugs_mcp(request: Request):
 # The record of the browser itself is the plane's registry (browser_plane.registry): one process on
 # a self-hosted instance keeps it in memory; the hosted service keeps it in its control store so
 # every replica the sandbox's calls reach attaches to the one browser instead of opening its own.
+
+# ── the browser's live view ──────────────────────────────────────────────────────────────────
+# What the console shows while a task browses: the vendor's live view of the session's browser,
+# who has control, and when the agent last acted. The live URL is a credential (whoever opens it
+# controls the browser), so it is read through the owned-session route and never put on the feed.
+
+
+@app.get("/v1/sessions/{sid}/browser")
+async def session_browser(sid: str, request: Request) -> dict:
+    await _owned_session(request, sid)
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        return {"session_id": sid, "open": False}
+    return {"session_id": sid, "open": True, "live_url": str(rec.get("live_url") or ""),
+            "control": str(rec.get("control") or "agent"), "opened_at": rec.get("created"),
+            "last_call_at": rec.get("last_call"), "last_tool": str(rec.get("last_tool") or ""),
+            "viewport": rec.get("viewport"), "calls": int(rec.get("calls") or 0), "session_minutes": browser_plane.SESSION_CAP_MIN}
+
+
+class BrowserControlBody(BaseModel):
+    control: str
+
+
+@app.post("/v1/sessions/{sid}/browser/control")
+async def session_browser_control(sid: str, body: BrowserControlBody, request: Request) -> dict:
+    """Hand the browser to the person (`user`) or back to the agent (`agent`). While the person
+    has it, the agent's browser calls are held and told so; nothing is stopped or lost."""
+    await _owned_session(request, sid)
+    who = (body.control or "").strip().lower()
+    if who not in ("user", "agent"):
+        raise HTTPException(400, "control is 'user' or 'agent'")
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        raise HTTPException(404, "this task has no open browser")
+    await browser_plane.registry.bump(sid, control=who, control_at=time.time())
+    _browser_notice(sid, "control", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), control=who)
+    return {"session_id": sid, "open": True, "control": who}
+
+
 _browser_open_locks: dict[str, asyncio.Lock] = {}
+# How long one held browser call waits for the person to hand the browser back before answering
+# that it is still theirs (under the MCP clients' 60 s request timeout), and how often it looks.
+BROWSER_HOLD_SLICE_S = float(os.environ.get("HR_BROWSER_HOLD_SLICE_S", "45"))
+BROWSER_HOLD_POLL_S = 0.5
+
+
+def _browser_notice(sid: str, kind: str, hid: str = "", org: str = "", **extra) -> None:
+    """One event on the harness feed for the console's live view: the browser opened, a call ran,
+    a call was held because the person has the browser, control changed hands, or it closed. The
+    in-flight turn's org, harness, member and response id tag it (so it replays to a viewer that
+    connects mid-turn and stays with the member whose session it is); a notice after the turn
+    (the reaper closing an idle browser) carries the record's harness. NEVER the live URL: whoever
+    holds that URL controls the browser, so it travels only through the owned-session route."""
+    buf = _turn_buffers.get(sid) or {}
+    ev = {"type": f"browser.{kind}", "session_id": sid, "at": time.time(), **extra}
+    _bus_publish(org or str(buf.get("org") or ""), hid or str(buf.get("harness") or ""),
+                 str(buf.get("member") or ""), sid, str(buf.get("rid") or ""), ev)
 
 
 async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, tool: str, spec: dict, args: dict,
@@ -14153,6 +14240,7 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
                     await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
                                             detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
                                                     "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
+                    _browser_notice(sid, "opened", hid=hid, org=org, vendor=browser_plane.VENDOR)
     if s is None:
         try:
             s = await browser_plane.attach(rec)             # this process's attachment to the recorded browser
@@ -14163,6 +14251,31 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
     if (s.allow, s.deny) != (allow, deny):
         s.allow, s.deny, s.host_cache = list(allow), list(deny), {}      # the workspace changed its lists
         await browser_plane.registry.bump(sid, allow=list(allow), deny=list(deny))
+    # THE PERSON MAY HAVE THE BROWSER. The console's live view lets them take over with a click,
+    # and a takeover pauses the agent rather than ending its work: the call WAITS here, without a
+    # token spent, and runs the moment they hand the browser back. Read from the record, since the
+    # takeover is a write from another request (another replica when there are several). A wait
+    # is bounded below the MCP clients' own request timeouts (60 s in the reference SDKs): past
+    # the bound the tool answers, not as an error, that the person still has the browser and the
+    # agent may call again to keep waiting. Measured on hr-test 0.25.7-rc.4 before this: a refusal
+    # made pi end its turn early with "the browser is under user control, so I can't continue".
+    current = await browser_plane.registry.get(sid) if not (rec is None and s.opened) else None
+    if (current or {}).get("control") == "user":
+        _browser_notice(sid, "held", hid=hid, org=org, tool=tool)
+        waited = 0.0
+        while (current or {}).get("control") == "user" and waited < BROWSER_HOLD_SLICE_S:
+            await asyncio.sleep(BROWSER_HOLD_POLL_S)
+            waited += BROWSER_HOLD_POLL_S
+            current = await browser_plane.registry.get(sid)
+        if current is None:
+            return await refused("session closed", "The browser for this task was stopped while the person had it. "
+                                                   "Call again to open a new one.")
+        if current.get("control") == "user":
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "held", "still held",
+                                    detail={"waited_s": round(waited, 1)})
+            return _jsonrpc_result(rid, _tool_text(
+                "The person using this task still has the browser. Call this tool again to keep waiting for it, "
+                "or continue without the browser."))
     async with s.lock:
         if s.closed:
             return await refused("session closed", "The browser for this task was stopped. Call again to open a new one.")
@@ -14179,6 +14292,9 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
             await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
                                     f"{type(e).__name__}: {e}")
             return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
+    viewport = await browser_plane.viewport_of(s)            # the screen's shape, for the card's frame and cursor
+    await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool, viewport=viewport)
+    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=viewport)
     if isinstance(out, tuple) and out[0] == "image":
         png, caption = out[1], out[2]
         stored = None
@@ -14211,6 +14327,7 @@ async def _browser_close(sid: str, reason: str) -> None:
             await browser_plane.detach(s)
         return
     _browser_open_locks.pop(sid, None)
+    _browser_notice(sid, "closed", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), reason=reason)
     try:
         fig = await browser_plane.close_session_browser(rec, s)
     except Exception as e:  # noqa: BLE001
@@ -16743,10 +16860,10 @@ async def list_models(request: Request) -> dict:
         models = [{"id": m, "label": m, "backend": b, "available": ok(m),
                     "default": m == c["default"]} for m in c["models"]]
         seen = set(c["models"])
-        # Add models from the effective map that are not already in the catalog.
-        # A model serves this backend only if its integration's api_format is compatible;
-        # on an incompatible backend it is still LISTED (so the operator sees it exists) but
-        # greyed out (available=False) rather than silently omitted.
+        # Add models from the effective map that are not already in the catalog: a custom
+        # endpoint's model, on the backends its api_format drives. Not on the others, not even
+        # greyed: a Claude model under Codex read as "Codex can use Anthropic models" (Richard,
+        # hr-test 2026-09-27), and a backend that can never run a model has no row for it.
         for canonical, iname in eff_map.items():
             if canonical in seen:
                 continue
@@ -16757,10 +16874,7 @@ async def list_models(request: Request) -> dict:
             if _integration_serves_backend(integ, b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": True, "default": False})
-            elif _custom_can_drive(b):
-                models.append({"id": canonical, "label": canonical, "backend": b,
-                               "available": False, "default": False})
-            seen.add(canonical)
+                seen.add(canonical)
         out[b] = {"default": c["default"], "models": models}
     return {"backends": out}
 

@@ -795,6 +795,23 @@ def _skill_dir_name(s: str) -> str:
     return n or "skill"
 
 
+def _mcp_headers(s: dict | None) -> dict[str, str]:
+    """A remote server's HTTP headers: `auth` (the bearer the gateway resolved for the harness)
+    as Authorization, then the declared headers, which win on a clash. EVERY writer and the
+    bridge take a server's headers from here and nowhere else: eight writers took only the
+    declared headers and dropped `auth`, so the plugs server (hosted, auth minted per turn)
+    answered 401 to kimi, aider, opencode, qwen, gemini, goose, openhands and cline, and those
+    bases had no browser at all (the browser column on hr-test, 2026-09-27)."""
+    out: dict[str, str] = {}
+    auth = (s or {}).get("auth")
+    if auth:
+        out["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+    hdrs = (s or {}).get("headers")
+    if isinstance(hdrs, dict):
+        out.update({str(k): str(v) for k, v in hdrs.items() if k and v is not None})
+    return out
+
+
 def _mcp_name(s: str) -> str:
     """Sanitize an MCP server name into a CLI-safe identifier (alnum + underscore)."""
     n = _MCP_NAME_RE.sub("_", (s or "").strip()).strip("_")
@@ -821,12 +838,8 @@ def _write_mcp_config_claude(cwd: str, servers: list[dict],
         if url:
             transport = (s.get("transport") or "http").lower()
             entry = {"type": "sse" if transport == "sse" else "http", "url": url}
-            auth = s.get("auth")
-            if auth:  # bearer token (resolved by the gateway) -> Authorization header
-                hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-                entry["headers"] = {"Authorization": hdr}
-            if isinstance(s.get("headers"), dict):
-                entry.setdefault("headers", {}).update(s["headers"])
+            if _mcp_headers(s):
+                entry["headers"] = _mcp_headers(s)
         elif command:
             entry = {"type": "stdio", "command": command, "args": s.get("args") or []}
             if isinstance(s.get("env"), dict):
@@ -861,18 +874,10 @@ def _codex_mcp_toml(servers: list[dict]) -> str:
             continue
         if not url:
             continue
-        auth = (s or {}).get("auth")
         lines = [f"[mcp_servers.{name}]", f'url = "{url}"']
         # One http_headers inline table: Authorization from `auth` + any extra headers the
         # gateway resolved (e.g. Additional Headers / $headers.{name} app-auth values).
-        hdrs: dict[str, str] = {}
-        if auth:
-            hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-        extra = (s or {}).get("headers")
-        if isinstance(extra, dict):
-            for k, v in extra.items():
-                if k and v is not None:
-                    hdrs[str(k)] = str(v)
+        hdrs = _mcp_headers(s)
         if hdrs:
             def _tesc(x: str) -> str:
                 return x.replace("\\", "\\\\").replace('"', '\\"')
@@ -1190,12 +1195,7 @@ def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dic
             out.append(s)
             continue
         name = _mcp_name(str(s.get("name") or s.get("id") or "mcp"))
-        headers: dict = {}
-        auth = s.get("auth")
-        if auth:
-            headers["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-        if isinstance(s.get("headers"), dict):
-            headers.update({str(k): str(v) for k, v in s["headers"].items() if k and v is not None})
+        headers = _mcp_headers(s)
         bdir = pathlib.Path(_safe_join(cwd, ".harness/mcp-bridge"))
         bdir.mkdir(parents=True, exist_ok=True)
         launcher = bdir / f"{name}.sh"
@@ -2380,11 +2380,17 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
 
 
 def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
-    """Write $HOME/.pi/agent/mcp.json for pi-mcp-adapter (same input contract as the claude/codex
-    writers: url + optional auth/headers, or command + args for a plugin's stdio server). Returns
-    whether any server was written. The agent-dir
-    location is deliberate: project-local .pi/mcp.json sits behind pi's trust gate; the agent dir
-    does not."""
+    """Write $HOME/.pi/agent/mcp-adapter.json for pi-mcp-adapter (same input contract as the
+    claude/codex writers: url + optional auth/headers, or command + args for a plugin's stdio
+    server). Returns whether any server was written. The agent-dir location is deliberate:
+    project-local .pi/mcp.json sits behind pi's trust gate; the agent dir does not.
+
+    THE FILE IS NAMED FOR ADAPTER 3.x. pi-mcp-adapter 3 reads .mcp.json, ~/.config/mcp/mcp.json
+    and <agent dir>/mcp-adapter.json and, its README says, "does not read Pi's <agent dir>/mcp.json
+    or .pi/mcp.json at all"; 2.x read mcp.json. A volume that installed 2.x at its first boot kept
+    working on the old name while a fresh one resolved 3.x and saw no server at all (hosted,
+    2026-09-27: pi listed no MCP tool and grepped the workspace for the tool's name). The
+    entrypoint pins the adapter's version, so the name here is the one that version reads."""
     entries: dict = {}
     for s in servers or []:
         name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
@@ -2396,17 +2402,12 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
                 entries[name] = {"command": s["command"], "args": list(s.get("args") or [])}
             continue
         entry: dict = {"url": url}
-        auth = (s or {}).get("auth")
-        if auth:
-            hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-            entry["headers"] = {"Authorization": hdr}
-        if isinstance((s or {}).get("headers"), dict):
-            entry.setdefault("headers", {}).update({str(k): str(v) for k, v in s["headers"].items()
-                                                    if k and v is not None})
+        if _mcp_headers(s):
+            entry["headers"] = _mcp_headers(s)
         entries[name] = entry
     if not entries:
         return False
-    path = home / ".pi" / "agent" / "mcp.json"
+    path = home / ".pi" / "agent" / "mcp-adapter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     # directTools: the tools are registered on the agent one by one, as every other CLI lists
     # MCP tools. The adapter's default hides them behind one `mcp` proxy tool (search, then call),
@@ -2682,13 +2683,8 @@ def _omp_write_mcp(agent_dir: pathlib.Path, servers: list[dict] | None) -> bool:
         if not url:
             continue
         entry: dict = {"type": "sse" if str((s or {}).get("transport") or "").lower() == "sse" else "http", "url": url}
-        auth = (s or {}).get("auth")
-        if auth:
-            hdr = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-            entry["headers"] = {"Authorization": hdr}
-        if isinstance((s or {}).get("headers"), dict):
-            entry.setdefault("headers", {}).update({str(k): str(v) for k, v in s["headers"].items()
-                                                    if k and v is not None})
+        if _mcp_headers(s):
+            entry["headers"] = _mcp_headers(s)
         entries[name] = entry
     if not entries:
         return False
@@ -2831,12 +2827,7 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
         entry: dict = {"url": url}
         if ((s or {}).get("transport") or "").lower() == "sse":
             entry["transport"] = "sse"
-        hdrs: dict[str, str] = {}
-        auth = (s or {}).get("auth")
-        if auth:  # bearer token (resolved by the gateway) -> Authorization header
-            hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-        if isinstance((s or {}).get("headers"), dict):
-            hdrs.update({str(k): str(v) for k, v in s["headers"].items() if k and v is not None})
+        hdrs = _mcp_headers(s)
         if hdrs:
             entry["headers"] = hdrs
         out[name] = entry
@@ -4033,9 +4024,9 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
             # Their schema names the transport by the key: `url` is an SSE endpoint, `httpUrl` a
             # streamable HTTP one; a server declared sse under httpUrl is silently never loaded.
             entry: dict = {"url": url} if str(sv.get("transport") or "").lower() == "sse" else {"httpUrl": url}
-            hdrs = sv.get("headers")
-            if isinstance(hdrs, dict) and hdrs:
-                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
         elif sv.get("command"):
             cmd = sv["command"]
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
@@ -4191,9 +4182,9 @@ def _kimi_mcp_config(home: pathlib.Path, mcp_servers: list[dict] | None) -> path
             entry: dict = {"url": url}
             if str(sv.get("transport") or "").lower() == "sse":
                 entry["transport"] = "sse"
-            hdrs = sv.get("headers")
-            if isinstance(hdrs, dict) and hdrs:
-                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
         elif sv.get("command"):
             cmd = sv["command"]
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
@@ -4301,9 +4292,9 @@ def _aider_mcp_servers(mcp_servers: list[dict] | None) -> dict:
             entry: dict = {"url": url}
             if str(sv.get("transport") or "").lower() == "sse":
                 entry["transport"] = "sse"
-            hdrs = sv.get("headers")
-            if isinstance(hdrs, dict) and hdrs:
-                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
         elif sv.get("command"):
             cmd = sv["command"]
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
@@ -4582,9 +4573,9 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
             # Their schema names the transport by the key: `url` is an SSE endpoint, `httpUrl` a
             # streamable HTTP one; a server declared sse under httpUrl is silently never loaded.
             entry: dict = {"url": url} if str(sv.get("transport") or "").lower() == "sse" else {"httpUrl": url}
-            hdrs = sv.get("headers")
-            if isinstance(hdrs, dict) and hdrs:
-                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
         elif sv.get("command"):
             cmd = sv["command"]
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
@@ -4730,9 +4721,9 @@ def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
         if not url:
             continue
         entry: dict = {"transport": {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "streamableHttp", "url": url}}
-        hdrs = sv.get("headers")
-        if isinstance(hdrs, dict) and hdrs:
-            entry["transport"]["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+        hdrs = _mcp_headers(sv)
+        if hdrs:
+            entry["transport"]["headers"] = hdrs
         servers[name] = entry
     (sdir / "cline_mcp_settings.json").write_text(json.dumps({"mcpServers": servers}, indent=2))
 
@@ -4951,9 +4942,9 @@ def _opencode_mcp(servers: list[dict] | None) -> dict:
         cmd = sv.get("command")
         if url:
             entry: dict = {"type": "remote", "url": url, "oauth": False}
-            hdrs = sv.get("headers")
-            if isinstance(hdrs, dict) and hdrs:
-                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
         elif cmd:
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
             argv = [str(a) for a in argv] + [str(a) for a in (sv.get("args") or [])]
@@ -5451,9 +5442,9 @@ def _goose_extensions(mcp_servers: list[dict] | None, tools_disabled: list[str] 
         if url:
             entry: dict = {"enabled": True, "type": "streamable_http", "name": name,
                            "uri": url, "timeout": 300}
-            hdrs = sv.get("headers")
-            if isinstance(hdrs, dict) and hdrs:
-                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
         elif cmd:
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
             argv = [str(a) for a in argv] + [str(a) for a in (sv.get("args") or [])]
@@ -6072,9 +6063,9 @@ def _openhands_mcp_config(mcp_servers: list[dict] | None) -> dict:
             transport = str(sv.get("transport") or "").lower()
             if transport in ("stdio", "http", "streamable-http", "sse"):
                 entry["transport"] = transport
-            hdrs = sv.get("headers")
-            if isinstance(hdrs, dict) and hdrs:
-                entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
         elif sv.get("command"):
             cmd = sv["command"]
             argv = cmd if isinstance(cmd, list) else [str(cmd)]
