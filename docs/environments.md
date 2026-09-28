@@ -72,45 +72,57 @@ harness object and on `POST /v1/responses`; `environment` on the session object.
 
 ## How the hosted service implements it
 
-The hosted service runs one Hyper-V container per session out of a warm pool, restores the
-workspace from a tarball in blob storage (`_hydrate`) and checkpoints it back (`_checkpoint`);
-there is no shared filesystem between the gateway, the pool hosts and the sandboxes. The same
+Reviewed with the hosted session on 2026-09-28; the corrections are theirs. The hosted service runs
+one session per Azure Container Apps dynamic session out of the custom-container pool
+(`harness-sessions-e2`: 1 vCPU, 2 GiB, about 4 GiB of ephemeral disk, a 1800 s cooldown after
+which the container is recycled). There is no pool host to keep a cache on, no volume and no bind
+mount a session can be given, and nothing in a sandbox may hold a blob credential. The same
 contract is built like this:
 
-1. **Record**: the same `Environment` vertex on the HR tenant (register the label in the graph
-   seed as `Harness` is). Same routes, same object; `mount` stays `/env/<slug>`.
-2. **Source bytes**: blob storage, `environments/<id>/source/<path>` per file plus a small index
-   blob with the tree, or one `source.tgz` rewritten on each write the way `CheckpointWorkspaceFiles`
-   rewrites a checkpoint. Per-file blobs are simpler for the console's editor; the index makes the
-   tree one read.
-3. **Build**: a build is a sandbox job, not a gateway thread. The gateway takes a sandbox from the
-   pool under the identifier `env:<id>:<n>`, streams the source into it, runs the same steps the
-   self-hosted runner runs (`runner/environments.py::_build`, factored so both call one function),
-   tars the finished version (`layer.tgz`, sizes recorded) into blob storage at
-   `environments/<id>/versions/<n>/layer.tgz` with `.hr-build.json` beside it, and releases the
-   sandbox. The build has the tenant's credentials and nothing else; it is billed as a task of the
-   environment's org (a `build` unit on the ledger, priced by sandbox-seconds like a turn).
-4. **The mount**: at `/hydrate`, when the turn names an environment, the runner in the sandbox
-   fetches `layer.tgz` for the active version and extracts it to `/env/<slug>` before restoring the
-   workspace, then `chmod -R a-w` it. That already meets the contract (no reinstall, read-only per
-   sandbox, the outcome the chapter requires) and is the first slice. The second slice removes the
-   copy: the pool host keeps `/var/cache/hr-env/<id>/<n>/` (fetched once per host, LRU by bytes)
-   and starts the session's container with a read-only bind mount of it at `/env/<slug>`. Then a
-   session starts in the time it takes to mount, and a hundred sessions on one host share one copy.
-5. **Isolation**: the container is the boundary. One session cannot see another's container at
-   all; the bind mount is read-only; the source and the layers in blob storage are written only by
-   the gateway and the build job. Nothing in the sandbox holds a blob credential (the credential
-   broker rule stands).
-6. **Versions and rollback**: the vertex's `active_version` is the pointer; the runner reads it in
-   the turn body (the gateway passes `version` too, so a hydrate is deterministic). A session that
-   started on version 3 keeps 3 for later turns unless the gateway is told otherwise; the trace
-   records the version per turn.
-7. **Limits and metering**: import 512 MiB, file 64 MiB (the same env-tunable caps), a layer size
-   cap per plan, and storage metered like checkpoints (`/internal/storage-usage`).
-
-What the hosted twin must not do: build in the gateway's own process (it has no toolchain and no
-disk), keep a layer inside a session's checkpoint (it would be excluded anyway), or let the source
-be written from inside a sandbox (the only writers are the API and the build).
+1. **Record.** The same `Environment` vertex on the HR tenant, registered with the seed script
+   (label and edges) before the gateway that writes it rolls, as the billing labels were: a write
+   before the seed 400s. Same routes, same object, `mount` stays `/env/<slug>`.
+2. **Source.** One blob per file (`environments/<id>/source/<path>`) plus a small index blob with
+   the tree, so the console's editor reads and writes one file at a time. A build materialises
+   `environments/<id>/versions/<n>/source.tgz` from them first, so the build's input is one
+   immutable object: reproducible, one download.
+3. **Build = a sandbox job, never a gateway thread.** A gateway replica has no toolchain, no disk
+   and may restart. The build takes a sandbox from the pool under the identifier `env-<id>-<n>`
+   (no colons; the charset is the pool's), the policy gate runs BEFORE the sandbox is allocated
+   (deficit and plan refusals; a build counts as a task for the Free plan's concurrency), and the
+   "one build at a time per environment" lock and the build's status live in the control store as
+   a lease with a TTL, swept by the straggler sweep, exactly as turns are, so a replica restart
+   orphans nothing. Inside the sandbox the same `runner/environments.py::_build` runs (the one
+   function both sides call), with `source.tgz` as its input and a 1800 s wall clock. The build is
+   metered as agent work under the org, with its own receipt line ("Environment build",
+   `agent.active_second`, the per-task cost cap applied), not a new ledger unit.
+4. **Blob access is the gateway's, in one shape.** The sandbox never sees the account key. For the
+   layer, the gateway mints a per-blob, minutes-lived SAS (write-only for the build's output,
+   read-only for a turn's input) and hands it in the build or turn body, so a layer of a few
+   hundred MB does not pass through a gateway replica that has no disk. The build writes
+   `layer.tgz` (zstd) and `.hr-build.json` (status, log, packages, sizes) with its write SAS; a
+   turn's hydrate downloads `layer.tgz` with its read SAS. The source files and index are written
+   only by the API (the gateway streams them itself, as it streams checkpoints).
+5. **The mount = extract at hydrate.** This IS the hosted design, not a first slice: when a turn
+   names an environment, `/hydrate` downloads the active version's `layer.tgz` and extracts it to
+   `/env/<slug>` once per session lifetime (the container lives until the cooldown recycles it, so
+   later turns of the session find it in place), root-owned with 755/644 as extracted, no
+   `chmod -R` pass; the agent runs as the image's agent uid (10001), which is the same wall the
+   self-hosted server uses. The turn record carries `env_hydrate_ms` so the cost is visible. If
+   sharing a layer across sessions is ever needed, the ACA-native shape is a session pool whose
+   image bakes the layer, a different product decision; a bind mount is not promised.
+6. **Isolation.** The container is the boundary: one session cannot see another's container at
+   all; the layer is root's and the agent is not; the source and the layers are written only by
+   the API and the build's write SAS.
+7. **Versions, rollback, retention.** `active_version` on the vertex is the pointer; the gateway
+   passes `version` in the turn body so a hydrate is deterministic, and stamps the session with
+   the version it started on, which later turns of that session keep. The active version plus the
+   last three are kept; an environment's blobs are deleted with it; layers are counted in
+   `/internal/storage-usage`.
+8. **Sizes.** The ephemeral disk also holds the workspace, so the layer cap is a fraction of it, per
+   plan, enforced at build time from the recorded size: a layer over the cap fails the build with
+   the size in the log. Import 512 MiB and file 64 MiB stay the env-tunable caps; measure the disk
+   with `df` in a session before writing the number into a plan.
 
 ## What is not in this slice
 
