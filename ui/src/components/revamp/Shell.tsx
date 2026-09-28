@@ -343,7 +343,7 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
       {/* mobile top bar (<=768): brand + hamburger; the sidebar becomes an overlay drawer */}
       <div className="v2-mobilebar">
         {/* eslint-disable-next-line @next/next/no-img-element -- small static brand asset */}
-        <img src="/brand/hr-mark-duo-light.svg" alt="" />
+        <img src="/brand/hr-mark-console.svg" alt="" />
         <strong>HarnessRouter Console</strong>
         <button type="button" aria-label="Open navigation" aria-expanded={mobileNav}
           onClick={() => setMobileNav((v) => !v)}><iconify-icon icon="tabler:menu-2"></iconify-icon></button>
@@ -355,13 +355,12 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
           onPointerDown={onDragStart} onDoubleClick={() => commitNavW(railed ? 268 : 64)} />
 
         <div className="v2-title">
-          {/* Expanded: the full wordmark, nothing else (no "Console" suffix). Rail: icon only.
-              eslint-disable-next-line @next/next/no-img-element -- small static brand asset */}
+          {/* The design's mark (three bars, the third in the accent) and the console's name beside
+              it; the rail keeps the mark alone (Richard's Starter Kits design, 2026-09-28). */}
           <span className="v2-brand">
             {/* eslint-disable-next-line @next/next/no-img-element -- small static brand asset */}
-            <img className="v2-brand-full" src="/brand/hr-horizontal-duo-light.png" alt="HarnessRouter" />
-            {/* eslint-disable-next-line @next/next/no-img-element -- small static brand asset */}
-            <img className="v2-brand-icon" src="/brand/hr-mark-duo-light.svg" alt="HarnessRouter" />
+            <img className="v2-brand-mark" src="/brand/hr-mark-console.svg" alt="" />
+            <strong className="v2-brand-name">HarnessRouter Console</strong>
           </span>
           <span className="v2-title-actions">
             {/* The explicit collapse/expand toggle from the design's title row. Search moved out
