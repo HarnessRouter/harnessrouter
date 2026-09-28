@@ -1,0 +1,215 @@
+{
+ "instance": "hr-test (self-hosted, 0.25.7-rc.17)",
+ "measured": "2026-09-27",
+ "prompt": "Open https://example.com/ in the browser, click the only link on that page, and reply with the URL and the title of the page you land on.",
+ "rows": [
+  {
+   "base": "codex",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "navigate",
+    "open"
+   ],
+   "s": 33,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "claude-code",
+   "model": "claude-sonnet-4.6",
+   "ok": true,
+   "tools": [
+    "click",
+    "navigate",
+    "open"
+   ],
+   "s": 46,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "hermes",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open"
+   ],
+   "s": 52,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "pi",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open"
+   ],
+   "s": 34,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "omp",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "navigate",
+    "open"
+   ],
+   "s": 40,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "dsh",
+   "model": "deepseek-v4-pro",
+   "ok": true,
+   "tools": [
+    "click",
+    "navigate",
+    "open"
+   ],
+   "s": 27,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "goose",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open"
+   ],
+   "s": 33,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "opencode",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open"
+   ],
+   "s": 27,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "aider",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open",
+    "snapshot"
+   ],
+   "s": 33,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "kimi",
+   "model": "kimi-k3",
+   "ok": true,
+   "tools": [
+    "click",
+    "navigate",
+    "open"
+   ],
+   "s": 40,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "openhands",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open",
+    "snapshot"
+   ],
+   "s": 46,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "cheetahclaws",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "navigate",
+    "open"
+   ],
+   "s": 27,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "qwen",
+   "model": "qwen3.7-max",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open"
+   ],
+   "s": 40,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "gemini",
+   "model": "gemini-3.8-flash",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open"
+   ],
+   "s": 33,
+   "usd": 0.000333,
+   "why": ""
+  },
+  {
+   "base": "cline",
+   "model": "gpt-5.4",
+   "ok": true,
+   "tools": [
+    "click",
+    "get_url",
+    "navigate",
+    "open",
+    "snapshot",
+    "wait_for"
+   ],
+   "s": 33,
+   "usd": 0.000333,
+   "why": ""
+  }
+ ]
+}

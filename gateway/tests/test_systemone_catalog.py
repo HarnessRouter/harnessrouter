@@ -74,7 +74,8 @@ def test_a_custom_endpoints_models_never_appear_on_the_systemone_list(monkeypatc
     """Measured on hr-test 2026-09-19: a System One harness's picker showed claude-sonnet-4.6,
     gpt-5.5 and four more as "(no provider)". They were the rows of custom-endpoint integrations,
     appended to every backend as unavailable. No custom format can drive systemone, so nothing of
-    theirs belongs on its list; a chat backend keeps the greyed row as its explanation."""
+    theirs belongs on its list (since 2026-09-27 no backend lists a custom model its format cannot
+    drive, greyed or otherwise)."""
     import asyncio
     integ = [{"name": "my-openai", "provider": "custom", "config": {"api_format": "openai", "base_url": "https://x/v1"}}]
 
@@ -86,7 +87,6 @@ def test_a_custom_endpoints_models_never_appear_on_the_systemone_list(monkeypatc
 
     monkeypatch.setattr(gw, "_integrations_doc", _integrations)
     monkeypatch.setattr(gw, "_effective_model_map", _map)
-    assert not gw._custom_can_drive("systemone") and gw._custom_can_drive("claude") and gw._custom_can_drive("hermes")
     view = asyncio.run(gw._harness_models_view(None, "systemone", {"jev-1.13", "jev-latest", "jev-preview"}))
     assert [m["id"] for m in view["models"]] == ["jev-latest", "jev-preview", "jev-1.13",
                                                  "laya", "openthai-systemone", "system-one-phase2"]
@@ -94,10 +94,9 @@ def test_a_custom_endpoints_models_never_appear_on_the_systemone_list(monkeypatc
     # HarnessRouter key serves them (the same explanation every backend gives a curated model)
     assert {m["id"]: m["available"] for m in view["models"]} == {"jev-latest": True, "jev-preview": True, "jev-1.13": True,
                                                                   "laya": False, "openthai-systemone": False, "system-one-phase2": False}
-    # a chat backend the custom format cannot drive still shows the row, greyed, as the explanation
+    # a chat backend the custom format cannot drive lists nothing of the custom endpoint's either
     view = asyncio.run(gw._harness_models_view(None, "claude", set()))
-    row = next(m for m in view["models"] if m["id"] == "gpt-5.5")
-    assert row["available"] is False
+    assert "gpt-5.5" not in [m["id"] for m in view["models"]]
 
 
 def test_the_base_takes_no_skills_and_none_are_mounted_for_a_turn(monkeypatch):

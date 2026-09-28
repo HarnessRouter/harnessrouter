@@ -241,7 +241,7 @@ a { color: inherit; text-decoration: none; }
 .wbx-typing span:nth-child(2) { animation-delay: .2s; } .wbx-typing span:nth-child(3) { animation-delay: .4s; }
 .wbx-think { font-size: 12.5px; color: var(--sidebar-mute); }
 .wbx-think summary { cursor: pointer; }
-.wbx-think > div { white-space: pre-wrap; padding: 6px 0 0 10px; border-left: 2px solid var(--line); margin-top: 5px; }
+.wbx-think > div { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; padding: 6px 0 0 10px; border-left: 2px solid var(--line); margin-top: 5px; }   /* a long unbroken token (a base64 key) wraps instead of running off the card */
 .wbx-tool { font-size: 12px; font-family: ui-monospace, monospace; background: var(--brand-50); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 10px; align-self: flex-start; }
 .wbx-tool-name { color: var(--brand); font-weight: 600; }
@@ -441,6 +441,9 @@ a { color: inherit; text-decoration: none; }
     z-index: 30; box-shadow: -10px 0 30px rgba(17, 19, 23, 0.14);
   }
   .wbx-conv.split .wbx-vresize { display: none; }
+  /* the browser card is not an overlay: it keeps a narrower column of its own and the conversation
+     is squeezed to the left of it (Richard, 2026-09-27) */
+  .wbx-conv.split .wbx-browser-pane { position: static; width: 46% !important; min-width: 240px; max-width: 62%; box-shadow: none; padding: 12px 12px 12px 0; }
 }
 .fp-head { height: 50px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }
 .fp-ic { flex-shrink: 0; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--brand-50, #f2f0ff); }
@@ -948,3 +951,112 @@ body.hr-resizing iframe { pointer-events: none; }
 /* Why an incomplete turn is incomplete — one quiet line under the neutral badge, only when the
    record actually knows the cause. */
 .wbx-incomplete-why { font-size: 12.5px; color: var(--mut, #6b7280); margin: 4px 0 0 2px; }
+
+/* ── the task's browser: one floating card ──────────────────────────────────────────────────
+   The right slot holds a rounded card lifted off the page; its top row carries every action and
+   the vendor's live view fills the rest. The card's edge glows the brand blue while the agent has
+   the browser and the tint breathes faster while the agent acts; the person's card has a calm green
+   edge. Reduced motion keeps the colours and drops the animation. The card also fills the window
+   (full). */
+/* the column the docked card sits in is invisible (no surface, no edge, no shadow) and lets the
+   page beneath be used around the card, which floats in it, centred (Richard, 2026-09-27). The
+   conversation keeps at least half the width: at 686 px the 62% a file preview may take left a
+   254 px conversation with a crushed composer (hr-test rc.13). */
+.wbx-browser-pane { background: transparent; padding: 12px 12px 12px 0; align-items: center; pointer-events: none; max-width: 50%; }
+.wbx-browser-pane > * { pointer-events: auto; }
+.wbx-browser-card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 auto;
+  border-radius: 16px; background: var(--surface); box-shadow: 0 1px 2px rgba(17, 19, 23, .06), 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1px var(--line);
+  overflow: visible; transition: box-shadow .4s ease; }
+.wbx-browser-card.is-full { position: fixed; inset: 12px; z-index: 80; }
+/* the card's edge says who has the browser, quietly: a thin blue or green line, no motion outside */
+.wbx-browser-card.is-agent { box-shadow: 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1.5px var(--brand); }
+.wbx-browser-card.is-user { box-shadow: 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1.5px #1f9d63; }
+/* inside the screen: the edges tint blue and breathe, the middle stays clear; while the agent acts
+   the breathing quickens (Richard, 2026-09-27: the tint, no rings) */
+.wbx-browser-veil { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: inherit;
+  background: radial-gradient(ellipse 70% 62% at 50% 50%, transparent 0%, transparent 60%, color-mix(in srgb, var(--brand) 9%, transparent) 84%, color-mix(in srgb, var(--brand) 26%, transparent) 100%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 45%, transparent), inset 0 0 36px color-mix(in srgb, var(--brand) 22%, transparent);
+  animation: wbx-veil 3.2s ease-in-out infinite; }
+.wbx-browser-veil.is-acting { animation-duration: 1.9s; }
+@keyframes wbx-veil { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+/* the ghost cursor: where the agent last acted, gliding there along an arc; a ring on a click */
+.wbx-ghost { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; z-index: 2;
+  filter: drop-shadow(0 2px 4px rgba(17, 19, 23, .35)); }
+.wbx-ghost svg { display: block; margin: -3px 0 0 -4px; }
+.wbx-ghost-ring { position: absolute; left: -10px; top: -10px; width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--brand);
+  opacity: 0; animation: wbx-ghost-ring .7s ease-out 1; }
+@keyframes wbx-ghost-ring { 0% { transform: scale(.3); opacity: .8; } 100% { transform: scale(1.6); opacity: 0; } }
+/* the action row */
+.wbx-browser-bar { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; min-height: 46px; border-bottom: 1px solid var(--line);
+  border-radius: 16px 16px 0 0; background: var(--surface); }
+.wbx-browser-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.wbx-browser-title b { font-size: 13px; font-weight: 600; color: var(--ink); }
+.wbx-browser-status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wbx-browser-bar-gap { flex: 1 1 auto; }
+.wbx-browser-btn { flex: 0 0 auto; height: 30px; padding: 0 12px; margin-left: 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.wbx-browser-btn:hover { background: var(--brand-50); }
+.wbx-browser-btn.is-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.wbx-browser-btn.is-primary:hover { background: var(--brand-hover); }
+.wbx-browser-btn:disabled { opacity: .6; cursor: default; }
+.wbx-browser-ic { flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.wbx-browser-ic:hover { background: var(--brand-50); color: var(--ink); }
+/* the screen: the browser's own shape (landscape, whatever the card's), fitted inside the card and
+   centred; the card's surface, never black, is what shows around it. Beside the conversation the
+   card takes only the height the screen needs; full screen fits the screen to the card. */
+.wbx-browser-stream { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 0 0 16px 16px; overflow: hidden; background: var(--surface);
+  display: flex; align-items: center; justify-content: center; }
+.wbx-browser-screen { position: relative; width: 100%; aspect-ratio: var(--sw, 16) / var(--sh, 10); overflow: hidden; background: var(--line); }
+.wbx-browser-stream.is-fit { container-type: size; }
+.wbx-browser-stream.is-fit .wbx-browser-screen { width: min(100cqw, calc(100cqh * var(--sw, 16) / var(--sh, 10))); }
+.wbx-browser-card.is-docked { align-self: center; }
+/* the grip: the card's own left edge resizes its column (Richard, 2026-09-27: the drag range is the
+   card's border, not a strip the height of the column); a short bar shows on hover and while dragging */
+.wbx-browser-grip { position: absolute; left: -7px; top: 10px; bottom: 10px; width: 14px; cursor: col-resize; z-index: 3; }
+.wbx-browser-grip::after { content: ''; position: absolute; left: 5px; top: 50%; width: 4px; height: 44px; margin-top: -22px; border-radius: 2px;
+  background: var(--brand); opacity: 0; transition: opacity .15s ease; }
+.wbx-browser-grip:hover::after, body.hr-resizing .wbx-browser-grip::after { opacity: .7; }
+.wbx-browser-view, .wbx-browser-view iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+.wbx-browser-view[inert] iframe { pointer-events: none; }
+.wbx-browser-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #aab1bd; font-size: 13px; }
+.wbx-browser-takeover { position: absolute; inset: 0; border: 0; background: transparent; cursor: pointer; padding: 0; }
+.wbx-browser-takeover:focus-visible { outline: 3px solid var(--brand); outline-offset: -3px; }
+/* the empty state: a small window on a soft glow */
+.wbx-browser-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  padding: 24px 28px; color: var(--muted); font-size: 13px; line-height: 1.5; gap: 6px; }
+.wbx-browser-empty p { margin: 0; max-width: 380px; }
+.wbx-browser-empty-title { color: var(--ink); font-weight: 600; font-size: 14px; margin-top: 8px !important; }
+.wbx-browser-empty-art { position: relative; margin-bottom: 4px; }
+.wbx-browser-empty-art::before { content: ''; position: absolute; inset: -30px -40px; border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--brand) 14%, transparent), transparent 70%); }
+.wbx-browser-empty-art svg { position: relative; }
+.wbx-browser-empty-art .art-window { fill: var(--surface); stroke: color-mix(in srgb, var(--brand) 55%, var(--line)); stroke-width: 1.5; }
+.wbx-browser-empty-art .art-line { stroke: var(--line); stroke-width: 1.5; }
+.wbx-browser-empty-art .art-dot { fill: color-mix(in srgb, var(--brand) 45%, var(--line)); }
+.wbx-browser-empty-art .art-bar { fill: var(--brand-50); }
+.wbx-browser-empty-art .art-text { fill: color-mix(in srgb, var(--ink) 18%, var(--surface)); }
+.wbx-browser-empty-art .art-text.is-light { fill: color-mix(in srgb, var(--ink) 9%, var(--surface)); }
+.wbx-browser-empty-art .art-cursor { fill: var(--brand); stroke: var(--surface); stroke-width: 1.5; stroke-linejoin: round; }
+/* the live dot: blue and pulsing while the agent acts, green when the person has the browser */
+.wbx-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.wbx-live-dot.is-idle { background: var(--brand); opacity: .55; }
+.wbx-live-dot.is-on { background: var(--brand); box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); animation: wbx-dot 1.4s ease-out infinite; }
+.wbx-live-dot.is-user { background: #1f9d63; }
+@keyframes wbx-dot { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 55%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
+/* the header's Browser control */
+.wbx-browser-hbtn { position: relative; }
+.wbx-browser-hbtn .wbx-live-dot { position: absolute; right: 4px; top: 4px; width: 7px; height: 7px; background: transparent; }
+.wbx-browser-hbtn.is-on { color: var(--brand); border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
+@media (prefers-reduced-motion: reduce) {
+  .wbx-browser-veil, .wbx-ghost-ring, .wbx-live-dot.is-on { animation: none; }
+}
+/* phones: the card is a sheet under the conversation, full width at the height the screen needs,
+   and the conversation keeps the rest of the screen above it */
+@media (max-width: 720px) {
+  .wbx-conv.split:has(.wbx-browser-pane) { flex-direction: column; }
+  .wbx-conv.split .wbx-browser-pane { position: static; width: 100% !important; min-width: 0; max-width: none; height: auto; flex: 0 0 auto !important; padding: 0 8px 8px; }
+  .wbx-browser-card.is-docked { width: 100%; }
+  .wbx-browser-grip { display: none; }
+  .wbx-browser-btn { padding: 0 10px; }
+}

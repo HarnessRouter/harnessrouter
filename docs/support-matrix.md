@@ -3639,3 +3639,26 @@ Not run in this column, 198 pairs the provider serves that the harness did not r
 - openhands x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - goose x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 
+## Browser plugin, every base
+
+Measured 2026-09-27 on hr-test (self-hosted, 0.25.7-rc.17). One task in plain words, "Open https://example.com/ in the browser, click the only link on that page, and reply with the URL and the title of the page you land on." A base passes when the task completed, the trace shows the browser navigating and clicking, the answer names the page the link leads to, and the browser session was stopped and billed; a failure is retested once. System One is not in the column: its models choose among offered actions and call no tools. The run's findings are in [support-matrix-notes.md](support-matrix-notes.md).
+
+| base | model | browser | tools seen | seconds | notes |
+|---|---|---|---|---:|---|
+| codex | gpt-5.4 | pass | click, navigate, open | 33 |  |
+| claude-code | claude-sonnet-4.6 | pass | click, navigate, open | 46 |  |
+| hermes | gpt-5.4 | pass | click, get_url, navigate, open | 52 |  |
+| pi | gpt-5.4 | pass | click, get_url, navigate, open | 34 |  |
+| omp | gpt-5.4 | pass | click, navigate, open | 40 |  |
+| dsh | deepseek-v4-pro | pass | click, navigate, open | 27 |  |
+| goose | gpt-5.4 | pass | click, get_url, navigate, open | 33 |  |
+| opencode | gpt-5.4 | pass | click, get_url, navigate, open | 27 |  |
+| aider | gpt-5.4 | pass | click, get_url, navigate, open, snapshot | 33 |  |
+| kimi | kimi-k3 | pass | click, navigate, open | 40 |  |
+| openhands | gpt-5.4 | pass | click, get_url, navigate, open, snapshot | 46 |  |
+| cheetahclaws | gpt-5.4 | pass | click, navigate, open | 27 |  |
+| qwen | qwen3.7-max | pass | click, get_url, navigate, open | 40 |  |
+| gemini | gemini-3.8-flash | pass | click, get_url, navigate, open | 33 |  |
+| cline | gpt-5.4 | pass | click, get_url, navigate, open, snapshot, wait_for | 33 |  |
+
+15 of 15 bases drive the browser.

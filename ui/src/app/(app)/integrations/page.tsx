@@ -48,6 +48,8 @@ interface ProviderMeta {
 interface Doc {
   integrations: Integration[];
   model_map: Record<string, string>;
+  /** the hosted console, where a HarnessRouter API key's credit is bought and topped up */
+  hosted_console?: string;
   /** Images route separately from chat: the integration serving your chat models is usually not
    *  the one serving images, and an image model in a chat picker is a broken choice. */
   image_model_map?: Record<string, string>;
@@ -255,6 +257,8 @@ export default function IntegrationsPage() {
                             <span className={'itg-balance' + (i.balance.usd <= 0 ? ' out' : '')}>
                               {i.balance.usd <= 0 ? '$0.00 left, top up' : `$${i.balance.usd.toFixed(2)} left`}
                             </span>
+                            <a className="itg-balance-topup" href={`${doc?.hosted_console || 'https://app.harnessrouter.ai'}/billing`} target="_blank" rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}>Add credit ↗</a>
                           </div>
                         )}
                       </td>
@@ -339,6 +343,10 @@ export default function IntegrationsPage() {
                         <a className="itg-hosted-link" href="#get-key"
                           onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing({ ...editing, provider: 'harnessrouter', config: editing.provider === 'harnessrouter' ? editing.config : {} }); void getKey(); }}>
                           Get a key ↗</a>
+                        {editing.provider === 'harnessrouter' && editingOriginal && (
+                          <a className="itg-hosted-link" href={`${doc?.hosted_console || 'https://app.harnessrouter.ai'}/billing`} target="_blank" rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}>Add credit ↗</a>
+                        )}
                       </span>
                       <span className="itg-hosted-accent">Every model at its listed price, no markup</span>
                       <span className="itg-hosted-muted">One universal key, every model on the list.</span>

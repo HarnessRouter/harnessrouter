@@ -1568,3 +1568,43 @@ on every connection, so 0.25.6 lists gpt-6-sol and gpt-6-luna on goose and its o
 the same way: 50 of 50 after one retest (first run 48 of 50: gpt-6-luna's recycle recall on
 Vercel and gpt-6-sol's on OpenAI, both answering "GOOSE DONE", both passing the retest). The
 same recall flake as above, on the base that resumes through the relay like cline does.
+
+## The browser column (2026-09-27)
+
+Every base but System One drives the browser plugin on one task in plain words: "Open
+https://example.com/ in the browser, click the only link on that page, and reply with the URL and
+the title of the page you land on." A base passes when the task completed, the trace shows the
+browser navigating and clicking, the answer names iana.org (where the link goes), and the browser
+session was stopped and billed. Runner: `scripts/support-matrix/plugs/browser.py`; the table is
+the Browser section of support-matrix.md, rendered from docs/browser-column.json.
+
+**Result: 15 of 15 on 0.25.7-rc.17, first try, 27 to 52 seconds a base, one browser minute each.**
+
+The baseline on rc.14, before any change, was 5 of 15 (codex, claude-code, pi, omp, dsh), and
+three defects stood between it and the result, each measured on its own build:
+
+1. **A Browser section in the agent's doc (rc.15).** Codex 0.154 keeps MCP tools behind its tool
+   search and opened a page with web search and curl while the console's Browser card stayed
+   empty; hermes fetched the page its own way, and cheetahclaws and opencode obeyed the prompt's
+   "do not visit any other site" instead of following the link (which leads to iana.org). A
+   harness that includes the browser plugin now gets a Browser section in AGENTS.md / CLAUDE.md,
+   the file its own instructions go to: the tools by name, that the person is watching, never
+   curl or a web search instead, look the tools up if they are deferred. The prompt lost the ban
+   and names "the only link" rather than its wording, which example.com changes ("More
+   information..." one week, "Learn more" the next). On rc.15 the seven bases that already had
+   the tools passed 7 of 7.
+2. **One header helper for every MCP writer (rc.16).** goose, opencode, aider, kimi, qwen,
+   gemini, openhands and cline had no browser at all: their MCP writers passed a server's
+   declared headers and dropped its `auth`, so the plugs server, whose credential the gateway
+   mints per turn, answered 401 (openhands said so; kimi said the server could not be reached;
+   the rest said they had no browser). claude, codex, pi, omp and hermes each carried their own
+   copy of the auth handling and worked. `_mcp_headers` in runner/server.py is now the one place
+   a server's headers come from, for every writer and the bridge. 14 of 15 on rc.16.
+3. **Tool names are `plug_tool` (rc.17).** openhands reached the browser and the turn died on the
+   Responses API's "Invalid 'input[3].name': string does not match pattern '^[a-zA-Z0-9_-]+$'":
+   the plugs server named its tools browser.navigate, github.get_file_contents and so on. Claude
+   Code, Codex and pi rewrite an MCP tool's name before offering it; OpenHands passes it through,
+   and neither OpenAI's nor Anthropic's function-name rule allows a dot. 15 of 15 on rc.17.
+
+Tools seen per base differ by style, not by ability: some snapshot before clicking, some read the
+URL after, cline waits for the load; every one navigated and clicked through the plugin.
