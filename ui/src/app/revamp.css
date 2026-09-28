@@ -2025,6 +2025,9 @@ button.creq-srcstat.on b { color: var(--accent); }
 .plugin-list{container-type:inline-size}
 .plugin-row .capability-actions{display:grid;grid-template-columns:repeat(2,minmax(104px,max-content));gap:6px 8px;justify-content:end;align-self:start;margin-top:2px}
 .plugin-row .capability-actions .button,.plugin-row .capability-actions .toggle-button{width:100%;min-width:0;justify-content:center}
+/* a row with one action (a connected plugin's Included switch) keeps it on the right edge, where the
+   packages' actions end; alone in a two-column grid it sat in the first column (Richard, 2026-09-27) */
+.plugin-row .capability-actions>:only-child{grid-column:1/-1;justify-self:end}
 @container (max-width:680px){
   .plugin-row{grid-template-columns:30px minmax(0,1fr)}
   .plugin-row .capability-actions{grid-column:2;justify-content:start;margin-top:8px}
