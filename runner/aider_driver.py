@@ -318,17 +318,22 @@ def _run_shell_commands_reporting(coder, gate: _Gate, reflect: bool = True):
 
 # A reply that announces work instead of doing it: "I'll create…", "Let me…", "Sure, I will…".
 # Anchored at the start, after an optional acknowledgement, so an answer that happens to contain
-# the words ("The file I'll need is…") is not one.
+# the words ("The file I'll need is…") is not one. The apostrophe is either kind: gpt-5.4 writes
+# "I’ll open the page in the browser" with the typographic one, and a match on the straight one
+# alone let that turn end with the plan and nothing done (hr-test 0.25.13, 2026-09-28).
 _ANNOUNCES = re.compile(
     r"^\s*(?:(?:ok(?:ay)?|sure|certainly|got it|understood|alright|right)[,.!:]?\s*)?"
-    r"(?:i(?:'ll| will| am going to|'m going to| can go ahead)|let me|first,? i(?:'ll| will)|"
-    r"here(?:'s| is) (?:the|my) plan)\b", re.I)
+    r"(?:i(?:['’]ll| will| am going to|['’]m going to| can go ahead| (?:still |also )?need to)|let me|"
+    r"first,? i(?:['’]ll| will)|here(?:['’]s| is) (?:the|my) plan)\b", re.I)
+# A reply that stops short and says so in a paragraph of its own: "To complete the task, I still
+# need to click the link" after the first browser output (gpt-5.4, hr-test 0.25.13, 2026-09-28).
+_STOPS_SHORT = re.compile(r"(?:^|\n)\s*to (?:complete|finish) (?:the|this) task,?\s*i (?:still |also )?need to\b", re.I)
 NUDGE = ("Nothing was run or edited. If the task needs files or commands, produce them now in "
          "this reply; otherwise give your final answer.")
 
 
 def _announces_without_acting(text: str) -> bool:
-    return bool(_ANNOUNCES.match(text or ""))
+    return bool(_ANNOUNCES.match(text or "") or _STOPS_SHORT.search(text or ""))
 
 
 def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
