@@ -10,7 +10,7 @@ recycle (the session's sandbox is let go on purpose through the internal recycle
 follow-up must recall the first message: the history survived the checkpoint round trip).
 Results are one JSON record per harness x model with the outcome, seconds and reason of each
 scenario; `fill-connection.py` stamps each record with the connection its session actually ran on;
-`render.py` turns the records into `docs/support-matrix.md`.
+`render.py` turns the records into `docs/support-matrix.md` (the Browser section at its end comes from docs/browser-column.json).
 
 ```
 export BASE=https://your-instance HR_USER=harnessrouter HR_PASS=... PROVIDER=tokenrouter
