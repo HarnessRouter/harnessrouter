@@ -578,8 +578,11 @@ _SNAPSHOT_JS = """
 (max) => {
   const out = []; let n = 0;
   const seen = new Set();
+  // Visible to a person: laid out, not hidden, and at least 8 px each way. Sites keep tiny proxy
+  // controls (DuckDuckGo's 4 x 4 search input beside the field people see); an agent that types
+  // into one of those types into nothing anyone can see (hr-test, 2026-09-28).
   const vis = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+    return r.width >= 8 && r.height >= 8 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
   const nameOf = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder')
     || (el.labels && el.labels[0] && el.labels[0].innerText) || el.getAttribute('alt') || el.innerText || el.value || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
   const sel = 'h1,h2,h3,a[href],button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=textbox],[contenteditable=true],summary';
