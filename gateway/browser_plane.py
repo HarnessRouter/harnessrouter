@@ -107,12 +107,13 @@ def _vendor_client() -> httpx.AsyncClient:
 
 async def vendor_create(timeout_min: int, metadata: dict) -> dict:
     """A browser in the vendor's cloud: no proxy, no CAPTCHA solving, no recording, so the only
-    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency. Resizable, so the
-    live view can give the browser the shape of the card it is shown in (an emulated viewport set
-    over CDP changed the page's layout but not what the vendor streams: hr-test, 2026-09-28)."""
+    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency. The screen is the
+    vendor's default, landscape: what the live view streams is that screen, whatever the shape of
+    the card showing it (measured on hr-test, 2026-09-28: neither an emulated viewport over CDP
+    nor allowResizing changed the streamed frame), so the console fits the frame inside the card."""
     async with _vendor_client() as c:
         r = await c.post(f"{API_BASE}/browsers", json={
-            "timeout": int(timeout_min), "proxyCountryCode": None, "solveCaptchas": False, "allowResizing": True,
+            "timeout": int(timeout_min), "proxyCountryCode": None, "solveCaptchas": False,
             "enableRecording": False, "metadata": {k: str(v)[:100] for k, v in metadata.items()}})
     if r.status_code == 402:
         raise BrowserRefused("vendor_credits", "The browser service has no credit left. Tell the person.")

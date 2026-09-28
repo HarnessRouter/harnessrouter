@@ -316,12 +316,14 @@ export function usePaneState(h: string): PaneState {
 }
 /** What the session's route says about its browser, folded into the store (the feed keeps it fresh
  *  from there). Called when a task is opened, so a browser that was already running shows. */
-export function seedBrowserState(sid: string, info: { open: boolean; control?: string; last_call_at?: number | null; last_tool?: string } | null): void {
+export function seedBrowserState(sid: string, info: { open: boolean; control?: string; last_call_at?: number | null; last_tool?: string;
+                                                       viewport?: { w: number; h: number } | null } | null): void {
   if (!sid || !info) return;
   setConvState(sid, (st) => {
     if (!info.open) return st.browser ? { browser: { ...st.browser, open: false } } : {};
     return { browser: { open: true, control: info.control === 'user' ? 'user' : 'agent', lastCallAt: (Number(info.last_call_at) || 0) * 1000,
-                        lastTool: String(info.last_tool || ''), held: false, epoch: st.browser?.epoch || 1 } };
+                        lastTool: String(info.last_tool || ''), held: false, epoch: st.browser?.epoch || 1,
+                        ...(info.viewport && info.viewport.w > 0 ? { viewport: info.viewport } : {}) } };
   });
 }
 export function useHarnessBus(harnessId: string, onActivity?: () => void) {

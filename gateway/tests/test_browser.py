@@ -427,7 +427,7 @@ def test_a_turn_browses_and_the_session_is_priced_metered_and_stopped(client, wo
     assert out["isError"] is False, out
     text = out["content"][0]["text"]
     assert text.startswith("Opened https://example.com/ (Example Domain)") and 'e1 link "More information..." href=https://www.iana.org/domains/example' in text
-    assert ven.created == [{"timeout": 20, "proxyCountryCode": None, "solveCaptchas": False, "allowResizing": True, "enableRecording": False,
+    assert ven.created == [{"timeout": 20, "proxyCountryCode": None, "solveCaptchas": False, "enableRecording": False,
                             "metadata": {"harness": hid, "session": sid}}]
     assert browsers[-1].cdp == f"{CDP}/bu_1" and browsers[-1].contexts[0].kw == {"accept_downloads": False, "viewport": {"width": 1280, "height": 800}}
 
@@ -858,6 +858,7 @@ def test_the_person_takes_the_browser_over_and_the_agent_waits(client, world):
         assert all(p["harness"] == hid and p["sid"] == sid and "live_url" not in p["ev"] for p in published)
         info = client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json()
         assert info["open"] is True and info["control"] == "agent" and info["last_tool"] == "navigate"
+        assert info["viewport"] == {"w": 1280, "h": 800}                  # the screen's shape, for the card's frame
         assert info["live_url"].startswith("http") and info["session_minutes"] == gw.browser_plane.SESSION_CAP_MIN
         # the person takes over: the agent's next call waits for the hand-back, and past the wait's
         # bound answers (not as an error) that the person still has the browser; the record says who has it

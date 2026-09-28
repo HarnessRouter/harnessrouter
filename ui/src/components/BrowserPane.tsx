@@ -15,7 +15,7 @@ import { authHeaders } from '@/lib/chat';
 import { getPaneState, setPaneState, type BrowserState, type PaneMode } from '@/lib/conversation';
 
 export interface BrowserInfo { open: boolean; live_url?: string; control?: string; opened_at?: number | null;
-  last_call_at?: number | null; last_tool?: string; calls?: number; session_minutes?: number }
+  last_call_at?: number | null; last_tool?: string; viewport?: { w: number; h: number } | null; calls?: number; session_minutes?: number }
 
 export async function fetchBrowser(sid: string): Promise<BrowserInfo | null> {
   if (!sid) return null;
@@ -97,7 +97,7 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
   const [info, setInfo] = useState<BrowserInfo | null>(null);
   const [pending, setPending] = useState(false);
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const streamRef = useRef<HTMLDivElement>(null);
+  const screenRef = useRef<HTMLDivElement>(null);
   const epoch = live?.epoch ?? 0;
   // The live URL is read once per browser (a new epoch is a new browser with a new URL).
   useEffect(() => {
@@ -120,6 +120,10 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
   const acting = control === 'agent' && open && (busy || now - lastCallAt < ACTING_MS);
   const held = !!live?.held && control === 'user';
   const src = viewerUrl(info?.live_url || '');
+  // The browser's screen is landscape whatever the card's shape (the vendor streams the screen, not
+  // a viewport of the card's making): the frame keeps the screen's aspect and fits inside the card.
+  const screen = live?.viewport ?? info?.viewport ?? null;
+  const screenStyle = { ['--sw' as string]: screen && screen.w > 0 ? screen.w : 16, ['--sh' as string]: screen && screen.h > 0 ? screen.h : 10 } as React.CSSProperties;
 
   const takeOver = async () => {
     if (pending || control === 'user' || !open) return;
@@ -215,7 +219,8 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
           <p>When the agent opens a page for this task it streams here, live. Watch it work, take it over from the row above or with a click on the screen, and hand it back when you are done.</p>
         </div>
       ) : (
-        <div className="wbx-browser-stream" ref={streamRef}>
+        <div className={'wbx-browser-stream' + (mode === 'docked' ? '' : ' is-fit')}>
+          <div className="wbx-browser-screen" ref={screenRef} style={screenStyle}>
           {/* View-only while the agent drives: inert blocks focus and keys, the transparent button
               over the screen blocks the pointer and is "take over". Both go the moment the person has it. */}
           <div className="wbx-browser-view" inert={control === 'agent' ? true : undefined}>
@@ -231,12 +236,13 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
                   acts; the middle stays clear */}
               <div className={'wbx-browser-veil' + (acting ? ' is-acting' : '')} aria-hidden="true" />
               {live?.point && live.viewport && (
-                <GhostCursor point={live.point} viewport={live.viewport} tool={live.lastTool} at={live.lastCallAt} host={streamRef} />
+                <GhostCursor point={live.point} viewport={live.viewport} tool={live.lastTool} at={live.lastCallAt} host={screenRef} />
               )}
               <button type="button" className="wbx-browser-takeover" onClick={takeOver} disabled={pending} title="Click to take over the browser"
                 aria-label="Take over the browser" />
             </>
           )}
+          </div>
         </div>
       )}
     </div>

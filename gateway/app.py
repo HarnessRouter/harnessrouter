@@ -14138,7 +14138,7 @@ async def session_browser(sid: str, request: Request) -> dict:
     return {"session_id": sid, "open": True, "live_url": str(rec.get("live_url") or ""),
             "control": str(rec.get("control") or "agent"), "opened_at": rec.get("created"),
             "last_call_at": rec.get("last_call"), "last_tool": str(rec.get("last_tool") or ""),
-            "calls": int(rec.get("calls") or 0), "session_minutes": browser_plane.SESSION_CAP_MIN}
+            "viewport": rec.get("viewport"), "calls": int(rec.get("calls") or 0), "session_minutes": browser_plane.SESSION_CAP_MIN}
 
 
 class BrowserControlBody(BaseModel):
@@ -14270,8 +14270,9 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
             await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
                                     f"{type(e).__name__}: {e}")
             return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
-    await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool)
-    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=await browser_plane.viewport_of(s))
+    viewport = await browser_plane.viewport_of(s)            # the screen's shape, for the card's frame and cursor
+    await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool, viewport=viewport)
+    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=viewport)
     if isinstance(out, tuple) and out[0] == "image":
         png, caption = out[1], out[2]
         stored = None

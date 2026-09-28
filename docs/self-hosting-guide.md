@@ -630,9 +630,10 @@ includes the plugin, and the workspace still has to have connected it.
 **Watching and taking over.** When a task opens a browser, the console brings up a Browser card
 beside the conversation and streams the vendor's live view of it; the edges of the screen tint
 blue while the agent has the browser and breathe while it acts, and a ghost cursor glides along a
-small arc to wherever the agent last clicked or typed. The browser takes the shape of the card it
-is shown in, so the page fills it, in the card, in full screen and floating. The card's top row
-carries every action: **Take over**
+small arc to wherever the agent last clicked or typed. The browser's screen is landscape whatever
+the card's shape: the card shows the whole screen at the largest size that fits, with its own
+surface around it, and beside the conversation it takes only the height the screen needs (drag
+the divider, float or go full screen for a larger view). The card's top row carries every action: **Take over**
 (or a click on the screen) makes the view yours to click and type in and pauses the agent, whose
 next browser call waits for you without spending tokens and runs the moment you choose **Hand back
 to the agent** (after 45 seconds of waiting the call answers that you still have the browser and

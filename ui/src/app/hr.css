@@ -997,8 +997,15 @@ body.hr-resizing iframe { pointer-events: none; }
 .wbx-browser-ic { flex: 0 0 auto; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .wbx-browser-ic:hover { background: var(--brand-50); color: var(--ink); }
-/* the stream fills the card below the row */
-.wbx-browser-stream { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 0 0 16px 16px; overflow: hidden; background: #0f1115; }
+/* the screen: the browser's own shape (landscape, whatever the card's), fitted inside the card and
+   centred; the card's surface, never black, is what shows around it. Beside the conversation the
+   card takes only the height the screen needs; full screen and floating fit the screen to the card. */
+.wbx-browser-stream { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 0 0 16px 16px; overflow: hidden; background: var(--surface);
+  display: flex; align-items: center; justify-content: center; }
+.wbx-browser-screen { position: relative; width: 100%; aspect-ratio: var(--sw, 16) / var(--sh, 10); overflow: hidden; background: var(--line); }
+.wbx-browser-stream.is-fit { container-type: size; }
+.wbx-browser-stream.is-fit .wbx-browser-screen { width: min(100cqw, calc(100cqh * var(--sw, 16) / var(--sh, 10))); }
+.wbx-browser-card.is-docked { align-self: flex-start; }
 .wbx-browser-view, .wbx-browser-view iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
 .wbx-browser-view[inert] iframe { pointer-events: none; }
 .wbx-browser-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #aab1bd; font-size: 13px; }
