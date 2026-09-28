@@ -276,6 +276,12 @@ Name those tools on the connection, comma-separated, and every turn through it r
 for Codex's `web_search` that is a hard switch in its configuration, not a request. The same field
 exists on each harness, for tools you want off regardless of the endpoint.
 
+Custom OpenAI Responses connections start with Codex's function tools only. The Codex namespace
+(`multi_agent_v1`) and built-in `web_search` are disabled by default because compatible endpoints
+often reject those tool types. Set `namespace_tools` or `web_search` to `"1"` in the connection
+configuration (or turn the corresponding console switch on) when the endpoint supports them;
+`disabled_tools` still takes precedence for `web_search`.
+
 </details>
 
 <details>
