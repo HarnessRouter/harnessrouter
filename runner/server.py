@@ -2603,6 +2603,16 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
             {"type": "tool_result", "tool_use_id": obj.get("toolCallId") or "tool",
              "is_error": bool(obj.get("isError")), "content": content}]}}]
     if t == "agent_end":
+        if obj.get("willRetry"):
+            # pi retries a retryable provider error itself (settings.retry: three attempts by
+            # default), a reply stream cut mid-message among them, and says so on the agent_end it
+            # emits before retrying. That agent_end is not the end of the turn: the attempt's error
+            # and its half-streamed text give way to the retry's. Taking it as the end failed a
+            # GDPval turn whose relay cut the last line of its reply (2026-09-26) while pi retried
+            # and finished; the error also outlived a successful retry, so the true end failed too.
+            state.pop("_pi_error", None)
+            state["_pi_text"] = ""
+            return []
         err = state.get("_pi_error")
         usage = dict(state.get("_pi_usage") or {})
         usage = {k: v for k, v in usage.items() if v}
@@ -5740,6 +5750,19 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
+# Goose 1.50.0 sends extension startup failures to stderr, not stream-json. The
+# turn can still complete successfully without that extension, so the generic
+# failure-only stderr tail would otherwise hide the missing MCP tools.
+_GOOSE_EXTENSION_START_FAILURE = re.compile(
+    r"Failed to start extension '([^'\r\n]{1,80})' \(.*\), continuing without it$"
+)
+
+
+def _goose_mcp_startup_failure(line: str) -> str:
+    match = _GOOSE_EXTENSION_START_FAILURE.search(line)
+    return match.group(1) if match else ""
+
+
 # aider has NO conversation id of ANY kind — its continuation is the chat-history FILE — so the
 # runner announces a synthetic one. Without it the gateway never records a conversation id, never
 # treats a later turn as a follow-up, and every turn is a fresh thread: measured as the support
@@ -6553,6 +6576,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     killer.daemon = True
     killer.start()
     errbuf: list[str] = []   # non-JSON output (CLI stderr is merged into stdout) — the REAL error text
+    goose_mcp_down: set[str] = set()
     try:
         for raw in proc.stdout:  # type: ignore[union-attr]
             raw = raw.strip()
@@ -6564,6 +6588,15 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 errbuf.append(raw)
                 if len(errbuf) > 80:
                     del errbuf[0]
+                if normalize is _goose_to_claude:
+                    name = _goose_mcp_startup_failure(raw)
+                    if name and name not in goose_mcp_down:
+                        goose_mcp_down.add(name)
+                        # Include only the extension name. Its raw stderr may contain secrets,
+                        # and the gateway only needs the name to explain the missing tools.
+                        with _turns_lock:
+                            rec["events"].append({"type": "system", "subtype": "mcp_unavailable",
+                                                  "servers": [{"name": name}], "_ts": time.time()})
                 continue
             try:
                 obj = json.loads(raw)
