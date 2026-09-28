@@ -94,8 +94,8 @@ body {
 /* The wordmark sits in a clipping box: when the nav is dragged narrower than the mark, the mark
    is cropped on its right and the toggle keeps its place inside the nav. */
 .v2-title .v2-brand { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
-.v2-title .v2-brand-full { height: 20px; width: auto; max-width: none; flex: none; }   /* the pack's lettering at 20px reads as the 14.5px title; 28px read as 21px (Richard, 2026-09-26) */
-.v2-title .v2-brand-icon { width: 22px; height: 22px; display: none; }
+.v2-title .v2-brand-mark { width: 16px; height: 15px; flex: none; }
+.v2-title .v2-brand-name { margin-left: 11px; font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; color: var(--v2-ink); }
 .v2-title .v2-searchbtn {
   margin-left: auto; border: 0; background: none; color: var(--v2-cap); cursor: pointer;
   display: inline-flex; padding: 4px; border-radius: 6px;
@@ -172,11 +172,10 @@ body {
 }
 
 /* collapsed rail: icons only */
-.v2-side.is-rail .v2-title .v2-brand-full,
+.v2-side.is-rail .v2-title .v2-brand-name,
 .v2-side.is-rail .v2-wscard .v2-wsmeta, .v2-side.is-rail .v2-group-label,
 .v2-side.is-rail .v2-item span, .v2-side.is-rail .v2-item .v2-item-end,
 .v2-side.is-rail .v2-soon-pill, .v2-side.is-rail .v2-account .v2-email { display: none; }
-.v2-side.is-rail .v2-title .v2-brand-icon { display: inline-block; }
 .v2-side.is-rail .v2-title { justify-content: center; padding-left: 0; padding-right: 0; }
 .v2-side.is-rail .v2-title .v2-brand { flex: none; overflow: visible; }
 .v2-side.is-rail .v2-wscard { justify-content: center; padding: 5px; margin: 0 auto 14px; width: auto; border-color: transparent; }
