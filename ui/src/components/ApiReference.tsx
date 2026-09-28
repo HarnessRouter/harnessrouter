@@ -296,6 +296,7 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
           <Param name="mcp_servers" type="array">Tool connections: <code>{`{name, url, auth?, enabled}`}</code>. For <code>auth</code>, pass a secrets ref (below) or a <code>$headers.&#123;Name&#125;</code> per-request reference.</Param>
           <Param name="skills" type="array"><code>{`{name, files:[{path, content|content_b64}]}`}</code>, a bundle MUST include a <code>SKILL.md</code>; invalid bundles are rejected with 400. Skills can be whole folders: <code>path</code> is the file&apos;s relative path inside the skill (nested layouts like <code>guides/SKILL.md</code> install as-is); the root <code>SKILL.md</code> needs YAML frontmatter (<code>name</code>, <code>description</code>). Bundles over ~48&nbsp;KB are offloaded server-side and the saved agent returns that skill as <code>{`{name, enabled, blob}`}</code> with no <code>files</code>, normal; the folder still mounts into every run. On later updates pass such entries back unchanged; only include <code>files</code> when changing content.</Param>
           <Param name="plugins" type="array">Packages in the Agent Plugins format: <code>{`{files:[{path, content|content_b64}], enabled?}`}</code>, each with a <code>plugin.json</code> at its root, tools in <code>mcp.json</code>, Skills under <code>skills/</code>. The saved agent returns each as <code>{`{name, enabled, blob, manifest, mcpServers, skills, skipped}`}</code>; pass such entries back unchanged, and include <code>files</code> only for a new or changed package.</Param>
+          <Param name="environment" type="string">An environment id (<code>henv_…</code>): the project every run of this agent reads at its path, read-only, with its packages installed. See Environments below.</Param>
           <Param name="disabled_tools" type="array">Inherited/built-in tool names to disable.</Param>
           <Param name="additional_headers" type="array">Header NAMES your product passes per request for app-level auth (see Additional headers above).</Param>
           <Param name="max_step" type="integer">Default agent step budget (default 400).</Param>
@@ -335,6 +336,55 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
         <p className="hr-meta">This agent&apos;s own tools and Skills as an Agent Plugins package, ready to
           send to another agent&apos;s <code>plugins</code> or to write to disk for any client that reads the
           format. Credentials are never included; each omission is listed in <code>skipped</code>.</p>
+      </Endpoint>
+
+      <h3 className="apidoc-h3">Environments</h3>
+      <p className="hr-meta">A project and its installed dependencies, built once and read by every run that names it: mounted
+        read-only at <code>/env/&#123;slug&#125;</code> in the run&apos;s sandbox, beside the run&apos;s own writable
+        workspace, with its Python virtualenv and node_modules on <code>PATH</code>. Name it on an agent
+        (<code>environment</code> above) or on one run (<code>environment</code> in the task body). Two runs on
+        one environment share every byte of it and none of each other&apos;s workspace.</p>
+      <Endpoint method="POST" path="/v1/environments">
+        <p className="hr-meta">Create one. Returns it with its <code>id</code> and its <code>mount</code>, the path runs will see.</p>
+        <div className="apidoc-sub">Request body</div>
+        <ParamTable>
+          <Param name="name" type="string" req>Starts with a letter or digit; the path segment (<code>slug</code>) derives from it and does not change.</Param>
+          <Param name="description" type="string">What the project is.</Param>
+          <Param name="entry" type="string">How it is run, in your words (<code>python3 run.py --episode &lt;id&gt;</code>); repeated to the agent word for word.</Param>
+        </ParamTable>
+        <CodeBlock code={`curl -X POST $BASE/v1/environments -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
+  -d '{"name": "Content Studio", "entry": "python3 run.py --episode <id>"}'`} />
+      </Endpoint>
+      <Endpoint method="PUT" path="/v1/environments/{id}/files/{path}">
+        <p className="hr-meta">Write one file (the body is its bytes); a path ending in <code>/</code> makes a directory.
+          <code> GET</code> reads it back, <code>DELETE</code> removes a file or a folder, and <code>GET /v1/environments/&#123;id&#125;/files</code>
+          lists the tree. Editing changes nothing a run sees until the next build.</p>
+        <CodeBlock code={`curl -X PUT "$BASE/v1/environments/$ENV/files/scripts/render.py" -H "Authorization: Bearer $KEY" \\
+  --data-binary @scripts/render.py`} />
+      </Endpoint>
+      <Endpoint method="POST" path="/v1/environments/{id}/import">
+        <p className="hr-meta">A whole project at once, keeping its tree: a zip or tar as the body, or
+          <code> {`{"git": {"url": "...", "ref": "main"}}`}</code>. A single wrapping folder is stripped; links and paths
+          that escape the root are dropped; <code>?replace=1</code> clears the files first.</p>
+        <CodeBlock code={`curl -X POST "$BASE/v1/environments/$ENV/import?replace=1" -H "Authorization: Bearer $KEY" \\
+  -H "Content-Type: application/zip" --data-binary @content-studio.zip`} />
+      </Endpoint>
+      <Endpoint method="POST" path="/v1/environments/{id}/build">
+        <p className="hr-meta">Snapshot the files into the next version and install what they declare:
+          <code> requirements.txt</code> / <code>pyproject.toml</code> into a virtualenv, <code>package.json</code> with npm,
+          then <code>setup.sh</code>. Returns at once; poll <code>GET /v1/environments/&#123;id&#125;/builds/&#123;version&#125;</code>
+          for <code>building</code> → <code>ready</code> (with the packages and the log) or <code>failed</code> (with the reason).
+          A finished build becomes the version runs read; <code>POST …/versions/&#123;n&#125;/activate</code> rolls back to an
+          earlier one.</p>
+        <CodeBlock code={`curl -X POST $BASE/v1/environments/$ENV/build -H "Authorization: Bearer $KEY"
+curl $BASE/v1/environments/$ENV/builds/1 -H "Authorization: Bearer $KEY"`} />
+      </Endpoint>
+      <Endpoint method="POST" path="/v1/responses">
+        <p className="hr-meta">A run on an environment: the agent&apos;s harness names it, or the run does. A run on
+          an environment with nothing built is refused with <code>environment_not_ready</code> before it starts.</p>
+        <CodeBlock code={`curl -X POST $BASE/v1/responses -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
+  -d '{"input": "Render the teaser for episode 12 into my working directory.",
+       "metadata": {"harness_id": "chrn_..."}, "environment": "henv_..."}'`} />
       </Endpoint>
 
       <Endpoint method="GET" path="/v1/models">

@@ -2,6 +2,23 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-09-28
+
+Additive to `2026-09-12`: every request and object valid under the previous version is valid here.
+
+- **Environments** ([Environments](versions/2026-09-28/environments.md)), the Environments
+  sub-protocol, optional at every class behind the `environments` capability. An environment is a
+  project's files and installed dependencies, built once and mounted read-only at a fixed path in
+  every session that names it, beside the session's own writable working directory. The chapter
+  defines the object (`henv_`), files by path and whole-project import, builds and versions with
+  an active pointer and rollback, the `environment` field on the harness object and on a task,
+  what a session sees (the mount, the variables, the instruction, the record), and the errors.
+- The session object carries `environment` ([Sessions §3](versions/2026-09-28/sessions.md#3-inspecting-a-session)).
+- New error codes: `environment_not_found`, `environment_not_ready`, `environment_busy`,
+  `environment_exists`, `environment_invalid`, `environment_unavailable`.
+- Conformance suite `2026.9.28`: checks EN-01 to EN-08 (EN-07 runs one task that reads the
+  environment and tries to write it), skipped on a server without the capability.
+
 ## Conformance suite 2026.9.12.post4 (2026-09-27)
 
 - The public fixture answers at `https://uhp-fixture.harnessrouter.ai/mcp`, the suite's new default;

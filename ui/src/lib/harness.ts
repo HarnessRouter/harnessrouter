@@ -56,6 +56,8 @@ export interface CustomHarness {
   // skipped from the package on every save; a saved plugin round-trips as {name, enabled, blob}
   // plus those derived fields, and a freshly picked one carries its `files` until it is saved.
   plugins?: HarnessPlugin[];
+  // The environment (henv_) every Task of this Harness reads at its mount path, read-only; '' for none.
+  environment?: string;
   createdAt: number;
 }
 
@@ -425,6 +427,7 @@ function harnessBody(input: Partial<CustomHarness> & { name: string; base: strin
     timeout_seconds: input.timeoutSeconds || null,
     additional_headers: input.additionalHeaders || [],
     env: input.env || {},
+    environment: input.environment || '',
   };
 }
 
