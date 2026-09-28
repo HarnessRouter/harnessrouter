@@ -14271,7 +14271,7 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
                                     f"{type(e).__name__}: {e}")
             return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
     await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool)
-    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=browser_plane.viewport_of(s))
+    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=await browser_plane.viewport_of(s))
     if isinstance(out, tuple) and out[0] == "image":
         png, caption = out[1], out[2]
         stored = None

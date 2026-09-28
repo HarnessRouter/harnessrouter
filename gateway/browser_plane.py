@@ -669,13 +669,23 @@ async def _mark(s: Session, loc) -> None:
         s.pointer = {"x": round(float(box["x"]) + float(box["width"]) / 2, 1), "y": round(float(box["y"]) + float(box["height"]) / 2, 1)}
 
 
-def viewport_of(s: Session) -> dict:
-    """The page's viewport, the coordinate space of `pointer`."""
+async def viewport_of(s: Session) -> dict:
+    """The page's own layout viewport (window.innerWidth/innerHeight), the coordinate space of
+    `pointer`. Asked of the page, not of the context: the vendor's default context carries its
+    window's size, not the 1280 x 800 this plane asks for when it makes a context of its own, and
+    a cursor placed on the assumed size landed low and right of the element the agent clicked
+    (hr-test, 2026-09-27)."""
     try:
-        v = s.page.viewport_size if s.page is not None else None
+        v = await s.page.evaluate("() => [window.innerWidth, window.innerHeight]")
+        if isinstance(v, (list, tuple)) and len(v) == 2 and int(v[0]) > 0:
+            return {"w": int(v[0]), "h": int(v[1])}
     except Exception:  # noqa: BLE001
-        v = None
-    return {"w": int((v or {}).get("width") or 1280), "h": int((v or {}).get("height") or 800)}
+        pass
+    try:
+        vs = s.page.viewport_size if s.page is not None else None
+    except Exception:  # noqa: BLE001
+        vs = None
+    return {"w": int((vs or {}).get("width") or 1280), "h": int((vs or {}).get("height") or 800)}
 
 
 async def call(s: Session, name: str, args: dict):
