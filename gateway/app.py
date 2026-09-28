@@ -4865,15 +4865,6 @@ _CUSTOM_FORMAT_BACKENDS = {
 }
 
 
-def _custom_can_drive(backend: str) -> bool:
-    """Whether ANY custom-endpoint format can run this backend. A custom integration's models are
-    shown greyed on a backend its format cannot drive, so the reader learns why a model they
-    configured is not pickable there; on a backend no custom format drives at all (systemone runs
-    System One models only, and a custom endpoint speaks OpenAI or Anthropic text shapes) the row
-    is not an explanation but a chat model offered on a harness that cannot use one."""
-    return any(backend in bs for bs in _CUSTOM_FORMAT_BACKENDS.values())
-
-
 def _integration_serves_backend(integ: dict, backend: str) -> bool:
     """Can this integration actually run a turn on `backend`? For a custom provider this is
     gated by its api_format (see _CUSTOM_FORMAT_BACKENDS); every other provider just needs a
@@ -6873,17 +6864,8 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
             models.append({"id": canonical, "label": canonical, "backend": backend,
                            "available": True, "default": canonical == default})
             seen.add(canonical)
-    # A custom model whose api_format this backend can't speak is still LISTED so the operator
-    # can see it exists, but greyed out (available=False) rather than silently omitted — the
-    # picker must not offer a choice that fails at the first call.
-    for canonical, iname in eff_map.items():
-        if canonical in seen:
-            continue
-        integ = integrations.get(iname)
-        if integ and str(integ.get("provider") or "").lower() == "custom" and _custom_can_drive(backend):
-            models.append({"id": canonical, "label": canonical, "backend": backend,
-                           "available": False, "default": canonical == default})
-            seen.add(canonical)
+    # A custom model whose api_format this backend cannot speak is not listed here at all (it
+    # was greyed once, as an explanation; read as the backend offering it: Richard, 2026-09-27).
     if default and default not in seen:
         models.insert(0, {"id": default, "label": default, "backend": backend,
                           "available": ok(default), "default": True})
@@ -7200,7 +7182,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # The harness's configured instructions are the agent's CLAUDE.md (claude) / AGENTS.md (codex) —
     # written into the workspace by the runner, NOT injected as a system prompt. The model keeps the
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
-    agent_doc = str((hv or {}).get("system_prompt") or "")
+    agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
+                                      await _harness_plug_types(harness_id, org, hv))
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -13524,6 +13507,45 @@ async def _media_session_purge(sid: str) -> None:
 # that the record names a WORKSPACE, because that is what a plug belongs to.
 _PLUGS_SERVER = "plugs"
 _PLUGS_ENTRY = {"name": "plugs", "id": "mcp.plugs"}
+
+# What the agent's doc (AGENTS.md / CLAUDE.md) says about the browser when the harness includes
+# it. Codex 0.154 keeps MCP tools behind its tool search, so without a word about them it opened
+# a page with web search and curl while the person watched an empty Browser card (hr-test,
+# 2026-09-27); pi found the tools on its own. Every base reads its doc, so every base gets it.
+_BROWSER_GUIDE = (
+    "## Browser\n"
+    "This task has a live browser that the person can watch and take over. Its tools are on the "
+    "`plugs` server: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, "
+    "browser_scroll, browser_extract_text, browser_screenshot, browser_wait_for, browser_back, "
+    "browser_get_url, browser_list_tabs, browser_switch_tab. Use them for anything on the web: "
+    "opening a page, reading it, filling a form, clicking through. Do not fetch a page with curl, "
+    "wget or a web search instead: the person is watching the browser, and a page fetched another "
+    "way never appears there. If these tools are not in your tool list, look them up (they may be "
+    "deferred) before touching the web any other way.")
+
+
+def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
+    """The harness's instructions plus a section for each included plugin that needs one."""
+    parts = [agent_doc.strip()] if agent_doc and agent_doc.strip() else []
+    if "browser" in plug_types:
+        parts.append(_BROWSER_GUIDE)
+    return "\n\n".join(parts)
+
+
+async def _harness_plug_types(hid: str, org: str, hv: dict | None) -> list[str]:
+    """The plugins a harness includes, by type, from its plugs server's record: [] when it has
+    no enabled plugs entry, or the record cannot be read (the turn runs without the section)."""
+    if not hid or not hv:
+        return []
+    try:
+        servers = _mcp_list(hv)
+        entry = next((e for e in servers if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
+        if not entry or str(entry.get("enabled", True)) in ("False", "false", "0"):
+            return []
+        _, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, servers, entry_id=_PLUGS_ENTRY["id"])
+    except Exception:  # noqa: BLE001
+        return []
+    return [str(x) for x in (rec.get("plugs") or []) if x]
 _PLUG_CALL_LABEL = "PlugCall"
 # The registry that holds plug records: the engine's door on the platform edge (the engine's own
 # ingress admits no in-environment caller). Empty = no registry, so every plug reads as missing.
@@ -16838,10 +16860,10 @@ async def list_models(request: Request) -> dict:
         models = [{"id": m, "label": m, "backend": b, "available": ok(m),
                     "default": m == c["default"]} for m in c["models"]]
         seen = set(c["models"])
-        # Add models from the effective map that are not already in the catalog.
-        # A model serves this backend only if its integration's api_format is compatible;
-        # on an incompatible backend it is still LISTED (so the operator sees it exists) but
-        # greyed out (available=False) rather than silently omitted.
+        # Add models from the effective map that are not already in the catalog: a custom
+        # endpoint's model, on the backends its api_format drives. Not on the others, not even
+        # greyed: a Claude model under Codex read as "Codex can use Anthropic models" (Richard,
+        # hr-test 2026-09-27), and a backend that can never run a model has no row for it.
         for canonical, iname in eff_map.items():
             if canonical in seen:
                 continue
@@ -16852,10 +16874,7 @@ async def list_models(request: Request) -> dict:
             if _integration_serves_backend(integ, b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": True, "default": False})
-            elif _custom_can_drive(b):
-                models.append({"id": canonical, "label": canonical, "backend": b,
-                               "available": False, "default": False})
-            seen.add(canonical)
+                seen.add(canonical)
         out[b] = {"default": c["default"], "models": models}
     return {"backends": out}
 

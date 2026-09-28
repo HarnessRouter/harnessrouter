@@ -241,7 +241,7 @@ a { color: inherit; text-decoration: none; }
 .wbx-typing span:nth-child(2) { animation-delay: .2s; } .wbx-typing span:nth-child(3) { animation-delay: .4s; }
 .wbx-think { font-size: 12.5px; color: var(--sidebar-mute); }
 .wbx-think summary { cursor: pointer; }
-.wbx-think > div { white-space: pre-wrap; padding: 6px 0 0 10px; border-left: 2px solid var(--line); margin-top: 5px; }
+.wbx-think > div { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; padding: 6px 0 0 10px; border-left: 2px solid var(--line); margin-top: 5px; }   /* a long unbroken token (a base64 key) wraps instead of running off the card */
 .wbx-tool { font-size: 12px; font-family: ui-monospace, monospace; background: var(--brand-50); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 10px; align-self: flex-start; }
 .wbx-tool-name { color: var(--brand); font-weight: 600; }

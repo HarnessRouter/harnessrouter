@@ -642,6 +642,9 @@ the agent may keep waiting or go on without it); **Full screen** fills the windo
 puts the card away. The card
 closes itself when the browser closes; the **Browser** button in the task header, there whenever
 the harness includes the browser plugin, opens it at any time, with or without a browser in it.
+A harness that includes the plugin also tells its agent so, in a Browser section of the agent's
+instructions file: use the browser tools for the web and never curl or a web search instead
+(Codex keeps its MCP tools behind a tool search and reached for curl without it).
 Behind it: `GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which
 is a credential and is served only to the session's owner) and
 `POST /v1/sessions/{sid}/browser/control` with `{"control": "user"}` or `{"control": "agent"}`;

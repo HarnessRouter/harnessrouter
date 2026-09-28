@@ -884,3 +884,14 @@ def test_the_person_takes_the_browser_over_and_the_agent_waits(client, world):
     finally:
         gw._bus_publish = orig
 
+
+
+def test_a_harness_with_the_browser_tells_its_agent_to_use_it():
+    """The agent's doc gets a Browser section when the harness includes the plugin, after its own
+    instructions, and nothing when it does not (Codex opened a page with curl while the card
+    stayed empty, hr-test 2026-09-27)."""
+    assert gw._agent_doc_with_plugs("", []) == ""
+    assert gw._agent_doc_with_plugs("Be brief.", ["github"]) == "Be brief."
+    doc = gw._agent_doc_with_plugs("Be brief.\n", ["browser"])
+    assert doc.startswith("Be brief.\n\n## Browser\n") and "browser_navigate" in doc and "curl" in doc
+    assert gw._agent_doc_with_plugs("", ["browser"]) == gw._BROWSER_GUIDE
