@@ -43,7 +43,9 @@ EXCLUDED = {"systemone"}
 
 def _client(base_url: str, api_key: str, workspace: str):
     base = base_url.rstrip("/")
-    H = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "x-harness-workspace": workspace}
+    # Named, not Python's default: the hosted console's edge answers that with 403 (error 1010).
+    H = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "x-harness-workspace": workspace,
+         "User-Agent": "harnessrouter-browser-column/1"}
 
     def call(method: str, path: str, body=None, timeout=120):
         req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None,
