@@ -1,6 +1,6 @@
 // The task's browser, live, as one floating card: an action row on top (who has it, take over or
 // hand back, full screen, float, close) and the vendor's live view filling the rest. The card glows
-// the brand blue while the agent has the browser and ripples while it acts; a click on the screen
+// the brand blue while the agent has the browser, breathing while it acts; a click on the screen
 // or the button takes it over, after which the view is the person's and the agent's next browser
 // call waits for the hand-back. The card docks beside the conversation, fills the window, or
 // floats over the page and can be dragged by its top row.
@@ -30,6 +30,14 @@ async function setControl(sid: string, control: 'user' | 'agent'): Promise<boole
       { method: 'POST', headers: { ...authHeaders(), 'content-type': 'application/json' }, body: JSON.stringify({ control }) });
     return r.ok;
   } catch { return false; }
+}
+
+/** The shape of the box the live view fills: the page is laid out at that aspect, so it fills the card. */
+async function postView(sid: string, w: number, h: number): Promise<void> {
+  try {
+    await harnessFetch(`/api/harness/v1/sessions/${encodeURIComponent(sid)}/browser/view`,
+      { method: 'POST', headers: { ...authHeaders(), 'content-type': 'application/json' }, body: JSON.stringify({ w, h }) });
+  } catch { /* the page keeps its shape */ }
 }
 
 /** The vendor's viewer without its own tabs and toolbar: the card's row is the chrome. */
@@ -65,9 +73,9 @@ function GhostCursor({ point, viewport, tool, at, host }: {
     const el = host.current; if (!el) return;
     const scale = el.clientWidth / Math.max(1, viewport.w);
     const target = { x: point.x * scale, y: point.y * scale };
-    const start = from.current;
+    // the first point is reached from the middle of the screen, so the cursor is seen arriving
+    const start = from.current || { x: el.clientWidth / 2, y: el.clientHeight / 2 };
     cancelAnimationFrame(raf.current);
-    if (!start) { setPos(target); from.current = target; if (tool === 'click') setRing((n) => n + 1); return; }
     // a quadratic arc: the control point sits off the straight line, to the side, a quarter of the way
     const dx = target.x - start.x, dy = target.y - start.y, len = Math.hypot(dx, dy) || 1;
     const ctrl = { x: (start.x + target.x) / 2 - dy / len * Math.min(90, len * 0.25), y: (start.y + target.y) / 2 + dx / len * Math.min(90, len * 0.25) };
@@ -106,6 +114,22 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
     fetchBrowser(sessionId).then((i) => { if (alive) setInfo(i); });
     return () => { alive = false; };
   }, [sessionId, epoch]);
+  // The page takes the shape of the screen it is shown on: the stream's box goes to the session
+  // whenever it changes (debounced), and the browser lays the page out at that aspect.
+  const open = live ? live.open : !!info?.open;
+  useEffect(() => {
+    const el = streamRef.current;
+    if (!el || !open) return;
+    let timer = 0, last = '';
+    const send = () => {
+      const w = Math.round(el.clientWidth), h = Math.round(el.clientHeight), key = `${w}x${h}`;
+      if (w < 50 || h < 50 || key === last) return;
+      last = key; void postView(sessionId, w, h);
+    };
+    const ro = new ResizeObserver(() => { window.clearTimeout(timer); timer = window.setTimeout(send, 250); });
+    ro.observe(el); send();
+    return () => { ro.disconnect(); window.clearTimeout(timer); };
+  }, [open, epoch, sessionId, mode]);
   // "acting" fades a few seconds after the agent's last call, so the glow follows the work.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -114,7 +138,6 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
     return () => window.clearInterval(id);
   }, [live?.open]);
 
-  const open = live ? live.open : !!info?.open;
   const control: 'agent' | 'user' = live?.control ?? (info?.control === 'user' ? 'user' : 'agent');
   const lastCallAt = live?.lastCallAt ?? ((Number(info?.last_call_at) || 0) * 1000);
   const acting = control === 'agent' && open && (busy || now - lastCallAt < ACTING_MS);
@@ -227,11 +250,9 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
           </div>
           {control === 'agent' && (
             <>
-              {/* the agent's presence: the edges of the screen tint blue and, while it acts, rings
-                  travel inward from the edge like ripples; the middle stays clear */}
-              <div className={'wbx-browser-veil' + (acting ? ' is-acting' : '')} aria-hidden="true">
-                {acting && <><span className="wbx-browser-ring" /><span className="wbx-browser-ring" /><span className="wbx-browser-ring" /></>}
-              </div>
+              {/* the agent's presence: the edges of the screen tint blue and breathe, faster while it
+                  acts; the middle stays clear */}
+              <div className={'wbx-browser-veil' + (acting ? ' is-acting' : '')} aria-hidden="true" />
               {live?.point && live.viewport && (
                 <GhostCursor point={live.point} viewport={live.viewport} tool={live.lastTool} at={live.lastCallAt} host={streamRef} />
               )}

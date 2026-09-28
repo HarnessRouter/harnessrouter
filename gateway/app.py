@@ -14145,6 +14145,30 @@ class BrowserControlBody(BaseModel):
     control: str
 
 
+class BrowserViewBody(BaseModel):
+    w: int
+    h: int
+
+
+@app.post("/v1/sessions/{sid}/browser/view")
+async def session_browser_view(sid: str, body: BrowserViewBody, request: Request) -> dict:
+    """The shape of the screen the live view fills, from the console: the page is laid out at that
+    aspect (browser_plane.page_size_for), on this replica now and on every other at its next call,
+    so the view fills the card."""
+    await _owned_session(request, sid)
+    if body.w < 50 or body.h < 50:
+        raise HTTPException(400, "w and h are the box in CSS pixels")
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        raise HTTPException(404, "this task has no open browser")
+    size = browser_plane.page_size_for(body.w, body.h)
+    await browser_plane.registry.bump(sid, view=size)
+    s = browser_plane._SESSIONS.get(sid)
+    if s is not None and not s.closed:
+        await browser_plane.set_view(s, size)
+    return {"session_id": sid, "view": size}
+
+
 @app.post("/v1/sessions/{sid}/browser/control")
 async def session_browser_control(sid: str, body: BrowserControlBody, request: Request) -> dict:
     """Hand the browser to the person (`user`) or back to the agent (`agent`). While the person
@@ -14238,6 +14262,8 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
     # agent may call again to keep waiting. Measured on hr-test 0.25.7-rc.4 before this: a refusal
     # made pi end its turn early with "the browser is under user control, so I can't continue".
     current = await browser_plane.registry.get(sid) if not (rec is None and s.opened) else None
+    if (current or {}).get("view") and current["view"] != s.view:
+        await browser_plane.set_view(s, current["view"])       # the console posted a box to another replica
     if (current or {}).get("control") == "user":
         _browser_notice(sid, "held", hid=hid, org=org, tool=tool)
         waited = 0.0
