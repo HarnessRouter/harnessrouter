@@ -100,16 +100,22 @@ def run_base(call, base: str, model: str, keep: bool, log) -> dict:
         text = "".join(p.get("text") or "" for it in (d.get("output") or []) for p in (it.get("content") or [])
                        if p.get("type") in ("output_text", "text")) if isinstance(d, dict) else ""
         out["answer"] = text[-400:]
-        time.sleep(6)                                   # the stop row lands after the turn settles
-        code, trace = call("GET", f"/v1/traces/{sid}/all?compact=0", timeout=120)
+        # The stop row is in the trace once the browser has been stopped, which the gateway does
+        # before it finalizes the trace; read until it is there, up to a bound.
         rows = []
-        for line in (trace if isinstance(trace, str) else "").splitlines():
-            try:
-                ev = json.loads(line)
-            except ValueError:
-                continue
-            if ev.get("type") == "plug" and ev.get("plug") == "browser":
-                rows.append({k: ev.get(k) for k in ("tool", "outcome", "ms", "unit", "usd", "error")})
+        for _ in range(18):
+            code, trace = call("GET", f"/v1/traces/{sid}/all?compact=0", timeout=120)
+            rows = []
+            for line in (trace if isinstance(trace, str) else "").splitlines():
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("type") == "plug" and ev.get("plug") == "browser":
+                    rows.append({k: ev.get(k) for k in ("tool", "outcome", "ms", "unit", "usd", "error")})
+            if any(r["tool"] == "session" for r in rows):
+                break
+            time.sleep(5)
         ok_tools = [r["tool"] for r in rows if r.get("outcome") == "ok"]
         stop = next((r for r in rows if r["tool"] == "session"), None)
         out["tools"] = sorted(set(t for t in ok_tools if t != "session"))
