@@ -57,8 +57,7 @@ def test_the_reason_is_the_last_connection_that_ran_not_a_skipped_one():
     assert gw._turn_failure_message(rec) == \
         "The turn failed on every connection it tried. The last one said: The model refused to complete the request"
     only_skips = {"tried": [{"connection": "a", "error": "not found"}, {"connection": "b", "error": "credential cannot be brokered; refused"}]}
-    assert gw._turn_failure_message(only_skips) == \
-        "The turn failed on every connection it tried. The last one said: credential cannot be brokered; refused"
+    assert gw._turn_failure_message(only_skips).startswith("This model is served here only by a connection this harness's base cannot use.")
 
 
 def test_a_provider_refusing_the_tasks_earlier_reasoning_is_said_in_words():

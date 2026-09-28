@@ -171,7 +171,9 @@ def main() -> int:
             print(time.strftime("%H:%M:%S"), s, flush=True)
 
     code, d = call("PUT", "/v1/plugs/browser", {"enabled": True, "config": {"allow_domains": [], "deny_domains": []}})
-    if code != 200 or d.get("status") != "connected":
+    if code in (404, 405):
+        print("the instance manages plugins in its console; the include's status is the gate")   # hosted
+    elif code != 200 or d.get("status") != "connected":
         print("FAIL the browser plugin did not connect:", code, json.dumps(d)[:200]); return 2
     if a.bases == "all":
         code, bases = call("GET", "/v1/bases")
