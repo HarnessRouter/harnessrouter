@@ -107,7 +107,10 @@ def _vendor_client() -> httpx.AsyncClient:
 
 async def vendor_create(timeout_min: int, metadata: dict) -> dict:
     """A browser in the vendor's cloud: no proxy, no CAPTCHA solving, no recording, so the only
-    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency."""
+    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency. The screen is the
+    vendor's default, landscape: what the live view streams is that screen, whatever the shape of
+    the card showing it (measured on hr-test, 2026-09-28: neither an emulated viewport over CDP
+    nor allowResizing changed the streamed frame), so the console fits the frame inside the card."""
     async with _vendor_client() as c:
         r = await c.post(f"{API_BASE}/browsers", json={
             "timeout": int(timeout_min), "proxyCountryCode": None, "solveCaptchas": False,
@@ -209,44 +212,113 @@ async def resolves_private(host: str) -> bool:
 
 
 # ── the session ──────────────────────────────────────────────────────────────────────────────
+# One browser per harness session, wherever the call lands. The RECORD of it (the vendor's id,
+# the CDP address, when it opened and was last used, its counts, its lists) is kept once for every
+# gateway process by the registry below; the ATTACHMENT (the CDP connection, the context, the
+# page) is this process's own, made by the first call that reaches it and dropped when the record
+# goes. A CLI's tool calls are load-balanced over every replica, and a per-process record let one
+# turn open a browser on each replica it reached (four for one turn on 2026-09-25, three of them
+# stopped only by the idle reaper, none of them the page the agent had opened).
 class Session:
-    def __init__(self, sid: str, hid: str, org: str, workspace: str, allow: list[str], deny: list[str]):
-        self.sid, self.hid, self.org, self.workspace = sid, hid, org, workspace
-        self.allow, self.deny = list(allow), list(deny)
-        self.vendor_id = ""
-        self.live_url = ""
+    """This process's attachment to a session's browser, built from its record."""
+
+    def __init__(self, rec: dict):
+        self.sid, self.hid, self.org, self.workspace = str(rec["sid"]), str(rec["hid"]), str(rec["org"]), str(rec["workspace"])
+        self.allow, self.deny = list(rec.get("allow") or []), list(rec.get("deny") or [])
+        self.vendor_id = str(rec.get("vendor_id") or "")
+        self.cdp_url = str(rec.get("cdp_url") or "")
+        self.live_url = str(rec.get("live_url") or "")
+        self.created = float(rec.get("created") or time.time())
+        self.reserved = float(rec.get("reserved") or 0.0)   # what was counted against the task before the browser opened
         self.browser = None
         self.context = None
         self.page = None
-        self.created = time.time()
-        self.last_used = self.created
-        self.calls = 0
-        self.screenshots = 0
-        self.reserved = 0.0                     # what was counted against the task before the browser opened
-        self.blocked: list[str] = []            # hosts refused during this session, for the record
+        self.blocked: list[str] = []            # hosts this attachment refused, so each is recorded once
         self.host_cache: dict[str, bool] = {}
         self.lock = asyncio.Lock()
         self.closed = False
-
-    @property
-    def minutes(self) -> int:
-        return max(1, math.ceil((time.time() - self.created) / 60))
-
-    def expired(self, now: float | None = None) -> str | None:
-        now = now or time.time()
-        if now - self.created > SESSION_CAP_MIN * 60:
-            return "session_cap"
-        if now - self.last_used > IDLE_S:
-            return "idle"
-        return None
+        self.opened = False                     # this call made the browser at the vendor: the caller writes the open row once
+        self.pointer: dict | None = None        # where the agent last acted (the element's centre), for the console's ghost cursor; kept across navigations so the next action glides from there
 
 
-_SESSIONS: dict[str, Session] = {}
+def minutes(rec: dict) -> int:
+    return max(1, math.ceil((time.time() - float(rec.get("created") or time.time())) / 60))
+
+
+def expired(rec: dict, now: float | None = None) -> str | None:
+    now = now or time.time()
+    if now - float(rec.get("created") or now) > SESSION_CAP_MIN * 60:
+        return "session_cap"
+    if now - float(rec.get("last_used") or now) > IDLE_S:
+        return "idle"
+    return None
+
+
+# ── the registry ─────────────────────────────────────────────────────────────────────────────
+# Where the records live. In this process by default, which is right for one gateway process (a
+# self-hosted instance); a deployment that runs several installs one over its shared store, so
+# the same session reads the same browser from every replica. `bump` increments the counters
+# named in COUNTERS, appends to the lists named in LISTS and sets anything else.
+COUNTERS = ("calls", "screenshots")
+LISTS = ("blocked",)
+
+
+class LocalRegistry:
+    def __init__(self):
+        self._recs: dict[str, dict] = {}
+
+    async def get(self, sid: str) -> dict | None:
+        return self._recs.get(sid)
+
+    async def create(self, sid: str, rec: dict) -> bool:
+        """True iff this call made the record; False when one is there already."""
+        if sid in self._recs:
+            return False
+        self._recs[sid] = rec
+        return True
+
+    async def bump(self, sid: str, **fields) -> None:
+        rec = self._recs.get(sid)
+        if rec is None:
+            return
+        for k, v in fields.items():
+            if k in COUNTERS:
+                rec[k] = int(rec.get(k) or 0) + int(v)
+            elif k in LISTS:
+                rec.setdefault(k, []).append(v)
+            else:
+                rec[k] = v
+
+    async def delete(self, sid: str) -> bool:
+        """True iff this call removed the record: the remover stops the browser and writes its row."""
+        return self._recs.pop(sid, None) is not None
+
+    async def all(self) -> list[dict]:
+        return list(self._recs.values())
+
+    async def lock(self, sid: str, ttl_s: int) -> bool:
+        return True                             # one process: the caller's own lock serialises its opens
+
+    async def unlock(self, sid: str) -> None:
+        pass
+
+
+registry = LocalRegistry()
+_SESSIONS: dict[str, Session] = {}            # this process's attachments, by session
 _pw = None
 
 
 def sessions() -> dict[str, Session]:
     return _SESSIONS
+
+
+def _record(sid: str, hid: str, org: str, workspace: str, allow: list[str], deny: list[str], d: dict,
+            reserved: float) -> dict:
+    now = time.time()
+    return {"sid": sid, "hid": hid, "org": org, "workspace": workspace, "allow": list(allow), "deny": list(deny),
+            "vendor_id": str(d["id"]), "cdp_url": str(d["cdpUrl"]), "live_url": str(d.get("liveUrl") or ""),
+            "created": now, "last_used": now, "calls": 0, "screenshots": 0, "blocked": [],
+            "reserved": float(reserved)}
 
 
 async def _connect(cdp_url: str):
@@ -276,22 +348,79 @@ async def _allowed(s: Session, url: str) -> str | None:
     return "a private or local address" if s.host_cache[host] else None
 
 
-async def open_session(sid: str, hid: str, org: str, workspace: str, allow: list[str], deny: list[str]) -> Session:
-    """A browser for this harness session: the vendor's, then Playwright over CDP, then a fresh
-    context that accepts no downloads, with every request of every page gated by _allowed."""
+async def open_session(sid: str, hid: str, org: str, workspace: str, allow: list[str], deny: list[str],
+                       reserved: float = 0.0) -> Session:
+    """The session's browser, attached here: the recorded one when there is one, else a new one at
+    the vendor, recorded for every process first. One opener at a time across processes: the
+    others wait for its record. `opened` on the result says this call made the browser."""
     if not configured():
         raise BrowserRefused("not_configured", "The browser service is not set up on this deployment. Tell the person.")
-    live = [x for x in _SESSIONS.values() if not x.closed]
-    if sum(1 for x in live if x.org == org) >= ORG_SESSIONS:
-        raise BrowserRefused("org_busy", f"This account already has {ORG_SESSIONS} browsers open. Try again when one of them finishes.")
-    if len(live) >= MAX_SESSIONS:
-        raise BrowserRefused("busy", "Every browser is in use right now. Try again in a minute.")
-    s = Session(sid, hid, org, workspace, allow, deny)
-    d = await vendor_create(SESSION_CAP_MIN, {"harness": hid, "session": sid})
-    s.vendor_id, s.live_url = str(d["id"]), str(d.get("liveUrl") or "")
+    rec = await registry.get(sid)
+    locked = False
+    if rec is None:
+        for _ in range(60):
+            if await registry.lock(sid, 30):
+                locked = True
+                break
+            await asyncio.sleep(0.5)
+            rec = await registry.get(sid)
+            if rec is not None:
+                break
+        else:
+            raise BrowserRefused("busy", "The browser is still being started. Try again in a moment.")
+    opened = False
     try:
-        s.browser = await _connect(str(d["cdpUrl"]))
-        s.context = await s.browser.new_context(accept_downloads=False, viewport={"width": 1280, "height": 800})
+        if rec is None:
+            live = await registry.all()
+            if sum(1 for x in live if x.get("org") == org) >= ORG_SESSIONS:
+                raise BrowserRefused("org_busy", f"This account already has {ORG_SESSIONS} browsers open. Try again when one of them finishes.")
+            if len(live) >= MAX_SESSIONS:
+                raise BrowserRefused("busy", "Every browser is in use right now. Try again in a minute.")
+            d = await vendor_create(SESSION_CAP_MIN, {"harness": hid, "session": sid})
+            rec = _record(sid, hid, org, workspace, allow, deny, d, reserved)
+            if await registry.create(sid, rec):
+                opened = True
+            else:
+                # Made elsewhere between the lock and here (a lock the store could not keep): theirs stands.
+                try:
+                    await vendor_stop(rec["vendor_id"])
+                except Exception:  # noqa: BLE001
+                    pass
+                rec = await registry.get(sid)
+                if rec is None:
+                    raise BrowserRefused("busy", "The browser could not be started. Try again.")
+    finally:
+        if locked:
+            await registry.unlock(sid)
+    try:
+        s = await attach(rec)
+    except Exception:
+        if opened:                              # a browser nobody can reach: not left for the reaper
+            await registry.delete(sid)
+            try:
+                await vendor_stop(rec["vendor_id"])
+            except Exception:  # noqa: BLE001
+                pass
+        raise
+    s.opened = opened
+    return s
+
+
+async def attach(rec: dict) -> Session:
+    """This process's attachment to the recorded browser, made on first use and kept. Every process
+    uses the browser's own default context and its first tab, so the page is the same page from
+    every replica; the request gate is installed per attachment and reads the record's lists."""
+    sid = str(rec["sid"])
+    s = _SESSIONS.get(sid)
+    if s is not None and not s.closed and s.vendor_id == str(rec.get("vendor_id") or ""):
+        return s
+    if s is not None:
+        await detach(s)                         # the record names another browser: this one is gone
+    s = Session(rec)
+    s.browser = await _connect(s.cdp_url)
+    try:
+        contexts = list(getattr(s.browser, "contexts", None) or [])
+        s.context = contexts[0] if contexts else await s.browser.new_context(accept_downloads=False, viewport={"width": 1280, "height": 800})
 
         async def gate(route, request):
             why = await _allowed(s, request.url)
@@ -299,49 +428,102 @@ async def open_session(sid: str, hid: str, org: str, workspace: str, allow: list
                 host = urllib.parse.urlsplit(request.url).hostname or request.url[:60]
                 if host not in s.blocked:
                     s.blocked.append(host)
+                    await registry.bump(sid, blocked=host)
                 await route.abort("blockedbyclient")
             else:
                 await route.continue_()
 
         await s.context.route("**/*", gate)
-        s.page = await s.context.new_page()
+        pages = list(getattr(s.context, "pages", None) or [])
+        s.page = pages[0] if pages else await s.context.new_page()
         s.page.set_default_timeout(30000)
+        on = getattr(s.context, "on", None)
+        if callable(on):
+            on("page", lambda pg: asyncio.ensure_future(_follow_new_tab(s, sid, pg)))
     except Exception:
-        await close_session_browser(s)
+        await detach(s)
         raise
     _SESSIONS[sid] = s
     return s
 
 
-async def close_session_browser(s: Session) -> dict:
-    """Stop everything and read the vendor's figures. Every step is best effort: a browser that
-    would not close must not keep its minutes from being metered."""
-    s.closed = True
-    _SESSIONS.pop(s.sid, None)
-    for closer in (getattr(s.context, "close", None), getattr(s.browser, "close", None)):
-        if closer:
-            try:
-                await asyncio.wait_for(closer(), 10)
-            except Exception:  # noqa: BLE001
-                pass
-    figures: dict = {}
-    if s.vendor_id:
+async def _follow_new_tab(s: Session, sid: str, pg) -> None:
+    """A link the person opened in a new tab while they have the browser is followed in the tab the
+    live view shows: the new page's address goes to the shown page and the new page closes, so the
+    view stays with them (the console's live view shows one tab, and a link marked to open in a new
+    one looked like a click that did nothing: the LinkedIn and X icons on a directory page,
+    2026-09-27). Only while the person has the browser: the agent's own tabs are its to manage
+    (list_tabs, switch_tab)."""
+    try:
+        rec = await registry.get(sid)
+        if (rec or {}).get("control") != "user" or pg is s.page:
+            return
         try:
-            figures = await vendor_stop(s.vendor_id)
+            await pg.wait_for_load_state("domcontentloaded", timeout=8000)
+        except Exception:  # noqa: BLE001
+            pass
+        url = str(getattr(pg, "url", "") or "")
+        if url and url != "about:blank":
+            await s.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await pg.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def detach(s: Session) -> None:
+    """Drop this process's attachment; the browser itself stays as it is (a connected browser's
+    close disconnects it and closes only the contexts this attachment made)."""
+    s.closed = True
+    if _SESSIONS.get(s.sid) is s:
+        _SESSIONS.pop(s.sid, None)
+    closer = getattr(s.browser, "close", None)
+    if closer:
+        try:
+            await asyncio.wait_for(closer(), 10)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def close_session_browser(rec: dict, s: Session | None) -> dict:
+    """Stop the recorded browser and read the vendor's figures, dropping this process's attachment
+    when it has one. Every step is best effort: a browser that would not close must not keep its
+    minutes from being metered."""
+    if s is not None:
+        s.closed = True
+        if _SESSIONS.get(s.sid) is s:
+            _SESSIONS.pop(s.sid, None)
+        for closer in (getattr(s.context, "close", None), getattr(s.browser, "close", None)):
+            if closer:
+                try:
+                    await asyncio.wait_for(closer(), 10)
+                except Exception:  # noqa: BLE001
+                    pass
+    figures: dict = {}
+    if rec.get("vendor_id"):
+        try:
+            figures = await vendor_stop(str(rec["vendor_id"]))
         except Exception:  # noqa: BLE001
             figures = {}
     usd = vendor_cost(figures)
     source = "vendor"
     if usd is None:
-        usd, source = round(s.minutes * PRICES["browser.minute"], 6), "table"
-    return {"minutes": s.minutes, "usd": usd, "usd_source": source, "calls": s.calls,
-            "screenshots": s.screenshots, "blocked": s.blocked[:20],
+        usd, source = round(minutes(rec) * PRICES["browser.minute"], 6), "table"
+    return {"minutes": minutes(rec), "usd": usd, "usd_source": source, "calls": int(rec.get("calls") or 0),
+            "screenshots": int(rec.get("screenshots") or 0), "blocked": list(rec.get("blocked") or [])[:20],
             "proxy_mb": figures.get("proxyUsedMb") or 0}
 
 
-def expired_sessions(now: float | None = None) -> list[tuple[Session, str]]:
+async def expired_sessions(now: float | None = None) -> list[tuple[dict, str]]:
+    """Every recorded browser past its cap or idle, from any process."""
     now = now or time.time()
-    return [(s, why) for s in list(_SESSIONS.values()) if (why := s.expired(now))]
+    return [(rec, why) for rec in await registry.all() if (why := expired(rec, now))]
+
+
+async def sweep_attachments() -> None:
+    """Drop the attachments whose browser was stopped from another process."""
+    for s in list(_SESSIONS.values()):
+        if await registry.get(s.sid) is None:
+            await detach(s)
 
 
 # ── the tools ────────────────────────────────────────────────────────────────────────────────
@@ -386,7 +568,7 @@ _tool("switch_tab", "act", "Make one of the open tabs the current tab.",
 
 
 def tool_list() -> list[dict]:
-    return [{"name": f"browser.{t['name']}", "description": f"[browser, {t['risk']}] {t['description']}",
+    return [{"name": f"browser_{t['name']}", "description": f"[browser, {t['risk']}] {t['description']}",
              "inputSchema": t["inputSchema"],
              "annotations": {"readOnlyHint": t["risk"] == "read", "destructiveHint": False}} for t in _TOOLS]
 
@@ -399,8 +581,11 @@ _SNAPSHOT_JS = """
 (max) => {
   const out = []; let n = 0;
   const seen = new Set();
+  // Visible to a person: laid out, not hidden, and at least 8 px each way. Sites keep tiny proxy
+  // controls (DuckDuckGo's 4 x 4 search input beside the field people see); an agent that types
+  // into one of those types into nothing anyone can see (hr-test, 2026-09-28).
   const vis = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+    return r.width >= 8 && r.height >= 8 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
   const nameOf = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder')
     || (el.labels && el.labels[0] && el.labels[0].innerText) || el.getAttribute('alt') || el.innerText || el.value || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
   const sel = 'h1,h2,h3,a[href],button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=textbox],[contenteditable=true],summary';
@@ -478,11 +663,41 @@ async def _settled(s: Session) -> None:
             pass
 
 
+async def _mark(s: Session, loc) -> None:
+    """Remember the centre of the element about to be acted on, in page coordinates, so the console
+    can show a ghost cursor going there. Best effort: a locator that cannot be measured leaves the
+    last point standing."""
+    try:
+        box = await loc.bounding_box()
+    except Exception:  # noqa: BLE001
+        return
+    if isinstance(box, dict) and box.get("width") is not None:
+        s.pointer = {"x": round(float(box["x"]) + float(box["width"]) / 2, 1), "y": round(float(box["y"]) + float(box["height"]) / 2, 1)}
+
+
+async def viewport_of(s: Session) -> dict:
+    """The page's own layout viewport (window.innerWidth/innerHeight), the coordinate space of
+    `pointer`. Asked of the page, not of the context: the vendor's default context carries its
+    window's size, not the 1280 x 800 this plane asks for when it makes a context of its own, and
+    a cursor placed on the assumed size landed low and right of the element the agent clicked
+    (hr-test, 2026-09-27)."""
+    try:
+        v = await s.page.evaluate("() => [window.innerWidth, window.innerHeight]")
+        if isinstance(v, (list, tuple)) and len(v) == 2 and int(v[0]) > 0:
+            return {"w": int(v[0]), "h": int(v[1])}
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        vs = s.page.viewport_size if s.page is not None else None
+    except Exception:  # noqa: BLE001
+        vs = None
+    return {"w": int((vs or {}).get("width") or 1280), "h": int((vs or {}).get("height") or 800)}
+
+
 async def call(s: Session, name: str, args: dict):
     """Run one tool on this session. Returns text, or ("image", png bytes, caption) for a
     screenshot the caller stores. Raises BrowserToolError with a sentence the agent can act on."""
-    s.calls += 1
-    s.last_used = time.time()
+    await registry.bump(s.sid, last_used=time.time(), calls=1)
     page = s.page
     if name == "navigate":
         url = str(args.get("url") or "").strip()
@@ -513,6 +728,7 @@ async def call(s: Session, name: str, args: dict):
         return text[:cap] + (f"\n… {len(text) - cap} more characters" if len(text) > cap else "")
     if name == "click":
         loc = _target(s, args)
+        await _mark(s, loc)
         try:
             await loc.click(timeout=15000)
         except Exception as e:  # noqa: BLE001
@@ -521,6 +737,7 @@ async def call(s: Session, name: str, args: dict):
         return f"Clicked. Now at {await _where(s)}"
     if name == "type":
         loc = _target(s, args)
+        await _mark(s, loc)
         text = str(args.get("text") or "")
         try:
             await loc.fill(text, timeout=15000)
@@ -564,7 +781,7 @@ async def call(s: Session, name: str, args: dict):
             png = await page.screenshot(type="png", full_page=bool(args.get("full_page")))
         except Exception as e:  # noqa: BLE001
             raise BrowserToolError(f"The screenshot failed: {str(e).splitlines()[0][:160]}") from None
-        s.screenshots += 1
+        await registry.bump(s.sid, screenshots=1)
         return ("image", png, f"Screenshot of {await _where(s)}")
     if name == "back":
         try:
@@ -589,7 +806,7 @@ async def call(s: Session, name: str, args: dict):
         s.page = pages[i]
         s.page.set_default_timeout(30000)
         return f"Current tab is now {i}: {await _where(s)}"
-    raise BrowserToolError(f"No tool named browser.{name}.")
+    raise BrowserToolError(f"No tool named browser_{name}.")
 
 
 def audit_line(d: dict) -> str:

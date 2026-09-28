@@ -49,6 +49,9 @@ def world(monkeypatch):
     for s in list(browser_plane.sessions().values()):
         s.closed = True
     browser_plane.sessions().clear()
+    browser_plane.registry = browser_plane.LocalRegistry()
+    gw._browser_open_locks.clear()
+    gw._plug_trace_handles.clear()
     gw._plug_fields_cache.clear()
     yield ven, posted
 
@@ -90,7 +93,7 @@ def test_the_catalog_and_the_browser_connected_here(client, world):
     r = _req(client, "POST", f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["browser"]})
     assert r.status_code == 200 and r.json()["status"] == {"browser": "missing"}
     tok = gw._mint_hosted_cred(hid, "sess1", gw._hosted_secret_key(hid, "mcp.plugs"))
-    out = _rpc(client, tok, "browser.get_url")
+    out = _rpc(client, tok, "browser_get_url")
     assert out["isError"] and out["content"][0]["text"].startswith("The workspace has no Browser plugin connected")
 
     # the workspace turns it on, with its site lists
@@ -101,15 +104,15 @@ def test_the_catalog_and_the_browser_connected_here(client, world):
     assert d["version"] == 1 and d["secrets_set"] == []
     assert _req(client, "GET", f"/v1/harnesses/{hid}/servers/mcp.plugs").json()["status"] == {"browser": "connected"}
     # the agent browses; the site lists come from the record
-    out = _rpc(client, tok, "browser.navigate", {"url": "https://example.com/"})
+    out = _rpc(client, tok, "browser_navigate", {"url": "https://example.com/"})
     assert out["isError"] is False, out
     assert out["content"][0]["text"].startswith("Opened https://example.com/ (Example Domain)")
-    out = _rpc(client, tok, "browser.navigate", {"url": "https://public.example/leak"})
+    out = _rpc(client, tok, "browser_navigate", {"url": "https://public.example/leak"})
     assert out["isError"] and "outside the ones" in out["content"][0]["text"]
     # a settings change is a new version, read on the next call
     r = _req(client, "PUT", "/v1/plugs/browser", {"enabled": True, "config": {"allow_domains": []}})
     assert r.json()["version"] == 2 and r.json()["config"]["allow_domains"] == [] and r.json()["config"]["deny_domains"] == ["ads.example.com"]
-    assert _rpc(client, tok, "browser.navigate", {"url": "https://public.example/leak"})["isError"] is False
+    assert _rpc(client, tok, "browser_navigate", {"url": "https://public.example/leak"})["isError"] is False
     # the count the Plugins page shows
     other = _harness(client)
     a = _req(client, "GET", "/v1/plugs/browser/attachments").json()
@@ -122,7 +125,7 @@ def test_the_catalog_and_the_browser_connected_here(client, world):
     # turned off: the tools refuse in a sentence, the record stays
     r = _req(client, "PUT", "/v1/plugs/browser", {"enabled": False})
     assert r.json()["status"] == "disabled"
-    out = _rpc(client, tok, "browser.get_url")
+    out = _rpc(client, tok, "browser_get_url")
     assert out["isError"] and "turned off" in out["content"][0]["text"]
     assert _req(client, "GET", "/v1/plugs").json()["plugs"][0]["status"] == "disabled"
 
@@ -148,7 +151,7 @@ def test_a_credentialed_plugin_keeps_its_secret_in_the_store(client, world, monk
     hid = _harness(client)
     assert _req(client, "POST", f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["github"]}).json()["status"] == {"github": "connected"}
     tok = gw._mint_hosted_cred(hid, "sess2", gw._hosted_secret_key(hid, "mcp.plugs"))
-    out = _rpc(client, tok, "github.get_file_contents", {"path": "README.md"})
+    out = _rpc(client, tok, "github_get_file_contents", {"path": "README.md"})
     assert out["isError"] is False, out
     assert json.loads(out["content"][0]["text"])["content"] == "hello" and calls[-1].url.host == "api.github.com"
     assert _rows(hid, "github")[-1]["outcome"] == "ok"

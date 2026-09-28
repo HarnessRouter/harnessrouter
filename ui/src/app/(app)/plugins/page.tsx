@@ -88,7 +88,7 @@ export default function PluginsPage() {
               const price = p.pricing ? `$${p.pricing.usd_per_unit.toFixed(2)} per ${p.pricing.unit}, billed at the service's own price` : 'No charge';
               return (
                 <div key={p.type} className="capability-row">
-                  <span className="capability-icon"><iconify-icon icon={ICON[p.type] || 'tabler:plug'}></iconify-icon></span>
+                  <span className="capability-icon"><iconify-icon icon={ICON[p.type] || 'lucide:plug'}></iconify-icon></span>
                   <div className="capability-copy">
                     <strong>{p.label} {p.official && <span className="status neutral">Official</span>} <span className={'status ' + (on ? 'healthy' : p.status === 'needs_auth' ? 'warning' : 'neutral')}>{STATUS_LABEL[p.status]}</span></strong>
                     <span>{BLURB[p.type] || ''} {p.tools} tools · {price}{c ? ` · ${c.attached} of ${c.harnesses} Harnesses include it` : ''}</span>
@@ -131,12 +131,13 @@ export default function PluginsPage() {
                       placeholder={editing.type === 'browser' ? (k === 'allow_domains' ? 'example.com, docs.example.org (empty means any public site)' : 'ads.example.com') : ''}
                       onChange={(e) => setForm({ ...form, [k]: e.target.value })} /></div>
                 ))}
+                {editing.secrets_needed.length > 0 && <span className="field-help">This plugin runs on the credential you enter here, kept in this instance and never shown again. Every call an agent makes lands in the account that credential belongs to.</span>}
                 {editing.pricing && <span className="field-help">{`Up to ${editing.pricing.session_cap_minutes} minutes of browsing per task, at most $${editing.pricing.session_estimate_usd.toFixed(4)} a task. Private and local addresses are never reachable.`}</span>}
               </div>
-            </div>
-            <div className="modal-footer">
-              <button className="button" type="button" onClick={() => setEditing(null)} disabled={Boolean(busy)}>Cancel</button>
-              <button className="button primary" type="button" disabled={Boolean(busy)} onClick={() => void save(editing, true, true)}>{busy ? 'Saving…' : editing.status === 'missing' ? 'Connect' : 'Save'}</button>
+              <div className="modal-actions">
+                <button className="button" type="button" onClick={() => setEditing(null)} disabled={Boolean(busy)}>Cancel</button>
+                <button className="button primary" type="button" disabled={Boolean(busy)} onClick={() => void save(editing, true, true)}>{busy ? 'Saving…' : editing.status === 'missing' ? 'Connect' : 'Save'}</button>
+              </div>
             </div>
           </section>
         </div>

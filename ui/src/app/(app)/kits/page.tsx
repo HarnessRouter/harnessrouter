@@ -133,8 +133,7 @@ export default function KitsPage() {
       <div className="page-header">
         <div>
           <h1>Starter Kits</h1>
-          <p>A working product in one click: each kit provisions the Harness it needs and opens
-            its own app, with everything it uses included.</p>
+          <p>See what you can build with HarnessRouter. Try these apps in one click. Each app’s agent features run on HarnessRouter.</p>
         </div>
       </div>
 
