@@ -784,89 +784,75 @@ body.hr-resizing iframe { pointer-events: none; }
 .sh-login-hint code { font-size: 11px; }
 
 
-/* ── Starter Kits ───────────────────────────────────────────────────────────────────────── */
-/* 300px, not 340: at 340 a three-kit catalogue wraps to 2 + 1 on every laptop, and the third card
-   sits alone beside an empty half-row. The cards are text that reflows, so the narrower floor buys
-   a row that reads as one shelf. `auto-fit` collapses the empty tracks so ONE kit still fills the
-   width rather than hugging the left edge. */
-/* `min(300px, 100%)`, not a bare 300px: a minmax floor is a HARD floor, so in a container narrower
-   than the floor the track keeps its 300px and the cards push out past the page. Capping the floor
-   at the container's own width lets it collapse instead. */
-.kit-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
-  gap: 16px; align-items: stretch;
-}
-/* A single kit must not stretch to the width of a 27" display and look lost. */
-@media (min-width: 1100px) {
-  .kit-grid { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 460px)); }
-}
+/* ── Starter Kits (Richard's console design, 2026-09-28) ───────────────────────────────────
+   A white head with the title, a search box and two tabs; below it a shelf of cards, two across
+   on a wide screen, one on a narrow one. Each card: the product's own screenshot as its cover,
+   its mark in a tile hung over the cover's edge (the accent when the kit is running), name,
+   tagline, description, what it runs on as chips, and the one action its state calls for. */
+.kits-head { padding: 30px 36px 0; background: var(--surface); border-bottom: 1px solid var(--line); }
+.kits-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 32px; }
+.kits-head-copy { min-width: 0; }
+.kits-head h1 { margin: 0 0 7px; font-size: 28px; font-weight: 700; letter-spacing: -.02em; color: var(--ink); }
+.kits-head p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); max-width: 640px; text-wrap: pretty; }
+.kits-search { display: flex; align-items: center; gap: 9px; width: 280px; flex: none; box-sizing: border-box; padding: 9px 12px; margin-top: 4px;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; color: var(--muted); }
+.kits-search:focus-within { border-color: var(--accent); }
+.kits-search input { flex: 1; min-width: 0; padding: 0; font: inherit; font-size: 13.5px; background: transparent; border: 0; outline: none; color: var(--ink); }
+.kits-search input::placeholder { color: var(--muted); }
+.kits-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.kits-tabs { display: flex; gap: 22px; margin-top: 22px; }
+.kits-tab { display: flex; align-items: center; gap: 7px; padding: 0 0 13px; margin-bottom: -1px; background: transparent; border: 0; border-bottom: 2px solid transparent;
+  cursor: pointer; font: inherit; font-size: 14.5px; font-weight: 600; color: var(--muted); }
+.kits-tab.is-on { color: var(--ink); border-bottom-color: var(--accent); }
+.kits-tab-count { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--line-strong); }
+.kits-tab.is-on .kits-tab-count { color: var(--accent); }
+.kits-body { padding: 24px 36px 34px; }
+.kits-empty { font-size: 13.5px; color: var(--muted); padding: 8px 0; }
+.kits-empty code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 
-.kit-card {
-  position: relative; display: flex; flex-direction: column; gap: 12px;
-  padding: 20px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 14px; overflow: hidden;
-  transition: border-color .14s ease, box-shadow .14s ease;
-}
-.kit-card:hover { border-color: var(--line-strong); box-shadow: 0 10px 30px -18px rgba(15, 23, 42, .35); }
-/* A hairline of the kit's own accent, so a card reads as the product it opens. */
-.kit-wash { position: absolute; inset: 0 0 auto 0; height: 3px; opacity: .9; }
+.kit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+@media (max-width: 900px) { .kit-grid { grid-template-columns: minmax(0, 1fr); } }
 
-.kit-head { display: flex; align-items: flex-start; gap: 12px; }
-.kit-icon {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; border-radius: 11px; background: var(--accent);
-  color: #fff; font-size: 21px; flex: 0 0 auto;
+.kit-card { display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; background: var(--surface); border: 1px solid var(--line);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.kit-card:hover { border-color: var(--line-strong); box-shadow: 0 14px 30px -20px rgba(28, 25, 23, .35); transform: translateY(-1px); }
+/* the cover: the product's screenshot, its top edge first, filling 150px */
+.kit-cover { position: relative; height: 150px; background: var(--surface-subtle); border-bottom: 1px solid var(--line); overflow: hidden; }
+.kit-cover img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.kit-pill { position: absolute; top: 12px; right: 12px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--green) 12%, #fff); color: var(--green); }
+.kit-pill.is-busy { background: color-mix(in srgb, var(--accent) 8%, #fff); color: var(--accent); }
+.kit-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.kit-body { position: relative; padding: 0 22px 20px; display: flex; flex-direction: column; flex: 1; }
+/* the tile: the kit's mark, hung over the cover's edge; the accent while the kit runs */
+.kit-tile { display: grid; place-items: center; width: 44px; height: 44px; margin-top: -22px; flex: none; border-radius: 10px; box-sizing: border-box;
+  border: 3px solid var(--surface); box-shadow: 0 4px 12px -6px rgba(28, 25, 23, .35); background: var(--ink); color: #fff; font-size: 20px; }
+.kit-card.is-running .kit-tile { background: var(--accent); }
+.kit-name { margin: 12px 0 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
+.kit-tagline { margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; font-weight: 500; color: var(--ink); text-wrap: pretty; }
+.kit-text { margin: 8px 0 0; font-size: 13px; line-height: 1.6; color: var(--muted); text-wrap: pretty; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.kit-stack { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+.kit-chip { display: inline-flex; align-items: center; gap: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--ink);
+  padding: 4px 9px; border-radius: 999px; background: var(--surface-subtle); }
+.kit-chip > span { color: var(--muted); }
+.kit-chip.is-warn { color: var(--amber); }
+.kit-foot { display: flex; align-items: center; gap: 12px; margin-top: auto; padding-top: 18px; flex-wrap: wrap; }
+.kit-foot-gap { flex: 1; }
+.kit-btn { display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 13.5px; font-weight: 600; padding: 10px 14px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); text-decoration: none; cursor: pointer; white-space: nowrap; }
+.kit-btn:hover { border-color: var(--muted); }
+.kit-btn.is-primary { padding: 11px 18px; border-color: var(--accent); background: var(--accent); color: #fff; }
+.kit-btn.is-primary:hover { background: color-mix(in srgb, var(--accent) 85%, #000); border-color: color-mix(in srgb, var(--accent) 85%, #000); }
+.kit-btn:disabled { opacity: .7; cursor: default; }
+.kit-btn-glyph { font-size: 12px; }
+@media (max-width: 720px) {
+  .kits-head { padding: 22px 16px 0; }
+  .kits-head-row { flex-direction: column; gap: 14px; }
+  .kits-search { width: 100%; margin-top: 0; }
+  .kits-body { padding: 16px 0 24px; }
+  .kit-body { padding: 0 16px 16px; }
 }
-/* A kit that ships its own mark draws it as itself: no tile behind it, no tint over it. The mark
-   already carries the product's colour — putting it on an accent square would be the console
-   restating something the drawing has said. */
-.kit-icon.is-mark { background: none; border-radius: 0; }
-.kit-icon.is-mark img { display: block; width: 40px; height: 40px; }
-.kit-titles { flex: 1; min-width: 0; }
-.kit-titles h2 { margin: 0; font-size: 16px; font-weight: 650; color: var(--ink); letter-spacing: -.01em; }
-.kit-tagline { margin: 3px 0 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
-.kit-live {
-  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px; font-weight: 650; letter-spacing: .02em; color: var(--green);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
-  padding: 3px 9px; border-radius: 999px;
-}
-.kit-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
-
-.kit-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
-
-.kit-facts { list-style: none; margin: 2px 0 0; padding: 0; flex: 0 0 auto; display: flex; flex-direction: column; gap: 7px; }
-.kit-facts li {
-  display: flex; align-items: center; gap: 8px; min-width: 0;
-  font-size: 12.5px; color: var(--ink);
-}
-.kit-facts iconify-icon { font-size: 15px; color: var(--muted); flex: 0 0 auto; }
-.kit-fact-dim { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.kit-fact-warn { color: var(--amber); }
-.kit-fact-warn iconify-icon { color: var(--amber); }
-
-.kit-actions {
-  display: flex; align-items: center; gap: 10px;
-  margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line);
-}
-.kit-actions-spacer { flex: 1; }
-.kit-link { font-size: 12.5px; color: var(--muted); text-decoration: none; }
-
-/* A link that performs an action rather than navigating. Same look as .kit-link so the two
-   footer affordances read as siblings, but a <button> because it opens a dialog: a link that
-   goes nowhere is a link screen readers and middle-clicks both get wrong. */
-.kit-link-button {
-  background: none;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  cursor: pointer;
-}
-
-.kit-link:hover { color: var(--ink); text-decoration: underline; }
-.kit-actions .button { display: inline-flex; align-items: center; gap: 7px; }
-.kit-actions .button iconify-icon { font-size: 15px; }
 
 /* ── Launch dialog: pick the agent + model before provisioning ─────────────────────── */
 .kit-overlay {

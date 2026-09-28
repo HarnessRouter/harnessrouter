@@ -58,12 +58,29 @@ function runtimeOf(kit: Kit): { label: string; model: string; suggested: boolean
   return rec ? { label: rec.baseLabel, model: rec.model, suggested: true } : null;
 }
 
+/** The design's mark for each kit, drawn in the card's tile (16-unit stroke paths, like the
+ *  navigation's icons). A kit the design does not know keeps the iconify name from its manifest. */
+const KIT_MARKS: Record<string, string> = {
+  slides: 'M2.5 3h11v8h-11zM8 11v2.5M5.5 13.5h5M4.8 5.6h6.4M4.8 8h4',
+  sheets: 'M2.5 2.5h11v11h-11zM2.5 6h11M2.5 9.5h11M6.5 6v7.5',
+  dashboard: 'M2.5 2.5h11v11h-11zM5.5 11V8.5M8 11V5.5M10.5 11V7',
+  video: 'M2.5 3h11v10h-11zM6.8 6v4l3.4-2z',
+  mario: 'M4.5 5.5h7a3 3 0 0 1 3 3v2a2.5 2.5 0 0 1-4.3 1.7L9 11H7l-1.2 1.2A2.5 2.5 0 0 1 1.5 10.5v-2a3 3 0 0 1 3-3M5 7.5v3M3.5 9h3M10.5 8.5h.01M12 10h.01',
+};
+/** The kits whose cover the console ships (public/kit-covers, the README's screenshots at 1400 wide). */
+const KIT_COVERS = new Set(['slides', 'sheets', 'dashboard', 'video', 'mario']);
+
+const ICON_SLIDERS = 'M2.5 4.5h7M12 4.5h1.5M2.5 11.5h1.5M6.5 11.5h7M10.5 3v3M5 10v3';
+const ICON_SEARCH = 'M7 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10M10.6 10.6 14 14';
+
 export default function KitsPage() {
   const [kits, setKits] = useState<Kit[] | null>(null);
   const [bases, setBases] = useState<Base[]>([]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
   const [picking, setPicking] = useState<Kit | null>(null);
+  const [tab, setTab] = useState<'all' | 'running'>('all');
+  const [q, setQ] = useState('');
 
   const reload = useCallback(() => {
     harnessFetch('/api/harness/v1/kits', { headers: authHeaders(), cache: 'no-store' })
@@ -125,123 +142,130 @@ export default function KitsPage() {
     }
   }
 
+  const all = kits || [];
+  const runningCount = all.filter((k) => k.launched).length;
+  const needle = q.trim().toLowerCase();
+  const shown = all.filter((k) =>
+    (tab !== 'running' || k.launched) &&
+    (!needle || `${k.title} ${k.tagline} ${k.description}`.toLowerCase().includes(needle)));
+
   return (
-    // Same chrome as every other collection page (Harnesses, Integrations, Keys…). This page
-    // used `page-head`, which is styled nowhere — that is why its heading and spacing did not
-    // match the rest of the console.
-    <section className="view is-active collection-view" id="view-kits"><div className="page">
-      <div className="page-header">
-        <div>
-          <h1>Starter Kits</h1>
-          <p>See what you can build with HarnessRouter. Try these apps in one click. Each app’s agent features run on HarnessRouter.</p>
+    // The Starter Kits page from Richard's console design (2026-09-28): a white head with the
+    // title, a search box and two tabs; below it a two-column shelf of cards, each with the
+    // product's own screenshot as its cover, its mark in a tile over the cover's edge, what it
+    // runs on as chips, and the one action that fits its state.
+    <section className="view is-active collection-view" id="view-kits">
+      <div className="kits-head">
+        <div className="kits-head-row">
+          <div className="kits-head-copy">
+            <h1>Starter Kits</h1>
+            <p>A working product in one click: each kit provisions the Harness it needs and opens its own app, with everything it uses included.</p>
+          </div>
+          <label className="kits-search">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true"><path d={ICON_SEARCH} /></svg>
+            <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search kits" aria-label="Search kits" />
+          </label>
+        </div>
+        <div className="kits-tabs" role="tablist" aria-label="Kits">
+          <button type="button" role="tab" aria-selected={tab === 'all'} className={'kits-tab' + (tab === 'all' ? ' is-on' : '')} onClick={() => setTab('all')}>
+            <span>All kits</span><span className="kits-tab-count">{kits === null ? '' : all.length}</span>
+          </button>
+          <button type="button" role="tab" aria-selected={tab === 'running'} className={'kits-tab' + (tab === 'running' ? ' is-on' : '')} onClick={() => setTab('running')}>
+            <span>Running</span><span className="kits-tab-count">{kits === null ? '' : runningCount}</span>
+          </button>
         </div>
       </div>
 
-      {err && <div className="hr-error" role="alert">{err}</div>}
+      <div className="kits-body">
+        {err && <div className="hr-error" role="alert">{err}</div>}
 
-      {kits === null && !err && <div className="kit-grid">
-        {[0, 1].map((i) => <div key={i} className="kit-card"><span className="sk" style={{ height: 236 }} /></div>)}
-      </div>}
+        {kits === null && !err && <div className="kit-grid">
+          {[0, 1].map((i) => <div key={i} className="kit-card"><span className="sk" style={{ height: 330 }} /></div>)}
+        </div>}
 
-      {kits !== null && kits.length === 0 && (
-        <div className="session-empty">
-          This build ships no starter kits. They come from the starter-kit repository at image
-          build time — a build with <code>WITH_STARTER_KITS=0</code> has none.
-        </div>
-      )}
+        {kits !== null && all.length === 0 && (
+          <div className="kits-empty">
+            This build ships no starter kits. They come from the starter-kit repository at image
+            build time — a build with <code>WITH_STARTER_KITS=0</code> has none.
+          </div>
+        )}
+        {kits !== null && all.length > 0 && shown.length === 0 && (
+          <div className="kits-empty">
+            {tab === 'running' && !needle ? 'No kits are running yet. Launch one from All kits.' : 'No kits match. Clear the search to see them all.'}
+          </div>
+        )}
 
-      {kits !== null && kits.length > 0 && (
-        <div className="kit-grid">
-          {kits.map((k) => {
-            const run = runtimeOf(k);
-            return (
-              <article key={k.id} className="kit-card">
-                {/* A wash of the kit's own accent, so a card reads as the product it opens. */}
-                <span className="kit-wash" style={k.accent ? { background: k.accent } : undefined} />
-
-                <header className="kit-head">
-                  {/* The kit's own product mark when it ships one — the same drawing its app puts
-                      in its own title bar, so the card and the thing it opens are recognisably one
-                      product. A kit without a mark keeps the icon name from its manifest, tinted
-                      with its accent; the mark supplies its own colour and needs no tile. */}
-                  {k.iconUrl ? (
-                    <span className="kit-icon is-mark">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={k.iconUrl} alt="" width={40} height={40} />
-                    </span>
-                  ) : (
-                    <span className="kit-icon" style={k.accent ? { background: k.accent } : undefined}>
-                      <iconify-icon icon={k.icon || 'tabler:box'}></iconify-icon>
-                    </span>
-                  )}
-                  <div className="kit-titles">
-                    <h2>{k.title}</h2>
-                    <p className="kit-tagline">{k.tagline}</p>
+        {shown.length > 0 && (
+          <div className="kit-grid">
+            {shown.map((k) => {
+              const run = runtimeOf(k);
+              const isBusy = busy === k.id;
+              const mark = KIT_MARKS[k.id];
+              return (
+                <article key={k.id} className={'kit-card' + (k.launched ? ' is-running' : '')}>
+                  {/* The cover: the product itself, the screenshot the README shows for it. A
+                      kit without one shows a wash of its own accent. */}
+                  <div className="kit-cover" style={!KIT_COVERS.has(k.id) && k.accent ? { background: k.accent } : undefined}>
+                    {KIT_COVERS.has(k.id) && (
+                      // eslint-disable-next-line @next/next/no-img-element -- static kit cover
+                      <img src={`/kit-covers/${k.id}.jpg`} alt="" loading="lazy" />
+                    )}
+                    {(k.launched || isBusy) && (
+                      <span className={'kit-pill' + (isBusy ? ' is-busy' : '')}>
+                        <span className="kit-pill-dot" aria-hidden="true" />{isBusy && !k.launched ? 'Provisioning' : 'Running'}
+                      </span>
+                    )}
                   </div>
-                  {k.launched && <span className="kit-live" title="This kit is already running">Running</span>}
-                </header>
 
-                <p className="kit-desc">{k.description}</p>
+                  <div className="kit-body">
+                    <span className="kit-tile" aria-hidden="true">
+                      {mark ? (
+                        <svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d={mark} /></svg>
+                      ) : (
+                        <iconify-icon icon={k.icon || 'tabler:box'}></iconify-icon>
+                      )}
+                    </span>
+                    <h2 className="kit-name">{k.title}</h2>
+                    <p className="kit-tagline">{k.tagline}</p>
+                    <p className="kit-text">{k.description}</p>
 
-                {/* Everything here is a fact from the kit's own config or the server's view of
-                    this org's integrations — never a guess about what the kit might do. */}
-                <ul className="kit-facts">
-                  {run && (
-                    <li>
-                      <iconify-icon icon="tabler:cpu"></iconify-icon>
-                      {run.suggested ? 'Will run on ' : 'Running on '}{run.label}
-                      <span className="kit-fact-dim"> · {run.model}</span>
-                    </li>
-                  )}
-                  {!run && (
-                    <li className="kit-fact-warn">
-                      <iconify-icon icon="tabler:plug-connected-x"></iconify-icon>
-                      No connected provider can run this yet
-                    </li>
-                  )}
-                  {k.skills.length > 0 && (
-                    <li>
-                      <iconify-icon icon="tabler:sparkles"></iconify-icon>
-                      Installs {k.skills.join(', ')}
-                    </li>
-                  )}
-                  {/* What the kit reads, from its own declaration — not which database a launched
-                      one is pointed at. That belongs to the kit's app, which shows it where the
-                      data is actually being looked at. */}
-                  {k.database && (
-                    <li>
-                      <iconify-icon icon="tabler:database"></iconify-icon>
-                      Reads your {k.database.engines.map((e) => ENGINE_LABEL[e] || e).join(' or ')} database
-                    </li>
-                  )}
-                </ul>
+                    {/* Everything here is a fact from the kit's own config or the server's view of
+                        this org's integrations — never a guess about what the kit might do. */}
+                    <div className="kit-stack">
+                      {run && <span className="kit-chip" title={run.suggested ? 'Recommended runtime' : 'Runtime'}><span>{run.suggested ? 'recommended' : 'runtime'}</span>{run.label}</span>}
+                      {run && <span className="kit-chip" title="Model"><span>model</span>{run.model}</span>}
+                      {!run && <span className="kit-chip is-warn" title="No connected provider can run this yet"><span>runtime</span>none connected</span>}
+                      {k.skills.map((sk) => <span key={sk} className="kit-chip" title="Skill"><span>skill</span>{sk}</span>)}
+                      {k.database && <span className="kit-chip" title="Reads your database"><span>db</span>{k.database.engines.map((e) => ENGINE_LABEL[e] || e).join(', ')}</span>}
+                    </div>
 
-                <footer className="kit-actions">
-                  {k.launched && k.harnessId && (
-                    <a className="kit-link" href={`/harnesses/${k.harnessId}`}>Harness settings</a>
-                  )}
-                  {/* Reconnect. Launch is idempotent, and a connection string sent to a kit that
-                    already exists means "connect this": that is how you move a kit to another
-                    database, or recover from a password change. Without this the dialog is
-                    unreachable the moment a kit is running, because the button turns into Open
-                    and the kit's own app points at "this kit's settings", which was a place that
-                    did not exist. Only for kits that read a database. */}
-                {k.launched && k.database && (
-                  <button className="kit-link kit-link-button" type="button"
-                          onClick={() => setPicking(k)}>Reconnect database</button>
-                )}
-                <span className="kit-actions-spacer" />
-                  <button className="button primary" type="button" disabled={busy === k.id}
-                    onClick={() => (k.launched ? void launch(k) : setPicking(k))}>
-                    {busy === k.id ? (k.launched ? 'Opening…' : 'Launching…') : k.launched ? 'Open' : 'Launch'}
-                    <iconify-icon icon={k.launched ? 'tabler:external-link' : 'tabler:arrow-right'}></iconify-icon>
-                  </button>
-                </footer>
-              </article>
-            );
-          })}
-        </div>
-      )}
+                    <div className="kit-foot">
+                      {k.launched && k.harnessId && (
+                        <a className="kit-btn" href={`/harnesses/${k.harnessId}`}>
+                          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON_SLIDERS} /></svg>
+                          <span>Harness settings</span>
+                        </a>
+                      )}
+                      {/* Reconnect. Launch is idempotent, and a connection string sent to a kit that
+                          already exists means "connect this": that is how you move a kit to another
+                          database, or recover from a password change. Only for kits that read one. */}
+                      {k.launched && k.database && (
+                        <button className="kit-btn" type="button" onClick={() => setPicking(k)}>Reconnect database</button>
+                      )}
+                      <span className="kit-foot-gap" />
+                      <button className={'kit-btn' + (k.launched ? '' : ' is-primary')} type="button" disabled={isBusy}
+                        onClick={() => (k.launched ? void launch(k) : setPicking(k))}>
+                        <span>{isBusy ? (k.launched ? 'Opening…' : 'Provisioning…') : k.launched ? 'Open' : 'Launch'}</span>
+                        {!isBusy && <span className="kit-btn-glyph" aria-hidden="true">{k.launched ? '↗' : '→'}</span>}
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {picking && (
         <LaunchDialog
@@ -250,7 +274,7 @@ export default function KitsPage() {
           onLaunch={(base, model, database) => void launch(picking, base, model, database)}
         />
       )}
-    </div></section>
+    </section>
   );
 }
 
