@@ -174,6 +174,55 @@ def test_the_workdir_tree_hides_the_harness_state(tmp_path):
     assert ".harness/**" in drv._workdir_gitignore(_fake_src(tmp_path))
 
 
+# ── what the support matrix found, and what fixed it (2026-09-28) ──
+def test_the_turn_runs_in_the_workspace_not_in_the_frameworks_base():
+    """The two defects the matrix found were both about WHERE something lands.
+
+    A tool that takes a path from the model resolves it against the PROCESS cwd: text_editor writes
+    with a bare open(path) (plugins/_text_editor/helpers/file_ops.write_file). With the cwd left at
+    Agent Zero's base — where the framework has to be imported from — a model that asked for
+    "hello-agentzero.txt" had its file written inside .harness/, the prefix /produced excludes, so
+    the turn delivered nothing while its card said "Edited a file". Measured on the support matrix:
+    every artifact failure was a model that passed a RELATIVE path, which is why it read as
+    intermittent. The chdir must happen after the framework is importable and before the turn."""
+    src = pathlib.Path(drv.__file__).read_text()
+    on_path = src.index("sys.path.insert(0, str(base))")
+    into_ws = src.index("os.chdir(str(cwd))")
+    run = src.index("asyncio.run(_run(job))")
+    assert on_path < into_ws < run
+    # and the base is still what the framework computes its own paths from
+    assert src.index("os.chdir(str(base))") < into_ws
+
+
+def test_the_conversation_starts_with_the_users_own_first_message(tmp_path):
+    """Agent Zero opens a fresh conversation with a FABRICATED exchange — a user message "Hello!"
+    and an assistant greeting — so its web UI never starts empty. In a harness that is a lie about
+    the user. Measured: asked "what exact word did I ask you to reply with in my very first
+    message", five model/run pairs on the matrix answered the INJECTED message back ("Hello",
+    "Hello!", "none", "you did not ask me to reply with any specific word") while the real first
+    message sat in the same prompt.
+
+    The override is by FILE NAME (helpers/extension._get_extension_classes merges by file name,
+    first occurrence winning, and usr/extensions comes first), so the name is load-bearing: this
+    test is what fails if a pin bump renames the bundled extension."""
+    base = drv.prepare_base(_fake_src(tmp_path), tmp_path / "ws" / ".harness" / "agentzero",
+                            tmp_path / "ws" / "tmp")
+    drv.install_hooks(base)
+    f = base / "usr" / "extensions" / "python" / "agent_init" / "_10_initial_message.py"
+    assert f.is_file()
+    body = f.read_text()
+    assert "class InitialMessage(Extension)" in body   # the bundled class's name, by contract
+    assert "return" in body.split("def execute")[1]
+
+
+def test_the_model_is_told_to_name_files_the_way_the_reader_sees_them():
+    """The workdir is an absolute sandbox path (/data/workspaces/hsess…), and a model that repeats
+    it in its answer shows the reader a path that means nothing to them. A nudge, not a guarantee:
+    the turn's cwd is the workspace, so a relative path is all the agent needs."""
+    env = drv.environment_prompt("/data/workspaces/hsess1/x")
+    assert "relative to the working directory" in env
+
+
 # ── the event hooks ──
 def test_the_response_tool_is_the_answer_not_a_card(capsys):
     drv._STATE.update({"pending": {}, "final": ""})

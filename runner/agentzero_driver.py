@@ -219,6 +219,8 @@ def environment_prompt(cwd: str) -> str:
             "you run in a linux sandbox as an unprivileged user, not in a docker image of your own\n"
             f"your working directory is {cwd}; the terminal starts there and relative paths resolve there\n"
             "files you are asked to produce must be written inside the working directory\n"
+            "prefer a path relative to the working directory, in your tool calls and when you name a "
+            "file to the user: the sandbox path means nothing to them\n"
             "use python3 and the tools already installed; there is no root access\n")
 
 
@@ -385,11 +387,37 @@ _HOOK_SRC = {
 }
 
 
+# Agent Zero opens every fresh conversation with a FABRICATED exchange: its agent_init extension
+# adds a user message "Hello!" (prompts/fw.initial_user_message.md) and an assistant greeting, so
+# the web UI never starts empty. In a harness that message is a lie about the user: the transcript's
+# first user message is one the person never sent, and the gateway's record does not have it.
+# MEASURED on the support matrix (2026-09-28): asked "what exact word did I ask you to reply with in
+# my very first message", five model/run pairs answered "Hello", "Hello!", "none" or "you did not ask
+# me to reply with any specific word" — the injected message, quoted back — while the real first
+# message sat in the same prompt. It read as intermittent because only some models take "the very
+# first message" literally.
+#
+# Overridden through the framework's own mechanism rather than patched: extension classes are merged
+# by FILE NAME with the first occurrence winning (helpers/extension._get_extension_classes), and
+# usr/extensions comes before the bundled extensions in the search order, so a file of the same name
+# here replaces the bundled one. The name is therefore load-bearing, and a pin bump must re-check it.
+_INITIAL_MESSAGE_OVERRIDE = (
+    "from helpers.extension import Extension\n\n\n"
+    "class InitialMessage(Extension):\n"
+    "    \"\"\"Overrides extensions/python/agent_init/_10_initial_message.py by file name: a harness\n"
+    "    conversation starts with the user's own first message.\"\"\"\n\n"
+    "    def execute(self, **kwargs):\n"
+    "        return\n")
+
+
 def install_hooks(base: pathlib.Path) -> None:
     for point, code in _HOOK_SRC.items():
         d = base / "usr" / "extensions" / "python" / point
         d.mkdir(parents=True, exist_ok=True)
         (d / "_99_harnessrouter.py").write_text(code)
+    d = base / "usr" / "extensions" / "python" / "agent_init"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "_10_initial_message.py").write_text(_INITIAL_MESSAGE_OVERRIDE)
 
 
 _STATE: dict = {"pending": {}, "final": "", "steps": 0, "max_turns": None}
@@ -600,6 +628,16 @@ def main(argv: list[str]) -> int:
     runtime.initialize()
     dotenv.load_dotenv()
     files.normalize_a0_path = lambda p: p   # see the module docstring
+    # THE TURN'S WORKING DIRECTORY IS THE WORKSPACE, not the base the framework was imported from.
+    # Agent Zero resolves its OWN paths against its base dir (helpers/files.get_abs_path), so the
+    # import above is unaffected — but a tool that takes a path from the model resolves it against
+    # the process cwd: text_editor writes with a bare `open(path)` (plugins/_text_editor/helpers/
+    # file_ops.write_file). With the cwd left at the base, a model that asked for
+    # "hello-agentzero.txt" had its file written to .harness/agentzero/base/ — inside the prefix
+    # /produced excludes, so the turn produced a file the user never saw. MEASURED on the support
+    # matrix (2026-09-28): every artifact failure said "Edited a file" and delivered nothing, and it
+    # was the models that pass a RELATIVE path that failed, which is why it read as intermittent.
+    os.chdir(str(cwd))
     try:
         return asyncio.run(_run(job))
     except Exception as e:  # noqa: BLE001 — an import or setup failure is still a turn result
