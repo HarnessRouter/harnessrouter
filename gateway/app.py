@@ -856,7 +856,8 @@ def _policy_chain(raw: str) -> list[str]:
 
 _AUTH_FIELDS = ("api_key", "base_url", "aws_region", "aws_access_key_id", "aws_secret_access_key",
                 "aws_session_token", "aws_bearer_token", "gcp_project", "gcp_region",
-                "gcp_sa_json", "wire_api", "api_format", "full_url")
+                "gcp_sa_json", "wire_api", "api_format", "full_url", "namespace_tools",
+                "web_search")
 
 
 # ── LLM egress broker ────────────────────────────────────────────────────────────────────────
@@ -3416,6 +3417,23 @@ def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path
     return json.dumps(doc).encode() if changed else body
 
 
+_EFFORT_SHAPE_REFUSED_RE = re.compile(r"is not supported for this model\. Use .{0,80}adaptive", re.S)
+
+
+def _effort_shape_refused(refused: bytes) -> bool:
+    """Whether an OpenAI-shape request's `reasoning_effort` came back as Anthropic's refusal of the
+    legacy thinking block: '"thinking.type: enabled" is not supported for this model. Use
+    "thinking.type: adaptive" and "output_config.effort"'. The harness sent effort the OpenAI way
+    (OpenHands sends `reasoning_effort: high` for every model, and its SDK already treats Claude 5
+    as adaptive); the aggregator's chat-completions translation made the block Claude 5, 4.7
+    and 4.8 refuse (TokenRouter, measured on hr-test 0.25.12, 2026-09-28)."""
+    try:
+        text = refused.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(_EFFORT_SHAPE_REFUSED_RE.search(text))
+
+
 _GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
 
 
@@ -3878,6 +3896,23 @@ async def llm_broker(path: str, request: Request):
             # aread() hands back the DECODED body; passing Google's content-encoding header along with
             # it made the harness fail on the error itself ("Response decompression failed", "Failed
             # to process error response") instead of reading the refusal, 2026-09-06.
+            return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
+                            headers={k: val for k, val in up.headers.items()
+                                     if k.lower() not in ("content-length", "transfer-encoding", "connection",
+                                                          "content-encoding")})
+    if up.status_code == 400 and body and b"reasoning_effort" in body:
+        # An aggregator that turns `reasoning_effort` into Anthropic's legacy thinking block is
+        # refused by the newer Claude models; the request goes again without the effort, at the
+        # model's own default, the way a field Google does not know goes again without it.
+        refused = await up.aread()
+        await up.aclose()
+        if _effort_shape_refused(refused):
+            body = _without_field(body, "reasoning_effort")
+            print(f"[broker] {provider} refused reasoning_effort's thinking shape for {_body_model_name(body)!r}; "
+                  f"sent again without it sid={sid}", flush=True)
+            req = rc.build_request(request.method, url, headers=headers, content=body or None)
+            up = await rc.send(req, stream=True)
+        else:
             return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
                             headers={k: val for k, val in up.headers.items()
                                      if k.lower() not in ("content-length", "transfer-encoding", "connection",
@@ -4818,6 +4853,8 @@ _PROVIDER_CATALOG: dict[str, dict] = {
             {"key": "base_url", "label": "Endpoint URL",
              "placeholder": "https://your-api.example.com"},
             {"key": "full_url", "label": "Use Full URL"},
+            {"key": "namespace_tools", "label": "Enable Codex namespace tools"},
+            {"key": "web_search", "label": "Enable Codex web search"},
         ],
         "secret": "api_key",
         "secret_label": "API Key",

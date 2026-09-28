@@ -406,6 +406,8 @@ def test_shell_output_is_fed_back_so_the_model_sees_it_in_the_same_turn():
     aider_driver._run_shell_commands_reporting(c, g, reflect=True)
     c.run_shell_commands()
     assert c.reflected_message and "STAMP-OK" in c.reflected_message
+    # the output is followed by an ask, as aider's own reflections are, or the model answers "Ok"
+    assert c.reflected_message.endswith("\n\n" + aider_driver.REFLECT_ASK) and c.reflected_message.index("STAMP-OK") < c.reflected_message.index(aider_driver.REFLECT_ASK)
 
 
 def test_a_reflection_does_not_re_run_the_command_it_reported():
