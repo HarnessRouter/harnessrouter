@@ -17,17 +17,22 @@ Source anchors (all v1.50.0):
   get_or_create_session_id         crates/goose-cli/src/cli.rs
   skill discovery roots            crates/goose/src/skills/mod.rs
 """
+import json
+import os
 import pathlib
 import sqlite3
 import sys
 import tempfile
+import time
+import uuid
 
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (Auth, ALL_GOOSE_TOOLS, BACKENDS, _agent_doc_path, _build_goose,  # noqa: E402
                     _goose_extensions, _goose_has_session, _goose_root, _goose_split_base,
-                    _goose_to_claude, _goose_usage, _norm_token_usage, _resume_lost,
+                    _goose_mcp_startup_failure, _goose_to_claude, _goose_usage,
+                    _norm_token_usage, _resume_lost, _run_turn_bg, _turns,
                     _GOOSE_SESSION_NAME)
 
 
@@ -443,6 +448,40 @@ def test_notifications_render_nothing():
     out, _ = _norm([{"type": "notification", "extension_id": "developer",
                      "log": {"message": "chatter"}}])
     assert out == []
+
+
+def test_real_goose_startup_warning_survives_successful_turn(tmp_path):
+    """Goose 1.50.0 logs this warning on stderr, then emits a successful stream-json turn.
+
+    The runner must surface the missing MCP tool even when the answer itself succeeded. Only
+    the extension name is exposed; subprocess stderr in the reason may contain credentials.
+    """
+    warning = "  ⚠ Failed to start extension 'broken-mcp' (process quit before initialization: stderr = secret-token), continuing without it"
+    another = "  ⚠ Failed to start extension 'other-mcp' (process quit before initialization: stderr = ), continuing without it"
+    assert _goose_mcp_startup_failure(warning) == "broken-mcp"
+    assert not _goose_mcp_startup_failure("ordinary CLI stderr")
+    script = tmp_path / "goose_stream.py"
+    script.write_text(
+        "import json,sys\n"
+        f"for line in {[warning, warning, another, 'unrelated stderr']!r}:\n"
+        "    sys.stderr.write(line + '\\n'); sys.stderr.flush()\n"
+        f"print(json.dumps({_msg({'type': 'text', 'text': 'hello'})!r}), flush=True)\n"
+        "print(json.dumps({'type':'complete','input_tokens':1,'output_tokens':1}), flush=True)\n"
+    )
+    turn_id = "goose-warning-" + uuid.uuid4().hex
+    _turns[turn_id] = {"events": [], "done": False, "started": time.time()}
+    try:
+        _run_turn_bg(turn_id, [sys.executable, str(script)], os.environ.copy(), str(tmp_path),
+                     _goose_to_claude, "gpt-test", timeout_seconds=10)
+        rec = _turns[turn_id]
+        warnings = [ev for ev in rec["events"] if ev.get("subtype") == "mcp_unavailable"]
+        assert rec["status"] == "done" and rec["result"] == "hello"
+        assert [ev["servers"] for ev in warnings] == [
+            [{"name": "broken-mcp"}], [{"name": "other-mcp"}]]
+        assert all(ev["type"] == "system" and isinstance(ev["_ts"], float) for ev in warnings)
+        assert "secret-token" not in json.dumps(rec["events"])
+    finally:
+        _turns.pop(turn_id, None)
 
 
 def test_complete_suppresses_the_eof_result():

@@ -11,6 +11,7 @@ import oneLight from 'react-syntax-highlighter/dist/esm/styles/prism/one-light';
 import { FileTypeIcon, extOf } from './FileTypeIcon';
 import { harnessFetch } from '@/lib/hfetch';
 import { authHeaders, downloadFile, fetchFileBlob } from '@/lib/chat';
+import { csvToTable } from './csvToTable';
 
 const LANG: Record<string, string> = {
   js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx',
@@ -117,7 +118,7 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
       if (kind === 'code' || kind === 'markdown' || kind === 'csv') {
         const t = await r.text();
         if (!alive) return;
-        if (kind === 'csv') setSt({ kind: 'csv', html: csvToTable(t) });
+        if (kind === 'csv') setSt({ kind: 'csv', html: csvToTable(t, extOf(name) === 'tsv' ? '\t' : ',') });
         else setSt({ kind, text: t.slice(0, 400000) });
       } else if (kind === 'binary') {
         if (alive) setSt({ kind: 'binary' });
@@ -181,24 +182,6 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
       </div>
     </div>
   );
-}
-
-function csvToTable(text: string): string {
-  const rows = text.split(/\r?\n/).filter((r) => r.length).slice(0, 1000);
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const split = (line: string) => {
-    const out: string[] = []; let cur = ''; let q = false;
-    for (const ch of line) {
-      if (ch === '"') q = !q;
-      else if ((ch === ',' || ch === '\t') && !q) { out.push(cur); cur = ''; }
-      else cur += ch;
-    }
-    out.push(cur); return out;
-  };
-  return '<table>' + rows.map((r, i) => {
-    const cells = split(r).map((c) => `<${i === 0 ? 'th' : 'td'}>${esc(c.replace(/^"|"$/g, ''))}</${i === 0 ? 'th' : 'td'}>`).join('');
-    return `<tr>${cells}</tr>`;
-  }).join('') + '</table>';
 }
 
 const IcDownload = () => <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>;

@@ -9641,11 +9641,10 @@ def _convert_to_pdf(data: bytes, ext: str) -> bytes | None:
 async def container_file_pdf(container_id: str, file_id: str, request: Request):
     """Return a PDF rendering of an office file (cached). Lets the UI preview pptx/ppt/odp inline."""
     await _owned_session(request, container_id)   # V1C02-004: container_id IS the session id
-    cache_key = f"previews/{container_id}/{file_id}.pdf"
-    cached = await _blob_get(cache_key, kb=RESP_BLOB_KB)
-    if cached is not None:
-        return Response(content=cached, media_type="application/pdf")
-    got = await _container_file_bytes(container_id, file_id)   # cfile_… blob or wf_… workspace path
+    # File ids are stable across writes to the same path. Resolve the current source before
+    # consulting the preview cache, then key the PDF by its bytes so a replacement cannot reuse
+    # the previous rendering and a deleted source cannot be kept alive by its preview.
+    got = await _container_file_bytes(container_id, file_id)
     if got is None:
         raise HTTPException(404, "file not found")
     data, _media, fname = got
@@ -9654,6 +9653,12 @@ async def container_file_pdf(container_id: str, file_id: str, request: Request):
         return Response(content=data, media_type="application/pdf")
     if ext not in _PDF_CONVERTIBLE:
         raise HTTPException(415, f"no pdf preview for .{ext}")
+    source_sha = hashlib.sha256(data).hexdigest()
+    cache_prefix = f"previews/{container_id}/{file_id}/"
+    cache_key = f"{cache_prefix}{source_sha}.pdf"
+    cached = await _blob_get(cache_key, kb=RESP_BLOB_KB)
+    if cached is not None:
+        return Response(content=cached, media_type="application/pdf")
     if not _SOFFICE:
         # Distinguish "this build cannot preview documents" from "this document failed to
         # convert" — they need different actions, and one generic error told the user neither.
@@ -9661,7 +9666,21 @@ async def container_file_pdf(container_id: str, file_id: str, request: Request):
     pdf = await asyncio.to_thread(_convert_to_pdf, data, ext)
     if pdf is None:
         raise HTTPException(502, f"could not convert this .{ext} file")
-    await _blob_put(cache_key, pdf, kb=RESP_BLOB_KB)   # cache so repeat previews are instant
+    stored = await _blob_put(cache_key, pdf, kb=RESP_BLOB_KB)
+    if stored:
+        # Content-addressed keys avoid races through a mutable "current preview" pointer. Remove
+        # older revisions after a successful write so repeated edits do not leave unbounded PDF
+        # copies behind. This is storage hygiene only; cache cleanup is best-effort.
+        try:
+            objects = await _blob_list_all(cache_prefix, kb=RESP_BLOB_KB, hard_cap=1000)
+            stale = [str(item.get("file_id") or "") for item in objects
+                     if item.get("file_id") and item.get("file_id") != cache_key]
+            legacy_key = f"previews/{container_id}/{file_id}.pdf"
+            stale.append(legacy_key)
+            await asyncio.gather(*[_blob_delete(key, kb=RESP_BLOB_KB) for key in stale],
+                                 return_exceptions=True)
+        except Exception:  # noqa: BLE001 — cleanup must never fail an otherwise valid preview
+            pass
     return Response(content=pdf, media_type="application/pdf")
 
 
@@ -14816,8 +14835,9 @@ _BASE_CATALOG: dict[str, dict] = {
                           "running commands to complete the task end to end."),
         # opencode's permission keys, verbatim from core/src/v1/config/permission.ts. These are the
         # real names the deny rules match, not display labels — the same trap the claude list warns
-        # about, where a decorated label silently matches nothing and disables no tool.
-        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+        # about, where a decorated label silently matches nothing and disables no tool. No row for a
+        # write: opencode's `edit` permission covers write and patch (its config.ts folds them in).
+        "tools": [("bash", "Bash"), ("read", "File Read"),
                   ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"), ("list", "List"),
                   ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("task", "Task"),
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],

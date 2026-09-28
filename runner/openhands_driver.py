@@ -227,7 +227,16 @@ def _agent_spec(job: dict) -> dict:
     # still cover a blip. Persisted with the agent like the rest of the spec.
     spec: dict = {"llm": {"model": job["model"], "base_url": None, "usage_id": "harness",
                           "num_retries": 2, "retry_min_wait": 2, "retry_max_wait": 8,
-                          "retry_multiplier": 2},
+                          "retry_multiplier": 2,
+                          # The SDK sends its reasoning effort to a Claude model as extended
+                          # thinking, and picks the shape from LiteLLM's model metadata; a model
+                          # served through the proxy under our own id has none, so the legacy
+                          # `thinking.type: enabled` went out and Anthropic refused every Claude
+                          # model in the catalog ("not supported for this model. Use adaptive and
+                          # output_config.effort", hosted, 2026-09-28). The override names the
+                          # shape Anthropic takes now.
+                          **({"capability_overrides": {"thinking_mode": "adaptive"}}
+                             if str(job["model"]).rsplit("/", 1)[-1].startswith("claude-") else {})},
                   "tools": tools,
                   # THE AGENT DOC IS CONTEXT, NOT A FILE THE MODEL MAY OR MAY NOT OPEN. The SDK
                   # loads the workspace's AGENTS.md (and .agents/skills/) as repo skills only when

@@ -108,6 +108,17 @@ def test_final_is_last_message_not_a_concatenation():
     assert state["final"] == "Done. One file."
 
 
+def test_an_agent_end_that_will_retry_is_not_the_end():
+    """A VERBATIM capture of `pi -p --mode json` (0.85.1) against a provider that closed the first
+    reply stream mid-message and answered the second: pi emits agent_end with willRetry, retries
+    and finishes. One result, the retry's, with the retry's text alone."""
+    events = [json.loads(line) for line in
+              (pathlib.Path(__file__).parent / "fixtures" / "pi_retry_after_stream_cut.jsonl").read_text().splitlines()]
+    chunks, state = _run(events, model="test-model")
+    results = [e for e in _flat(chunks) if e["type"] == "result"]
+    assert [(r["subtype"], r["result"]) for r in results] == [("success", "The file is saved as Report.pdf")]
+
+
 def test_tool_events_map_to_tool_use_and_tool_result():
     chunks, _ = _run(HAPPY)
     evs = _flat(chunks)
