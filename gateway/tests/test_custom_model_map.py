@@ -27,7 +27,8 @@ def test_a_custom_integration_saved_with_one_model_id_still_reads_as_that_one_ro
 
 def test_the_mapped_connection_sends_the_wire_id_verbatim(monkeypatch):
     integ = {"name": "proxy", "provider": "custom",
-             "config": {"api_format": "responses", "base_url": "https://proxy.internal/openai/v1", "api_key": "k"},
+             "config": {"api_format": "responses", "base_url": "https://proxy.internal/openai/v1", "api_key": "k",
+                        "namespace_tools": "1", "web_search": "1"},
              "models": [{"canonical": "gpt-5.5", "provider_id": "prod-gpt-v2"}]}
     async def mm(): return {"gpt-5.5": "proxy"}
     async def docs(): return [integ]
@@ -35,6 +36,10 @@ def test_the_mapped_connection_sends_the_wire_id_verbatim(monkeypatch):
     monkeypatch.setattr(gw, "_integrations_doc", docs)
     conn = asyncio.run(gw._mapped_integration_conn("codex", "gpt-5.5"))
     assert conn and conn["provider"] == "tokenrouter" and conn["model"] == "prod-gpt-v2" and conn["_model_resolved"]
+    assert conn["namespace_tools"] == "1" and conn["web_search"] == "1"
+    monkeypatch.setattr(gw, "PUBLIC_BASE_URL", "https://public.example")
+    forwarded = gw._auth_from_conn(conn, sid="sid")
+    assert forwarded and forwarded["namespace_tools"] == "1" and forwarded["web_search"] == "1"
     # a Responses endpoint drives codex and nothing else; a chat one never drives codex
     assert gw._integration_serves_backend(integ, "codex") and not gw._integration_serves_backend(integ, "hermes")
     integ["config"]["api_format"] = "openai"
@@ -46,6 +51,7 @@ def test_the_catalog_offers_the_canonicals_to_the_custom_form_and_disabled_tools
     custom = cat["custom"]
     assert "gpt-5.5" in custom["canonicals"] and "claude-opus-4.8" in custom["canonicals"]
     assert not any(f["key"] == "model_id" for f in custom["fields"])
+    assert {"namespace_tools", "web_search"} <= {f["key"] for f in custom["fields"]}
     for pid, c in cat.items():
         has = any(f["key"] == "disabled_tools" for f in c["fields"])
         assert has == ("codex" in c["backends"]), pid
