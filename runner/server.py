@@ -3011,6 +3011,19 @@ def _stringify_assistant_content(body: bytes) -> bytes:
     return body
 
 
+_EFFORT_SHAPE_REFUSED_RE = re.compile(rb"is not supported for this model\. Use .{0,80}adaptive", re.S)
+
+
+def _effort_shape_refused(data: bytes) -> bool:
+    """Whether a chat-completions request's `reasoning_effort` came back as Anthropic's refusal of
+    the legacy thinking block: '"thinking.type: enabled" is not supported for this model. Use
+    "thinking.type: adaptive" and "output_config.effort"'. The harness sent effort the OpenAI way
+    (OpenHands sends `reasoning_effort: high` for every model, and its SDK already treats Claude 5
+    as adaptive); the aggregator's chat-completions translation made it the block Claude 5, 4.7 and
+    4.8 refuse (TokenRouter, measured on hr-test 0.25.13, 2026-09-28)."""
+    return bool(_EFFORT_SHAPE_REFUSED_RE.search(data or b""))
+
+
 def _set_reasoning_effort_none(body: bytes) -> bytes:
     """Set `reasoning_effort: "none"` in one chat-completions body.
 
@@ -3598,6 +3611,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _drop_stream_options(body)
             if flags.get(f"reasoning_effort_none:{_body_model}"):
                 body = _set_reasoning_effort_none(body)
+            if flags.get(f"drop_reasoning_effort:{_body_model}"):
+                body = _drop_top_level_field(body, "reasoning_effort")
             for field in flags.get("drop_fields", ()):
                 body = _drop_top_level_field(body, field)
             headers["content-length"] = str(len(body))
@@ -3654,6 +3669,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     flags[f"reasoning_effort_none:{_body_model}"] = True
                     body = effort
                     headers["content-length"] = str(len(body))
+                    continue
+                if (attempt < 2 and e.code == 400 and body is not None and b"reasoning_effort" in body
+                        and _effort_shape_refused(data)):
+                    # An aggregator that turns `reasoning_effort` into Anthropic's legacy thinking
+                    # block is refused by the newer Claude models. The effort goes, for this model on
+                    # this route, and the request goes again at the model's own default; the broker
+                    # does the same for brokered traffic.
+                    flags[f"drop_reasoning_effort:{_body_model}"] = True
+                    body = _drop_top_level_field(body, "reasoning_effort")
+                    headers["content-length"] = str(len(body))
+                    print(f"[relay] provider refused reasoning_effort's thinking shape for model={_body_model}; "
+                          f"sent again without it", flush=True)
                     continue
                 if e.code in (400, 422):
                     # The provider's own words, kept here for every provider: a harness shows a
