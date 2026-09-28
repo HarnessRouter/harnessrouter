@@ -46,6 +46,21 @@ chmod 751 "$DATA_DIR" "$HARNESS_WORKSPACE"        # traversable by sessions, nei
 export HR_ENV_ROOT="${HR_ENV_ROOT:-$DATA_DIR/environments}"
 mkdir -p "$HR_ENV_ROOT" /env
 chmod 755 "$HR_ENV_ROOT" /env
+# A login shell (`bash -lc`, which codex uses for its commands) runs /etc/profile, and Debian's
+# sets PATH from scratch, which dropped the environment's venv and node_modules/.bin that the runner
+# had put first (measured on 0.26.0-rc.1: `python3` was /usr/local's, not the venv's). The runner
+# names the environment in HR_ENVIRONMENT, which a login shell keeps; this profile drop-in puts the
+# environment back at the head of PATH after /etc/profile has had its say.
+mkdir -p /etc/profile.d
+cat > /etc/profile.d/hr-environment.sh <<'PROFILE'
+# HarnessRouter: the task's environment (runner/environments.py) stays first on PATH in login shells.
+if [ -n "$HR_ENVIRONMENT" ]; then
+  [ -d "$HR_ENVIRONMENT/node_modules/.bin" ] && PATH="$HR_ENVIRONMENT/node_modules/.bin:$PATH"
+  [ -d "$HR_ENVIRONMENT/.venv/bin" ] && PATH="$HR_ENVIRONMENT/.venv/bin:$PATH" && export VIRTUAL_ENV="$HR_ENVIRONMENT/.venv"
+  export PATH
+fi
+PROFILE
+chmod 644 /etc/profile.d/hr-environment.sh
 for f in "$DATA_DIR"/*.db "$DATA_DIR"/*.db-* "$DATA_DIR"/selfhost-auth.json; do
   if [ -e "$f" ]; then chown "$PRODUCT:$PRODUCT" "$f"; chmod 600 "$f"; fi
 done

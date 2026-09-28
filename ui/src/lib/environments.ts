@@ -76,7 +76,7 @@ export async function readEnvironmentFile(id: string, path: string): Promise<{ t
 export const writeEnvironmentFile = (id: string, path: string, body: Blob | string) =>
   raw('PUT', `/v1/environments/${id}/files/${encodePath(path)}`, body, typeof body === 'string' ? 'text/plain; charset=utf-8' : (body.type || 'application/octet-stream')).then((r) => r.json());
 export const makeEnvironmentDir = (id: string, path: string) =>
-  raw('PUT', `/v1/environments/${id}/files/${encodePath(path.replace(/\/+$/, ''))}/`, '').then((r) => r.json());
+  gw<{ path: string; dir: boolean }>('POST', `/v1/environments/${id}/directories`, { path: path.replace(/\/+$/, '') });
 export const deleteEnvironmentPath = (id: string, path: string) =>
   raw('DELETE', `/v1/environments/${id}/files/${encodePath(path)}`).then((r) => r.json());
 export const importEnvironmentArchive = (id: string, file: File, replace = false) =>

@@ -114,8 +114,8 @@ but one file per request, because a project is larger than a package:
 ```http
 GET    /v1/environments/{id}/files                 the tree: every file and directory, with sizes
 GET    /v1/environments/{id}/files/{path}          one file's bytes, with its content type
-PUT    /v1/environments/{id}/files/{path}          write one file (the body is its bytes)
-PUT    /v1/environments/{id}/files/{path}/         make a directory (an empty body)
+PUT    /v1/environments/{id}/files/{path}          write one file (the body is its bytes; its directories are made)
+POST   /v1/environments/{id}/directories           make an empty directory: {"path": "assets/brand"}
 DELETE /v1/environments/{id}/files/{path}          remove a file or a directory tree
 POST   /v1/environments/{id}/import                a whole project at once
 ```

@@ -77,7 +77,7 @@ def test_an_environment_is_created_with_a_slug_and_an_empty_status(api):
 def test_files_go_in_and_come_back_and_a_path_out_of_the_tree_is_refused(api):
     eid = api.post("/v1/environments", json={"name": "files-env"}).json()["id"]
     assert api.put(f"/v1/environments/{eid}/files/scripts/render.py", content=b"print('render')\n").status_code == 200
-    assert api.put(f"/v1/environments/{eid}/files/assets/brand/", content=b"").status_code == 200
+    assert api.post(f"/v1/environments/{eid}/directories", json={"path": "assets/brand"}).status_code == 200
     r = api.get(f"/v1/environments/{eid}/files/scripts/render.py")
     assert r.status_code == 200 and r.content == b"print('render')\n"
     t = api.get(f"/v1/environments/{eid}/files").json()

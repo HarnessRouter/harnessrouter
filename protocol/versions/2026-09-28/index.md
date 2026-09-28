@@ -60,6 +60,7 @@ the [protocol README](../../README.md).
 | `GET` `PUT` `DELETE` | `/v1/environments/{id}` | Full, capability `environments` | [Environments](environments.md) |
 | `GET` | `/v1/environments/{id}/files` | Full, capability `environments` | [Environments](environments.md) |
 | `GET` `PUT` `DELETE` | `/v1/environments/{id}/files/{path}` | Full, capability `environments` | [Environments](environments.md) |
+| `POST` | `/v1/environments/{id}/directories` | Full, capability `environments` | [Environments](environments.md) |
 | `POST` | `/v1/environments/{id}/import` | Full, capability `environments` | [Environments](environments.md) |
 | `POST` | `/v1/environments/{id}/build` | Full, capability `environments` | [Environments](environments.md) |
 | `GET` | `/v1/environments/{id}/builds/{version}` | Full, capability `environments` | [Environments](environments.md) |
