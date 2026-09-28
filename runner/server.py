@@ -5750,6 +5750,19 @@ def _goose_eof(state: dict, rc: int) -> list[dict]:
 _goose_to_claude.eof = _goose_eof   # type: ignore[attr-defined]
 
 
+# Goose 1.50.0 sends extension startup failures to stderr, not stream-json. The
+# turn can still complete successfully without that extension, so the generic
+# failure-only stderr tail would otherwise hide the missing MCP tools.
+_GOOSE_EXTENSION_START_FAILURE = re.compile(
+    r"Failed to start extension '([^'\r\n]{1,80})' \(.*\), continuing without it$"
+)
+
+
+def _goose_mcp_startup_failure(line: str) -> str:
+    match = _GOOSE_EXTENSION_START_FAILURE.search(line)
+    return match.group(1) if match else ""
+
+
 # aider has NO conversation id of ANY kind — its continuation is the chat-history FILE — so the
 # runner announces a synthetic one. Without it the gateway never records a conversation id, never
 # treats a later turn as a follow-up, and every turn is a fresh thread: measured as the support
@@ -6563,6 +6576,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     killer.daemon = True
     killer.start()
     errbuf: list[str] = []   # non-JSON output (CLI stderr is merged into stdout) — the REAL error text
+    goose_mcp_down: set[str] = set()
     try:
         for raw in proc.stdout:  # type: ignore[union-attr]
             raw = raw.strip()
@@ -6574,6 +6588,15 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 errbuf.append(raw)
                 if len(errbuf) > 80:
                     del errbuf[0]
+                if normalize is _goose_to_claude:
+                    name = _goose_mcp_startup_failure(raw)
+                    if name and name not in goose_mcp_down:
+                        goose_mcp_down.add(name)
+                        # Include only the extension name. Its raw stderr may contain secrets,
+                        # and the gateway only needs the name to explain the missing tools.
+                        with _turns_lock:
+                            rec["events"].append({"type": "system", "subtype": "mcp_unavailable",
+                                                  "servers": [{"name": name}], "_ts": time.time()})
                 continue
             try:
                 obj = json.loads(raw)
