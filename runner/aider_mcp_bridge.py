@@ -72,7 +72,9 @@ def _target(servers: dict, name: str):
         if headers:
             import httpx2
             from mcp.client.streamable_http import streamable_http_client
-            return streamable_http_client(url, http_client=httpx2.AsyncClient(headers=headers))
+            # 90 s, not httpx's 5 s read default: the plugs plane caps a call at 60 s and a takeover
+            # holds one 45 s; under load a navigate answered ReadTimeout (hosted, 2026-09-28).
+            return streamable_http_client(url, http_client=httpx2.AsyncClient(headers=headers, timeout=90.0))
         return url
     cmd = entry.get("command")
     if cmd:
