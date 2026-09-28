@@ -665,12 +665,24 @@ install_backends() {
   fi
 
   if wanted pi && [ ! -x "$(backend_bin pi)" ]; then
-    echo "[harnessrouter] installing Pi (MIT) and its MCP adapter (MIT)…"
-    # --ignore-scripts is pi's own documented install form. The MCP adapter is a pi extension
-    # (github.com/nicobailon/pi-mcp-adapter): pi deliberately ships without MCP, and the runner
-    # mounts this adapter via -e only on turns that actually configure MCP servers.
+    echo "[harnessrouter] installing Pi (MIT)…"
+    # --ignore-scripts is pi's own documented install form.
     try_install "Pi" npm install -g --prefix "$TOOLS" --no-audit --no-fund --ignore-scripts \
-        @earendil-works/pi-coding-agent pi-mcp-adapter || true
+        @earendil-works/pi-coding-agent || true
+  fi
+  # The MCP adapter is a pi extension (github.com/nicobailon/pi-mcp-adapter): pi deliberately
+  # ships without MCP, and the runner mounts this adapter via -e only on turns that configure MCP
+  # servers. PINNED, and re-pinned on every start, because the adapter's major decides which file
+  # it reads: 2.x read <agent dir>/mcp.json, 3.x reads <agent dir>/mcp-adapter.json and not the
+  # old name at all (its README). The runner writes the 3.x name; a volume that first booted on
+  # 2.x is moved here, and a fresh volume no longer takes whatever npm serves that day.
+  PI_MCP_PIN="${HR_PI_MCP_ADAPTER_VERSION:-3.1.0}"
+  if wanted pi && [ -x "$(backend_bin pi)" ]; then
+    have_adapter="$(node -e "console.log(require('$TOOLS/lib/node_modules/pi-mcp-adapter/package.json').version)" 2>/dev/null || true)"
+    if [ "$have_adapter" != "$PI_MCP_PIN" ]; then
+      echo "[harnessrouter] installing pi-mcp-adapter $PI_MCP_PIN (MIT, version-pinned)${have_adapter:+, replacing $have_adapter}…"
+      try_install "pi-mcp-adapter" npm install -g --prefix "$TOOLS" --no-audit --no-fund --ignore-scripts "pi-mcp-adapter@$PI_MCP_PIN" || true
+    fi
   fi
 
   if wanted omp && [ ! -x "$(backend_bin omp)" ]; then

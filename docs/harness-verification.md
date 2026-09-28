@@ -106,6 +106,28 @@ if it is unreachable the MCP half is skipped and the row says so, because a publ
 down is not evidence about this product. `MCP_URL=off` skips it outright, for an instance with no
 egress, and any other URL overrides the default.
 
+## The family tour
+
+One conversation, one deliverable, every model family in turn. The first turn builds a small
+deliverable (a one-page `.pptx`); each following turn switches the composer's model to the next
+family (OpenAI, Anthropic, Google, xAI, Meta, DeepSeek, Moonshot, Qwen, Zhipu, Mistral, StepFun,
+Tencent, NVIDIA, one model each) and asks for one more change to the same deck. A turn passes when
+it completes and the deck is produced again; the tour passes when every family the instance
+serves passes. Nothing about the harness is allowed to depend on which model answered the turn
+before: the session file, the resume, the verdict on how the turn ended.
+
+It exists because the matrix's five scenarios did not catch what a person found in five turns
+on 2026-09-27: a CheetahClaws turn on muse-spark-1.1 that answered in full was reported as a
+failure, because the model's smaller context made the CLI compact its history mid-turn and the
+driver judged the turn by a position in that history. Every base runs the tour before its column
+is published, and a base that changes how it reads its own history runs it again.
+
+`scripts/support-matrix/family-tour.mjs` drives it through the console (`HARNESS=<base>`; `SID=`
+continues an existing conversation, which is how a person's own failing session is retested) and
+writes one record per family: model, served model, status, seconds, the files the turn produced,
+and the failure text when there is one. The notes name the instance, the connections and the
+result per family.
+
 ## Rules for the run itself
 
 - **One provider at a time, and isolation means deletion.** A column measures what a provider can
