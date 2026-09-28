@@ -2617,6 +2617,12 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             _emit(oev)
     except Exception:  # noqa: BLE001
         pass
+    # The turn's browser closes BEFORE the trace is finalized: its stop row (the vendor's stop
+    # takes seconds) must be in the trace, and the first read of a finished trace caches the
+    # chunks present at that moment for every later read. Closed from persist() it landed after
+    # the manifest said terminal, so the row reached the audit and never the trace (hosted, every
+    # base of the browser column, 2026-09-27). persist() still closes a turn that never got here.
+    await _browser_close(sid, "turn_end")
     await _checkpoint(sid, rec)
     await _trace_finalize(sid, rec)
     # Persist the response record with the FULL turn output — NOT translator.output, which only
