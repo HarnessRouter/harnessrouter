@@ -3474,6 +3474,102 @@ def _with_gemini_schemas(body: bytes) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+# ── Tool declarations through Anthropic's validator ──────────────────────────────────────────────
+# Anthropic's Messages API refuses a tool whose input_schema has a combinator at the TOP level:
+# `tools.14.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top
+# level` (measured 2026-09-28 on claude-haiku-4.5 and claude-sonnet-4.6 through Vercel's gateway,
+# which translates an OpenAI tool into Anthropic's shape). A nested combinator is fine; only the
+# root is refused.
+#
+# Grok Build's `use_tool` declares exactly that: a root `oneOf` over its three call forms (inline
+# arguments, an arguments file, a document), each branch a `required` set plus a `not` forbidding the
+# other forms' keys. So EVERY claude id the grok base offers failed its first turn — the request was
+# refused before inference, on all five scenarios. The sanitiser below is the Anthropic counterpart
+# of _gemini_schema: one provider's validator, repaired in flight for every client, rather than a
+# catalog pruned of ten models the harness can otherwise drive.
+_ANTHROPIC_COMBINATORS = ("oneOf", "anyOf", "allOf")
+
+
+def _anthropic_tool_schema(node):
+    """One tool's parameter schema as Anthropic's input_schema validator accepts it: no combinator at
+    the root. The branches' own constraints cannot survive flattening — a root schema can express
+    "these properties" but not "exactly one of these shapes" — so what is kept is everything a
+    caller needs to build a valid call, and what is dropped is the exclusivity:
+
+      properties  the union of the root's and every branch's, root first (a branch that redeclares a
+                  property does not override the root's description of it)
+      required    only what EVERY branch requires, because a key one branch alone demands is not
+                  required of the call the model actually makes. For grok's `use_tool` that is the
+                  empty set, so `required` goes: two of its three forms do not take `tool_name`.
+      the rest    every other root key except the combinators and the `not` that rode with them
+
+    The exclusivity then lives where the model reads it anyway: `use_tool`'s own description says
+    "Supply exactly one form", and the tool itself validates its arguments (measured: a call missing
+    a required field comes back as a tool_result error, not a crash). Nested combinators are
+    untouched — Anthropic accepts those, and a property's own anyOf is how a nullable field is
+    spelled."""
+    if not isinstance(node, dict):
+        return node
+    branches = [b for k in _ANTHROPIC_COMBINATORS for b in (node.get(k) or [])
+                if isinstance(b, dict)]
+    if not branches:
+        return node
+    out = {k: v for k, v in node.items() if k not in _ANTHROPIC_COMBINATORS and k != "not"}
+    props = dict(out.get("properties") or {})
+    for b in branches:
+        for name, spec in (b.get("properties") or {}).items():
+            props.setdefault(name, spec)
+    if props:
+        out["properties"] = props
+    reqs = [set(b["required"]) for b in branches if isinstance(b.get("required"), list)]
+    required = list(node.get("required") or [])
+    if reqs:
+        common = set.intersection(*reqs) if len(reqs) == len(branches) else set()
+        required = [r for r in required if r in common] or sorted(common)
+    if required:
+        out["required"] = required
+    else:
+        out.pop("required", None)
+    out.setdefault("type", "object")
+    return out
+
+
+def _with_anthropic_schemas(body: bytes) -> bytes:
+    """The request with every tool's parameter schema flattened for Anthropic's validator. Both wire
+    shapes are handled, because both reach Anthropic: an OpenAI chat/completions body, whose
+    `tools[].function.parameters` an aggregator translates into `input_schema`, and an Anthropic
+    Messages body, which carries `tools[].input_schema` itself. A body without tools is untouched,
+    and a body no tool of which has a root combinator comes back byte-identical."""
+    if b'"tools"' not in body or not any(c.encode() in body for c in _ANTHROPIC_COMBINATORS):
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        holder, key = (fn, "parameters") if fn is not None else (tool, "input_schema")
+        schema = holder.get(key)
+        if not isinstance(schema, dict):
+            continue
+        flat = _anthropic_tool_schema(schema)
+        if flat is not schema and flat != schema:
+            holder[key] = flat
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _anthropic_family(model: str) -> bool:
+    """Whether this model id is served by Anthropic's own API, whoever fronts it. The vendor prefix
+    an aggregator adds (anthropic/claude-haiku-4.5) and the bare id both count; `claude` is the one
+    token every id in the family carries, as `gemini` is for Google's."""
+    return "claude" in (model or "").lower()
+
 def _google_signatures_in(doc: dict) -> list[tuple[str, str]]:
     """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
     found: list[tuple[str, str]] = []
@@ -3814,6 +3910,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             # validator as sent; the broker does the same normalisation for brokered traffic
             body = _with_gemini_schemas(body)
             headers["content-length"] = str(len(body))
+        if (_anthropic_family(_body_model) or flags.get("anthropic_schemas")) and body is not None:
+            # Anthropic refuses a tool whose input_schema has a combinator at its root, on its own
+            # API and through every aggregator that translates into it, so this needs no channel test
+            # and no per-route flag: the shape is invalid for the family wherever it is served.
+            fixed = _with_anthropic_schemas(body)
+            if fixed != body:
+                body = fixed
+                headers["content-length"] = str(len(body))
         resp = None
         tried_slim = False
         for attempt in (0, 1, 2):
@@ -3869,6 +3973,19 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     headers["content-length"] = str(len(body))
                     print(f"[relay] provider refused reasoning_effort's thinking shape for model={_body_model}; "
                           f"sent again without it", flush=True)
+                    continue
+                flat = _with_anthropic_schemas(body) if body is not None else None
+                if (attempt < 2 and e.code == 400 and b"input_schema" in data
+                        and any(c.encode() in data for c in _ANTHROPIC_COMBINATORS)
+                        and flat is not None and flat != body):
+                    # The provider named the fix itself ("input_schema does not support oneOf, allOf,
+                    # or anyOf at the top level"), so a channel this relay does not recognise as
+                    # Anthropic — or a model id that does not carry the family's name — is repaired on
+                    # the complaint and remembered, the max_completion_tokens pattern. This bounds the
+                    # shape to ONE extra request even where the proactive pass above does not fire.
+                    flags["anthropic_schemas"] = True
+                    body = flat
+                    headers["content-length"] = str(len(body))
                     continue
                 if e.code in (400, 422):
                     # The provider's own words, kept here for every provider: a harness shows a
