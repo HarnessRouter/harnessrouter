@@ -34,7 +34,11 @@ async def main() -> int:
         headers = json.loads(os.environ.get("HR_MCP_HEADERS") or "{}")
     except json.JSONDecodeError:
         headers = {}
-    remote = sse_client(url, headers=headers or None) if transport == "sse" else streamablehttp_client(url, headers=headers or None)
+    # 90 s per request and 600 s on the event stream, not the SDK's 5 s and 30 s: the plugs plane
+    # caps a call at 60 s and a takeover holds one 45 s; under load a browser call and even the
+    # tool listing timed out (hosted, omp and aider, 2026-09-28).
+    remote = (sse_client(url, headers=headers or None, timeout=90, sse_read_timeout=600) if transport == "sse"
+              else streamablehttp_client(url, headers=headers or None, timeout=90, sse_read_timeout=600))
     async with remote as streams:
         async with ClientSession(streams[0], streams[1]) as session:
             init = await session.initialize()

@@ -107,7 +107,10 @@ def _vendor_client() -> httpx.AsyncClient:
 
 async def vendor_create(timeout_min: int, metadata: dict) -> dict:
     """A browser in the vendor's cloud: no proxy, no CAPTCHA solving, no recording, so the only
-    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency."""
+    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency. The screen is the
+    vendor's default, landscape: what the live view streams is that screen, whatever the shape of
+    the card showing it (measured on hr-test, 2026-09-28: neither an emulated viewport over CDP
+    nor allowResizing changed the streamed frame), so the console fits the frame inside the card."""
     async with _vendor_client() as c:
         r = await c.post(f"{API_BASE}/browsers", json={
             "timeout": int(timeout_min), "proxyCountryCode": None, "solveCaptchas": False,
@@ -235,6 +238,7 @@ class Session:
         self.lock = asyncio.Lock()
         self.closed = False
         self.opened = False                     # this call made the browser at the vendor: the caller writes the open row once
+        self.pointer: dict | None = None        # where the agent last acted (the element's centre), for the console's ghost cursor; kept across navigations so the next action glides from there
 
 
 def minutes(rec: dict) -> int:
@@ -433,11 +437,37 @@ async def attach(rec: dict) -> Session:
         pages = list(getattr(s.context, "pages", None) or [])
         s.page = pages[0] if pages else await s.context.new_page()
         s.page.set_default_timeout(30000)
+        on = getattr(s.context, "on", None)
+        if callable(on):
+            on("page", lambda pg: asyncio.ensure_future(_follow_new_tab(s, sid, pg)))
     except Exception:
         await detach(s)
         raise
     _SESSIONS[sid] = s
     return s
+
+
+async def _follow_new_tab(s: Session, sid: str, pg) -> None:
+    """A link the person opened in a new tab while they have the browser is followed in the tab the
+    live view shows: the new page's address goes to the shown page and the new page closes, so the
+    view stays with them (the console's live view shows one tab, and a link marked to open in a new
+    one looked like a click that did nothing: the LinkedIn and X icons on a directory page,
+    2026-09-27). Only while the person has the browser: the agent's own tabs are its to manage
+    (list_tabs, switch_tab)."""
+    try:
+        rec = await registry.get(sid)
+        if (rec or {}).get("control") != "user" or pg is s.page:
+            return
+        try:
+            await pg.wait_for_load_state("domcontentloaded", timeout=8000)
+        except Exception:  # noqa: BLE001
+            pass
+        url = str(getattr(pg, "url", "") or "")
+        if url and url != "about:blank":
+            await s.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await pg.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def detach(s: Session) -> None:
@@ -538,7 +568,7 @@ _tool("switch_tab", "act", "Make one of the open tabs the current tab.",
 
 
 def tool_list() -> list[dict]:
-    return [{"name": f"browser.{t['name']}", "description": f"[browser, {t['risk']}] {t['description']}",
+    return [{"name": f"browser_{t['name']}", "description": f"[browser, {t['risk']}] {t['description']}",
              "inputSchema": t["inputSchema"],
              "annotations": {"readOnlyHint": t["risk"] == "read", "destructiveHint": False}} for t in _TOOLS]
 
@@ -551,8 +581,11 @@ _SNAPSHOT_JS = """
 (max) => {
   const out = []; let n = 0;
   const seen = new Set();
+  // Visible to a person: laid out, not hidden, and at least 8 px each way. Sites keep tiny proxy
+  // controls (DuckDuckGo's 4 x 4 search input beside the field people see); an agent that types
+  // into one of those types into nothing anyone can see (hr-test, 2026-09-28).
   const vis = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+    return r.width >= 8 && r.height >= 8 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
   const nameOf = (el) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder')
     || (el.labels && el.labels[0] && el.labels[0].innerText) || el.getAttribute('alt') || el.innerText || el.value || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
   const sel = 'h1,h2,h3,a[href],button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=textbox],[contenteditable=true],summary';
@@ -630,6 +663,37 @@ async def _settled(s: Session) -> None:
             pass
 
 
+async def _mark(s: Session, loc) -> None:
+    """Remember the centre of the element about to be acted on, in page coordinates, so the console
+    can show a ghost cursor going there. Best effort: a locator that cannot be measured leaves the
+    last point standing."""
+    try:
+        box = await loc.bounding_box()
+    except Exception:  # noqa: BLE001
+        return
+    if isinstance(box, dict) and box.get("width") is not None:
+        s.pointer = {"x": round(float(box["x"]) + float(box["width"]) / 2, 1), "y": round(float(box["y"]) + float(box["height"]) / 2, 1)}
+
+
+async def viewport_of(s: Session) -> dict:
+    """The page's own layout viewport (window.innerWidth/innerHeight), the coordinate space of
+    `pointer`. Asked of the page, not of the context: the vendor's default context carries its
+    window's size, not the 1280 x 800 this plane asks for when it makes a context of its own, and
+    a cursor placed on the assumed size landed low and right of the element the agent clicked
+    (hr-test, 2026-09-27)."""
+    try:
+        v = await s.page.evaluate("() => [window.innerWidth, window.innerHeight]")
+        if isinstance(v, (list, tuple)) and len(v) == 2 and int(v[0]) > 0:
+            return {"w": int(v[0]), "h": int(v[1])}
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        vs = s.page.viewport_size if s.page is not None else None
+    except Exception:  # noqa: BLE001
+        vs = None
+    return {"w": int((vs or {}).get("width") or 1280), "h": int((vs or {}).get("height") or 800)}
+
+
 async def call(s: Session, name: str, args: dict):
     """Run one tool on this session. Returns text, or ("image", png bytes, caption) for a
     screenshot the caller stores. Raises BrowserToolError with a sentence the agent can act on."""
@@ -664,6 +728,7 @@ async def call(s: Session, name: str, args: dict):
         return text[:cap] + (f"\n… {len(text) - cap} more characters" if len(text) > cap else "")
     if name == "click":
         loc = _target(s, args)
+        await _mark(s, loc)
         try:
             await loc.click(timeout=15000)
         except Exception as e:  # noqa: BLE001
@@ -672,6 +737,7 @@ async def call(s: Session, name: str, args: dict):
         return f"Clicked. Now at {await _where(s)}"
     if name == "type":
         loc = _target(s, args)
+        await _mark(s, loc)
         text = str(args.get("text") or "")
         try:
             await loc.fill(text, timeout=15000)
@@ -740,7 +806,7 @@ async def call(s: Session, name: str, args: dict):
         s.page = pages[i]
         s.page.set_default_timeout(30000)
         return f"Current tab is now {i}: {await _where(s)}"
-    raise BrowserToolError(f"No tool named browser.{name}.")
+    raise BrowserToolError(f"No tool named browser_{name}.")
 
 
 def audit_line(d: dict) -> str:

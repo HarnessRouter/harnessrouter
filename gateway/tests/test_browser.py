@@ -125,6 +125,9 @@ class Req:
 
 
 class Locator:
+    async def bounding_box(self):
+        return {"x": 100.0, "y": 200.0, "width": 50.0, "height": 20.0}
+
     def __init__(self, page, sel):
         self.page, self.sel, self.first = page, sel, self
 
@@ -355,7 +358,7 @@ def _rpc(client, tok: str, method: str, params: dict | None = None, rid=1):
 
 
 def _call(client, tok, name, **args):
-    return _rpc(client, tok, "tools/call", {"name": f"browser.{name}", "arguments": args})
+    return _rpc(client, tok, "tools/call", {"name": f"browser_{name}", "arguments": args})
 
 
 def _rows(hid: str) -> list[dict]:
@@ -386,12 +389,12 @@ def test_a_harness_includes_the_browser_like_any_plug_and_the_workspace_must_hav
     assert _get(client, f"/v1/harnesses/{hid}/servers/mcp.plugs").json()["status"] == {"browser": "missing"}
     tok = gw._mint_hosted_cred(hid, _session_of(hid), _key(hid))
     tools = _rpc(client, tok, "tools/list")["tools"]
-    assert [t["name"] for t in tools] == ["browser.navigate", "browser.get_url", "browser.snapshot", "browser.extract_text",
-                                          "browser.click", "browser.type", "browser.press_key", "browser.scroll", "browser.wait_for",
-                                          "browser.screenshot", "browser.back", "browser.list_tabs", "browser.switch_tab"]
-    assert next(t for t in tools if t["name"] == "browser.snapshot")["annotations"] == {"readOnlyHint": True, "destructiveHint": False}
-    assert next(t for t in tools if t["name"] == "browser.click")["annotations"] == {"readOnlyHint": False, "destructiveHint": False}
-    assert next(t for t in tools if t["name"] == "browser.navigate")["description"].startswith("[Browser, write]")
+    assert [t["name"] for t in tools] == ["browser_navigate", "browser_get_url", "browser_snapshot", "browser_extract_text",
+                                          "browser_click", "browser_type", "browser_press_key", "browser_scroll", "browser_wait_for",
+                                          "browser_screenshot", "browser_back", "browser_list_tabs", "browser_switch_tab"]
+    assert next(t for t in tools if t["name"] == "browser_snapshot")["annotations"] == {"readOnlyHint": True, "destructiveHint": False}
+    assert next(t for t in tools if t["name"] == "browser_click")["annotations"] == {"readOnlyHint": False, "destructiveHint": False}
+    assert next(t for t in tools if t["name"] == "browser_navigate")["description"].startswith("[Browser, write]")
     out = _call(client, tok, "navigate", url="https://example.com/")
     assert out["isError"] and out["content"][0]["text"].startswith("The workspace has no Browser plugin connected")
     assert ven.created == [] and _rows(hid)[-1]["outcome"] == "refused" and _rows(hid)[-1]["error"] == "missing"
@@ -404,7 +407,7 @@ def test_a_harness_includes_the_browser_like_any_plug_and_the_workspace_must_hav
     # a narrowed include lists only the named tools
     r = _post(client, f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["browser"], "tools": {"browser": ["navigate", "extract_text"]}})
     assert r.status_code == 200 and r.json()["tools"] == {"browser": ["navigate", "extract_text"]}
-    assert [t["name"] for t in _rpc(client, tok, "tools/list")["tools"]] == ["browser.navigate", "browser.extract_text"]
+    assert [t["name"] for t in _rpc(client, tok, "tools/list")["tools"]] == ["browser_navigate", "browser_extract_text"]
     r = _post(client, f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["browser"], "tools": {"browser": ["evaluate"]}})
     assert r.status_code == 400 and "evaluate" in r.text
 
@@ -829,3 +832,66 @@ def test_a_row_served_off_the_owning_replica_still_lands_in_the_trace(client, wo
         events += [json.loads(line) for line in body.decode().splitlines() if line.strip()]
     assert [(e["type"], e["tool"], e["outcome"]) for e in events] == [("plug", "open", "ok"), ("plug", "navigate", "ok")]
     assert all(gw._TRACE_NONCE in it["file_id"] for it in chunks)        # this process's chunks, unique beside the owner's
+
+
+def test_the_person_takes_the_browser_over_and_the_agent_waits(client, world):
+    """The console's live view: a click hands the browser to the person, the agent's calls are held
+    and told so, the session's route says who has it (and carries the live URL, nowhere else), and
+    a hand-back lets the agent go on. The feed carries the notices without the URL."""
+    reg, ven, posted = world
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid = _session_of(hid)
+    tok = gw._mint_hosted_cred(hid, sid, _key(hid))
+    published: list[dict] = []
+    orig = gw._bus_publish
+    gw._bus_publish = lambda org, h, member, s_, rid, ev: published.append({"harness": h, "sid": s_, "ev": ev})
+    try:
+        # no browser yet: the route says so, and nothing can be handed over
+        assert client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json() == {"session_id": sid, "open": False}
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "user"}, headers=HEADERS).status_code == 404
+        # the first call opens the browser: the feed learns it, the route carries the live URL
+        assert _call(client, tok, "navigate", url="example.com")["isError"] is False
+        kinds = [p["ev"]["type"] for p in published]
+        assert kinds == ["browser.opened", "browser.call"], kinds
+        assert all(p["harness"] == hid and p["sid"] == sid and "live_url" not in p["ev"] for p in published)
+        info = client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json()
+        assert info["open"] is True and info["control"] == "agent" and info["last_tool"] == "navigate"
+        assert info["viewport"] == {"w": 1280, "h": 800}                  # the screen's shape, for the card's frame
+        assert info["live_url"].startswith("http") and info["session_minutes"] == gw.browser_plane.SESSION_CAP_MIN
+        # the person takes over: the agent's next call waits for the hand-back, and past the wait's
+        # bound answers (not as an error) that the person still has the browser; the record says who has it
+        gw.BROWSER_HOLD_SLICE_S = 0.6
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "user"}, headers=HEADERS).json()["control"] == "user"
+        t0 = time.time()
+        out = _call(client, tok, "get_url")
+        assert out["isError"] is False and "still has the browser" in out["content"][0]["text"], out
+        assert 0.5 <= time.time() - t0 < 5, "the call waited for the slice before answering"
+        assert client.get(f"/v1/sessions/{sid}/browser", headers=HEADERS).json()["control"] == "user"
+        assert [p["ev"]["type"] for p in published][-2:] == ["browser.control", "browser.held"]
+        held_rows = [r for r in _rows(hid) if r["outcome"] == "held"]
+        assert held_rows and held_rows[-1]["tool"] == "get_url" and json.loads(held_rows[-1]["detail"])["waited_s"] >= 0.5
+        # an invalid hand is refused; a hand-back lets the agent go on
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "nobody"}, headers=HEADERS).status_code == 400
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "agent"}, headers=HEADERS).json()["control"] == "agent"
+        assert _call(client, tok, "get_url")["content"][0]["text"] == "https://example.com/ (Example Domain)"
+        assert [p["ev"]["type"] for p in published][-2:] == ["browser.control", "browser.call"]
+        # another org cannot read the live URL or take the browser
+        other = {**HEADERS, "x-harness-org": "someoneelse"}
+        assert client.get(f"/v1/sessions/{sid}/browser", headers=other).status_code in (403, 404)
+        assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "user"}, headers=other).status_code in (403, 404)
+    finally:
+        gw._bus_publish = orig
+
+
+
+def test_a_harness_with_the_browser_tells_its_agent_to_use_it():
+    """The agent's doc gets a Browser section when the harness includes the plugin, after its own
+    instructions, and nothing when it does not (Codex opened a page with curl while the card
+    stayed empty, hr-test 2026-09-27)."""
+    assert gw._agent_doc_with_plugs("", []) == ""
+    assert gw._agent_doc_with_plugs("Be brief.", ["github"]) == "Be brief."
+    doc = gw._agent_doc_with_plugs("Be brief.\n", ["browser"])
+    assert doc.startswith("Be brief.\n\n## Browser\n") and "browser_navigate" in doc and "curl" in doc
+    assert gw._agent_doc_with_plugs("", ["browser"]) == gw._BROWSER_GUIDE
