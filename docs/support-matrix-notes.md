@@ -1355,3 +1355,256 @@ wrote `trace.json` with `config_version: 1` and 61 archived frames; a probe with
 script ran on `script/s1` and finished. The calibration itself (baseline, one change, validation)
 runs on a Calibrator on the claude base with the calibrate package.
 
+## The cheetahclaws backend: CheetahClaws 3.5.88 (2026-09-24)
+
+CheetahClaws (SAIL-Research-Lab/cheetahclaws, PyPI `cheetahclaws`, Apache-2.0), a Python
+reimplementation of the Claude Code agent loop, as the sixteenth base (#229). The turn process is
+`runner/cheetahclaws_driver.py` inside a pinned venv: the CLI's own agent loop
+(`cheetahclaws.agent.run`, the generator its REPL and its headless bridge runner consume) is
+driven in process and every event is re-emitted as it is yielded, `__hr_init` first and
+`__hr_result` last, normalised by `_cheetahclaws_to_claude`.
+
+### Behaviour measured before the column ran (3.5.88, against a stub and the live instance)
+
+- **No event stream, and the session file is not one.** `cheetahclaws -p` prints the final answer
+  and ANSI tool cards; `session_latest.json` is rewritten by `autosave_session` once per USER turn,
+  after `run_query` returns, never between messages. Tailing it would give a silent turn and then
+  everything at once. In process the loop's own events stream: conformance S-09 passed with "events
+  spread over 5.1s", and the console renders text deltas and tool cards as they happen.
+- **Provider failures are prose and exit 0.** Against a stub, `cheetahclaws -p` printed
+  `[Failed — APIConnectionError: Connection error.. Hint: …]` (unreachable),
+  `[Failed — AuthenticationError: Error code: 401 - {…}. Hint: Check your API key: /config …]`
+  (bad key) and `[Retry 1/3 after 6s — rate_limit: …]` ×3 then `[Failed — RateLimitError: Error
+  code: 429 …]`, exit 0 each time. The driver's verdict is the history's shape instead (the loop
+  appends an assistant message only for a completion that came back); the `[Failed — …]` sentence is
+  kept as the reason, minus a hint that names a slash command. Recorded, and pinned, in
+  `runner/tests/fixtures/cheetahclaws/`. Live: a key the gateway refuses failed the turn with
+  `Failed — BadRequestError: Error code: 400 - {… 'No connected db.' …}` (the gateway's own answer
+  to an unknown key), 27 s.
+- **A dead endpoint hung the turn.** The CLI builds its OpenAI client with the SDK's 600 s timeout
+  and two retries of its own under the loop's three: a turn aimed at an address the instance's
+  firewall drops was still `running` at 600 s with nothing in its record. The driver now gives every
+  client a 300 s read timeout (`HR_CHEETAHCLAWS_TIMEOUT`, aider's budget) and no SDK retries, so the
+  loop's ladder is the only one: the same turn failed at 581 s with `Failed — APIConnectionError:
+  Connection error.`, and an endpoint that accepts and never answers fails in 23 s at a 2 s timeout
+  (`Failed — APITimeoutError: Request timed out.`, pinned by a test).
+- **Resume.** No resume flag: `-p` always starts from an empty state, and continuing is the REPL's
+  `/resume`. The driver loads the session file (the CLI's own `_migrate_session`) when it names the
+  requested id and writes it back with the CLI's own `autosave_session`, the id held fixed per
+  session. `_resume_lost` asks the same file. Recycle through the API: two turns, the sandbox
+  recycled (hydrated from the checkpoint), the session file identical, the recall turn answered
+  `M1-tools-pool`.
+- **Instructions and skills.** The CLI reads `CLAUDE.md` only (walking up from the cwd, plus
+  `~/.claude/CLAUDE.md`); there is no AGENTS.md discovery in the package, so with both present only
+  CLAUDE.md is loaded. It drops the whole file when a line matches its prompt-injection scan; the
+  driver says so in the record. Skills land in the project-level `.cheetahclaws/skills/`, which the
+  loader reads first; `.cheetahclaws/` is CLI state (its `tasks.json` tracker too) and never a
+  produced file, and the tracker is not checkpointed.
+- **Tool policy is hard, measured with a control.** The driver sets the CLI's `disabled_tools`: the
+  tool leaves the schema the provider receives (stub capture) and a call to it is refused at
+  execution. Live, with Bash, Write, Edit, NotebookEdit and Agent withheld, the model still called
+  Bash and Write by name; each came back `Error: tool 'Bash' is not enabled by the 'full' tool
+  profile for this turn.`, no file was written, and the answer said it had no write tool. The same
+  request with nothing withheld wrote the file through Write. AskUserQuestion (it blocks on a
+  terminal nobody is at), ReadEmail/SendEmail (no mailbox is configured) and the tools of optional
+  extras the bare install lacks (WebBrowse, ReadPDF, ReadSpreadsheet, ReadImage) are withheld on
+  every turn and not offered as toggles.
+- **Served model and usage come from the relay's taps.** The session file carries gross prompt
+  tokens with no cache split and no model. The CLI's `custom/` client streams without
+  `stream_options`, so the relay asks for the usage chunk on this route (`stream_usage`, pinned
+  against an upstream that sends usage only when asked); a live turn's Response carried
+  `input_tokens` 9118 / `output_tokens` 31 off the relay, and conformance T-03 read the served
+  model the same way.
+- **MCP** connects in a background thread at import in `-p`, racing the first model call; the
+  driver waits for it, and a server that does not connect becomes `mcp_unavailable`.
+
+### Versions and the column
+
+The column in `docs/support-matrix.md` is `cheetahclaws-tokenrouter`, measured on hr-test
+(harnessrouter/harnessrouter:0.25.0, the release that carries this base; one container, the default
+`HR_BACKENDS`, the live data volume) on 2026-09-26, after the author's own measurements on a lab
+gateway (kept in the PR, #264). CheetahClaws 3.5.88 was installed by the entrypoint at boot (wheel
+digest verified, import check passed). The instance's own connections served the turns: TokenRouter
+for gpt-5.4 and claude-sonnet-5, and gpt-5.4-mini through the Custom OpenAI Chat connection with
+TokenRouter behind the switch, as `fill-connection.py` stamped them.
+
+- **Conformance** (`uhp-conformance` 2026.9.12.post2 from this tree, `--class full`, a harness on
+  the base with `--model gpt-5.4`): 75/75, CONFORMANT (full).
+- **Console column** (`run.mjs`, `HARNESSES=cheetahclaws`, three models): 3 pairs, 15 of 15
+  scenario runs passed, first turn to recycle. Two rows are served as the provider's dated alias of
+  the id asked for (`gpt-5.4-2026-03-05`, `gpt-5.4-mini-2026-03-17`), which the table notes and
+  rule 2 does not count against the pair.
+- **Custom harness** (`custom-harness.mjs`, `BASES=cheetahclaws`, the public MCP probe reachable
+  from hr-test): the stamp skill read, its script run from the workspace, `stamp.txt` produced,
+  WebSearch withheld and unused, MCP reached, 28 s.
+- **Plugin matrix** (`plugins/run-matrix.py --bases cheetahclaws --mode all`): skills 1/1, stdio
+  MCP 1/1, SSE 1/1 through the CLI's own client. Streamable HTTP 0/1 on 0.25.0: the CLI's own
+  streamable-HTTP client (`mcp_client/client.py`, `HttpTransport`) is answered 400 on `initialize`
+  by the probe, the same server its SSE end and the runner's bridge reach, so the turn ran without
+  the server and said so. Since 0.25.1 a streamable-HTTP server reaches this base through the
+  runner's stdio bridge (`_BRIDGED_TRANSPORTS`, the mechanism codex, dsh and goose use for SSE),
+  the way every other base reaches it; the CLI's client keeps SSE and stdio. Measured on 0.25.1
+  (hr-test, the same probe): skills 1/1, stdio 1/1, SSE 1/1, streamable HTTP 1/1
+  (`PROBE-HTTP-ef8e44614954`, 11.1 s).
+- **The family tour** (`family-tour.mjs`, 0.25.2, on Richard's own five-turn conversation, `SID=`
+  continued, one model per family, three runs on 2026-09-26): 12 of 14 families passed, first
+  edit to recycle of the same deck. gpt-5.4-mini 13 s, claude-sonnet-5 81 s, gemini-3.5-flash 20 s,
+  grok-4.5 16 s, deepseek-v4-flash 155 s (served as v4.1-flash), kimi-k3 40 s, qwen3.8-flash 20 s,
+  glm-5.3-flash 46 s, mistral-medium-3.5 20 s, step-3.7-flash 49 s, hunyuan-4-preview 33 s,
+  nemotron-3.5-lightning 33 s. Two families fail on this base:
+  - **muse-spark** (1.1 twice, 1.3 once): the CLI compacts the conversation for the model's smaller
+    context, and after the compaction the model runs the one edit into a loop of ninety-odd tool
+    calls (`ls`, `cat hello-world.md`, `TaskList`, re-deciding the original "convert the md to a
+    deck" from the summary, "Auto-fanout" sub-summaries of every result), never finishes, and is
+    stopped at the tour's ten-minute cap. No two calls are identical, so the CLI's loop guard does
+    not fire. The line is excluded from the base's catalog with that note.
+  - **llama-3.3-70b**: refused in 7 s, three times (the third on 0.25.3, where the relay logs the
+    body the CLI cuts off): `400 "This model only supports single tool-calls at once!"` from
+    CoreWeave, the provider serving the model. The conversation holds one assistant message with
+    two tool calls (gpt-5.4-mini's Glob and Grep, issued together on the tour's first edit), and
+    that endpoint refuses every later request that replays it. llama alone never writes such a
+    message, so a fresh harness of the base completes in 11 s, as on pi. The model stays offered
+    with this note; whether the relay should rewrite a parallel-call message into consecutive
+    single-call ones for such a provider, or the catalog should drop the model on bases whose
+    CLIs call tools in parallel, is Richard's call.
+  - kimi-k3 and qwen3.8-flash failed the second run's rows without a defect: the edits repeated
+    ones earlier families had made and both rightly wrote nothing. The tour stamps every edit
+    since, and both pass.
+- **In the browser** (the console on hr-test, the system harness, gpt-5.4): a task that writes a
+  file and runs a command completed in 15 s with the file card and the byte count in the answer.
+- **Not measured here:** the other provider columns (OpenRouter, Vercel, the hosted HarnessRouter
+  API) beyond the three pairs above, so `_MODEL_CATALOG["cheetahclaws"]` stays offered, not
+  measured, for the rest of its list; and a benchmark column.
+
+
+## The gpt-6 line: sol and luna beside astra (2026-09-27)
+
+Richard asked whether gpt-6-sol was available and for the line to be expanded at list price on every
+harness that can run it. Read the same day: OpenAI's pricing page names gpt-6-astra, gpt-6-sol and
+gpt-6-luna and no terra; Azure's catalog has sol and luna at model version 2026-09-22 (deployed on
+our resource that day, GlobalStandard, beside astra's 2026-09-03 deployment); OpenRouter, TokenRouter,
+Vercel and llmtr list both as `openai/<id>` (OpenRouter and TokenRouter added them on 2026-09-22).
+List prices per 1M tokens, no markup: sol $2 in, $0.20 cached, $2.50 cache write, $10 out; luna
+$0.10, $0.01, $0.125, $0.50; astra $10, $1, $12.50, $50; above 272k prompt tokens input and cached
+input double and output is 1.5x, the rule the gpt-5.x line carries. Batch and Flex are half, fast
+mode double.
+
+**What decides which bases offer them.** OpenAI refuses function tools on /v1/chat/completions for
+the whole line unless `reasoning_effort` is `none` ("Function tools with reasoning_effort are not
+supported for gpt-6-sol in /v1/chat/completions. To use function tools, use /v1/responses or set
+reasoning_effort to 'none'", TokenRouter, 2026-09-27). sol and luna take `none` and then answer with
+a tool call (2.8 s and 1.8 s); the runner's relay already retries on exactly that sentence and
+remembers the fix per model, so the chat-only bases (aider, kimi, openhands, cheetahclaws, qwen,
+cline) run them the way they run the gpt-5.6 line. astra does not take `none` ("Supported values
+are: 'low', 'medium', 'high', and 'xhigh'"), so it stays on the Responses bases alone. Both sol and
+luna describe a red PNG as "Red", so hermes's vision auditing may use them. 0.25.4 carries all of
+it (#295); a model-support extension is a patch release, Richard's rule.
+
+**The columns.** One per connection on hr-test, the four ids routed at that connection through the
+model map and put back afterwards, twelve bases (codex, hermes, dsh, opencode, pi, omp, aider, kimi,
+openhands, cheetahclaws, qwen, cline; goose waits for cline's rows, which are what its list mirrors;
+systemone never), all five scenarios, `EXPECT_CONNECTION` set so a turn served elsewhere is a finding.
+cheetahclaws is wired to OpenRouter, TokenRouter and Vercel only, so its OpenAI and Azure rows are
+not run by design.
+
+**Results (0.25.4, one retest of every miss on the 0.25.5 candidate, the same code as 0.25.5):**
+146 pairs, 727 of 730 scenario runs.
+
+| Column | Pairs | After the retest | First run | What missed the first time |
+|---|---|---|---|---|
+| tokenrouter | 30 | 150 of 150 | 136 of 142 | openhands on both ids (the prefix defect below); gpt-6-luna's recycle recall on codex, hermes and qwen; gpt-6-luna's artifact on aider |
+| openrouter | 30 | 149 of 150 | 149 of 150 | aider x gpt-6-sol recycle, reproduced |
+| vercel | 30 | 150 of 150 | 148 of 150 | gpt-6-luna's recycle recall on codex and on aider |
+| openai | 28 | 139 of 140 | 139 of 140 | codex x gpt-6-luna recycle, reproduced |
+| azure-e2 | 28 | 139 of 140 | 138 of 140 | gpt-6-luna's recycle recall on codex (passed the retest) and on aider (reproduced) |
+
+Every gpt-6-astra pair passes on the six Responses bases on all five connections (30 pairs). Every
+gpt-6-sol and gpt-6-luna first, follow-up, switch and artifact scenario passes on every base and
+connection that ran; the three misses that stand are all the recycle recall, below. openhands
+passed on all five connections after the fix, rerun through the agent server, not the recorder.
+cheetahclaws has no OpenAI or Azure rows: the map's fall-through served its turns on a TokenRouter
+integration when the column's connection cannot drive it, and a pair served elsewhere is not a
+row for that column, so the bullet says not wired. Azure serves the ids as `gpt-6-sol-2026-09-22`
+and the aggregators as `openai/<id>`; both are the provider's alias of the same model, noted, not
+substitutions.
+
+- **openhands sent a bare id to TokenRouter** (fixed in 0.25.5). The builder prefixed the model
+  with `openai/`, and that prefix is taken off twice between the job and the wire (OpenHands' LLM
+  and litellm 1.94.3 each strip one), so an aggregator's `openai/gpt-6-sol` reached TokenRouter as
+  `gpt-6-sol`, refused with `503 model_not_found: No available channel for model gpt-6-sol under
+  group default`. OpenRouter and Vercel resolve a bare OpenAI id, which is why the earlier Vercel
+  column and this run's OpenRouter and Vercel rows passed, and openhands had never been measured
+  on TokenRouter. Measured against a loopback recorder in the openhands venv: `litellm_proxy/<id>`
+  is taken off once and the rest sent as it is, so the builder uses that prefix; and because
+  litellm's proxy provider reads LITELLM_PROXY_API_BASE and LITELLM_PROXY_API_KEY (its Responses
+  path does not fall back to the OpenAI pair: "api_base not set for LiteLLM Proxy responses API",
+  the first hosted turn on gpt-5.4, whose api_mode resolves to responses), the driver hands it
+  that pair and no other. Same fix on hosted (56308ad9), where openhands then passed the family
+  tour on the platform channel with receipts at list price.
+- **gpt-6-luna's recall after a recycle on codex.** The recycle scenario asks, after the sandbox
+  is recycled and the thread resumed, for the codeword of the task's first message; luna answered
+  the harness's completion phrase ("CODEX DONE") instead, first time on four of five connections,
+  twice on OpenAI direct, and passed the retest on TokenRouter, Vercel and Azure. hermes and qwen
+  did it once each on TokenRouter and passed the retest. The turn completes and the thread is
+  intact (the same question on gpt-6-sol and astra is answered everywhere), so this is the
+  cheapest tier's recall, recorded as FAIL where it reproduced and the model stays offered.
+- **aider answers nothing after the restore, sometimes.** aider's recycle resumes with its own
+  chat history; on the gpt-6 line it answered the recall with no text at all ("AIDER None") on
+  gpt-6-sol twice on OpenRouter, on gpt-6-luna twice on Azure, and once each on TokenRouter and
+  Vercel (passed the retest). Every other aider scenario passes on every connection. An open item
+  on aider's restore path with this line, not a catalog change.
+- **The console opened on a placeholder default** (fixed in 0.25.5, hosted b71f427b ported):
+  the placeholder lists and defaults in the console are regenerated from the gateway's catalog
+  byte for byte, the default helper reads the server's answer before the placeholder and never a
+  list's first entry, and a test fails the suite when the lists drift. Measured on the candidate:
+  a fresh page on codex, hermes, claude-code, omp, openhands, aider, kimi and dsh opens on the
+  gateway's default.
+- The 0.25.5 candidate was built from the branch so the openhands rerun could be measured end to
+  end before the tag; 0.25.5 is the same code from main, and the candidate's image and tag were
+  removed after the swap.
+
+**goose (0.25.6).** goose's list is the set of paths cline's rows earned, and cline passed both ids
+on every connection, so 0.25.6 lists gpt-6-sol and gpt-6-luna on goose and its own ten pairs ran
+the same way: 50 of 50 after one retest (first run 48 of 50: gpt-6-luna's recycle recall on
+Vercel and gpt-6-sol's on OpenAI, both answering "GOOSE DONE", both passing the retest). The
+same recall flake as above, on the base that resumes through the relay like cline does.
+
+## The browser column (2026-09-27)
+
+Every base but System One drives the browser plugin on one task in plain words: "Open
+https://example.com/ in the browser, click the only link on that page, and reply with the URL and
+the title of the page you land on." A base passes when the task completed, the trace shows the
+browser navigating and clicking, the answer names iana.org (where the link goes), and the browser
+session was stopped and billed. Runner: `scripts/support-matrix/plugs/browser.py`; the table is
+the Browser section of support-matrix.md, rendered from docs/browser-column.json.
+
+**Result: 15 of 15 on 0.25.7-rc.17, first try, 27 to 52 seconds a base, one browser minute each.**
+
+The baseline on rc.14, before any change, was 5 of 15 (codex, claude-code, pi, omp, dsh), and
+three defects stood between it and the result, each measured on its own build:
+
+1. **A Browser section in the agent's doc (rc.15).** Codex 0.154 keeps MCP tools behind its tool
+   search and opened a page with web search and curl while the console's Browser card stayed
+   empty; hermes fetched the page its own way, and cheetahclaws and opencode obeyed the prompt's
+   "do not visit any other site" instead of following the link (which leads to iana.org). A
+   harness that includes the browser plugin now gets a Browser section in AGENTS.md / CLAUDE.md,
+   the file its own instructions go to: the tools by name, that the person is watching, never
+   curl or a web search instead, look the tools up if they are deferred. The prompt lost the ban
+   and names "the only link" rather than its wording, which example.com changes ("More
+   information..." one week, "Learn more" the next). On rc.15 the seven bases that already had
+   the tools passed 7 of 7.
+2. **One header helper for every MCP writer (rc.16).** goose, opencode, aider, kimi, qwen,
+   gemini, openhands and cline had no browser at all: their MCP writers passed a server's
+   declared headers and dropped its `auth`, so the plugs server, whose credential the gateway
+   mints per turn, answered 401 (openhands said so; kimi said the server could not be reached;
+   the rest said they had no browser). claude, codex, pi, omp and hermes each carried their own
+   copy of the auth handling and worked. `_mcp_headers` in runner/server.py is now the one place
+   a server's headers come from, for every writer and the bridge. 14 of 15 on rc.16.
+3. **Tool names are `plug_tool` (rc.17).** openhands reached the browser and the turn died on the
+   Responses API's "Invalid 'input[3].name': string does not match pattern '^[a-zA-Z0-9_-]+$'":
+   the plugs server named its tools browser.navigate, github.get_file_contents and so on. Claude
+   Code, Codex and pi rewrite an MCP tool's name before offering it; OpenHands passes it through,
+   and neither OpenAI's nor Anthropic's function-name rule allows a dot. 15 of 15 on rc.17.
+
+Tools seen per base differ by style, not by ability: some snapshot before clicking, some read the
+URL after, cline waits for the load; every one navigated and clicked through the plugin.

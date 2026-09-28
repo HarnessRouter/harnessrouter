@@ -7,6 +7,7 @@ import sys
 
 from . import UHP_VERSION, checks  # noqa: F401 — importing checks populates the registry
 from .client import Client
+from . import DEFAULT_PLUGIN_MCP_URL
 from .context import Context
 from .registry import CLASSES, Outcome, checks_for
 from .report import render, to_json
@@ -34,6 +35,10 @@ def main(argv=None) -> int:
                    help="Extra header sent on every request, repeatable. For a target that "
                         "needs something a stock client never sends, e.g. a bring-your-own-key "
                         "host wanting the caller's model key. Never echoed into the report.")
+    p.add_argument("--plugin-mcp-url", default=os.environ.get("UHP_PLUGIN_MCP_URL", DEFAULT_PLUGIN_MCP_URL),
+                   help="A reachable streamable-HTTP MCP server the plugin checks point a plugin at "
+                        "(default: the public copy of uhp-conformance-fixture, or UHP_PLUGIN_MCP_URL). "
+                        "Run `uhp-conformance-fixture` to host your own.")
     p.add_argument("--label", default="",
                    help="How the report names the implementation measured, e.g. 'SuperQode 2.3.1'")
     a = p.parse_args(argv)
@@ -47,7 +52,7 @@ def main(argv=None) -> int:
         extra[name.strip()] = value.strip()
 
     ctx = Context(client=Client(a.base_url, a.api_key, headers=extra), harness_id=a.harness_id,
-                  model=a.model, task_timeout=a.task_timeout)
+                  model=a.model, task_timeout=a.task_timeout, plugin_mcp_url=a.plugin_mcp_url)
 
     # The harness the tasks run on is resolved BEFORE the first task, and named. A --harness-id
     # that matches nothing (a harness name given for an id, a typo) once fell back silently to
