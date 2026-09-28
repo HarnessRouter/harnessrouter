@@ -159,7 +159,7 @@ export default function KitsPage() {
         <div className="kits-head-row">
           <div className="kits-head-copy">
             <h1>Starter Kits</h1>
-            <p>A working product in one click: each kit provisions the Harness it needs and opens its own app, with everything it uses included.</p>
+            <p>See what you can build with HarnessRouter. Try these apps in one click. Each app’s agent features run on HarnessRouter.</p>
           </div>
           <label className="kits-search">
             <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true"><path d={ICON_SEARCH} /></svg>
