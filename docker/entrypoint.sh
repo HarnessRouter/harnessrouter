@@ -40,6 +40,12 @@ mkdir -p "$HARNESS_WORKSPACE"
 # by their session's uid (0700); the runner sets that as it allocates them.
 chown "$PRODUCT:$PRODUCT" "$DATA_DIR" "$HARNESS_WORKSPACE"
 chmod 751 "$DATA_DIR" "$HARNESS_WORKSPACE"        # traversable by sessions, neither listable nor writable
+# Environments (runner/environments.py): project layers built once and read by every session that
+# names one. Root's, readable by every session uid, writable by none: that ownership is the
+# read-only guarantee, so nothing here is handed to $PRODUCT. /env holds the links sessions are told.
+export HR_ENV_ROOT="${HR_ENV_ROOT:-$DATA_DIR/environments}"
+mkdir -p "$HR_ENV_ROOT" /env
+chmod 755 "$HR_ENV_ROOT" /env
 for f in "$DATA_DIR"/*.db "$DATA_DIR"/*.db-* "$DATA_DIR"/selfhost-auth.json; do
   if [ -e "$f" ]; then chown "$PRODUCT:$PRODUCT" "$f"; chmod 600 "$f"; fi
 done

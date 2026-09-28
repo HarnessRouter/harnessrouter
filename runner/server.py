@@ -73,7 +73,10 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+import environments   # the read-only project layer a turn may name (runner/environments.py)
+
 app = FastAPI(title="harness-runner")
+app.include_router(environments.router)
 
 WORKSPACE_ROOT = os.environ.get("HARNESS_WORKSPACE", "/workspace")
 # Session ids are opaque to us and arrive over the wire, so they are sanitized before becoming a
@@ -1335,7 +1338,8 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         else "CLAUDE.md")
 
 
-def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict]) -> None:
+def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict],
+                     environment: dict | None = None) -> None:
     """Compose the agent's instruction file from (1) the harness's user-authored doc and (2) a managed
     block: the workspace contract, always, plus an 'Available skills' section when skills are
     installed. The user doc is the base; the managed block is appended inside HTML-comment markers.
@@ -1359,6 +1363,7 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
              "under it. Never write output to an absolute path outside it (/tmp, /app, the "
              "workspace parent directory, or your home directory): those files are not collected, "
              "and the user will never see them.", ""]
+    lines += environments.doc_section(environment)
     if skills_meta:
         lines += ["## Available skills", "",
                   "These skills are installed in this workspace. When a task matches one, read its "
@@ -7625,6 +7630,7 @@ class TurnReq(BaseModel):
     vision: bool = True                    # pi: whether the model's channel accepts image input
     vision_auth: dict | None = None        # hermes: {provider, model, base_url, api_key} for its image questions
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
+    environment: dict | None = None        # {id, slug, entry}: the project layer at /env/<slug>, read-only (environments.py)
 
 
 @app.post("/turn")
@@ -7697,7 +7703,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
                 f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
-    _write_agent_doc(cwd, backend, agent_doc, installed_skills)
+    turn_environment = environments.resolve(req.environment)   # 409 when nothing is built: before any process starts
+    _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
     # The harness's own variables under the runner's, so nothing a caller names shadows the
     # runner's credentials or paths; the platform's HR_ names come after and win (below).
     env = {**_caller_env(req.env), **_child_env()}
@@ -7740,6 +7747,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # opaque UnknownError. Proven by env bisection on a live failure: with 40 inherited variables,
     # removing or correcting PWD alone flips the turn from failing to passing.
     env["PWD"] = cwd
+    environments.apply_env(env, turn_environment)
     auth = _adapt_custom_auth(req.auth or Auth())
     model = req.model or spec["default_model"]
     use_appserver = backend == "codex" and bool(req.codex_appserver)

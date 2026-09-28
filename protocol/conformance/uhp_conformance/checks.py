@@ -18,7 +18,7 @@ import uuid
 
 from .registry import Skip, check
 
-SPEC = "protocol/versions/2026-09-12"
+SPEC = "protocol/versions/2026-09-28"
 
 
 # ── shared fixtures ────────────────────────────────────────────────────────────────────
@@ -1714,3 +1714,221 @@ def r08(ctx):
     # would diagnose one bug twice.
     ctx.client.delete(f"/v1/sessions/{sid}/share")
     return "published with no body"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Environments (2026-09-28) — optional capability; a project's files and installed dependencies,
+# built once and read by every session that names it. Checks EN-01 to EN-06 need no model: they
+# drive the object, its files, a build and the reference. EN-07 runs one task on it.
+# ══════════════════════════════════════════════════════════════════════════════════════
+def _environments_supported(ctx) -> None:
+    d = ctx.state.get("discovery") or ctx.client.get("/v1/uhp", auth=False).json or {}
+    ctx.state["discovery"] = d
+    if not (d.get("capabilities") or {}).get("environments"):
+        raise Skip("this server reports the environments capability false or absent, and the "
+                   "Environments chapter is optional at every class")
+
+
+def _managed_environment(ctx) -> dict:
+    """One environment for the whole series, created once with a file and an empty requirements
+    manifest (a build that needs no network), remembered for cleanup."""
+    if ctx.state.get("environment"):
+        return ctx.state["environment"]
+    r = ctx.client.post("/v1/environments", body={"name": f"uhp-conformance-{uuid.uuid4().hex[:6]}",
+                                                  "description": "the conformance suite's environment",
+                                                  "entry": "python3 run.py"})
+    assert r.status == 200, f"POST /v1/environments returned HTTP {r.status}: {r.text[:200]}"
+    e = r.json or {}
+    ctx.validate(e, "Environment")
+    ctx.state["environment"] = e
+    ctx.state.setdefault("_cleanup_environments", []).append(e.get("id"))
+    return e
+
+
+def _built_environment(ctx) -> dict:
+    """The environment with a finished build, waited for once."""
+    e = _managed_environment(ctx)
+    if ctx.state.get("environment_built"):
+        return ctx.state["environment_built"]
+    eid = e["id"]
+    for path, body in (("run.py", b"import sys\nprint(sys.prefix)\n"), ("requirements.txt", b""),
+                       ("data/hello.txt", b"hello from the environment\n")):
+        r = ctx.client.put(f"/v1/environments/{eid}/files/{path}", raw=body, content_type="application/octet-stream")
+        assert r.status == 200, f"PUT files/{path} returned HTTP {r.status}: {r.text[:200]}"
+    r = ctx.client.post(f"/v1/environments/{eid}/build")
+    assert r.status == 200, f"POST build returned HTTP {r.status}: {r.text[:200]}"
+    n = int((r.json or {}).get("version") or 0)
+    assert n >= 1, f"the build did not name a version: {r.json}"
+    deadline = time.time() + ctx.task_timeout
+    rec = {}
+    while time.time() < deadline:
+        rec = ctx.client.get(f"/v1/environments/{eid}/builds/{n}").json or {}
+        if rec.get("status") in ("ready", "failed"):
+            break
+        time.sleep(2)
+    assert rec.get("status") == "ready", f"the build did not become ready: {rec.get('status')!r} {str(rec.get('error') or '')[:200]}"
+    e = ctx.client.get(f"/v1/environments/{eid}").json or {}
+    ctx.state["environment_built"] = e
+    return e
+
+
+@check("EN-01", "An environment is created with a fixed mount path and reads back", "full",
+       f"{SPEC}/environments.md#2-the-environment-object")
+def en01(ctx):
+    _environments_supported(ctx)
+    e = _managed_environment(ctx)
+    assert str(e.get("id") or "").startswith("henv_"), f"id {e.get('id')!r} does not carry the henv_ prefix"
+    assert e.get("status") == "empty" and e.get("version") is None, (
+        f"a new environment must be empty with no version; got status={e.get('status')!r} version={e.get('version')!r}")
+    assert str(e.get("mount") or "").startswith("/") and e["mount"].endswith("/" + e["slug"]), (
+        f"mount {e.get('mount')!r} must be an absolute path ending in the slug {e.get('slug')!r}")
+    got = ctx.client.get(f"/v1/environments/{e['id']}").json or {}
+    ctx.validate(got, "Environment")
+    assert got.get("slug") == e["slug"] and got.get("mount") == e["mount"], "the slug and mount must be stable across reads"
+    return f"{e['id']} at {e['mount']}"
+
+
+@check("EN-02", "Files go in by path and come back byte for byte; escapes are refused", "full",
+       f"{SPEC}/environments.md#3-files")
+def en02(ctx):
+    _environments_supported(ctx)
+    e = _managed_environment(ctx)
+    eid = e["id"]
+    body = b"nested\x00bytes\n"
+    r = ctx.client.put(f"/v1/environments/{eid}/files/probe/nested/blob.bin", raw=body, content_type="application/octet-stream")
+    assert r.status == 200, f"PUT returned HTTP {r.status}"
+    r = ctx.client.get(f"/v1/environments/{eid}/files/probe/nested/blob.bin")
+    assert r.status == 200 and r.raw == body, "the bytes must come back exactly as sent"
+    tree = ctx.client.get(f"/v1/environments/{eid}/files").json or {}
+    ctx.validate(tree, "EnvironmentFileList")
+    paths = {x.get("path") for x in tree.get("entries") or []}
+    assert "probe/nested/blob.bin" in paths and "probe/nested" in paths, f"the tree must list the file and its directories: {sorted(paths)[:10]}"
+    r = ctx.client.put(f"/v1/environments/{eid}/files/..%2Fescape.txt", raw=b"no", content_type="application/octet-stream")
+    assert r.status in (400, 404, 422), f"a path that escapes the root must be refused, got HTTP {r.status}"
+    assert ctx.client.delete(f"/v1/environments/{eid}/files/probe").status == 200, "a directory tree is removable"
+    paths = {x.get("path") for x in (ctx.client.get(f"/v1/environments/{eid}/files").json or {}).get("entries") or []}
+    assert "probe" not in paths, "the removed tree must be gone"
+    return "round trip, tree, escape refused, removal"
+
+
+@check("EN-03", "A build snapshots the source and becomes the active version", "full",
+       f"{SPEC}/environments.md#4-builds-and-versions")
+def en03(ctx):
+    _environments_supported(ctx)
+    e = _built_environment(ctx)
+    assert e.get("status") == "ready" and e.get("version") == 1, f"after the first build: status={e.get('status')!r} version={e.get('version')!r}"
+    vers = ctx.client.get(f"/v1/environments/{e['id']}/versions").json or {}
+    assert vers.get("active") == 1 and [v.get("version") for v in vers.get("versions") or []] == [1], f"versions: {vers}"
+    b = ctx.client.get(f"/v1/environments/{e['id']}/builds/1").json or {}
+    ctx.validate(b, "EnvironmentBuild")
+    assert b.get("status") == "ready" and isinstance(b.get("packages"), list), "a ready build lists its packages"
+    return f"version 1 ready, {len(b.get('packages') or [])} packages"
+
+
+@check("EN-04", "Editing the source changes nothing until the next build; rollback is a pointer", "full",
+       f"{SPEC}/environments.md#4-builds-and-versions")
+def en04(ctx):
+    _environments_supported(ctx)
+    e = _built_environment(ctx)
+    eid = e["id"]
+    ctx.client.put(f"/v1/environments/{eid}/files/data/hello.txt", raw=b"changed\n", content_type="application/octet-stream")
+    assert (ctx.client.get(f"/v1/environments/{eid}").json or {}).get("version") == 1, "an edit must not change the active version"
+    r = ctx.client.post(f"/v1/environments/{eid}/build")
+    assert r.status == 200 and (r.json or {}).get("version") == 2, f"the second build must be version 2: HTTP {r.status} {r.json}"
+    deadline = time.time() + ctx.task_timeout
+    rec = {}
+    while time.time() < deadline:
+        rec = ctx.client.get(f"/v1/environments/{eid}/builds/2").json or {}
+        if rec.get("status") in ("ready", "failed"):
+            break
+        time.sleep(2)
+    assert rec.get("status") == "ready", f"build 2: {rec.get('status')!r} {str(rec.get('error') or '')[:200]}"
+    assert (ctx.client.get(f"/v1/environments/{eid}").json or {}).get("version") == 2, "a finished build becomes the active version"
+    r = ctx.client.post(f"/v1/environments/{eid}/versions/1/activate")
+    assert r.status == 200 and (r.json or {}).get("version") == 1, f"activating version 1 must make it active: HTTP {r.status} {r.json}"
+    r = ctx.client.post(f"/v1/environments/{eid}/versions/99/activate")
+    assert r.status in (404, 409), f"activating a version that was never built must be refused, got HTTP {r.status}"
+    assert _error_code(r) in ("environment_not_ready", "not_found", ""), f"unexpected code {_error_code(r)!r}"
+    return "edit invisible, build 2 active, rollback to 1"
+
+
+@check("EN-05", "A harness names an environment; a task on an unbuilt one is refused before it starts", "full",
+       f"{SPEC}/environments.md#5-attaching-an-environment")
+def en05(ctx):
+    _environments_supported(ctx)
+    e = _built_environment(ctx)
+    h = _managed_harness(ctx, environment=e["id"])
+    got = ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}
+    assert got.get("environment") == e["id"], f"the harness must report the environment it names: {got.get('environment')!r}"
+    r = ctx.client.post("/v1/harnesses", body={"name": "uhp-conformance-bad-env", "base": _supported_base(ctx),
+                                               "environment": "henv_00000000000000000000000000000000"})
+    assert r.status == 404 and _error_code(r) == "environment_not_found", (
+        f"a harness naming an environment that is not there must be refused with environment_not_found: HTTP {r.status} {_error_code(r)!r}")
+    if r.status == 200:
+        ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
+    empty = ctx.client.post("/v1/environments", body={"name": f"uhp-conformance-empty-{uuid.uuid4().hex[:6]}"}).json or {}
+    ctx.state.setdefault("_cleanup_environments", []).append(empty.get("id"))
+    r = ctx.client.post("/v1/responses", body={"input": PROMPT, "metadata": {"harness_id": h["id"]},
+                                               "environment": empty.get("id"), "stream": False})
+    assert r.status == 409 and _error_code(r) == "environment_not_ready", (
+        f"a task on an environment with nothing built must be refused with environment_not_ready before it starts: HTTP {r.status} {_error_code(r)!r}")
+    return "harness reference reads back; unknown refused; unbuilt refused"
+
+
+@check("EN-06", "The environment's harness list names the harness that reads it", "full",
+       f"{SPEC}/environments.md#5-attaching-an-environment")
+def en06(ctx):
+    _environments_supported(ctx)
+    e = _built_environment(ctx)
+    h = _managed_harness(ctx, environment=e["id"])
+    ids = {x.get("id") for x in (ctx.client.get(f"/v1/environments/{e['id']}/harnesses").json or {}).get("harnesses") or []}
+    assert h["id"] in ids, "the harness that names the environment must be listed"
+    return f"{len(ids)} harness(es) read it"
+
+
+@check("EN-07", "A task reads the environment at its mount path, read-only, and its session names it", "full",
+       f"{SPEC}/environments.md#6-what-a-session-sees")
+def en07(ctx):
+    _environments_supported(ctx)
+    e = _built_environment(ctx)
+    h = _managed_harness(ctx, environment=e["id"])
+    mount = e["mount"]
+    body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
+                      f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
+            "metadata": {"harness_id": h["id"]}, "stream": False}
+    if ctx.model:
+        body["model"] = ctx.model
+    r = ctx.client.post("/v1/responses", body=body)
+    assert r.status == 200, f"the task did not start: HTTP {r.status} {r.text[:200]}"
+    resp = r.json or {}
+    text = " ".join(str(c.get("text") or "") for it in resp.get("output") or [] for c in it.get("content") or [] if isinstance(c, dict))
+    assert "hello from the environment" in text, f"the agent could not read the file at {mount}: {text[-300:]!r}"
+    assert "WRITE_RC=0" not in text or "denied" in text.lower() or "read-only" in text.lower(), (
+        f"a write under {mount} must fail (the layer is read-only): {text[-300:]!r}")
+    sid = str(((resp.get("metadata") or {}).get("session_id")) or "")
+    if sid:
+        s = ctx.client.get(f"/v1/sessions/{sid}").json or {}
+        assert s.get("environment") == e["id"], f"the session must name the environment its turn read: {s.get('environment')!r}"
+    return f"read {mount}/data/hello.txt; write refused"
+
+
+@check("EN-08", "Configured environments are cleaned up", "full", f"{SPEC}/environments.md#2-the-environment-object")
+def en08(ctx):
+    ids = [i for i in ctx.state.get("_cleanup_environments") or [] if i]
+    if not ids:
+        raise Skip("no environments were created by earlier checks")
+    # the harnesses that named them go first (F-07 ran before this series existed; its list is spent)
+    for hid in [i for i in ctx.state.get("_cleanup_harnesses") or [] if i]:
+        ctx.client.delete(f"/v1/harnesses/{hid}")
+    left = []
+    for eid in ids:
+        r = ctx.client.delete(f"/v1/environments/{eid}")
+        if r.status == 409:   # a build still running: wait for it, then delete
+            for _ in range(60):
+                time.sleep(2)
+                if ctx.client.delete(f"/v1/environments/{eid}").status == 200:
+                    break
+        if ctx.client.get(f"/v1/environments/{eid}").status != 404:
+            left.append(eid)
+    assert not left, f"these environments still resolve after delete: {left}"
+    return f"{len(ids)} removed"

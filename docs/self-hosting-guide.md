@@ -8,6 +8,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [Restarts, upgrades, and backups](#restarts-upgrades-and-backups)
 - [Starter kits](#starter-kits)
 - [Plugins](#plugins)
+- [Environments](#environments)
 - [What it is](#what-it-is)
 - [Why self-host](#why-self-host)
 - [The Unified Harness Protocol](#the-unified-harness-protocol)
@@ -676,6 +677,41 @@ instance keeps no ledger, and the price shown on the Plugins page is the vendor'
 no markup, read from the same table the hosted service bills from. Every call and every session is
 written down on the task's trace (event type `plug`, plug `browser`, with the minutes and the
 vendor's figure on the session row).
+
+## Environments
+
+A task's workspace starts empty and is checkpointed after every turn with its dependency
+directories left out, so a project that is uploaded into it is uploaded again next time and its
+packages are installed again. An **environment** is that project as one thing: its files and its
+installed dependencies, built once, and read by every task that names it.
+
+Every task that uses one finds it at `/env/<slug>` (the name, as a path segment), read-only and
+shared, with the environment's Python virtualenv and `node_modules` first on `PATH`, the project on
+`PYTHONPATH`, and `PROJECT_ROOT` naming the path. The task's own workspace stays what it was:
+writable, private to the session, checkpointed, and the only place its outputs come from. Two tasks
+on one environment share every byte of it and cannot read each other's workspace or write the
+environment; behind the write-wall an agent runs as its session's user and the environment is
+root's, so a write fails rather than being merely discouraged. The agent's instruction file says all
+of this, and repeats the "how it is run" line you gave.
+
+On the console, **Environments** (under Build): create one, then put the project in, one file at a
+time, as an archive, or from a git repository (the tree is kept; a single wrapping folder is
+stripped), and press **Build**. The build copies the files into a new version and installs what they
+declare (`requirements.txt` or `pyproject.toml` into `.venv`, `package.json` with npm, then
+`setup.sh` for anything else), logs the installers' output, and makes the version the one tasks
+read when it succeeds. Editing files afterwards changes nothing a task sees until the next build;
+an older version can be made active again with one click. Then name the environment under a
+harness's settings (**Project environment**), or on one task with `environment` in the request. A
+task on an environment with nothing built is refused before it starts.
+
+Where it lives: `/data/environments/<id>/` on the data volume (`source/`, `versions/<n>/`,
+`active`), with the `/env/<slug>` links remade after a restart. A build runs in the runner with the
+image's own `python3` and `npm` and the network, for at most `HR_ENV_BUILD_TIMEOUT` seconds
+(1800); an import may be `HR_ENV_IMPORT_MAX_BYTES` (512 MiB) and a file `HR_ENV_FILE_MAX_BYTES`
+(64 MiB). System packages are the image's (`ffmpeg`, LibreOffice, Playwright are there); a
+`setup.sh` runs with the build's privileges, so it is yours to trust. The API is under
+`/v1/environments`, in the [API reference](#using-the-api) and in the
+[Environments chapter](../protocol/versions/2026-09-28/environments.md) of the protocol.
 
 ## What it is
 
