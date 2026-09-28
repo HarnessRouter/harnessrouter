@@ -1218,7 +1218,19 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Every one of them launches a stdio server, so the runner hands them the bridge (mcp_bridge.py)
 # as one, and the bridge speaks the remote transport with the reference SDK. The server reaches
 # the agent on every base the same way; nothing is declared unsupported.
-_BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "cheetahclaws": ("http",)}
+#
+# grok is here for a sharper reason: it ADVERTISES SSE and then does not speak it. `type = "sse"`
+# beside the url is the shape its own `grok mcp add --transport sse` writes, and 1.0.41 accepts that
+# and dials the url with its STREAMABLE-HTTP client — the error names the worker
+# (`StreamableHttpClientWorker … HTTP 405 Method Not Allowed, when send initialize request`) and the
+# server's log shows a POST to an endpoint that answers GET. Measured 2026-09-28 against a local SSE
+# server with BOTH the vendor-written config and this runner's, and reproduced by `grok mcp doctor`,
+# so it is the CLI's defect rather than this file's config. Untreated it is silent: the tools never
+# arrive, `search_tool` answers "No MCP tools are available in this session", and the turn runs
+# without them. Its streamable-HTTP client is fine (verified against a local server and the public
+# deepwiki one, tools discovered and called), so only SSE is bridged.
+_BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "grok": ("sse",),
+                       "cheetahclaws": ("http",)}
 _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
 
 
@@ -4687,6 +4699,17 @@ _GROK_TOOL_POLICY_IDS = {
     "spawn_subagent": "Agent", "monitor": "monitor", "workflow": "workflow",
     "ask_user_question": "ask_user_question", "search_tool": "search_tool", "use_tool": "use_tool",
 }
+# WITHHOLDING THE SHELL MEANS WITHHOLDING EVERY SURFACE THAT RUNS A COMMAND, and grok has three
+# besides `run_terminal_cmd`. MEASURED 2026-09-28, A/B with a real model on a real turn: with only
+# run_terminal_command disabled, asked to run `echo <token> > shellproof.txt`, the agent called
+# `monitor` with that exact command (the docs call it the streaming counterpart of /loop: it "streams
+# events from a long-running script"), read the output back through
+# get_command_or_subagent_output, and the file was there with the token in it. `tool_enforcement:
+# "hard"` would have been an overstatement — UHP section 4.3 — on the strength of the tool list alone.
+# The subagent family is the same hole one step further out (a subagent carries its own tools, kimi's
+# lesson) and the scheduler runs commands on a timer; the CLI's `Agent` entry withholds all of them at
+# once, measured. So the console's Shell switch withholds monitor and Agent with it.
+_GROK_TOOL_IMPLIES = {"run_terminal_command": ("monitor", "Agent")}
 # Withheld on every turn, whatever the harness says. The media tools call xAI's Imagine models by an
 # xAI id at the turn's endpoint, which no other provider serves; send_feedback reports to xAI.
 _GROK_ALWAYS_WITHHELD = ("image_gen", "image_edit", "image_to_video", "reference_to_video",
@@ -4758,8 +4781,11 @@ def _grok_config(home: pathlib.Path, model: str, base_url: str,
     in 1 s. The SENSITIVITY PROOF that the rig could have seen it: the same stub under `grok mcp
     doctor`, which probes interactively, fetched both well-known documents.
     MCP: a stdio server is command/args/env/cwd; a remote one is url + headers, with `type = "sse"`
-    for an SSE server (grok speaks SSE and streamable HTTP itself, so nothing needs the bridge). A
-    server's `auth` becomes its Authorization header, as on every other base."""
+    for an SSE server. In practice one does not reach this function as SSE: grok is in
+    _BRIDGED_TRANSPORTS because its SSE client dials streamable HTTP instead (see there), so the
+    runner has already turned such a server into a stdio launcher for the bridge. The branch stays
+    for a server that arrives untouched, and writes the shape the CLI's own `mcp add --transport sse`
+    writes. A server's `auth` becomes its Authorization header, as on every other base."""
     lines = [
         "[features]", "telemetry = false", "remote_fetch = false", "managed_config = false",
         "campaigns = false", "turn_summary = false", "title_refresh = false", "session_recap = false",
@@ -4880,6 +4906,10 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     # -r continues one the store holds. The init event reports it, and the gateway sends it back.
     cmd += ["-r", sid] if resumed else ["-s", str(uuid.uuid4())]
     withheld = [_GROK_TOOL_POLICY_IDS[t] for t in (tools_disabled or []) if t in _GROK_TOOL_POLICY_IDS]
+    for t in (tools_disabled or []):
+        for implied in _GROK_TOOL_IMPLIES.get(t, ()):
+            if implied not in withheld:
+                withheld.append(implied)
     cmd += ["--disallowed-tools", ",".join(list(_GROK_ALWAYS_WITHHELD) + withheld)]
     if max_turns:
         # Unset is unbounded; reaching it ends the run as `error_max_turns`, which reads as failed.

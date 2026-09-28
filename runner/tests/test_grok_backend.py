@@ -410,3 +410,20 @@ def test_the_repair_is_idempotent_so_the_relays_retry_terminates():
     once = _with_anthropic_schemas(body)
     assert once != body
     assert _with_anthropic_schemas(once) == once
+
+
+def test_withholding_the_shell_withholds_every_other_command_surface():
+    """A/B-measured on 2026-09-28 (real model, real turn): with only run_terminal_command withheld the
+    agent ran the same command through `monitor` and read it back through
+    get_command_or_subagent_output, and the file it wrote was there — so the tool list alone did not
+    earn `tool_enforcement: "hard"`. With monitor and the CLI's `Agent` entry withheld too (the
+    subagent family and the scheduler), the agent answered that it had no shell and nothing ran."""
+    from server import _GROK_TOOL_IMPLIES
+    cmd, _, _ = _argv(tools_disabled=["run_terminal_command"])
+    withheld = cmd[cmd.index("--disallowed-tools") + 1].split(",")
+    assert "run_terminal_cmd" in withheld and "monitor" in withheld and "Agent" in withheld
+    assert _GROK_TOOL_IMPLIES["run_terminal_command"] == ("monitor", "Agent")
+    # withholding something else does not drag the command surfaces with it
+    cmd, _, _ = _argv(tools_disabled=["grep"])
+    withheld = cmd[cmd.index("--disallowed-tools") + 1].split(",")
+    assert "grep" in withheld and "monitor" not in withheld and "Agent" not in withheld
