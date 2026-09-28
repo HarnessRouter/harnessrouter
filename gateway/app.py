@@ -3747,7 +3747,17 @@ def _turn_failure_message(rec: dict) -> str:
     # "credential cannot be brokered; refused" because the chain's next entry could not be brokered
     # (hosted, 2026-09-08).
     ran = [t for t in tried if t.get("status")]
-    last = (ran or tried)[-1]
+    if not ran:
+        # Nothing ran: every connection was skipped before a request went out. The notes are the
+        # router's ("does not serve", "cannot be brokered"); the person needs what to do (hosted,
+        # claude-opus-5.5 on Claude Code, 2026-09-27: "credential cannot be brokered; refused").
+        model = str(rec.get("model") or "This model")
+        if any("brokered" in str(t.get("error") or "") for t in tried):
+            return (f"{model} is served here only by a connection this harness's base cannot use. Choose "
+                    "another model, or connect a provider that serves it under Bring Your Own Key.")
+        return (f"No connection on this account serves {model}. Choose another model, or connect a "
+                "provider that serves it under Bring Your Own Key.")
+    last = ran[-1]
     reason = str(last.get("error") or "").strip() or f"the connection answered {last.get('status') or 'with an error'}"
     if (said := _history_refusal(rec, reason)):
         return said
