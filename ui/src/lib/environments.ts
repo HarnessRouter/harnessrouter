@@ -21,7 +21,6 @@ export interface Environment {
   build: EnvironmentVersion | null;
   member: string; workspace: string; createdAt: number; updatedAt: number;
 }
-export interface EnvironmentBuild extends EnvironmentVersion { id: string; log?: string; packages?: never; }
 export interface EnvironmentBuildRecord {
   id: string; version: number; status: 'building' | 'ready' | 'failed';
   started_at?: number | null; finished_at?: number | null; error?: string; log?: string;
