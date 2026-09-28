@@ -468,7 +468,7 @@ def _stub_mcp_sdk(monkeypatch):
     sh = types.ModuleType("mcp.client.streamable_http")
     sh.streamable_http_client = lambda url, http_client=None: ("http", url, http_client)
     hx = types.ModuleType("httpx2")
-    hx.AsyncClient = lambda headers=None: ("client", headers)
+    hx.AsyncClient = lambda headers=None, timeout=None: ("client", headers)
     client = types.ModuleType("mcp.client")
     pkg = types.ModuleType("mcp")
     pkg.client = client
