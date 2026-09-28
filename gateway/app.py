@@ -14084,8 +14084,8 @@ async def plugs_mcp(request: Request):
 
     name = str(params.get("name") or "")
     args = params.get("arguments") or {}
-    plug, _, tool = name.partition(".")
-    spec = plugs_plane.find(plug, tool) if plug in plugs else None
+    plug, tool = plugs_plane.split_name(name, plugs)
+    spec = plugs_plane.find(plug, tool) if plug else None
     if spec is None or (enabled and enabled.get(plug) is not None and tool not in enabled[plug]):
         return _jsonrpc_result(rid, _tool_text(f"No tool named {name!r} on this server.", True))
     workspace = str(rec.get("workspace") or "")

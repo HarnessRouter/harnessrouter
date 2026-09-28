@@ -358,7 +358,7 @@ def _rpc(client, tok: str, method: str, params: dict | None = None, rid=1):
 
 
 def _call(client, tok, name, **args):
-    return _rpc(client, tok, "tools/call", {"name": f"browser.{name}", "arguments": args})
+    return _rpc(client, tok, "tools/call", {"name": f"browser_{name}", "arguments": args})
 
 
 def _rows(hid: str) -> list[dict]:
@@ -389,12 +389,12 @@ def test_a_harness_includes_the_browser_like_any_plug_and_the_workspace_must_hav
     assert _get(client, f"/v1/harnesses/{hid}/servers/mcp.plugs").json()["status"] == {"browser": "missing"}
     tok = gw._mint_hosted_cred(hid, _session_of(hid), _key(hid))
     tools = _rpc(client, tok, "tools/list")["tools"]
-    assert [t["name"] for t in tools] == ["browser.navigate", "browser.get_url", "browser.snapshot", "browser.extract_text",
-                                          "browser.click", "browser.type", "browser.press_key", "browser.scroll", "browser.wait_for",
-                                          "browser.screenshot", "browser.back", "browser.list_tabs", "browser.switch_tab"]
-    assert next(t for t in tools if t["name"] == "browser.snapshot")["annotations"] == {"readOnlyHint": True, "destructiveHint": False}
-    assert next(t for t in tools if t["name"] == "browser.click")["annotations"] == {"readOnlyHint": False, "destructiveHint": False}
-    assert next(t for t in tools if t["name"] == "browser.navigate")["description"].startswith("[Browser, write]")
+    assert [t["name"] for t in tools] == ["browser_navigate", "browser_get_url", "browser_snapshot", "browser_extract_text",
+                                          "browser_click", "browser_type", "browser_press_key", "browser_scroll", "browser_wait_for",
+                                          "browser_screenshot", "browser_back", "browser_list_tabs", "browser_switch_tab"]
+    assert next(t for t in tools if t["name"] == "browser_snapshot")["annotations"] == {"readOnlyHint": True, "destructiveHint": False}
+    assert next(t for t in tools if t["name"] == "browser_click")["annotations"] == {"readOnlyHint": False, "destructiveHint": False}
+    assert next(t for t in tools if t["name"] == "browser_navigate")["description"].startswith("[Browser, write]")
     out = _call(client, tok, "navigate", url="https://example.com/")
     assert out["isError"] and out["content"][0]["text"].startswith("The workspace has no Browser plugin connected")
     assert ven.created == [] and _rows(hid)[-1]["outcome"] == "refused" and _rows(hid)[-1]["error"] == "missing"
@@ -407,7 +407,7 @@ def test_a_harness_includes_the_browser_like_any_plug_and_the_workspace_must_hav
     # a narrowed include lists only the named tools
     r = _post(client, f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["browser"], "tools": {"browser": ["navigate", "extract_text"]}})
     assert r.status_code == 200 and r.json()["tools"] == {"browser": ["navigate", "extract_text"]}
-    assert [t["name"] for t in _rpc(client, tok, "tools/list")["tools"]] == ["browser.navigate", "browser.extract_text"]
+    assert [t["name"] for t in _rpc(client, tok, "tools/list")["tools"]] == ["browser_navigate", "browser_extract_text"]
     r = _post(client, f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["browser"], "tools": {"browser": ["evaluate"]}})
     assert r.status_code == 400 and "evaluate" in r.text
 

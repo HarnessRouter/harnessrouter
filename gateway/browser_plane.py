@@ -568,7 +568,7 @@ _tool("switch_tab", "act", "Make one of the open tabs the current tab.",
 
 
 def tool_list() -> list[dict]:
-    return [{"name": f"browser.{t['name']}", "description": f"[browser, {t['risk']}] {t['description']}",
+    return [{"name": f"browser_{t['name']}", "description": f"[browser, {t['risk']}] {t['description']}",
              "inputSchema": t["inputSchema"],
              "annotations": {"readOnlyHint": t["risk"] == "read", "destructiveHint": False}} for t in _TOOLS]
 
@@ -806,7 +806,7 @@ async def call(s: Session, name: str, args: dict):
         s.page = pages[i]
         s.page.set_default_timeout(30000)
         return f"Current tab is now {i}: {await _where(s)}"
-    raise BrowserToolError(f"No tool named browser.{name}.")
+    raise BrowserToolError(f"No tool named browser_{name}.")
 
 
 def audit_line(d: dict) -> str:
