@@ -959,8 +959,10 @@ body.hr-resizing iframe { pointer-events: none; }
    edge. Reduced motion keeps the colours and drops the animation. The card also fills the window
    (full). */
 /* the column the docked card sits in is invisible (no surface, no edge, no shadow) and lets the
-   page beneath be used around the card, which floats in it, centred (Richard, 2026-09-27) */
-.wbx-browser-pane { background: transparent; padding: 12px 12px 12px 0; align-items: center; pointer-events: none; }
+   page beneath be used around the card, which floats in it, centred (Richard, 2026-09-27). The
+   conversation keeps at least half the width: at 686 px the 62% a file preview may take left a
+   254 px conversation with a crushed composer (hr-test rc.13). */
+.wbx-browser-pane { background: transparent; padding: 12px 12px 12px 0; align-items: center; pointer-events: none; max-width: 50%; }
 .wbx-browser-pane > * { pointer-events: auto; }
 .wbx-browser-card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 auto;
   border-radius: 16px; background: var(--surface); box-shadow: 0 1px 2px rgba(17, 19, 23, .06), 0 12px 32px rgba(17, 19, 23, .12), 0 0 0 1px var(--line);
