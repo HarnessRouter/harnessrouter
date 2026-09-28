@@ -106,7 +106,11 @@ def test_openapi_describes_the_customer_surface_only():
     assert not [p for p in paths if p.startswith(("/v1/admin", "/v1/orgs", "/v1/mcp/", "/v1/kits", "/v1/cloud-upload", "/v1/hr", "/internal", "/share"))]
     # console-owned routes under a public prefix stay out (#245, reported by trifonnt): the cloud
     # upload handlers and the kits' server state, vendor and media handlers
-    assert not [p for p in paths if p.startswith(("/v1/harnesses/upload", "/v1/harnesses/{hid}/upload", "/v1/harnesses/{hid}/servers"))], sorted(paths)
+    assert not [p for p in paths if p.startswith(("/v1/harnesses/upload", "/v1/harnesses/{hid}/upload", "/v1/harnesses/{hid}/servers"))
+                and p != "/v1/harnesses/{hid}/servers/plugs"], sorted(paths)
+    # a customer app connects a plugin for its workspace and includes it on a harness by API
+    for p in ("/v1/plugs", "/v1/plugs/{plug_type}", "/v1/plugs/{plug_type}/attachments", "/v1/harnesses/{hid}/servers/plugs"):
+        assert p in paths, p
     for p in ("/v1/harnesses/{harness_id}/events", "/v1/harnesses/{hid}/plugin", "/v1/harnesses/{hid}/plugins/{name}/files"):
         assert p in paths, p
     assert "env" in doc["components"]["schemas"]["HarnessBody"]["properties"]

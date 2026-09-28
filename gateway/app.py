@@ -46,6 +46,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 import backing               # pluggable graph/blob/secret stores (vg | local)
 import media_plane           # the media plane (capability catalog, provider adapters, ffmpeg)
+import plugs_plane           # the plugs surface: the vendor tools behind the hosted plugs server
+import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 
@@ -98,9 +100,10 @@ class _OpsDrops:
 _billing_drops = _OpsDrops("billing", 60, ("errors", "rejects"))
 
 
-def _report_usage(org: str, metric: str, amount: float) -> None:
+def _report_usage(org: str, metric: str, amount: float, **_attribution) -> None:
     """Fire-and-forget metering to the billing harvest service. Never blocks or
-    fails a turn: 3s timeout; failures are COUNTED (never raised)."""
+    fails a turn: 3s timeout; failures are COUNTED (never raised). The hosted service's
+    per-task attribution keywords are accepted and, with no ledger here, dropped."""
     if not BILLING_HARVEST_URL or not org or amount <= 0:
         return
     async def _post():
@@ -1089,6 +1092,8 @@ _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_
 # base), the model list it serves, and the connect flow that hands a key to this instance.
 HR_HOSTED_BASE = os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai").rstrip("/")
 HR_HOSTED_PROVIDER_BASE = f"{HR_HOSTED_BASE}/v1/provider"
+# The hosted console, where a HarnessRouter API key's credit is bought and topped up.
+HR_HOSTED_CONSOLE = os.environ.get("HR_HOSTED_CONSOLE", "https://app.harnessrouter.ai").rstrip("/")
 HR_HOSTED_MODELS_URL = f"{HR_HOSTED_BASE}/v1/models"
 HR_HOSTED_BALANCE_URL = f"{HR_HOSTED_BASE}/v1/balance"
 HR_HOSTED_CONNECT_URL = f"{HR_HOSTED_BASE}/v1/connect"
@@ -1176,6 +1181,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
     ("google", "openhands"): "openai-api",
+    # cheetahclaws speaks ONE wire protocol: its `custom/<model>` client is OpenAI Chat Completions
+    # aimed at the loopback relay (CUSTOM_BASE_URL, 3.5.88), so it is wired to the chat-completions
+    # connections and to nothing it would have to translate for.
+    ("openrouter", "cheetahclaws"): "openai-api",
+    ("tokenrouter", "cheetahclaws"): "tokenrouter", ("vercel", "cheetahclaws"): "tokenrouter",
+    ("custom", "cheetahclaws"): "openai-api",
     ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
     ("azure-foundry", "qwen"): "azure",
     ("openrouter", "qwen"): "openai-api",
@@ -1241,6 +1252,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "kimi"): "tokenrouter",
     ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "openhands"): "tokenrouter",
+    ("harnessrouter", "cheetahclaws"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
     # The hosted service serves the open-weight System One models (laya, openthai-systemone,
@@ -2605,6 +2617,12 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             _emit(oev)
     except Exception:  # noqa: BLE001
         pass
+    # The turn's browser closes BEFORE the trace is finalized: its stop row (the vendor's stop
+    # takes seconds) must be in the trace, and the first read of a finished trace caches the
+    # chunks present at that moment for every later read. Closed from persist() it landed after
+    # the manifest said terminal, so the row reached the audit and never the trace (hosted, every
+    # base of the browser column, 2026-09-27). persist() still closes a turn that never got here.
+    await _browser_close(sid, "turn_end")
     await _checkpoint(sid, rec)
     await _trace_finalize(sid, rec)
     # Persist the response record with the FULL turn output — NOT translator.output, which only
@@ -3735,7 +3753,17 @@ def _turn_failure_message(rec: dict) -> str:
     # "credential cannot be brokered; refused" because the chain's next entry could not be brokered
     # (hosted, 2026-09-08).
     ran = [t for t in tried if t.get("status")]
-    last = (ran or tried)[-1]
+    if not ran:
+        # Nothing ran: every connection was skipped before a request went out. The notes are the
+        # router's ("does not serve", "cannot be brokered"); the person needs what to do (hosted,
+        # claude-opus-5.5 on Claude Code, 2026-09-27: "credential cannot be brokered; refused").
+        model = str(rec.get("model") or "This model")
+        if any("brokered" in str(t.get("error") or "") for t in tried):
+            return (f"{model} is served here only by a connection this harness's base cannot use. Choose "
+                    "another model, or connect a provider that serves it under Bring Your Own Key.")
+        return (f"No connection on this account serves {model}. Choose another model, or connect a "
+                "provider that serves it under Bring Your Own Key.")
+    last = ran[-1]
     reason = str(last.get("error") or "").strip() or f"the connection answered {last.get('status') or 'with an error'}"
     if (said := _history_refusal(rec, reason)):
         return said
@@ -4553,6 +4581,12 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
     except Exception:  # noqa: BLE001
         pass
+    # The share resolver caches token -> session and session -> shared for _SHARE_TTL seconds; a
+    # link opened inside that window after the delete still answered (R-07 of the conformance
+    # suite, intermittent by timing). The tombstone is not enough: the caches go with it, as they
+    # do on every revoke.
+    _SHARE_STATE_CACHE.pop(sid, None)
+    _SHARE_TOKEN_CACHE.clear()
     # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
     # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
@@ -4838,21 +4872,13 @@ _CUSTOM_FORMAT_BACKENDS = {
     # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
     # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
     # until it is — the picker greys out what the router cannot actually run.
+    # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands"},
+               "openhands", "cheetahclaws"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
-
-
-def _custom_can_drive(backend: str) -> bool:
-    """Whether ANY custom-endpoint format can run this backend. A custom integration's models are
-    shown greyed on a backend its format cannot drive, so the reader learns why a model they
-    configured is not pickable there; on a backend no custom format drives at all (systemone runs
-    System One models only, and a custom endpoint speaks OpenAI or Anthropic text shapes) the row
-    is not an explanation but a chat model offered on a harness that cannot use one."""
-    return any(backend in bs for bs in _CUSTOM_FORMAT_BACKENDS.values())
 
 
 def _integration_serves_backend(integ: dict, backend: str) -> bool:
@@ -5007,6 +5033,7 @@ async def admin_integrations_get(request: Request) -> dict:
                 if row.get("name") == hosted.get("name"):
                     row["balance"] = bal
     return {"integrations": public,
+            "hosted_console": HR_HOSTED_CONSOLE,
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
@@ -5743,6 +5770,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     },
     "openai": {
         "gpt-6-astra":   "gpt-6-astra",
+        "gpt-6-sol":     "gpt-6-sol",
+        "gpt-6-luna":    "gpt-6-luna",
         "gpt-5.6-sol":   "gpt-5.6-sol",
         "gpt-5.6-terra": "gpt-5.6-terra",
         "gpt-5.6-luna":  "gpt-5.6-luna",
@@ -5754,6 +5783,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     },
     "azure-foundry": {
         "gpt-6-astra":   "gpt-6-astra",
+        "gpt-6-sol":     "gpt-6-sol",
+        "gpt-6-luna":    "gpt-6-luna",
         "gpt-5.6-sol":   "gpt-5.6-sol",
         "gpt-5.6-terra": "gpt-5.6-terra",
         "gpt-5.6-luna":  "gpt-5.6-luna",
@@ -5765,6 +5796,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     },
     "openrouter": {
         "gpt-6-astra":        "openai/gpt-6-astra",
+        "gpt-6-sol":          "openai/gpt-6-sol",
+        "gpt-6-luna":         "openai/gpt-6-luna",
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
         "gpt-5.6-terra":      "openai/gpt-5.6-terra",
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
@@ -5900,6 +5933,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     # worked around in one vendor's table.
     "llmtr": {
         "gpt-6-astra":        "openai/gpt-6-astra",
+        "gpt-6-sol":          "openai/gpt-6-sol",
+        "gpt-6-luna":         "openai/gpt-6-luna",
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
         "gpt-5.6-terra":      "openai/gpt-5.6-terra",
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
@@ -6114,7 +6149,7 @@ _VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash
 # order it was written. Add a new model to its family here, not at the end of a catalog.
 _MODEL_ORDER: tuple[str, ...] = (
     # OpenAI
-    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
     "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
     # Anthropic
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8",
@@ -6247,8 +6282,19 @@ _MODEL_CATALOG: dict[str, dict] = {
     # by every provider we route to: openai and azure-foundry as `gpt-6-astra` (Azure model version
     # 2026-09-03, GlobalStandard), openrouter, tokenrouter, vercel and llmtr as `openai/gpt-6-astra`
     # (each provider's own /v1/models list, read the same day).
+    #
+    # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
+    # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
+    # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
+    # luna tiers. Unlike astra they accept `reasoning_effort: "none"`, and with it answer function
+    # tools on /v1/chat/completions (TokenRouter, measured 2026-09-27), the retry the runner's relay
+    # already makes for the gpt-5.6 line; so they are offered wherever gpt-5.6-sol is, the
+    # chat-only bases included, and astra stays on the Responses bases alone ("none" is not a value
+    # it takes: low, medium, high, xhigh). List prices, no markup: sol $2 in / $10 out, cached
+    # $0.20; luna $0.10 / $0.50, cached $0.01; astra $10 / $50, cached $1; all doubled above
+    # 272k prompt tokens as the gpt-5.x line is.
     "codex":  {"default": "gpt-5.4",
-               "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
                           # OpenAI's most capable agentic coding model, there is no 5.6-codex).
@@ -6265,7 +6311,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
     "hermes": {"default": "gpt-5.4",
-               "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
                           "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
@@ -6299,7 +6345,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # and the frontier set was probed per-model through the dsh driver (2026-08-20).
     "dsh": {"default": "deepseek-v4-pro",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash",
-                       "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                       "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6315,7 +6361,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
     "opencode": {"default": "gpt-5.4",
-                 "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                 "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6346,7 +6392,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # any release, and the prefix skips the table entirely rather than tracking it.
     "aider": {"default": "gpt-5.4",
               "models": [
-                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                  "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                   "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                   "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -6372,7 +6418,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # a stub), so the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
-                 "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -6387,13 +6433,15 @@ _MODEL_CATALOG: dict[str, dict] = {
     # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
     # loopback relay), so the list is theirs. Measured 2026-09-18/19: the Vercel column ran 49 of
     # these ids (239 of 245 scenarios) and the Google column ran the eight gemini ids, so the list
-    # is a measured one rather than an offered one. The id is sent with an `openai/` prefix by the
-    # runner, which is load-bearing: without an explicit provider litellm infers one from the base
-    # url, and a relay url inferred as Vercel produced `Missing credentials …
-    # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn.
+    # is a measured one rather than an offered one. The id is sent with a `litellm_proxy/` prefix by
+    # the runner, which is load-bearing: without an explicit provider litellm infers one from the
+    # base url, and a relay url inferred as Vercel produced `Missing credentials …
+    # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn. It was `openai/` until 2026-09-27, which is
+    # stripped twice on the way to the wire, so an aggregator's openai/<id> reached TokenRouter bare
+    # and was refused; the gpt-6 tokenrouter column found it (runner/server.py, _build_openhands).
     "openhands": {"default": "gpt-5.4",
                   "models": [
-                      "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                      "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                       "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -6405,9 +6453,34 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                       "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                       "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # cheetahclaws: the same relay reach as kimi and openhands (OpenAI chat/completions through the
+    # loopback relay), so the list is theirs. OFFERED, NOT YET MEASURED on these connections: the
+    # PR that added the base ran its column on a custom OpenAI-format connection only, and the
+    # hosted provider columns decide which of these ids stay. The id reaches the provider verbatim
+    # (the runner sends `custom/<id>`, and providers.py strips the prefix before the request).
+    "cheetahclaws": {"default": "gpt-5.4",
+                     "models": [
+                         "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                         "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
+                         "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
+                         "claude-sonnet-4.6", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
+                         "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
+                         "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+                         "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
+                         # muse-spark 1.1 and 1.3 are excluded: on the family tour (hr-test,
+                         # 2026-09-26, three attempts) each ran the same edit into a loop of 90-odd
+                         # tool calls after the CLI compacted the conversation, never finished, and
+                         # was stopped at the ten-minute cap; 1.2 sits between them and is not offered
+                         # either. muse-glimmer-30b is untested here and stays offered.
+                         "muse-glimmer-30b",
+                         "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
+                         "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
+                         "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
+                         "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
+                         "nemotron-3-super"]},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
-                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                        "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6429,7 +6502,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # see every agent turn fail, not an edge case. Same trap class as _TOKENROUTER_NO_CHANNEL:
     # the CHANNEL decides, not the model.
     "cline": {"default": "gpt-5.4",
-              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+              "models": ["gpt-5.4", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
@@ -6439,7 +6512,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     "pi": {"default": "gpt-5.4",
-           "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+           "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6485,6 +6558,9 @@ _MODEL_CATALOG: dict[str, dict] = {
     # unlabelled (_served_model_in / _relay_served_model, runner/server.py, pinned by
     # runner/tests/test_relay_served_model.py). cline and qwen gain the same check for free.
     # So these rows say "the id served it", not merely "the id completed a turn".
+    # gpt-6-sol and gpt-6-luna joined on 2026-09-27 after cline's rows passed all five scenarios on
+    # every connection of the gpt-6 columns (tokenrouter, openrouter, vercel, openai, azure-e2), the
+    # bar this list has always used; goose's own rows follow in the matrix.
     "goose": {"default": "gpt-5.4",
               # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
               # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
@@ -6506,7 +6582,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               # 2026-09-12; the aggregators forward that answer unchanged, so every column showed it (0 of 8
               # artifact/recall checks). The other Claude ids continue such a history. The Responses-only
               # ids stay out: goose is chat-only.
-              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+              "models": ["gpt-5.4", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6550,9 +6626,11 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # kimi speaks chat/completions only: the runner defines its model with provider type `openai`
 # through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
 # sets), so a Responses-API-only id would be a picker row that fails on send.
-# aider and openhands speak chat/completions through litellm's openai provider (the id is sent
-# `openai/<id>`), so a Responses-API-only id would be a picker row that fails on send.
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands")
+# aider and openhands speak chat/completions through litellm (aider under its openai provider, the
+# id sent `openai/<id>`; openhands under litellm's proxy provider, the id sent as it is), so a
+# Responses-API-only id would be a picker row that fails on send.
+# cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -6592,7 +6670,7 @@ _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROP
 # sorts first. When nothing on the instance serves one, hermes keeps its default (the main
 # model), which is today's behaviour and the honest answer: we cannot route to a model that no
 # integration here can reach.
-_VISION_CAPABLE = ("claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5", "gpt-5.6-luna",
+_VISION_CAPABLE = ("claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol",
                    "gpt-5.4", "claude-sonnet-4.6", "claude-opus-5.5", "claude-opus-5", "gpt-5.5")
 
 
@@ -6802,17 +6880,8 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
             models.append({"id": canonical, "label": canonical, "backend": backend,
                            "available": True, "default": canonical == default})
             seen.add(canonical)
-    # A custom model whose api_format this backend can't speak is still LISTED so the operator
-    # can see it exists, but greyed out (available=False) rather than silently omitted — the
-    # picker must not offer a choice that fails at the first call.
-    for canonical, iname in eff_map.items():
-        if canonical in seen:
-            continue
-        integ = integrations.get(iname)
-        if integ and str(integ.get("provider") or "").lower() == "custom" and _custom_can_drive(backend):
-            models.append({"id": canonical, "label": canonical, "backend": backend,
-                           "available": False, "default": canonical == default})
-            seen.add(canonical)
+    # A custom model whose api_format this backend cannot speak is not listed here at all (it
+    # was greyed once, as an explanation; read as the backend offering it: Richard, 2026-09-27).
     if default and default not in seen:
         models.insert(0, {"id": default, "label": default, "backend": backend,
                           "available": ok(default), "default": True})
@@ -6885,6 +6954,22 @@ def _is_internal_output(name: str) -> bool:
 
 
 # ── output (container) file collection: produced-this-turn files → blobs + citations ────
+# How many files the turn produced in all, by session, read once by the turn's changed.json: the
+# response carries at most RESP_MAX_FILES of them and the page says "showing 25 of N" from this.
+_produced_total: dict[str, int] = {}
+
+
+def _produced_rel(path: str) -> str:
+    """A produced path as the workspace names it: without a leading "./". A character strip
+    (`lstrip("./")`) also ate the dot of a dotfile, so `.harness/state.json` read as
+    `harness/state.json`, passed the internal-file check, and a produced `.env` would have been
+    captured as `env` (found by the test that pins this, 2026-09-25)."""
+    path = str(path or "")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
 async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[dict]:
     exclude = exclude or set()
     try:
@@ -6894,21 +6979,31 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
         items = (r.json() or {}).get("files") or []
     except Exception:  # noqa: BLE001
         return []
+    _produced_total[sid] = len([it for it in items if (it or {}).get("path")
+                                and not _is_internal_output(_produced_rel(it["path"]))])
     out: list[dict] = []
-    for it in items[:RESP_MAX_FILES]:
+    # The response carries at most RESP_MAX_FILES of them. Newest first when the runner says when
+    # each was written (the item's mtime), so a turn that produced a long series (a game's 1,400
+    # archived frames, hosted 2026-09-25) shows its latest and not its first second; a runner
+    # without the field keeps its own order. The console says how many there were in all.
+    items = sorted(items, key=lambda it: float((it or {}).get("mtime") or 0), reverse=True)
+    # The cap counts produced files, so what is never one (an internal name, an input file the
+    # caller attached) is set aside before it: an internal file newer than the rest must not
+    # take a slot from a real one.
+    wanted: list[tuple[str, str]] = []
+    for it in items:
         path = (it or {}).get("path")
-        if not path:
-            continue
-        rel = path.lstrip("./")
-        if rel in exclude or _is_internal_output(rel):
-            continue
+        rel = _produced_rel(path) if path else ""
+        if rel and rel not in exclude and not _is_internal_output(rel):
+            wanted.append((path, rel))
+    for path, rel in wanted[:RESP_MAX_FILES]:
         try:
             fr = await _sandbox("/file", sid, "GET", params={"path": path})
             if fr.status_code >= 400 or not fr.content or len(fr.content) > RESP_MAX_FILE_BYTES:
                 continue
             cfile = _rid("cfile")
             media = fr.headers.get("content-type", "application/octet-stream")
-            fname = path.lstrip("./")
+            fname = rel
             if await _blob_put(f"containers/{sid}/{cfile}", fr.content, kb=RESP_BLOB_KB):
                 await _blob_put(f"containers/{sid}/{cfile}.meta",
                                 json.dumps({"filename": fname, "media_type": media,
@@ -7103,7 +7198,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # The harness's configured instructions are the agent's CLAUDE.md (claude) / AGENTS.md (codex) —
     # written into the workspace by the runner, NOT injected as a system prompt. The model keeps the
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
-    agent_doc = str((hv or {}).get("system_prompt") or "")
+    agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
+                                      await _harness_plug_types(harness_id, org, hv))
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -7399,6 +7495,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     try:
         await _blob_put(f"sessions/{sid}/changed.json", json.dumps({
             "at": time.time(),
+            "produced": _produced_total.pop(sid, len(produced)),
             "files": [{"path": f.get("filename"), "file_id": f.get("file_id"),
                        "bytes": f.get("bytes")} for f in produced if f.get("file_id")],
         }).encode(), kb=RESP_BLOB_KB)
@@ -7411,6 +7508,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     if translator.usage:
         rec["usage"] = translator.usage
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
+    await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
@@ -8018,6 +8116,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                      {"type": "harness.turn.started", "user_text": user_text, "response_id": resp_id})
 
         async def persist(status: str) -> None:
+            if status != "running":
+                await _browser_close(sid, "turn_end")     # the turn's browser, if it opened one
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
                       "_member": member, "_input": input_items, "_backend": backend}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
@@ -9233,9 +9333,12 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
     if changed:
         blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
         items = []
+        produced_n = 0
         if blob:
             try:
-                items = (json.loads(blob) or {}).get("files") or []
+                doc = json.loads(blob) or {}
+                items = doc.get("files") or []
+                produced_n = int(doc.get("produced") or 0)
             except Exception:  # noqa: BLE001
                 items = []
         files = [{"object": "file", "id": it["file_id"], "container_id": sid,
@@ -9245,7 +9348,9 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
                   "file_id": it["file_id"], "download_url": _file_url(sid, it["file_id"])}
                  for it in items if it.get("path") and it.get("file_id")]
         files.sort(key=lambda f: f["path"])
-        return {"session_id": sid, "changed": True, "count": len(files), "files": files}
+        # `produced` is how many files the turn wrote in all; `count` is how many of them the
+        # response captured (at most RESP_MAX_FILES), which is what this list can name.
+        return {"session_id": sid, "changed": True, "count": len(files), "produced": max(produced_n, len(files)), "files": files}
     tf = await _workspace_tar(sid)
     if tf is None:
         raise HTTPException(404, "no workspace for this session yet — run a task first")
@@ -10068,6 +10173,7 @@ _NOT_CONNECTED = "No database is connected to this agent yet."
 _HOSTED_NOT_CONNECTED = {
     "database": ("database_not_connected", _NOT_CONNECTED),
     "media": ("media_not_connected", "No media tools are connected to this agent yet."),
+    "plugs": ("plugs_not_connected", "No plugins are connected to this agent yet."),
 }
 
 
@@ -10434,6 +10540,8 @@ async def get_harness_server(hid: str, sid: str, request: Request) -> dict:
            "enabled": str(entry.get("enabled", True)) not in ("False", "false", "0")}
     if str(rec.get("server") or "") == _MEDIA_SERVER:
         return {**out, **await _media_server_out()}
+    if str(rec.get("server") or "") == _PLUGS_SERVER:
+        return await _plugs_server_out(org, entry, rec)
     return {**out, "connection": _connection_out(rec)}
 
 
@@ -13086,7 +13194,8 @@ async def _media_server_out() -> dict:
     return {"capabilities": caps, "export": {"available": media_plane.have_ffmpeg()}}
 
 
-async def _media_route(hid: str, sid: str, eid: str, request: Request) -> tuple[str, dict, dict]:
+async def _media_route(hid: str, sid: str, eid: str, request: Request,
+                       servers: tuple[str, ...] = ()) -> tuple[str, dict, dict]:
     """(org, entry, session vertex) — the FOUR binds every app route to this server shares.
 
     Member of the org → the harness → the entry on that harness → AND THE SESSION ON THAT
@@ -13107,7 +13216,14 @@ async def _media_route(hid: str, sid: str, eid: str, request: Request) -> tuple[
     """
     org, _ = await _pub_org_member(request)
     v = await _harness_for_route(hid, org)
-    entry, _rec = await _hosted_resolve(_MEDIA_SERVER, hid, org, _mcp_list(v), entry_id=eid)
+    if servers:
+        # the bytes route only: a screenshot the browser plug stored is the session's media too
+        entry, rec0 = await _hosted_resolve_any(hid, org, _mcp_list(v), entry_id=eid)
+        if str(rec0.get("server") or "") not in servers:
+            code, msg = _HOSTED_NOT_CONNECTED[_MEDIA_SERVER]
+            raise uhp_error(404, code, msg, "harness_id")
+    else:
+        entry, _rec = await _hosted_resolve(_MEDIA_SERVER, hid, org, _mcp_list(v), entry_id=eid)
     sv: dict = {}
     if sid:
         _o, sv = await _owned_session(request, sid)
@@ -13294,7 +13410,7 @@ async def get_media_bytes(hid: str, eid: str, sid: str, med: str, request: Reque
     Range is not a nicety: without it Safari refuses to play at all and a timeline cannot scrub.
     The media id is immutable, so it is its own ETag and may be cached forever.
     """
-    await _media_route(hid, sid, eid, request)
+    await _media_route(hid, sid, eid, request, servers=(_MEDIA_SERVER, _PLUGS_SERVER))
     meta = await _media_meta(sid, med)
     if not meta:
         raise uhp_error(404, "media_not_found", "No media with that id in this video.", "med")
@@ -13396,6 +13512,911 @@ async def _media_session_purge(sid: str) -> None:
     with contextlib.suppress(Exception):
         for job in await _media_jobs_of(sid):
             await _vg_upsert(_MEDIA_JOB_LABEL, job["id"], {"deleted": "1", "status": "deleted"})
+
+
+# ── plugs: services connected once for a workspace, reached through one hosted server ─────────
+# A plug is a vendor account the workspace connected (its GitHub repository, its Vercel project,
+# its InsForge backend); the registry on the engine minted and keeps the per-workspace credential.
+# A harness attaches the plugs it needs, and from then on the agent calls them through this
+# gateway: the credential is resolved here at the moment of the call, used in process, never
+# handed to a sandbox and never returned, and every call is written down. Same entry, record,
+# per-turn credential and resolution as the database and media servers above; what is new is only
+# that the record names a WORKSPACE, because that is what a plug belongs to.
+_PLUGS_SERVER = "plugs"
+_PLUGS_ENTRY = {"name": "plugs", "id": "mcp.plugs"}
+
+# What the agent's doc (AGENTS.md / CLAUDE.md) says about the browser when the harness includes
+# it. Codex 0.154 keeps MCP tools behind its tool search, so without a word about them it opened
+# a page with web search and curl while the person watched an empty Browser card (hr-test,
+# 2026-09-27); pi found the tools on its own. Every base reads its doc, so every base gets it.
+_BROWSER_GUIDE = (
+    "## Browser\n"
+    "This task has a live browser that the person can watch and take over. Its tools are on the "
+    "`plugs` server: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, "
+    "browser_scroll, browser_extract_text, browser_screenshot, browser_wait_for, browser_back, "
+    "browser_get_url, browser_list_tabs, browser_switch_tab. Use them for anything on the web: "
+    "opening a page, reading it, filling a form, clicking through. Do not fetch a page with curl, "
+    "wget or a web search instead: the person is watching the browser, and a page fetched another "
+    "way never appears there. If these tools are not in your tool list, look them up (they may be "
+    "deferred) before touching the web any other way.")
+
+
+def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
+    """The harness's instructions plus a section for each included plugin that needs one."""
+    parts = [agent_doc.strip()] if agent_doc and agent_doc.strip() else []
+    if "browser" in plug_types:
+        parts.append(_BROWSER_GUIDE)
+    return "\n\n".join(parts)
+
+
+async def _harness_plug_types(hid: str, org: str, hv: dict | None) -> list[str]:
+    """The plugins a harness includes, by type, from its plugs server's record: [] when it has
+    no enabled plugs entry, or the record cannot be read (the turn runs without the section)."""
+    if not hid or not hv:
+        return []
+    try:
+        servers = _mcp_list(hv)
+        entry = next((e for e in servers if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
+        if not entry or str(entry.get("enabled", True)) in ("False", "false", "0"):
+            return []
+        _, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, servers, entry_id=_PLUGS_ENTRY["id"])
+    except Exception:  # noqa: BLE001
+        return []
+    return [str(x) for x in (rec.get("plugs") or []) if x]
+_PLUG_CALL_LABEL = "PlugCall"
+# The registry that holds plug records: the engine's door on the platform edge (the engine's own
+# ingress admits no in-environment caller). Empty = no registry, so every plug reads as missing.
+PLUGS_REGISTRY_URL = os.environ.get("HR_PLUGS_REGISTRY_URL", "").rstrip("/")
+# Who may attach and call the held plug types: org ids, or "*" for everyone. A self-hosted
+# instance is its operator's own box, so everyone by default; the hosted service names its orgs.
+_PLUGS_ORGS = {o.strip() for o in os.environ.get("HR_PLUGS_ORGS", "*").split(",") if o.strip()}
+_PLUG_STATUSES = ("connected", "needs_auth", "disabled")
+
+
+class PlugsBody(BaseModel):
+    plugs: list[str]                            # plug type names to attach (github, vercel, insforge)
+    tools: dict[str, list[str]] | None = None   # per plug, the tool names this harness may call; absent = all
+
+
+def _plugs_allowed(org: str, plug: str | None = None) -> bool:
+    """Whether this org may use plugs: every org for the open types (the browser, since Richard
+    opened it on 2026-09-24), the held list for the rest while they are verified."""
+    if plug in plugs_plane.OPEN_TYPES:
+        return True
+    return "*" in _PLUGS_ORGS or org in _PLUGS_ORGS
+
+
+def _plugs_gate(org: str, plugs: list[str]) -> None:
+    held = [t for t in plugs if not _plugs_allowed(org, t)]
+    if held:
+        raise uhp_error(404, "plugs_unavailable",
+                        f"The {plugs_plane.TYPES.get(held[0], held[0])} plugin is not available on this account yet.", "plugs")
+
+
+async def _plug_lookup(org: str, workspace: str, plug_type: str) -> tuple[str, dict | None]:
+    """(status, record) for one plug type in a workspace: connected, needs_auth, disabled, missing
+    (no such plug) or unavailable (the registry did not answer). Never a secret in the record.
+
+    Read on every call and not cached: the registry refreshes a short-lived credential on this
+    read (a GitHub installation token lives an hour), so a cached record would hold an expired one.
+    """
+    if not workspace:
+        return "missing", None
+    if not PLUGS_REGISTRY_URL:
+        return await _plug_lookup_local(org, workspace, plug_type)
+    try:
+        r = await _client().get(f"{PLUGS_REGISTRY_URL}/v1/plugs/by",
+                                params={"workspace": workspace, "type": plug_type},
+                                headers={"X-Internal-Key": INTERNAL_KEY}, timeout=15)
+    except Exception as e:  # noqa: BLE001
+        print(f"[plugs] registry unreachable for {plug_type} in {workspace}: {type(e).__name__}", flush=True)
+        return "unavailable", None
+    if r.status_code == 404:
+        return "missing", None
+    if r.status_code >= 400:
+        print(f"[plugs] registry answered {r.status_code} for {plug_type} in {workspace}", flush=True)
+        return "unavailable", None
+    try:
+        rec = r.json()
+    except ValueError:
+        return "unavailable", None
+    if (not isinstance(rec, dict) or str(rec.get("org_id") or "") != org
+            or str(rec.get("workspace") or "") != workspace):
+        # A record of another org is not this workspace's plug, whatever the registry was asked.
+        print(f"[plugs] registry record for {plug_type} in {workspace} belongs elsewhere; refused", flush=True)
+        return "missing", None
+    status = str(rec.get("effective_status") or rec.get("status") or "")
+    return (status if status in _PLUG_STATUSES else "needs_auth"), rec
+
+
+# The derived credential of a plug, by plug id and version: a rotation bumps the version, and a
+# record read with a new version reads the vault again. Bounded by the number of plugs served.
+_plug_fields_cache: dict[str, tuple[int, dict]] = {}
+
+
+async def _plug_fields(rec: dict) -> dict:
+    """The plug's derived credential fields, from the org's own vault tenant and nowhere else. A
+    ref outside the plug- namespace is not read: a record can name only what the registry wrote,
+    never a connection string or a provider key."""
+    pid = str(rec.get("id") or "")
+    try:
+        version = int(rec.get("version") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    hit = _plug_fields_cache.get(pid)
+    if hit and hit[0] == version:
+        return dict(hit[1])
+    tenant = str(rec.get("vault_tenant") or "")
+    if not _vault_tenant_ok(tenant):
+        return {}
+    out: dict = {}
+    for ref in rec.get("key_refs") or []:
+        name, field = str((ref or {}).get("ref") or ""), str((ref or {}).get("field") or "")
+        if not name.startswith("plug-") or not field:
+            continue
+        v = await _vault_get(tenant, name)
+        if v:
+            out[field] = v
+    if pid:
+        _plug_fields_cache[pid] = (version, dict(out))
+    return out
+
+
+# ── the local plug registry: a self-hosted instance has no engine, so the records live here ──
+# One record per workspace and plug type in the instance's own store: the status, the settings
+# the tools read, and for a plug that needs a credential (GitHub, Vercel, InsForge) the refs of
+# the secrets kept in the instance's secret store under the plug- namespace, the same namespace
+# the hosted registry writes, so _plug_fields reads both the same way. The browser is a platform
+# plug: no credential, only its site lists.
+_PLUG_LABEL = "Plug"
+_PLUG_FORMS: dict[str, dict] = {
+    "browser": {"secrets": [], "config": ["allow_domains", "deny_domains"], "source": "platform"},
+    "github": {"secrets": ["token"], "config": ["repo", "owner", "default_branch"], "source": "local"},
+    "vercel": {"secrets": ["token"], "config": ["project", "project_id", "team_id"], "source": "local"},
+    "insforge": {"secrets": ["api_key"], "config": ["project", "project_id", "url", "region"], "source": "local"},
+}
+
+
+def _plug_safe(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+
+
+def _plug_vid(workspace: str, plug_type: str) -> str:
+    return f"plug.{_plug_safe(workspace)}.{_plug_safe(plug_type)}"
+
+
+def _plug_domains_ok(names, param: str) -> list[str]:
+    if names is None:
+        return []
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise uhp_error(400, "invalid_input", f"{param} must be a list of domain names.", param)
+    out = []
+    for n in names:
+        n = n.strip().lower().lstrip("*").lstrip(".").rstrip(".")
+        if not n:
+            continue
+        if not re.fullmatch(r"[a-z0-9.-]{1,253}", n) or ".." in n:
+            raise uhp_error(400, "invalid_input", f"{n!r} is not a domain name.", param)
+        out.append(n)
+    return list(dict.fromkeys(out))[:100]
+
+
+def _plug_record_out(row: dict) -> dict:
+    """The record in the registry's own shape, from this instance's row."""
+    try:
+        config = json.loads(row.get("config") or "{}")
+    except ValueError:
+        config = {}
+    try:
+        key_refs = json.loads(row.get("key_refs") or "[]")
+    except ValueError:
+        key_refs = []
+    status = str(row.get("status") or "connected")
+    return {"id": str(row.get("id") or ""), "org_id": str(row.get("org") or ""), "workspace": str(row.get("workspace") or ""),
+            "type": str(row.get("type") or ""), "status": status, "effective_status": status,
+            "source": str(row.get("source") or "local"), "vault_tenant": str(row.get("org") or ""),
+            "key_refs": key_refs if isinstance(key_refs, list) else [], "config": config if isinstance(config, dict) else {},
+            "version": int(float(row.get("version") or 1)), "updated_at": row.get("updated_at") or ""}
+
+
+async def _plug_lookup_local(org: str, workspace: str, plug_type: str) -> tuple[str, dict | None]:
+    rows = await BACKING.graph.find(_PLUG_LABEL, {"workspace": workspace, "type": plug_type})
+    row = next((r for r in rows if str(r.get("org") or "") == org), None)
+    if not row:
+        return "missing", None
+    rec = _plug_record_out(row)
+    return (rec["status"] if rec["status"] in _PLUG_STATUSES else "needs_auth"), rec
+
+
+def _plug_workspace(request: Request) -> str:
+    """The workspace a plug route is about: the console names it; a bare API call means the
+    instance's default workspace, the one the console's own harnesses are in."""
+    return str(request.headers.get("x-harness-workspace") or "default")
+
+
+class PlugBody(BaseModel):
+    enabled: bool = True
+    config: dict | None = None      # the type's settings (the browser's site lists, a GitHub plug's repo)
+    secrets: dict | None = None     # field -> value for the type's credential fields; absent keeps what is stored
+
+
+def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, status: str) -> dict:
+    form = _PLUG_FORMS[plug_type]
+    cfg = dict((rec or {}).get("config") or {})
+    have = sorted({str((r or {}).get("field") or "") for r in ((rec or {}).get("key_refs") or [])} - {""})
+    return {"type": plug_type, "label": plugs_plane.TYPES.get(plug_type, plug_type), "source": form["source"],
+            "official": True, "status": status, "config": cfg, "secrets_set": have, "secrets_needed": list(form["secrets"]),
+            "config_fields": list(form["config"]), "version": int((rec or {}).get("version") or 0),
+            "tools": len(plugs_plane.tools_of(plug_type)),
+            **({"pricing": browser_plane.pricing()} if plug_type == plugs_plane.BROWSER else {})}
+
+
+@app.get("/v1/plugs")
+async def list_plugs(request: Request) -> dict:
+    """The plugin catalog for the caller's workspace: every type this instance serves, with its
+    state here (connected, disabled, needs_auth, missing)."""
+    org, _ = await _pub_org_member(request)
+    workspace = _plug_workspace(request)
+    out = []
+    for t in _PLUG_FORMS:
+        status, rec = await _plug_lookup(org, workspace, t)
+        out.append(_plug_public(org, workspace, t, rec, status))
+    return {"workspace": workspace, "plugs": out}
+
+
+@app.put("/v1/plugs/{plug_type}")
+async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
+    """Connect a plugin for the caller's workspace, change its settings, or turn it off. A
+    credential goes to the instance's secret store, never onto the record; a plug that needs one
+    and has none yet reads needs_auth until it is given."""
+    org, _ = await _pub_org_member(request)
+    if PLUGS_REGISTRY_URL:
+        raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
+    form = _PLUG_FORMS.get(plug_type)
+    if not form:
+        raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type",
+                        {"supported": sorted(_PLUG_FORMS)})
+    _plugs_gate(org, [plug_type])
+    workspace = _plug_workspace(request)
+    _status, prev = await _plug_lookup_local(org, workspace, plug_type)
+    config = dict((prev or {}).get("config") or {})
+    for k, v in (body.config or {}).items():
+        if k not in form["config"]:
+            raise uhp_error(400, "invalid_input", f"{plug_type} has no setting {k!r}.", "config")
+        if plug_type == plugs_plane.BROWSER:
+            config[k] = _plug_domains_ok(v, k)
+        elif v in (None, ""):
+            config.pop(k, None)
+        elif isinstance(v, str):
+            config[k] = v.strip()
+        else:
+            raise uhp_error(400, "invalid_input", f"{k} must be a string.", "config")
+    if plug_type == plugs_plane.BROWSER:
+        config.setdefault("allow_domains", [])
+        config.setdefault("deny_domains", [])
+        config["proxy"] = False
+    refs = {str(r.get("field")): str(r.get("ref")) for r in ((prev or {}).get("key_refs") or []) if isinstance(r, dict)}
+    for field, value in (body.secrets or {}).items():
+        if field not in form["secrets"]:
+            raise uhp_error(400, "invalid_input", f"{plug_type} takes no secret {field!r}.", "secrets")
+        if not isinstance(value, str) or not value.strip():
+            continue
+        ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plug_type)}-{_plug_safe(field)}"
+        await _vault_put(org, ref, value.strip())
+        refs[field] = ref
+    missing = [f for f in form["secrets"] if f not in refs]
+    status = "disabled" if not body.enabled else ("needs_auth" if missing else "connected")
+    version = int((prev or {}).get("version") or 0) + 1
+    now = int(time.time() * 1000)
+    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plug_type),
+                     {"org": org, "workspace": workspace, "type": plug_type, "status": status, "source": form["source"],
+                      "config": json.dumps(config, separators=(",", ":")),
+                      "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
+                      "version": str(version), "updated_at": str(now)})
+    _plug_fields_cache.pop(_plug_vid(workspace, plug_type), None)
+    status2, rec = await _plug_lookup_local(org, workspace, plug_type)
+    print(f"[plugs] {workspace}: {plug_type} {status2} (v{version})", flush=True)
+    return _plug_public(org, workspace, plug_type, rec, status2)
+
+
+@app.get("/v1/plugs/{plug_type}/attachments")
+async def plug_attachments_public(plug_type: str, request: Request) -> dict:
+    """How many of the caller's workspace's harnesses include this plugin, from the bindings."""
+    org, _ = await _pub_org_member(request)
+    if plug_type not in _PLUG_FORMS:
+        raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
+    workspace = _plug_workspace(request)
+    rows = _plugs_harness_rows(org, workspace, await BACKING.graph.find("Harness", {"org": org}))
+    attached = []
+    for r in rows:
+        hid = str(r.get("id") or "")
+        entry = next((e for e in _mcp_list(r) if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
+        if not entry:
+            continue
+        rec = await _hosted_record(org, _vault_key(entry.get("auth")))
+        if rec and rec.get("harness") == hid and plug_type in (rec.get("plugs") or []):
+            attached.append({"id": hid, "name": str(r.get("name") or "")})
+    return {"workspace": workspace, "type": plug_type, "harnesses": len(rows), "attached": len(attached), "harness_list": attached}
+
+
+def _plugs_types_ok(plugs: list) -> list[str]:
+    if not isinstance(plugs, list) or not plugs or not all(isinstance(t, str) for t in plugs):
+        raise uhp_error(400, "invalid_input", "plugs must be a non-empty list of plug type names.", "plugs")
+    bad = [t for t in plugs if t not in plugs_plane.TYPES]
+    if bad:
+        raise uhp_error(400, "invalid_plug", f"No plug of type {bad[0]!r} on this server.", "plugs",
+                        {"supported": sorted(plugs_plane.TYPES)})
+    return list(dict.fromkeys(plugs))
+
+
+def _plugs_tools_ok(tools, plugs: list[str]) -> dict | None:
+    if tools is None:
+        return None
+    if not isinstance(tools, dict):
+        raise uhp_error(400, "invalid_input", "tools must be an object of plug type to tool names.", "tools")
+    out = {}
+    for plug, names in tools.items():
+        if plug not in plugs:
+            raise uhp_error(400, "invalid_input", f"tools names {plug!r}, which is not being attached.", "tools")
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise uhp_error(400, "invalid_input", f"tools.{plug} must be a list of tool names.", "tools")
+        known = {t["name"] for t in plugs_plane.tools_of(plug)}
+        unknown = [n for n in names if n not in known]
+        if unknown:
+            raise uhp_error(400, "invalid_input", f"No tool named {plug}.{unknown[0]}.", "tools")
+        out[plug] = list(dict.fromkeys(names))
+    return out or None
+
+
+def _harness_workspace_for_plugs(v: dict | None) -> str:
+    """The workspace a harness's plugins bind to. A harness created without a workspace header
+    carries no stamp; on a self-hosted instance (no registry elsewhere) that harness is in the
+    instance's default workspace, the same leniency its listing applies (workspace_default), so
+    the guide's bare API calls, PUT /v1/plugs/browser then POST .../servers/plugs, meet in one
+    workspace. Behind a registry the stamp is required: a tenant is never guessed there."""
+    stamp = str((v or {}).get("workspace") or "")
+    if stamp or PLUGS_REGISTRY_URL:
+        return stamp
+    return _WORKSPACE_DEFAULT_ID
+
+
+def _plugs_harness_rows(org: str | None, workspace: str, rows: list[dict]) -> list[dict]:
+    """The harnesses of a workspace for the attachment count: those stamped with it, and on a
+    self-hosted instance the unstamped ones when it is the default workspace (see above)."""
+    lenient = not PLUGS_REGISTRY_URL and workspace == _WORKSPACE_DEFAULT_ID
+    return [r for r in rows
+            if (org is None or str(r.get("org") or "") == org)
+            and str(r.get("deleted")) not in ("1", "true", "True")
+            and (str(r.get("workspace") or "") == workspace or (lenient and not r.get("workspace")))]
+
+
+async def _plugs_attach(org: str, hid: str, v: dict | None, plugs: list[str], tools: dict | None) -> None:
+    """Bind plugs to a harness: the record (with the harness's workspace) and one entry. Idempotent;
+    a second attach keeps the entry's name and switch. The workspace is the harness's own and never
+    taken from a request: a harness reaches its own company's plugs and no other."""
+    origins = _own_origins()
+    if not origins:
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set "
+                        "HARNESS_PUBLIC_BASE_URL.", "plugs")
+    workspace = _harness_workspace_for_plugs(v)
+    if not workspace:
+        raise uhp_error(400, "workspace_required",
+                        "This agent is not in a named workspace; plugins connect to a workspace.", "plugs")
+    cur = _mcp_list(v)
+    prev = next((e for e in cur if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None) or {}
+    prev_key = _vault_key(prev.get("auth"))
+    key = prev_key if prev_key.startswith(_HOSTED_SECRET_PREFIX) else _hosted_secret_key(hid, _PLUGS_ENTRY["id"])
+    record = {"server": _PLUGS_SERVER, "harness": hid, "workspace": workspace, "plugs": plugs,
+              **({"tools_enabled": tools} if tools else {}), "updated_at": int(time.time() * 1000)}
+    await _hosted_put_record(org, key, record, secret=False, param="plugs")
+    entry = {"id": _PLUGS_ENTRY["id"], "name": str(prev.get("name") or _PLUGS_ENTRY["name"]),
+             "url": origins[0] + _HOSTED_MCP_PREFIX + _PLUGS_SERVER, "transport": "http",
+             "auth": f"vault:{key}",
+             "enabled": str(prev.get("enabled", True)) not in ("False", "false", "0")}
+    await _mcp_write(hid, [e for e in cur if str(e.get("id") or "") != _PLUGS_ENTRY["id"]] + [entry])
+    print(f"[plugs] {hid}: {', '.join(plugs)} attached for {workspace}", flush=True)
+
+
+async def _plugs_server_out(org: str, entry: dict, rec: dict) -> dict:
+    """The plugs server on a harness, describing itself: the binding and each plug's state. One
+    shape for the attach route's answer and for the server read (get_harness_server)."""
+    plugs = [t for t in rec.get("plugs") or [] if isinstance(t, str)]
+    status = {}
+    for t in plugs:
+        status[t], _ = await _plug_lookup(org, str(rec.get("workspace") or ""), t)
+    return {"id": entry.get("id"), "name": entry.get("name"),
+            "enabled": str(entry.get("enabled", True)) not in ("False", "false", "0"),
+            "workspace": str(rec.get("workspace") or ""), "plugs": plugs,
+            **({"tools": rec["tools_enabled"]} if isinstance(rec.get("tools_enabled"), dict) else {}),
+            "status": status}
+
+
+@app.post("/v1/harnesses/{hid}/servers/plugs")
+async def attach_plugs(hid: str, body: PlugsBody, request: Request) -> dict:
+    """Attach the workspace's plugs to one of the caller's harnesses. Idempotent: attaching again
+    replaces the list of plugs and tools and rewrites nothing else."""
+    org, _ = await _pub_org_member(request)
+    v = await _harness_for_route(hid, org)
+    plugs = _plugs_types_ok(body.plugs)
+    _plugs_gate(org, plugs)
+    await _plugs_attach(org, hid, v, plugs, _plugs_tools_ok(body.tools, plugs))
+    entry, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, _mcp_list(await _vertex_get(hid) or v),
+                                       entry_id=_PLUGS_ENTRY["id"])
+    return await _plugs_server_out(org, entry, rec)
+
+
+@app.delete("/v1/harnesses/{hid}/servers/plugs")
+async def detach_plugs(hid: str, request: Request) -> dict:
+    """Detach them: the entry goes and its binding record is scrubbed. The plugs themselves stay
+    connected to the workspace for every other harness."""
+    org, _ = await _pub_org_member(request)
+    v = await _harness_for_route(hid, org)
+    cur = _mcp_list(v)
+    after = [e for e in cur if str(e.get("id") or "") != _PLUGS_ENTRY["id"]]
+    if len(after) == len(cur):
+        code, msg = _HOSTED_NOT_CONNECTED[_PLUGS_SERVER]
+        raise uhp_error(404, code, msg, "harness_id")
+    await _mcp_write(hid, after)
+    await _hosted_scrub_removed(org, hid, cur, after)
+    return {"id": _PLUGS_ENTRY["id"], "detached": True}
+
+
+async def _plugs_ensure_required(org: str, hid: str) -> bool:
+    """A package that declares `requires.plugs` gets those plugs attached to the harness it is
+    installed on, with the harness's workspace bound: the package never names a tenant. Runs after
+    every write that can install a package. True when the harness changed."""
+    v = await _vertex_get(hid)
+    want = sorted({t for e in _plugins_of(v) if e.get("enabled")
+                   for t in (((e.get("manifest") or {}).get("requires") or {}).get("plugs") or [])
+                   if isinstance(t, str) and t in plugs_plane.TYPES})
+    held = [t for t in want if not _plugs_allowed(org, t)]
+    if held:
+        print(f"[plugs] {hid}: a package requires {', '.join(held)}; not open to {org} yet", flush=True)
+    want = [t for t in want if t not in held]
+    if not want:
+        return False
+    entry = next((e for e in _mcp_list(v) if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
+    rec = await _hosted_record(org, _vault_key((entry or {}).get("auth"))) if entry else None
+    have = ([t for t in (rec.get("plugs") or []) if isinstance(t, str)]
+            if rec and rec.get("harness") == hid else [])
+    if entry and set(want) <= set(have):
+        return False
+    await _plugs_attach(org, hid, v, list(dict.fromkeys(have + want)), (rec or {}).get("tools_enabled") or None)
+    return True
+
+
+_PLUG_REFUSALS = {
+    "missing": ("The workspace has no {label} plugin connected. Ask the person to connect one on the "
+                "workspace's Plugins page, then try again; you cannot connect it yourself."),
+    "needs_auth": "The workspace's {label} plugin needs attention on the Plugins page before it can be used. Tell the person.",
+    "disabled": "The workspace's {label} plugin is turned off. Tell the person if you need it.",
+    "unavailable": "The plugin registry did not answer. Try again in a moment.",
+}
+
+
+# A plug call served when this process holds no trace handle for the session (another replica is
+# running the turn on the hosted service; here, a reaper's stop after the turn's handle is gone)
+# belongs in the session's trace all the same: its chunk goes under the session's own prefix (the
+# vertex names it) with this process's nonce keeping the key unique. Bounded: one handle per session.
+_plug_trace_handles: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+
+
+async def _plug_trace_handle(sid: str) -> dict | None:
+    tr = _plug_trace_handles.get(sid)
+    if tr is None:
+        try:
+            v = await _vertex_get(sid) or {}
+        except Exception:  # noqa: BLE001
+            return None
+        prefix = str(v.get("trace_blob") or "")
+        if not prefix:
+            return None
+        tr = {"prefix": prefix, "org": str(v.get("tenant") or ""), "since": 0, "chunk": 0, "count": 0}
+        _plug_trace_handles[sid] = tr
+        while len(_plug_trace_handles) > 500:
+            _plug_trace_handles.popitem(last=False)
+    return tr
+
+
+async def _plug_call_record(hid: str, sid: str, org: str, workspace: str, plug: str, tool: str, risk: str,
+                            started: float, outcome: str, error: str = "", *, unit: str = "call",
+                            usd: float = 0.0, detail: dict | None = None) -> None:
+    """Every call, written down: an audit row, an event in the session's trace, and the meter.
+    Best effort in every part, because a failed record must not turn a served call into an error.
+
+    `unit` and `usd` are the row's money: a call is a `call` (or a `screenshot`) at nothing; a
+    browser session's own row carries `browser.usd` and the vendor's dollars, and that row is the
+    one the meter posts under that unit. `detail` is the row's figures (a session's minutes,
+    reason and source), kept as JSON text."""
+    now = time.time()
+    ms = int((now - started) * 1000)
+    props = {"harness": hid, "session": sid, "org": org, "workspace": workspace, "plug": plug, "tool": tool,
+             "risk": risk, "started": str(int(started * 1000)), "finished": str(int(now * 1000)), "ms": str(ms),
+             "outcome": outcome, "error": (error or "")[:300], "unit": unit, "usd": repr(round(float(usd), 6)),
+             "detail": json.dumps(detail or {}, separators=(",", ":"))[:600], "created_at": str(int(now * 1000))}
+    with contextlib.suppress(Exception):
+        await _vg_upsert(_PLUG_CALL_LABEL, _rid("pcall"), props)
+    tr = _session_trace.get(sid)
+    if not (tr and tr.get("prefix")):
+        tr = await _plug_trace_handle(sid)
+    if tr and tr.get("prefix"):
+        with contextlib.suppress(Exception):
+            await _trace_flush(tr, {"events": [{"type": "plug", "plug": plug, "tool": tool, "risk": risk,
+                                                 "outcome": outcome, "ms": ms, "unit": unit, "usd": round(float(usd), 6),
+                                                 **({"error": error[:300]} if error else {}),
+                                                 **({"detail": detail} if detail else {}), "_ts": now}]})
+    if unit == browser_plane.UNIT:
+        if usd > 0:
+            _report_usage(org, browser_plane.UNIT, float(usd), workspace=workspace, task_id=sid, harness_id=hid,
+                          title="Browser", harness_name="Browser")
+    elif outcome in ("ok", "error"):
+        # What was served is what is metered: a call the vendor refused still ran here; a call
+        # refused before any credential was resolved did not.
+        _report_usage(org, "plug.call", 1.0, workspace=workspace, task_id=sid, harness_id=hid)
+
+
+@app.post("/v1/mcp/plugs")
+async def plugs_mcp(request: Request):
+    """The MCP endpoint the agent's CLI talks to for its plugs. Streamable HTTP, stateless, the
+    same shape as the database server's: the token names the harness, the session and the record;
+    the record names the workspace and the plugs; each call resolves the plug's credential here."""
+    claims = _verify_hosted_cred(_broker_token(request))
+    if not claims:
+        raise HTTPException(401, "invalid or expired turn credential")
+    hid, sid, key = claims
+    try:
+        req = json.loads(await request.body() or b"{}")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "malformed JSON-RPC request") from None
+    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+
+    if method == "initialize":
+        return _jsonrpc_result(rid, {
+            "protocolVersion": str(params.get("protocolVersion") or "2024-11-05"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "plugs", "version": "1"}})
+    if rid is None:
+        return Response(status_code=202)
+    if method not in ("tools/list", "tools/call"):
+        return JSONResponse({"jsonrpc": "2.0", "id": rid,
+                             "error": {"code": -32601, "message": f"method not found: {method}"}})
+
+    v = await _harness_vertex(hid)
+    if v and str(v.get("deleted")) in ("1", "true", "True"):
+        v = None                    # a token outlives the agent it was minted for; its plugs must not
+    org = str((v or {}).get("org") or "")
+    try:
+        _entry, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, _mcp_list(v), key=key, check_enabled=True)
+    except HTTPException:
+        if method == "tools/list":
+            return _jsonrpc_result(rid, {"tools": []})
+        return _jsonrpc_result(rid, _tool_text(
+            "No plugins are connected to this agent. Ask the person to include them, then try again; "
+            "you cannot include them yourself.", True))
+    plugs = [t for t in rec.get("plugs") or [] if isinstance(t, str) and t in plugs_plane.TYPES]
+    enabled = rec.get("tools_enabled") if isinstance(rec.get("tools_enabled"), dict) else None
+    if method == "tools/list":
+        return _jsonrpc_result(rid, {"tools": plugs_plane.tool_list(plugs, enabled)})
+
+    name = str(params.get("name") or "")
+    args = params.get("arguments") or {}
+    plug, tool = plugs_plane.split_name(name, plugs)
+    spec = plugs_plane.find(plug, tool) if plug else None
+    if spec is None or (enabled and enabled.get(plug) is not None and tool not in enabled[plug]):
+        return _jsonrpc_result(rid, _tool_text(f"No tool named {name!r} on this server.", True))
+    workspace = str(rec.get("workspace") or "")
+    label = plugs_plane.TYPES.get(plug, plug)
+    started = time.time()
+    if not _plugs_allowed(org, plug):
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "refused",
+                                "plugs not open to this org")
+        return _jsonrpc_result(rid, _tool_text(f"The {label} plugin is not available on this account yet.", True))
+    status, prec = await _plug_lookup(org, workspace, plug)
+    if status != "connected" or not prec:
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "refused", status)
+        return _jsonrpc_result(rid, _tool_text(_PLUG_REFUSALS[status].format(label=label), True))
+    config = prec.get("config") if isinstance(prec.get("config"), dict) else {}
+    if plug == plugs_plane.BROWSER:
+        # A platform plug: the record carries no credential (source platform, key_refs []), only
+        # the sites the workspace allows; the browser itself is this gateway's session plane.
+        return await _browser_plug_call(rid, hid, sid, org, workspace, tool, spec, args if isinstance(args, dict) else {},
+                                        config, started)
+    fields = await _plug_fields(prec)
+    if not fields:
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "refused", "no credential")
+        return _jsonrpc_result(rid, _tool_text(_PLUG_REFUSALS["needs_auth"].format(label=label), True))
+    need = plugs_plane.permission_of(plug, tool)
+    if need and need in (config.get("permissions_missing") or []):
+        # The record knows what the installation was not granted; saying so beats a vendor 403
+        # the model would spend the turn retrying around.
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "refused", f"no {need} permission")
+        return _jsonrpc_result(rid, _tool_text(
+            f"The workspace's {label} plug was not granted {need} access, so {tool} cannot run. The person can "
+            "grant it on the app installation and reconnect the plug.", True))
+    try:
+        text = await plugs_plane.call(plug, tool, args if isinstance(args, dict) else {}, fields, config)
+    except plugs_plane.PlugToolError as e:
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", str(e))
+        return _jsonrpc_result(rid, _tool_text(str(e), True))
+    except Exception as e:  # noqa: BLE001
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
+                                f"{type(e).__name__}: {e}")
+        return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
+    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "ok")
+    return _jsonrpc_result(rid, _tool_text(text))
+
+
+# ── The browser plug: a cloud browser over CDP behind the plugs server ──────────────────────────
+# A workspace connects it once (a Plug record of type browser: platform auth, its site lists), a
+# harness includes it like any plug, and the agent gets navigate, snapshot, click, type and
+# friends, never a JavaScript evaluator, a download, a cookie, the vendor's key or the browser's
+# address. The browser itself lives in browser_plane.py: one per harness session, opened on the
+# first call, stopped at the turn's end, after idle, or at the cap. Money is the vendor's list
+# price passed through under one unit, browser.usd, on the session's own audit row.
+# One open per session at a time in this process. A CLI that issues tool calls in parallel (pi
+# does) sent navigate and screenshot together as a task's first browser calls; both found no
+# session and both opened a browser at the vendor, one of which nothing ever stopped (hr-test,
+# 2026-09-25: two open rows, one session row). The lock lives as long as the session's browser does.
+# The record of the browser itself is the plane's registry (browser_plane.registry): one process on
+# a self-hosted instance keeps it in memory; the hosted service keeps it in its control store so
+# every replica the sandbox's calls reach attaches to the one browser instead of opening its own.
+
+# ── the browser's live view ──────────────────────────────────────────────────────────────────
+# What the console shows while a task browses: the vendor's live view of the session's browser,
+# who has control, and when the agent last acted. The live URL is a credential (whoever opens it
+# controls the browser), so it is read through the owned-session route and never put on the feed.
+
+
+@app.get("/v1/sessions/{sid}/browser")
+async def session_browser(sid: str, request: Request) -> dict:
+    await _owned_session(request, sid)
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        return {"session_id": sid, "open": False}
+    return {"session_id": sid, "open": True, "live_url": str(rec.get("live_url") or ""),
+            "control": str(rec.get("control") or "agent"), "opened_at": rec.get("created"),
+            "last_call_at": rec.get("last_call"), "last_tool": str(rec.get("last_tool") or ""),
+            "viewport": rec.get("viewport"), "calls": int(rec.get("calls") or 0), "session_minutes": browser_plane.SESSION_CAP_MIN}
+
+
+class BrowserControlBody(BaseModel):
+    control: str
+
+
+@app.post("/v1/sessions/{sid}/browser/control")
+async def session_browser_control(sid: str, body: BrowserControlBody, request: Request) -> dict:
+    """Hand the browser to the person (`user`) or back to the agent (`agent`). While the person
+    has it, the agent's browser calls are held and told so; nothing is stopped or lost."""
+    await _owned_session(request, sid)
+    who = (body.control or "").strip().lower()
+    if who not in ("user", "agent"):
+        raise HTTPException(400, "control is 'user' or 'agent'")
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        raise HTTPException(404, "this task has no open browser")
+    await browser_plane.registry.bump(sid, control=who, control_at=time.time())
+    _browser_notice(sid, "control", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), control=who)
+    return {"session_id": sid, "open": True, "control": who}
+
+
+_browser_open_locks: dict[str, asyncio.Lock] = {}
+# How long one held browser call waits for the person to hand the browser back before answering
+# that it is still theirs (under the MCP clients' 60 s request timeout), and how often it looks.
+BROWSER_HOLD_SLICE_S = float(os.environ.get("HR_BROWSER_HOLD_SLICE_S", "45"))
+BROWSER_HOLD_POLL_S = 0.5
+
+
+def _browser_notice(sid: str, kind: str, hid: str = "", org: str = "", **extra) -> None:
+    """One event on the harness feed for the console's live view: the browser opened, a call ran,
+    a call was held because the person has the browser, control changed hands, or it closed. The
+    in-flight turn's org, harness, member and response id tag it (so it replays to a viewer that
+    connects mid-turn and stays with the member whose session it is); a notice after the turn
+    (the reaper closing an idle browser) carries the record's harness. NEVER the live URL: whoever
+    holds that URL controls the browser, so it travels only through the owned-session route."""
+    buf = _turn_buffers.get(sid) or {}
+    ev = {"type": f"browser.{kind}", "session_id": sid, "at": time.time(), **extra}
+    _bus_publish(org or str(buf.get("org") or ""), hid or str(buf.get("harness") or ""),
+                 str(buf.get("member") or ""), sid, str(buf.get("rid") or ""), ev)
+
+
+async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, tool: str, spec: dict, args: dict,
+                             config: dict, started: float):
+    plug = plugs_plane.BROWSER
+    allow = [d for d in config.get("allow_domains") or [] if isinstance(d, str)]
+    deny = [d for d in config.get("deny_domains") or [] if isinstance(d, str)]
+
+    async def refused(code: str, text: str):
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "refused", code)
+        return _jsonrpc_result(rid, _tool_text(text, True))
+
+    if not browser_plane.configured():
+        return await refused("not configured", "The browser service is not set up on this deployment. Tell the person.")
+    try:
+        rec = await browser_plane.registry.get(sid)
+    except Exception as e:  # noqa: BLE001
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", f"registry: {type(e).__name__}: {e}")
+        return _jsonrpc_result(rid, _tool_text("The browser service could not be reached. Try again.", True))
+    s = None
+    if rec is None:
+        async with _browser_open_locks.setdefault(sid, asyncio.Lock()):
+            rec = await browser_plane.registry.get(sid)     # the call that waited finds the browser the first one opened
+            if rec is None:
+                # The first call opens the browser: the estimate is written on the row for the record
+                # (a self-hosted instance keeps no task cost cap; the vendor's own credit is the ceiling).
+                estimate = browser_plane.session_estimate_usd()
+                try:
+                    s = await browser_plane.open_session(sid, hid, org, workspace, allow, deny, estimate)
+                except browser_plane.BrowserRefused as e:
+                    return await refused(e.code, str(e))
+                except Exception as e:  # noqa: BLE001
+                    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
+                                            f"open: {type(e).__name__}: {e}")
+                    return _jsonrpc_result(rid, _tool_text(f"The browser could not be started ({type(e).__name__}). Try again.", True))
+                if s.opened:
+                    await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
+                                            detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
+                                                    "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
+                    _browser_notice(sid, "opened", hid=hid, org=org, vendor=browser_plane.VENDOR)
+    if s is None:
+        try:
+            s = await browser_plane.attach(rec)             # this process's attachment to the recorded browser
+        except Exception as e:  # noqa: BLE001
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
+                                    f"attach: {type(e).__name__}: {e}")
+            return _jsonrpc_result(rid, _tool_text(f"The browser could not be reached ({type(e).__name__}). Try again.", True))
+    if (s.allow, s.deny) != (allow, deny):
+        s.allow, s.deny, s.host_cache = list(allow), list(deny), {}      # the workspace changed its lists
+        await browser_plane.registry.bump(sid, allow=list(allow), deny=list(deny))
+    # THE PERSON MAY HAVE THE BROWSER. The console's live view lets them take over with a click,
+    # and a takeover pauses the agent rather than ending its work: the call WAITS here, without a
+    # token spent, and runs the moment they hand the browser back. Read from the record, since the
+    # takeover is a write from another request (another replica when there are several). A wait
+    # is bounded below the MCP clients' own request timeouts (60 s in the reference SDKs): past
+    # the bound the tool answers, not as an error, that the person still has the browser and the
+    # agent may call again to keep waiting. Measured on hr-test 0.25.7-rc.4 before this: a refusal
+    # made pi end its turn early with "the browser is under user control, so I can't continue".
+    current = await browser_plane.registry.get(sid) if not (rec is None and s.opened) else None
+    if (current or {}).get("control") == "user":
+        _browser_notice(sid, "held", hid=hid, org=org, tool=tool)
+        waited = 0.0
+        while (current or {}).get("control") == "user" and waited < BROWSER_HOLD_SLICE_S:
+            await asyncio.sleep(BROWSER_HOLD_POLL_S)
+            waited += BROWSER_HOLD_POLL_S
+            current = await browser_plane.registry.get(sid)
+        if current is None:
+            return await refused("session closed", "The browser for this task was stopped while the person had it. "
+                                                   "Call again to open a new one.")
+        if current.get("control") == "user":
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "held", "still held",
+                                    detail={"waited_s": round(waited, 1)})
+            return _jsonrpc_result(rid, _tool_text(
+                "The person using this task still has the browser. Call this tool again to keep waiting for it, "
+                "or continue without the browser."))
+    async with s.lock:
+        if s.closed:
+            return await refused("session closed", "The browser for this task was stopped. Call again to open a new one.")
+        try:
+            out = await asyncio.wait_for(browser_plane.call(s, tool, args), browser_plane.CALL_CAP_S)
+        except asyncio.TimeoutError:
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", "timeout")
+            return _jsonrpc_result(rid, _tool_text(
+                f"The call took longer than {browser_plane.CALL_CAP_S:.0f} seconds and was stopped.", True))
+        except browser_plane.BrowserToolError as e:
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", str(e))
+            return _jsonrpc_result(rid, _tool_text(str(e), True))
+        except Exception as e:  # noqa: BLE001
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
+                                    f"{type(e).__name__}: {e}")
+            return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
+    viewport = await browser_plane.viewport_of(s)            # the screen's shape, for the card's frame and cursor
+    await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool, viewport=viewport)
+    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=viewport)
+    if isinstance(out, tuple) and out[0] == "image":
+        png, caption = out[1], out[2]
+        stored = None
+        with contextlib.suppress(Exception):
+            stored = await _media_store(sid, "image", png, {"source": "browser", "caption": caption[:160]})
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "ok", unit="screenshot",
+                                detail={"bytes": len(png), **({"media_id": stored["media_id"]} if stored else {})})
+        note = caption + (f"\nKept with the task's files as {_media_url(hid, _PLUGS_ENTRY['id'], sid, stored['media_id'])}"
+                          if stored else "")
+        return _jsonrpc_result(rid, {"content": [{"type": "image", "data": base64.b64encode(png).decode(), "mimeType": "image/png"},
+                                                 {"type": "text", "text": note}], "isError": False})
+    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "ok")
+    return _jsonrpc_result(rid, _tool_text(str(out)))
+
+
+async def _browser_close(sid: str, reason: str) -> None:
+    """Stop the session's browser, if it opened one, and write its one money row: the minutes it
+    ran and the vendor's dollars for them, metered under browser.usd. Closing the CDP socket alone
+    keeps the vendor's meter running, so the stop is explicit and it is in the audit trail."""
+    s = browser_plane.sessions().get(sid)
+    try:
+        rec = await browser_plane.registry.get(sid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[browser] {sid}: record not read at {reason}: {type(e).__name__}: {e}", flush=True)
+        return
+    if rec is None or not await browser_plane.registry.delete(sid):
+        # Stopped by another process (or never opened): that one writes the row; ours is only an
+        # attachment to drop.
+        if s is not None:
+            await browser_plane.detach(s)
+        return
+    _browser_open_locks.pop(sid, None)
+    _browser_notice(sid, "closed", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), reason=reason)
+    try:
+        fig = await browser_plane.close_session_browser(rec, s)
+    except Exception as e:  # noqa: BLE001
+        mins = browser_plane.minutes(rec)
+        fig = {"minutes": mins, "usd": round(mins * browser_plane.PRICES["browser.minute"], 6),
+               "usd_source": "table", "calls": int(rec.get("calls") or 0), "screenshots": int(rec.get("screenshots") or 0),
+               "blocked": [], "stop_error": f"{type(e).__name__}: {str(e)[:120]}"}
+    print(f"[browser] {sid}: stopped ({reason}) after {fig['minutes']} min, ${fig['usd']:.6f} ({fig['usd_source']})", flush=True)
+    reserved = float(rec.get("reserved") or 0.0)
+    released = round(max(0.0, reserved - float(fig["usd"])), 6)
+    await _plug_call_record(str(rec["hid"]), sid, str(rec["org"]), str(rec["workspace"]), plugs_plane.BROWSER, "session", "session",
+                            float(rec.get("created") or time.time()), "ok", "",
+                            unit=browser_plane.UNIT, usd=float(fig["usd"]),
+                            detail={"reason": reason, "vendor": browser_plane.VENDOR, "vendor_session": str(rec.get("vendor_id") or ""),
+                                    "reserved_usd": reserved, "released_usd": released, **fig})
+
+
+@app.on_event("startup")
+async def _browser_reaper_start() -> None:
+    """Idle and over-cap browsers are stopped whether or not another call ever comes."""
+    async def loop() -> None:
+        while True:
+            await asyncio.sleep(15)
+            with contextlib.suppress(Exception):
+                for rec, why in await browser_plane.expired_sessions():
+                    with contextlib.suppress(Exception):
+                        await _browser_close(str(rec["sid"]), why)
+                await browser_plane.sweep_attachments()
+    asyncio.get_running_loop().create_task(loop())
+
+
+@app.get("/internal/plugs/attachments", dependencies=[Depends(_internal_only)])
+async def plug_attachments(workspace: str, type: str) -> dict:
+    """How many of a workspace's harnesses include one plug type, for the Plugins page's
+    "attached N of M harnesses": M is the workspace's harnesses, N those whose plugs binding
+    names the type. Read from the bindings, never guessed."""
+    rows = _plugs_harness_rows(None, workspace, await BACKING.graph.find("Harness", {"workspace": workspace})
+                               + (await BACKING.graph.find("Harness", {"workspace": ""}) if not PLUGS_REGISTRY_URL else []))
+    attached = []
+    for r in rows:
+        hid = str(r.get("id") or "")
+        entry = next((e for e in _mcp_list(r) if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
+        if not entry:
+            continue
+        rec = await _hosted_record(str(r.get("org") or ""), _vault_key(entry.get("auth")))
+        if rec and rec.get("harness") == hid and type in (rec.get("plugs") or []):
+            attached.append(hid)
+    return {"workspace": workspace, "type": type, "harnesses": len(rows), "attached": len(attached), "harness_ids": attached}
+
+
+@app.get("/internal/plugs/pricing", dependencies=[Depends(_internal_only)])
+async def plug_pricing(type: str = "") -> dict:
+    """What a plug costs, from the one place that charges it, for the Plugins page's price line.
+    The browser passes the vendor's list price through; the other plugs cost nothing here."""
+    rows = [browser_plane.pricing()] + [{"type": t, "unit": "call", "usd_per_unit": 0.0, "markup": 0.0,
+                                         "source": "no charge", "billed_as": "plug.call"}
+                                        for t in plugs_plane.TYPES if t not in (plugs_plane.BROWSER, "github_app")]
+    if type:
+        row = next((r for r in rows if r["type"] == type), None)
+        if not row:
+            raise uhp_error(404, "plug_not_found", f"No plug of type {type!r}.", "type")
+        return row
+    return {"pricing": rows}
+
+
+@app.get("/internal/plugs/tools", dependencies=[Depends(_internal_only)])
+async def plug_tools(type: str) -> dict:
+    """The tools a plug type serves, from the same list the agent gets."""
+    if type not in plugs_plane.TYPES:
+        raise uhp_error(404, "plug_not_found", f"No plug of type {type!r}.", "type")
+    return {"type": type, "label": plugs_plane.TYPES[type],
+            "tools": [{"name": t["name"], "description": t["description"], "risk": t["risk"]} for t in plugs_plane.tools_of(type)]}
 
 
 # ── Starter Kits ──────────────────────────────────────────────────────────────────────────────
@@ -13884,6 +14905,43 @@ _BASE_CATALOG: dict[str, dict] = {
         # of every backend here that has a shell.
         "tool_enforcement": "hard",
     },
+    "cheetahclaws": {
+        "label": "CheetahClaws", "backend": "cheetahclaws", "status": "ready",
+        # NOT a system prompt of its own: the CLI composes its system prompt itself
+        # (context.build_system_prompt) and reads the harness's instructions from CLAUDE.md in the
+        # workspace — CLAUDE.md only; it has no AGENTS.md discovery at all.
+        "system_prompt": ("You are CheetahClaws, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The `tools` array a live 3.5.88 turn SENT ITS PROVIDER, captured at a stub (the CLI's
+        # "full" profile), by the names the model sees; test_catalog_cheetahclaws_tools.py pins
+        # these ids equal to the runner's CHEETAHCLAWS_TOOLS. Not offered, because the driver
+        # withholds them on every turn and a switch for them would change nothing: AskUserQuestion
+        # (it blocks on a terminal nobody is at), ReadEmail and SendEmail (no mailbox is ever
+        # configured), and WebBrowse, ReadPDF, ReadSpreadsheet and ReadImage, whose optional extras
+        # the pinned bare install does not carry (pymupdf, which `files` would bring, is AGPL-3.0).
+        "tools": [("Bash", "Shell"), ("Read", "File Read"), ("Write", "File Write"), ("Edit", "Edit"),
+                  ("Glob", "Glob"), ("Grep", "Search"), ("WebFetch", "Web Fetch"),
+                  ("WebSearch", "Web Search"), ("NotebookEdit", "Notebook Edit"),
+                  ("GetDiagnostics", "Diagnostics"), ("SummarizeLargeFile", "Large File Summary"),
+                  ("Skill", "Skill"), ("SkillList", "Skill List"), ("Agent", "Subagent"),
+                  ("CheckAgentResult", "Subagent Result"), ("ListAgentTasks", "Subagent Tasks"),
+                  ("ListAgentTypes", "Subagent Types"), ("SendMessage", "Subagent Message"),
+                  ("TaskCreate", "Task Create"), ("TaskGet", "Task Get"), ("TaskList", "Task List"),
+                  ("TaskUpdate", "Task Update"), ("MemorySave", "Memory Save"), ("MemoryList", "Memory List"),
+                  ("MemorySearch", "Memory Search"), ("MemoryVerify", "Memory Verify"),
+                  ("MemoryDelete", "Memory Delete"), ("Research", "Research"),
+                  ("EnterPlanMode", "Enter Plan"), ("ExitPlanMode", "Exit Plan"),
+                  ("SleepTimer", "Sleep Timer")],
+        # "hard", and measured: the driver sets the CLI's own `disabled_tools`, which removes the
+        # tool from the schema sent to the provider (tool_registry.get_tool_schemas) AND refuses a
+        # call to it at execution (agent.py: a name outside the turn's active set is an error, not a
+        # permission question). Pinned against a stub in runner/tests/test_cheetahclaws_backend.py
+        # (Bash and Write disabled: absent from the provider's `tools`). An MCP tool is withheld the
+        # same way, by its bare or server.tool name. The honest limit every shell-bearing base has:
+        # disabling Write alone does not stop a file being written through Bash.
+        "tool_enforcement": "hard",
+    },
     "systemone": {
         "label": "System One", "backend": "systemone", "status": "ready",
         # Delivered as the loop's task instructions on every step, beside the environment's own.
@@ -14174,7 +15232,7 @@ _PLUGIN_NAME_RE = re.compile(r"^(?!.*(--|\.\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _PLUGIN_PACKAGE_MAX = 16 * 1024 * 1024   # the JSON-encoded package; a plugin is code and prose, not data
 _PLUGIN_MANIFEST_FIELDS = {"$schema", "name", "version", "description", "author", "homepage",
-                           "repository", "license", "keywords", "extensions"}
+                           "repository", "license", "keywords", "extensions", "requires"}
 _PLUGIN_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PLUGIN_BLOB_RE = re.compile(r"^plg_[0-9a-f]{32}$")
 # The derived object rides on the harness record beside the blob handle; the record has a hard
@@ -14402,6 +15460,17 @@ def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
                                     and all(isinstance(x, str) for x in v.values())):
             raise _plugin_invalid(name, "plugin.json#/author",
                                   "author may carry only name, email and url, each a string")
+        elif k == "requires":
+            # requires.plugs names plug TYPES, never a tenant: the workspace a harness is in supplies
+            # the tenancy when the package is installed (_plugs_ensure_required).
+            plugs_req = v.get("plugs", []) if isinstance(v, dict) else None
+            if not (isinstance(v, dict) and set(v) <= {"plugs"} and isinstance(plugs_req, list)
+                    and all(isinstance(x, str) for x in plugs_req)):
+                raise _plugin_invalid(name, "plugin.json#/requires", "requires may carry plugs, a list of plug type names")
+            for t in plugs_req:
+                if t not in plugs_plane.TYPES:
+                    skipped.append({"path": f"plugin.json#/requires/plugs/{t}",
+                                    "reason": "no plug of that type on this server, ignored"})
         elif k == "extensions" and not isinstance(v, dict):
             skipped.append({"path": "plugin.json#/extensions", "reason": "extensions is not an object, ignored"})
 
@@ -14696,6 +15765,8 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     props = {"org": org, "member": member, "workspace": workspace, **_harness_props(body),
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
+    if await _plugs_ensure_required(org, hid):
+        return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
     return _harness_out({"id": hid, **props})
 
 
@@ -14809,6 +15880,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     # AFTER the write: _harness_props can still refuse this save (an unsupported base), and a
     # refused save that had already scrubbed a record would disconnect a database nobody removed.
     await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
+    await _plugs_ensure_required(org, hid)
     v = await _vertex_get(hid)
     return _harness_out(v or {"id": hid})
 
@@ -14958,6 +16030,8 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
              **_harness_props(body),
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
+    if await _plugs_ensure_required(org, hid):
+        return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
     return _harness_out({"id": hid, **props})
 
 
@@ -15182,6 +16256,8 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                                                "updated_at": str(int(time.time() * 1000))})
             existing = await _vertex_get(hid0) or {**existing, "system_prompt": want_prompt}
             print(f"[kits] {kit_id}: prompt refreshed on {hid0}", flush=True)
+        if await _plugs_ensure_required(org, hid0):
+            existing = await _vertex_get(hid0) or existing
         return {"kit": kit_id, "harnessId": hid0,
                 "route": (kit.get("app") or {}).get("route") or "", "created": False,
                 "harness": _harness_out(existing)}
@@ -15241,6 +16317,8 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         v = await _vertex_get(hid) or v
     if media_decl:
         await _hosted_media_attach(org, hid, v, media_decl)
+        v = await _vertex_get(hid) or v
+    if await _plugs_ensure_required(org, hid):
         v = await _vertex_get(hid) or v
     print(f"[kits] launched {kit_id} -> {hid}", flush=True)
     return {"kit": kit_id, "harnessId": hid,
@@ -15694,7 +16772,7 @@ async def get_harness_public(hid: str, request: Request) -> dict:
 # upload, workspaces) and every route behind the internal key stay out. Served on the same host as the API, and once per process.
 _OPENAPI_PUBLIC_PREFIXES = ("/v1/responses", "/v1/files", "/v1/sessions", "/v1/harnesses", "/v1/bases",
                             "/v1/models", "/v1/mcp-secrets", "/v1/mcp-test", "/v1/containers", "/v1/traces",
-                            "/v1/uhp", "/v1/openapi.json")
+                            "/v1/plugs", "/v1/uhp", "/v1/openapi.json")
 _openapi_doc: dict | None = None
 
 
@@ -15800,10 +16878,10 @@ async def list_models(request: Request) -> dict:
         models = [{"id": m, "label": m, "backend": b, "available": ok(m),
                     "default": m == c["default"]} for m in c["models"]]
         seen = set(c["models"])
-        # Add models from the effective map that are not already in the catalog.
-        # A model serves this backend only if its integration's api_format is compatible;
-        # on an incompatible backend it is still LISTED (so the operator sees it exists) but
-        # greyed out (available=False) rather than silently omitted.
+        # Add models from the effective map that are not already in the catalog: a custom
+        # endpoint's model, on the backends its api_format drives. Not on the others, not even
+        # greyed: a Claude model under Codex read as "Codex can use Anthropic models" (Richard,
+        # hr-test 2026-09-27), and a backend that can never run a model has no row for it.
         for canonical, iname in eff_map.items():
             if canonical in seen:
                 continue
@@ -15814,10 +16892,7 @@ async def list_models(request: Request) -> dict:
             if _integration_serves_backend(integ, b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": True, "default": False})
-            elif _custom_can_drive(b):
-                models.append({"id": canonical, "label": canonical, "backend": b,
-                               "available": False, "default": False})
-            seen.add(canonical)
+                seen.add(canonical)
         out[b] = {"default": c["default"], "models": models}
     return {"backends": out}
 
@@ -15932,6 +17007,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     # AFTER the write: see update_harness.
     await _hosted_scrub_removed(org, hid, _mcp_list(v), body.mcp_servers)
+    await _plugs_ensure_required(org, hid)
     return _harness_out(await _vertex_get(hid) or {"id": hid})
 
 

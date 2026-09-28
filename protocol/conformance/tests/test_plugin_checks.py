@@ -4,7 +4,9 @@ The Plugins chapter is a set of derivations, refusals and omissions, and a check
 passes cannot tell a server that refuses from one that does not. So every P- check runs against
 a deliberately wrong server (plugin_stub.py) carrying one defect at a time. Each defect must be
 caught by the check that claims to cover it, by no other, and a clean server must pass all ten.
-No task is ever run, so this needs no credentials, no network and no agent tokens.
+No task is ever run, so this needs no credentials, no network and no agent tokens. P-11 is the
+one plugin check that runs a task (through the fixture server); it is tested in
+test_plugin_fixture.py with a fake client and left out of this series.
 """
 from __future__ import annotations
 
@@ -66,16 +68,16 @@ def _run_series(defect: str) -> dict[str, Outcome]:
         else:
             pytest.fail(f"the stub did not start for defect {defect!r}")
         ctx = Context(client=Client(f"http://127.0.0.1:{port}", "stub-key"), task_timeout=30.0)
-        return {c.id: c.run(ctx).outcome for c in REGISTRY if c.id.startswith("P-")}
+        return {c.id: c.run(ctx).outcome for c in REGISTRY if c.id.startswith("P-") and c.id != "P-11"}
     finally:
         srv.terminate()
         srv.wait(timeout=5)
 
 
 def test_the_series_is_registered_at_full():
-    ids = [c.id for c in REGISTRY if c.id.startswith("P-")]
+    ids = [c.id for c in REGISTRY if c.id.startswith("P-") and c.id != "P-11"]
     assert ids == [f"P-{i:02d}" for i in range(1, 11)]
-    assert {c.cls for c in REGISTRY if c.id.startswith("P-")} == {"full"}
+    assert {c.cls for c in REGISTRY if c.id.startswith("P-")} == {"full"}   # P-11 included: it is full too
 
 
 def test_a_conformant_server_passes_every_check():

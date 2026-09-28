@@ -11,3 +11,7 @@ PyJWT==2.10.1
 cryptography==44.0.0
 asyncpg==0.30.0
 aiomysql==0.2.0
+# The browser plugin drives a cloud browser over CDP from the gateway (browser_plane.py,
+# connect_over_cdp): the driver is needed here, no browser binary is (the image's optional
+# WITH_BROWSER block installs Chromium for harnesses that verify their own output; this is not that).
+playwright==1.63.0

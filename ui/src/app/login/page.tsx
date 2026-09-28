@@ -121,7 +121,7 @@ function HostedLoginPage() {
     <div className="hr-auth">
       <div className="hr-auth-card">
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
-        <a className="hr-brand" href="https://harnessrouter.ai"><img className="hr-brand-logo" src="/harnessrouter-wordmark.png" alt="HarnessRouter" /></a>
+        <a className="hr-brand" href="https://harnessrouter.ai"><img className="hr-brand-logo" src="/brand/hr-horizontal-duo-light.png" alt="HarnessRouter" /></a>
         {verifyEmailAddr ? (
           <>
             <h1 style={{ marginTop: 14 }}>Check your email</h1>

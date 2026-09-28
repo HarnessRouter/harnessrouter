@@ -10,7 +10,7 @@ recycle (the session's sandbox is let go on purpose through the internal recycle
 follow-up must recall the first message: the history survived the checkpoint round trip).
 Results are one JSON record per harness x model with the outcome, seconds and reason of each
 scenario; `fill-connection.py` stamps each record with the connection its session actually ran on;
-`render.py` turns the records into `docs/support-matrix.md`.
+`render.py` turns the records into `docs/support-matrix.md` (the Browser section at its end comes from docs/browser-column.json).
 
 ```
 export BASE=https://your-instance HR_USER=harnessrouter HR_PASS=... PROVIDER=tokenrouter
@@ -33,6 +33,20 @@ Rows that fail must carry the reproduced provider error text; a verified list is
 from another instance, since each reaches providers by its own path. Retest a bare `incomplete`
 before excluding a model.
 
+## The family tour
+
+One conversation, every model family in turn, on one deliverable (see "The family tour" in
+docs/harness-verification.md). Through the console, like `run.mjs`:
+
+```
+export BASE=https://your-instance HR_USER=harnessrouter HR_PASS=...
+HARNESS=cheetahclaws RESULTS=tour-cheetahclaws.json node family-tour.mjs
+SID=hsess... HARNESS=cheetahclaws node family-tour.mjs     # retest a person's own conversation
+```
+
+`FAMILIES` (comma list of model ids, one per family) overrides the default list; a model the
+instance does not serve is skipped and recorded as not offered. Exit 0 when every family passed.
+
 ## The plugin matrix
 
 `plugins/run-matrix.py` proves the plugin path on every base, one base at a time: a harness is
@@ -45,3 +59,19 @@ remote two against a public probe), and the answer is judged on the probe token 
         --bases aider --out plugin-results.json
 
 Kept in the repository since 2026-09-18 after the copy in a scratch folder was emptied mid-review.
+
+## The browser column
+
+`plugs/browser.py` runs the browser plugin on every base but System One, through the API, on one
+task in plain words (open example.com, follow its link, report where you landed), and judges each
+base on the trace: the browser navigated and clicked, the answer names the page it reached, the
+browser session was stopped and billed. A failed base is retested once. The prompt names no tool;
+the harness's Browser section in the agent's instructions file is what the agent goes on.
+
+    python3 plugs/browser.py --base-url https://<instance>/api/harness --api-key "$KEY" \
+        --out browser.json --md browser.md            # every ready base except systemone
+    python3 plugs/browser.py ... --bases codex,pi     # a few bases
+    python3 plugs/browser.py ... --model gpt-5.4      # one model on every base
+
+The table (`--md`) is the Browser section of docs/support-matrix.md; the run's findings go to
+docs/support-matrix-notes.md like every other column's.

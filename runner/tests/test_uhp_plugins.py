@@ -143,7 +143,10 @@ def test_pi_adapter_gets_a_stdio_command_entry(tmp_path):
                 "args": ["--data", "/ws/.harness/plugin-data/hr_probe"], "plugin": "hr-probe"},
                {"name": "remote", "url": "https://mcp.example.invalid/mcp", "headers": {"X-Team": "t"}}]
     assert rn._pi_write_mcp(home, servers) is True
-    cfg = json.loads((home / ".pi" / "agent" / "mcp.json").read_text())["mcpServers"]
+    doc = json.loads((home / ".pi" / "agent" / "mcp-adapter.json").read_text())
+    # the tools are registered one by one, as on every other CLI; not behind the adapter's proxy
+    assert doc["settings"] == {"directTools": True, "disableProxyTool": True}
+    cfg = doc["mcpServers"]
     assert cfg["probe"] == {"command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
                             "args": ["--data", "/ws/.harness/plugin-data/hr_probe"]}
     assert cfg["remote"] == {"url": "https://mcp.example.invalid/mcp", "headers": {"X-Team": "t"}}
@@ -207,6 +210,17 @@ def test_a_client_without_sse_gets_the_server_through_the_stdio_bridge(tmp_path)
     # the writers then see a stdio entry, as for any plugin server
     ext = rn._goose_extensions(rn._sse_bridges(str(tmp_path), [sse, http], "goose"), None)
     assert ext["probe_sse"]["type"] == "stdio" and ext["probe_http"]["type"] == "streamable_http"
+    # the other way round for CheetahClaws 3.5.88: its client speaks SSE and stdio, and its own
+    # streamable-HTTP client is answered 400 on initialize by a standard server (the public probe,
+    # 2026-09-27), so the streamable-HTTP server is the one that rides the bridge; a url with no
+    # transport is streamable HTTP too
+    bare = {"name": "probe_bare", "url": "https://probe.example.invalid/mcp"}
+    out = rn._sse_bridges(str(tmp_path), [sse, http, bare], "cheetahclaws")
+    assert out[0] == sse
+    for b, u in ((out[1], "https://probe.example.invalid/mcp"), (out[2], "https://probe.example.invalid/mcp")):
+        assert "url" not in b and b["args"] == []
+        text = pathlib.Path(b["command"]).read_text()
+        assert f"HR_MCP_URL={u}" in text and "HR_MCP_TRANSPORT=http" in text
 
 def test_dsh_job_keeps_a_stdio_server(tmp_path):
     """_build_dsh hands the driver a job whose server list kept only urls, from before plugins:
@@ -218,3 +232,28 @@ def test_dsh_job_keeps_a_stdio_server(tmp_path):
     cmd = rn._build_dsh("deepseek", rn.Auth(api_key="k", base_url="https://api.deepseek.com"), "deepseek-v4-pro", "x", str(tmp_path), env, mcp_servers=servers)
     job = json.loads(cmd[2])
     assert [s["name"] for s in job["mcp_servers"]] == ["probe", "remote"]
+
+
+def test_a_servers_auth_reaches_every_base_as_its_authorization_header(tmp_path):
+    """One helper gives every writer a server's headers, `auth` first as Authorization and the
+    declared headers over it. Eight writers took only the declared headers, so the hosted plugs
+    server (auth minted per turn) answered 401 to kimi, aider, opencode, qwen, gemini, goose,
+    openhands and cline, and those bases had no browser (hr-test browser column, 2026-09-27)."""
+    import json
+    assert rn._mcp_headers({"auth": "tok"}) == {"Authorization": "Bearer tok"}
+    assert rn._mcp_headers({"auth": "bearer tok"}) == {"Authorization": "bearer tok"}
+    assert rn._mcp_headers({"auth": "tok", "headers": {"X-Team": "t", "Authorization": "Bearer mine"}}) == {"Authorization": "Bearer mine", "X-Team": "t"}
+    assert rn._mcp_headers({"headers": {"X": None}}) == {} and rn._mcp_headers(None) == {}
+    sv = [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs", "transport": "http", "auth": "tok"}]
+    want = {"Authorization": "Bearer tok"}
+    assert rn._opencode_mcp(sv)["plugs"]["headers"] == want
+    assert rn._goose_extensions(sv, None)["plugs"]["headers"] == want
+    assert rn._openhands_mcp_config(sv)["plugs"]["headers"] == want
+    assert rn._aider_mcp_servers(sv)["plugs"]["headers"] == want
+    assert rn._hermes_mcp_section(sv)["plugs"]["headers"] == want
+    assert json.loads(rn._kimi_mcp_config(tmp_path / "kimi", sv).read_text())["mcpServers"]["plugs"]["headers"] == want
+    rn._qwen_settings(tmp_path / "qwen", sv)
+    assert json.loads((tmp_path / "qwen" / ".qwen" / "settings.json").read_text())["mcpServers"]["plugs"]["headers"] == want
+    rn._gemini_settings(tmp_path / "gemini", sv)
+    assert json.loads((tmp_path / "gemini" / ".gemini" / "settings.json").read_text())["mcpServers"]["plugs"]["headers"] == want
+    assert 'http_headers = { "Authorization" = "Bearer tok" }' in rn._codex_mcp_toml(sv)

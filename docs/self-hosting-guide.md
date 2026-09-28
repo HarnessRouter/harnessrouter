@@ -7,6 +7,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [Install](#install)
 - [Restarts, upgrades, and backups](#restarts-upgrades-and-backups)
 - [Starter kits](#starter-kits)
+- [Plugins](#plugins)
 - [What it is](#what-it-is)
 - [Why self-host](#why-self-host)
 - [The Unified Harness Protocol](#the-unified-harness-protocol)
@@ -337,16 +338,16 @@ offers you providers that work.
 |---|---|
 | `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
 | `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, System One |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, System One, CheetahClaws |
 | `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
 | `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, Aider, OpenHands |
 | `typesafe` | System One (Jev on TypeSafe's own API: `jev-latest`, `jev-preview`) |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
-| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws |
+| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws |
 | `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
-| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws (OpenAI format) |
 
 </details>
 
@@ -588,6 +589,88 @@ spends.
 
 ---
 
+## Plugins
+
+A plugin is a service your workspace connects once; each harness then includes the ones it needs,
+and its agent gets that service's tools on every task. The catalog is on the **Plugins** page of the
+Console, and every row of it is one plugin: what it is, its state here (Connected, Needs auth,
+Disabled, Not connected), what it costs, and how many harnesses include it.
+
+| Plugin | What the agent gets | What you provide |
+|---|---|---|
+| Browser | A real web browser: open a page, read it, click, type, scroll, wait, take a screenshot, go back, switch tabs. Thirteen tools, no JavaScript evaluation, no downloads. | Nothing on the page. The instance needs a [Browser Use Cloud](https://browser-use.com) key in its environment (below). |
+| GitHub | The connected repository: files, branches, commits, pull requests. | An access token and the repository (`owner/name`). |
+| Vercel | The connected project: deployments and domains. | An access token, the project id and team id. |
+| InsForge | The connected backend: its tables and records. | The API key and the backend's address. |
+
+**Turning a plugin on.** Open **Plugins**, and on the row choose **Turn on** (the browser) or
+**Connect** (a plugin that needs a credential; the credential is kept in the instance's secret store
+and never shown again). **Settings** changes what the plugin may do: the browser's site lists ("only
+these sites", "never these sites", matched by domain suffix; empty means any public site), a GitHub
+plugin's repository. **Turn off** keeps the record and refuses the agent's calls with a sentence
+until it is turned on again. Nothing is included on a harness by turning a plugin on.
+
+**Including it on a harness.** Open the harness, find **Plugins** under its settings, and mark the
+plugin **Included**. Over the API, the harness's plugins are its `plugs` attachment:
+
+```bash
+curl -s -X PUT "$HARNESSROUTER_BASE_URL/v1/plugs/browser" \
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"config":{"allow_domains":["example.com"],"deny_domains":[]}}'
+curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses/$HID/servers/plugs" \
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"plugs":["browser"]}'
+```
+
+`GET /v1/plugs` lists the catalog with each plugin's state for your workspace;
+`GET /v1/plugs/browser/attachments` says how many harnesses include it. A package can ask for a
+plugin with `"requires": {"plugs": ["browser"]}` in its `plugin.json`; the harness it lands on
+includes the plugin, and the workspace still has to have connected it.
+
+**Watching and taking over.** When a task opens a browser, the console brings up a Browser card
+beside the conversation and streams the vendor's live view of it; the edges of the screen tint
+blue while the agent has the browser and breathe while it acts, and a ghost cursor glides along a
+small arc to wherever the agent last clicked or typed. The browser's screen is landscape whatever
+the card's shape: the card shows the whole screen at the largest size that fits, with its own
+surface around it; beside the conversation it floats, centred, at the height the screen needs,
+with the conversation squeezed to its left (on a phone it sits under the conversation instead;
+drag the divider or go full screen for a larger view). The card's top row carries every action: **Take over**
+(or a click on the screen) makes the view yours to click and type in and pauses the agent, whose
+next browser call waits for you without spending tokens and runs the moment you choose **Hand back
+to the agent** (after 45 seconds of waiting the call answers that you still have the browser and
+the agent may keep waiting or go on without it); **Full screen** fills the window and **Close**
+puts the card away. The card
+closes itself when the browser closes; the **Browser** button in the task header, there whenever
+the harness includes the browser plugin, opens it at any time, with or without a browser in it.
+A harness that includes the plugin also tells its agent so, in a Browser section of the agent's
+instructions file: use the browser tools for the web and never curl or a web search instead
+(Codex keeps its MCP tools behind a tool search and reached for curl without it).
+Behind it: `GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which
+is a credential and is served only to the session's owner) and
+`POST /v1/sessions/{sid}/browser/control` with `{"control": "user"}` or `{"control": "agent"}`;
+the harness event feed carries `browser.opened`, `browser.call` (with the point the agent acted on
+and the page's viewport), `browser.held`, `browser.control` and `browser.closed` (never the address).
+
+**The browser.** The browser runs in Browser Use Cloud and is driven from this instance; the agent
+never holds the browser's address or the key. Set the key in the container's environment:
+
+```bash
+docker run -e BROWSER_USE_API_KEY=... ...
+```
+
+Until it is set, the browser's tools answer that the browser service is not set up on this
+deployment. Every session is one browser per task, opened on the agent's first browser tool call
+and stopped when the task ends, after two idle minutes, or after twenty minutes, whichever comes
+first; each call has sixty seconds; at most three browsers per workspace are open at once
+(`HR_BROWSER_ORG_SESSIONS`) and nine per instance (`HR_BROWSER_MAX_SESSIONS`). Private, loopback
+and link-local addresses are never reachable, on a page or in anything a page loads. Screenshots
+are kept with the task's files. What the vendor charges ($0.02 per browser hour at the time of
+writing, rounded up to the minute) is what a session costs you on your Browser Use account; this
+instance keeps no ledger, and the price shown on the Plugins page is the vendor's list price with
+no markup, read from the same table the hosted service bills from. Every call and every session is
+written down on the task's trace (event type `plug`, plug `browser`, with the minutes and the
+vendor's figure on the session row).
+
 ## What it is
 
 An *agent harness* is the runtime layer around a model; Codex, Claude Code, and Hermes are harnesses. In this repo's API you also create *harness* objects: a saved configuration whose `base` is one of those runtimes, plus a model, instructions, and limits. A *task* is one run of that configuration, a real conversation against a real POSIX workspace with bash and git, streamed back as it happens.
@@ -654,7 +737,7 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
@@ -726,15 +809,17 @@ It is created in this self-hosted instance and authenticates requests to that CE
 neither a Cloud key, your Console password, nor the model-provider key configured
 in **Integrations**. Never put it in browser-side code or commit it to Git.
 
-### Install a plugin on a harness
+### Install a package on a harness
 
-A plugin is a folder in the [Agent Plugins](https://agent-plugins.org) format: `plugin.json` at its
+A package is a folder in the [Agent Plugins](https://agent-plugins.org) format: `plugin.json` at its
 root, tools in `mcp.json`, Skills under `skills/`. Installing one gives a harness all of it at once,
 and the harness records it as a named, versioned package it can export again. Starter kits built from
-the kit release that carries plugin packages ship their Skills this way, so a kit launched from such
-an image shows the kit as an installed plugin; a kit launched earlier keeps its Skills as its own.
+the kit release that carries packages ship their Skills this way, so a kit launched from such
+an image shows the kit as an installed package; a kit launched earlier keeps its Skills as its own.
+(A package is not a plugin in the sense of the [Plugins](#plugins) page: a plugin is a service the
+workspace connects once; a package is files a harness carries.)
 
-In the Console, open the harness, find **Plugins**, and choose **Install from folder**. Over the API,
+In the Console, open the harness, find **Packages**, and choose **Install from folder**. Over the API,
 `plugins` is a field of the harness record. The simplest case is a new harness created with the
 package in it:
 
