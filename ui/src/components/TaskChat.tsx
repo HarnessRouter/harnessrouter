@@ -28,7 +28,7 @@ import { withText, withReasoning, withStep, withResult, asstText } from 'reifyui
 import {
   // The conversation controller and its module-level singletons now live in one place so Tasks and
   // Arena share a single store, one realtime bus wiring and one turn lifecycle (see lib/conversation).
-  useConversationTurn, useHarnessBus, useConvState, getConvState, setConvState, convStore,
+  useConversationTurn, useHarnessBus, useConvState, getConvState, setConvState, convStore, seedBrowserState, usePaneState, setPaneState, getPaneState,
   msgsFromTurns, turnIndexOf, trackTaskFinished, isInternalOutput,
   addPendingCard, setPendingSid, dropPending, livePending,
   _busSuppress, _runningSids,
@@ -37,6 +37,7 @@ import {
 import TracesMain from '@/studio/traces/TracesMain.jsx';
 import { traceStore } from '@/studio/traces/store';
 import { FilePreview } from '@/components/FilePreview';
+import { BrowserPane, fetchBrowser } from '@/components/BrowserPane';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { AttachCard, OutputFiles } from '@/components/ChatAttachments';
 
@@ -225,7 +226,7 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
   const [draft, setDraft] = useState<CustomHarness | null>(ch);
   useEffect(() => setDraft(ch), [ch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useModelCatalog();   // server catalog is the source of truth for the picker
+  const catalog = useModelCatalog();   // server catalog is the source of truth for the picker and the default
   const models = oobModels(oob).length ? oobModels(oob) : oobModels(oobById(draft?.base || ''));
   // The safe fallback is the BACKEND DEFAULT (gpt-5.4 / sonnet-4.6), never models[0], the lists
   // lead with the newest/priciest entries (gpt-5.6-*, fable-5) and those must never be picked
@@ -269,7 +270,10 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
       : ms.includes(dm.replace(/^claude-/, '')) ? dm.replace(/^claude-/, '')
       : (oobDefaultModel(base0) || dm);
     setModel(pick);
-  }, [harnessId, ch?.defaultModel, ch?.base, deepSid]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `catalog` is a dep so the pick follows the server's default the moment the catalog lands: the
+    // placeholder default stands in for a second or two, and nothing can be picked in that window
+    // (the options stay disabled until availability is read), so the re-sync clobbers no choice.
+  }, [harnessId, ch?.defaultModel, ch?.base, deepSid, catalog]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [recentsKey, setRecentsKey] = useState(0);
   // Realtime broadcast: subscribe ONCE per harness. Every session's live events flow into the conv
@@ -480,6 +484,35 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   useEffect(() => { if (hero) taRef.current?.focus(); }, [hero, harnessId]);   // a fresh draft in another harness is a fresh box too
   const [files, setFiles] = useState<{ name: string; dataUri: string }[]>([]);
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+  // The task's browser: the store carries what the feed says; the pane shows when a browser is
+  // open unless the person closed it for THAT browser (epoch), and the chip brings it back.
+  const liveSid = sessionId ?? liveSessionId ?? null;
+  const browser = useConvState(liveSid ?? '').browser;
+  const pane = usePaneState(harnessId);
+  useEffect(() => {
+    if (!liveSid) return;
+    let alive = true;
+    fetchBrowser(liveSid).then((i) => { if (alive) seedBrowserState(liveSid, i); });
+    return () => { alive = false; };
+  }, [liveSid]);
+  // A browser opening brings the pane up on its own unless the person closed it for that very
+  // browser; a browser closing takes the pane down. The header's Browser control opens it at any
+  // time, with or without a browser in it.
+  const epoch = browser?.open ? browser.epoch : 0;
+  useEffect(() => {
+    if (!liveSid || !epoch) return;
+    if (getPaneState(harnessId).dismissed[liveSid] !== epoch) setPaneState(harnessId, { open: true });
+  }, [liveSid, epoch, harnessId]);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    const open = !!browser?.open;
+    if (wasOpen.current && !open) setPaneState(harnessId, { open: false });
+    wasOpen.current = open;
+  }, [browser?.open, harnessId]);
+  const closeBrowserPane = () => setPaneState(harnessId, { open: false, mode: 'docked',
+    dismissed: liveSid && browser?.open ? { ...getPaneState(harnessId).dismissed, [liveSid]: browser.epoch } : getPaneState(harnessId).dismissed });
+  const browserShown = pane.open && !preview;
+  const browserDocked = browserShown && pane.mode === 'docked';
   const [modelOpen, setModelOpen] = useState(false);
   const modelBtnRef = useRef<HTMLElement>(null);
   const [previewW, onPreviewResize] = useHResize(520, 340, 1100, true);
@@ -511,7 +544,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   const convRef = useRef<HTMLDivElement>(null);
   const canAttach = !!target.backend && !busy;
   return (
-    <div ref={convRef} className={'wbx-conv' + (preview ? ' split' : '')}>
+    <div ref={convRef} className={'wbx-conv' + (preview || browserDocked ? ' split' : '')}>
       {/* A fresh draft centers on what it is for: the harness, named under its base's mark, with
           the composer right under it. The first message turns it into the running thread. */}
       <div className={'wbx-conv-main' + (!loading && msgs.length === 0 && !busy ? ' is-hero' : '')}>
@@ -706,6 +739,14 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
           <FilePreview file={preview} onClose={() => setPreview(null)} />
         </div>
       </>}
+      {browserDocked && (
+        <div className="wbx-preview-pane wbx-browser-pane" style={{ width: previewW, flex: '0 0 auto' }}>
+          <BrowserPane harnessId={harnessId} sessionId={liveSid ?? ''} live={browser} busy={busy} mode="docked" onClose={closeBrowserPane} onResizeStart={onPreviewResize} />
+        </div>
+      )}
+      {browserShown && pane.mode !== 'docked' && (
+        <BrowserPane harnessId={harnessId} sessionId={liveSid ?? ''} live={browser} busy={busy} mode={pane.mode} onClose={closeBrowserPane} />
+      )}
       {outOfCredits && (
         <InsufficientCreditsModal balance={outOfCredits.balance}
           onClose={clearOutOfCredits} />

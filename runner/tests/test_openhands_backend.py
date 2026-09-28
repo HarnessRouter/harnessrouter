@@ -177,8 +177,27 @@ def test_the_relay_token_rides_the_turns_environment_so_the_served_model_and_usa
     cmd = _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"),
                            "gpt-5.4", "hi", d, env)
     job = json.loads(cmd[-1])
-    assert env["OPENAI_API_KEY"].startswith("hr-relay-") and env["OPENAI_API_KEY"] == job["api_key"]
-    assert env["OPENAI_BASE_URL"] == job["base_url"]
+    assert env["LITELLM_PROXY_API_KEY"].startswith("hr-relay-") and env["LITELLM_PROXY_API_KEY"] == job["api_key"]
+    assert env["LITELLM_PROXY_API_BASE"] == job["base_url"]
+    # the pair litellm reads for a litellm_proxy/ id on both its paths; the OpenAI pair is read by
+    # nothing once the id carries that prefix (hr-test venv, 2026-09-27), so it is not set
+    assert "OPENAI_API_KEY" not in env and "OPENAI_BASE_URL" not in env
+
+
+def test_the_model_id_rides_the_litellm_proxy_prefix_so_a_vendor_slug_survives_to_the_wire():
+    """`openai/` was stripped twice between the job and the wire (OpenHands' LLM and litellm each
+    take one off), so an aggregator's openai/gpt-6-sol reached TokenRouter as the bare id and was
+    refused (503 model_not_found, the tokenrouter column of 2026-09-27). litellm's proxy prefix is
+    taken off once and the rest is sent as it is, measured in the openhands venv on hr-test."""
+    from server import Auth, _build_openhands
+    for pid in ("openai/gpt-6-sol", "gpt-6-sol", "anthropic/claude-sonnet-5"):
+        d = tempfile.mkdtemp(); env: dict = {}
+        cmd = _build_openhands("tokenrouter", Auth(api_key="sk-real", base_url="https://api.tokenrouter.com/v1"),
+                               pid, "hi", d, env)
+        job = json.loads(cmd[-1])
+        assert job["model"] == f"litellm_proxy/{pid}"
+        assert not job["model"].startswith("openai/")
+        assert env["LITELLM_PROXY_API_BASE"] == job["base_url"] and env["LITELLM_PROXY_API_KEY"] == job["api_key"]
 
 
 def test_only_the_execution_status_update_sets_the_status():
@@ -435,7 +454,7 @@ def test_the_field_litellm_invents_for_a_known_claude_id_never_reaches_the_provi
     d = tempfile.mkdtemp(); env: dict = {}
     _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://api.anthropic.com"),
                      "claude-haiku-4-5-20251001", "hi", d, env)
-    route = _HERMES_RELAY["routes"][env["OPENAI_API_KEY"]]
+    route = _HERMES_RELAY["routes"][env["LITELLM_PROXY_API_KEY"]]
     assert route[2]["drop_fields"] == ("max_tokens",)
 
 
@@ -474,3 +493,14 @@ def test_a_file_editor_view_is_a_read_card():
                         "action": {"kind": "FileEditorAction", "command": "create", "path": "/w/a.md", "file_text": "x"}}, {})
     assert call[0][1]["name"] == "Edit"
 
+
+
+def test_a_claude_model_is_told_its_thinking_shape_and_others_are_not():
+    """Anthropic refused every Claude model behind the proxy with "thinking.type: enabled is not
+    supported for this model. Use adaptive and output_config.effort" (hosted, 2026-09-28): the SDK
+    reads the shape off LiteLLM's metadata, which knows nothing of a model served under our id.
+    The spec names the shape for a Claude model and says nothing otherwise."""
+    for m in ("litellm_proxy/claude-opus-5", "litellm_proxy/claude-sonnet-5", "claude-fable-5-1"):
+        assert drv._agent_spec({"model": m})["llm"]["capability_overrides"] == {"thinking_mode": "adaptive"}, m
+    for m in ("litellm_proxy/gpt-5.4", "openai/gpt-5.5", "deepseek-v4-pro", "kimi-k3"):
+        assert "capability_overrides" not in drv._agent_spec({"model": m})["llm"], m

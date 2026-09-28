@@ -1670,6 +1670,8 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
     .itg-or::before, .itg-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
     /* what is left to spend on the hosted account: an amber pill on its own row under the name */
     .itg-balance-row { margin-top: 5px; }
+.itg-balance-topup { margin-left: 8px; font-size: 12px; color: var(--brand); text-decoration: none; white-space: nowrap; }
+.itg-balance-topup:hover { text-decoration: underline; }
     .itg-balance { display: inline-block; padding: 2px 9px; border-radius: 999px;
       font-size: 11.5px; font-weight: 600; line-height: 16px; color: #8a5a00;
       background: #fff3cf; border: 1px solid rgba(214, 150, 0, .38); white-space: nowrap; }
@@ -2023,6 +2025,9 @@ button.creq-srcstat.on b { color: var(--accent); }
 .plugin-list{container-type:inline-size}
 .plugin-row .capability-actions{display:grid;grid-template-columns:repeat(2,minmax(104px,max-content));gap:6px 8px;justify-content:end;align-self:start;margin-top:2px}
 .plugin-row .capability-actions .button,.plugin-row .capability-actions .toggle-button{width:100%;min-width:0;justify-content:center}
+/* a row with one action (a connected plugin's Included switch) keeps it on the right edge, where the
+   packages' actions end; alone in a two-column grid it sat in the first column (Richard, 2026-09-27) */
+.plugin-row .capability-actions>:only-child{grid-column:1/-1;justify-self:end}
 @container (max-width:680px){
   .plugin-row{grid-template-columns:30px minmax(0,1fr)}
   .plugin-row .capability-actions{grid-column:2;justify-content:start;margin-top:8px}

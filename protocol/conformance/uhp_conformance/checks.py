@@ -846,7 +846,7 @@ def f05(ctx):
 @check("F-06", "MCP servers and disabled tools round-trip", "full",
        f"{SPEC}/harnesses.md#41-mcp-servers")
 def f06(ctx):
-    mcp = [{"name": "conformance-mcp", "url": "https://mcp.example.invalid/mcp",
+    mcp = [{"name": "conformance-mcp", "url": ctx.plugin_mcp_url,
             "transport": "http", "enabled": False}]
     h = _managed_harness(ctx, mcp_servers=mcp, disabled_tools=["WebSearch"])
     got = ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}
@@ -901,13 +901,25 @@ def _package(name: str = "uhp-conformance-plugin", *, manifest: dict | None = No
 
 _PLUGIN_MANIFEST = {"$schema": _AP_MANIFEST_SCHEMA, "name": "uhp-conformance-plugin",
                     "version": "1.0.0", "description": "A conformance fixture."}
-_PLUGIN_MCP = {"$schema": _AP_MCP_SCHEMA, "mcpServers": {
-    "conformance-http": {"type": "streamable-http", "url": "https://mcp.example.invalid/mcp"},
-    "conformance-stdio": {"type": "stdio", "command": "./bin/tool.bin",
-                          "args": ["--data", "${PLUGIN_DATA}"]},
-}}
-_PLUGIN_FILES = _package(manifest=_PLUGIN_MANIFEST, mcp=_PLUGIN_MCP)
-_PLUGIN_PATHS = sorted(f["path"] for f in _PLUGIN_FILES)
+
+
+def _plugin_mcp(ctx) -> dict:
+    """The fixture plugin's mcp.json. Its HTTP server is the one the run was pointed at
+    (`--plugin-mcp-url`), which resolves and answers: a host may refuse a server it cannot reach at
+    configuration time and record that in `skipped`, and with an unresolvable placeholder these
+    checks measured that refusal instead of the plugin (the hosted HarnessRouter, 2026-09-27)."""
+    return {"$schema": _AP_MCP_SCHEMA, "mcpServers": {
+        "conformance-http": {"type": "streamable-http", "url": ctx.plugin_mcp_url},
+        "conformance-stdio": {"type": "stdio", "command": "./bin/tool.bin",
+                              "args": ["--data", "${PLUGIN_DATA}"]},
+    }}
+
+
+def _plugin_files_of(ctx) -> list[dict]:
+    return _package(manifest=_PLUGIN_MANIFEST, mcp=_plugin_mcp(ctx))
+
+
+_PLUGIN_PATHS = sorted(f["path"] for f in _package(manifest=_PLUGIN_MANIFEST, mcp={"mcpServers": {}}))
 
 
 def _error_code(r) -> str:
@@ -938,7 +950,7 @@ def p01(ctx):
        f"{SPEC}/plugins.md#2-the-plugin-object")
 def p02(ctx):
     _plugins_supported(ctx)
-    h = _managed_harness(ctx, plugins=[{"files": _PLUGIN_FILES}])
+    h = _managed_harness(ctx, plugins=[{"files": _plugin_files_of(ctx)}])
     got = ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}
     plugins = got.get("plugins") or []
     assert len(plugins) == 1, f"installed one plugin, read back {len(plugins)}"
@@ -983,7 +995,7 @@ def p03(ctx):
     base = _supported_base(ctx)
     r = ctx.client.post("/v1/harnesses", body={
         "name": "uhp-conformance-nomanifest", "base": base,
-        "plugins": [{"files": _package(manifest=None, mcp=_PLUGIN_MCP)}]})
+        "plugins": [{"files": _package(manifest=None, mcp=_plugin_mcp(ctx))}]})
     if r.status == 200:
         ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
         raise AssertionError(
@@ -1000,11 +1012,10 @@ def p03(ctx):
 def p04(ctx):
     _plugins_supported(ctx)
     base = _supported_base(ctx)
-    direct = [{"name": "conformance-http", "url": "https://direct.example.invalid/mcp",
-               "transport": "http"}]
+    direct = [{"name": "conformance-http", "url": ctx.plugin_mcp_url, "transport": "http"}]
     r = ctx.client.post("/v1/harnesses", body={
         "name": "uhp-conformance-collision", "base": base,
-        "mcp_servers": direct, "plugins": [{"files": _PLUGIN_FILES}]})
+        "mcp_servers": direct, "plugins": [{"files": _plugin_files_of(ctx)}]})
     if r.status == 200:
         ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
         raise AssertionError(
@@ -1023,7 +1034,7 @@ def p04(ctx):
        f"{SPEC}/plugins.md#3-installing-a-plugin")
 def p05(ctx):
     _plugins_supported(ctx)
-    h = _managed_harness(ctx, plugins=[{"files": _PLUGIN_FILES}])
+    h = _managed_harness(ctx, plugins=[{"files": _plugin_files_of(ctx)}])
     hid = h["id"]
     got = ctx.client.get(f"/v1/harnesses/{hid}").json or {}
     if got.get("mcpServers") or got.get("skills"):
@@ -1050,7 +1061,7 @@ def p05(ctx):
        f"{SPEC}/plugins.md#5-exporting-a-harness-as-a-plugin")
 def p06(ctx):
     _plugins_supported(ctx)
-    direct = [{"name": "conformance-direct", "url": "https://mcp.example.invalid/mcp",
+    direct = [{"name": "conformance-direct", "url": ctx.plugin_mcp_url,
                "transport": "http", "headers": {"X-Team": "conformance"}, "auth": "secret-token"}]
     h = _managed_harness(ctx, mcp_servers=direct, skills=[_SKILL_BUNDLE])
     r = ctx.client.get(f"/v1/harnesses/{h['id']}/plugin")
@@ -1094,8 +1105,8 @@ def p06(ctx):
 def p07(ctx):
     _plugins_supported(ctx)
     mcp = {"$schema": _AP_MCP_SCHEMA, "mcpServers": {
-        "conformance-http": {"type": "streamable-http", "url": "https://mcp.example.invalid/mcp"},
-        "conformance-broken": {"type": "carrier-pigeon", "url": "https://mcp.example.invalid/x"}}}
+        "conformance-http": {"type": "streamable-http", "url": ctx.plugin_mcp_url},
+        "conformance-broken": {"type": "carrier-pigeon", "url": ctx.plugin_mcp_url}}}
     h = _managed_harness(ctx, plugins=[{"files": _package(manifest=_PLUGIN_MANIFEST, mcp=mcp)}])
     pl = ((ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}).get("plugins") or [{}])[0]
     names = [s.get("name") for s in pl.get("mcpServers") or []]
@@ -1114,7 +1125,7 @@ def p07(ctx):
        f"{SPEC}/plugins.md#3-installing-a-plugin")
 def p08(ctx):
     _plugins_supported(ctx)
-    h = _managed_harness(ctx, plugins=[{"files": _PLUGIN_FILES, "enabled": False}])
+    h = _managed_harness(ctx, plugins=[{"files": _plugin_files_of(ctx), "enabled": False}])
     pl = ((ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}).get("plugins") or [{}])[0]
     assert pl.get("name") == "uhp-conformance-plugin", f"the disabled plugin was not kept: {pl}"
     assert pl.get("enabled") is False, (
@@ -1146,6 +1157,51 @@ def p09(ctx):
     return f"refused; supported={supported}"
 
 
+@check("P-11", "A plugin's MCP server answers the agent's tool call", "full",
+       f"{SPEC}/plugins.md#4-binding-at-run-time")
+def p11(ctx):
+    """The one plugin check that runs a task. P-02 to P-10 read what the server derived and
+    refused; none of them shows that an agent can reach the plugin's server. This one installs a
+    plugin whose only server is the fixture the run was pointed at, asks the agent to call the
+    fixture's tool with a nonce, and expects the fixture's answer back: the tool's output is a
+    function of the nonce that the agent cannot produce without calling it."""
+    _plugins_supported(ctx)
+    from .fixture import fixture_answer, TOOL_NAME
+    base_h = _harness(ctx)
+    nonce = uuid.uuid4().hex[:10]
+    mcp = {"$schema": _AP_MCP_SCHEMA, "mcpServers": {
+        "conformance-http": {"type": "streamable-http", "url": ctx.plugin_mcp_url}}}
+    body = {"name": f"uhp-conformance-p11-{nonce[:4]}", "base": base_h.get("base") or _supported_base(ctx),
+            "plugins": [{"files": _package(manifest=_PLUGIN_MANIFEST, mcp=mcp, skill=False)}]}
+    model = ctx.model or str(base_h.get("defaultModel") or "").strip()
+    if model:
+        body["default_model"] = model
+    r = ctx.client.post("/v1/harnesses", body=body)
+    if r.status != 200:
+        raise Skip(f"could not create a harness carrying the plugin (HTTP {r.status}: {r.body[:160]!r})")
+    h = r.json or {}
+    ctx.state.setdefault("_cleanup_harnesses", []).append(h.get("id"))
+    pl = ((ctx.client.get(f"/v1/harnesses/{h['id']}").json or {}).get("plugins") or [{}])[0]
+    names = [s.get("name") for s in pl.get("mcpServers") or []]
+    assert names == ["conformance-http"], (
+        f"the plugin's server was not derived (servers={names}, skipped={pl.get('skipped')}); the "
+        f"fixture at {ctx.plugin_mcp_url} must be reachable from this server")
+    task = {"input": (f"Call the tool {TOOL_NAME} with the text {nonce} and reply with exactly what it "
+                      "returns, nothing else."),
+            "metadata": {"harness_id": h["id"]}, "stream": False}
+    if model:
+        task["model"] = model
+    resp = ctx.client.post("/v1/responses", body=task)
+    assert resp.status == 200, f"POST /v1/responses returned HTTP {resp.status}: {resp.body[:200]!r}"
+    text = json.dumps((resp.json or {}).get("output") or [])
+    want = fixture_answer(nonce)
+    assert want in text, (
+        f"the reply does not carry the fixture's answer {want!r} (status={(resp.json or {}).get('status')}, "
+        f"output={text[:240]!r}). The agent never reached the plugin's server: either the host did "
+        f"not bind it at run time or the sandbox cannot reach {ctx.plugin_mcp_url}.")
+    return f"the fixture answered through the plugin in {resp.elapsed_s:.1f}s"
+
+
 @check("P-10", "Two plugins with the same name are refused", "full",
        f"{SPEC}/plugins.md#3-installing-a-plugin")
 def p10(ctx):
@@ -1154,7 +1210,7 @@ def p10(ctx):
     twin = _package(manifest=_PLUGIN_MANIFEST, mcp=None, skill=False)
     r = ctx.client.post("/v1/harnesses", body={
         "name": "uhp-conformance-twins", "base": base,
-        "plugins": [{"files": _PLUGIN_FILES}, {"files": twin}]})
+        "plugins": [{"files": _plugin_files_of(ctx)}, {"files": twin}]})
     if r.status == 200:
         ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
         raise AssertionError("two plugins named uhp-conformance-plugin were installed side by side; "
@@ -1241,7 +1297,7 @@ def _run_with_reserved(ctx) -> dict:
             "tools": [{"type": "function", "name": "uhp_conformance_probe",
                        "description": "Must never be offered to the agent.",
                        "parameters": {"type": "object", "properties": {}}},
-                      {"name": "uhp-conformance-mcp", "url": "https://mcp.example.invalid/mcp",
+                      {"name": "uhp-conformance-mcp", "url": ctx.plugin_mcp_url,
                        "transport": "http"}],
             "include": ["uhp.conformance.not_a_real_value"]}
     if ctx.model:

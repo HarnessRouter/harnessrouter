@@ -216,9 +216,10 @@ def _agent_spec(job: dict) -> dict:
     # NO BASE URL IN IT EITHER. The spec is persisted with the conversation, and the base url is
     # the loopback relay's, which binds a fresh port on every runner start: a conversation created
     # before a restart dialled the old port on its next turn and died on `Cannot connect to host
-    # 127.0.0.1:39265` (hr-test, 2026-09-19, the first turn after a deploy). litellm reads
-    # OPENAI_BASE_URL from the environment when the spec carries none, and the driver sets it for
-    # this turn's server the way it sets the key, so every turn dials the relay it was given.
+    # 127.0.0.1:39265` (hr-test, 2026-09-19, the first turn after a deploy). litellm reads the
+    # base from the environment when the spec carries none (LITELLM_PROXY_API_BASE for the
+    # litellm_proxy/ id the builder sends), and the driver sets it for this turn's server the way
+    # it sets the key, so every turn dials the relay it was given.
     # RETRIES BOUNDED IN SECONDS, NOT MINUTES. The SDK's defaults (5 retries, 8 s minimum wait,
     # 64 s maximum, multiplier 8) turn a provider that answers the same 503 every time into a
     # 270-310 s turn before the reason is reported (three switch scenarios, hr-test 2026-09-19);
@@ -226,7 +227,16 @@ def _agent_spec(job: dict) -> dict:
     # still cover a blip. Persisted with the agent like the rest of the spec.
     spec: dict = {"llm": {"model": job["model"], "base_url": None, "usage_id": "harness",
                           "num_retries": 2, "retry_min_wait": 2, "retry_max_wait": 8,
-                          "retry_multiplier": 2},
+                          "retry_multiplier": 2,
+                          # The SDK sends its reasoning effort to a Claude model as extended
+                          # thinking, and picks the shape from LiteLLM's model metadata; a model
+                          # served through the proxy under our own id has none, so the legacy
+                          # `thinking.type: enabled` went out and Anthropic refused every Claude
+                          # model in the catalog ("not supported for this model. Use adaptive and
+                          # output_config.effort", hosted, 2026-09-28). The override names the
+                          # shape Anthropic takes now.
+                          **({"capability_overrides": {"thinking_mode": "adaptive"}}
+                             if str(job["model"]).rsplit("/", 1)[-1].startswith("claude-") else {})},
                   "tools": tools,
                   # THE AGENT DOC IS CONTEXT, NOT A FILE THE MODEL MAY OR MAY NOT OPEN. The SDK
                   # loads the workspace's AGENTS.md (and .agents/skills/) as repo skills only when
@@ -517,14 +527,18 @@ def main() -> int:
 
     env = dict(os.environ)
     env["OPENHANDS_AGENT_SERVER_CONFIG_PATH"] = str(cfg)
-    # THE PROVIDER CREDENTIAL, and the only place it lives (see _agent_spec). The id is sent with an
-    # `openai/` prefix by the builder so litellm routes through its openai provider verbatim instead
-    # of INFERRING one from the base url — the inference is what produced `Vercel_ai_gatewayException
-    # … set the VERCEL_AI_GATEWAY_API_KEY`, a provider-specific variable nothing here would set.
+    # THE PROVIDER CREDENTIAL, and the only place it lives (see _agent_spec). The id is sent with a
+    # `litellm_proxy/` prefix by the builder so litellm routes through its proxy provider, which
+    # sends the rest of the id as it is (an `openai/` prefix was taken off twice on the way to the
+    # wire and an aggregator's openai/<id> reached TokenRouter bare), instead of INFERRING one from
+    # the base url — the inference is what produced `Vercel_ai_gatewayException … set the
+    # VERCEL_AI_GATEWAY_API_KEY`, a provider-specific variable nothing here would set. The proxy
+    # provider reads ITS OWN pair, on the chat path and the Responses path alike; the OpenAI pair
+    # is not read on the Responses path ("api_base not set for LiteLLM Proxy responses API").
     if job.get("api_key"):
-        env["OPENAI_API_KEY"] = str(job["api_key"])
+        env["LITELLM_PROXY_API_KEY"] = str(job["api_key"])
     if job.get("base_url"):
-        env["OPENAI_BASE_URL"] = str(job["base_url"])
+        env["LITELLM_PROXY_API_BASE"] = str(job["base_url"])
     # The SDK prints a multi-line banner to STDOUT on import, which is this driver's NDJSON channel
     # for the server's own process; off by its own switch rather than by filtering lines.
     env["OPENHANDS_SUPPRESS_BANNER"] = "1"

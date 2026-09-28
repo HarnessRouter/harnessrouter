@@ -1092,6 +1092,8 @@ _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_
 # base), the model list it serves, and the connect flow that hands a key to this instance.
 HR_HOSTED_BASE = os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai").rstrip("/")
 HR_HOSTED_PROVIDER_BASE = f"{HR_HOSTED_BASE}/v1/provider"
+# The hosted console, where a HarnessRouter API key's credit is bought and topped up.
+HR_HOSTED_CONSOLE = os.environ.get("HR_HOSTED_CONSOLE", "https://app.harnessrouter.ai").rstrip("/")
 HR_HOSTED_MODELS_URL = f"{HR_HOSTED_BASE}/v1/models"
 HR_HOSTED_BALANCE_URL = f"{HR_HOSTED_BASE}/v1/balance"
 HR_HOSTED_CONNECT_URL = f"{HR_HOSTED_BASE}/v1/connect"
@@ -2615,6 +2617,12 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             _emit(oev)
     except Exception:  # noqa: BLE001
         pass
+    # The turn's browser closes BEFORE the trace is finalized: its stop row (the vendor's stop
+    # takes seconds) must be in the trace, and the first read of a finished trace caches the
+    # chunks present at that moment for every later read. Closed from persist() it landed after
+    # the manifest said terminal, so the row reached the audit and never the trace (hosted, every
+    # base of the browser column, 2026-09-27). persist() still closes a turn that never got here.
+    await _browser_close(sid, "turn_end")
     await _checkpoint(sid, rec)
     await _trace_finalize(sid, rec)
     # Persist the response record with the FULL turn output — NOT translator.output, which only
@@ -3745,7 +3753,17 @@ def _turn_failure_message(rec: dict) -> str:
     # "credential cannot be brokered; refused" because the chain's next entry could not be brokered
     # (hosted, 2026-09-08).
     ran = [t for t in tried if t.get("status")]
-    last = (ran or tried)[-1]
+    if not ran:
+        # Nothing ran: every connection was skipped before a request went out. The notes are the
+        # router's ("does not serve", "cannot be brokered"); the person needs what to do (hosted,
+        # claude-opus-5.5 on Claude Code, 2026-09-27: "credential cannot be brokered; refused").
+        model = str(rec.get("model") or "This model")
+        if any("brokered" in str(t.get("error") or "") for t in tried):
+            return (f"{model} is served here only by a connection this harness's base cannot use. Choose "
+                    "another model, or connect a provider that serves it under Bring Your Own Key.")
+        return (f"No connection on this account serves {model}. Choose another model, or connect a "
+                "provider that serves it under Bring Your Own Key.")
+    last = ran[-1]
     reason = str(last.get("error") or "").strip() or f"the connection answered {last.get('status') or 'with an error'}"
     if (said := _history_refusal(rec, reason)):
         return said
@@ -4563,6 +4581,12 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
     except Exception:  # noqa: BLE001
         pass
+    # The share resolver caches token -> session and session -> shared for _SHARE_TTL seconds; a
+    # link opened inside that window after the delete still answered (R-07 of the conformance
+    # suite, intermittent by timing). The tombstone is not enough: the caches go with it, as they
+    # do on every revoke.
+    _SHARE_STATE_CACHE.pop(sid, None)
+    _SHARE_TOKEN_CACHE.clear()
     # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
     # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
@@ -4857,15 +4881,6 @@ _CUSTOM_FORMAT_BACKENDS = {
 }
 
 
-def _custom_can_drive(backend: str) -> bool:
-    """Whether ANY custom-endpoint format can run this backend. A custom integration's models are
-    shown greyed on a backend its format cannot drive, so the reader learns why a model they
-    configured is not pickable there; on a backend no custom format drives at all (systemone runs
-    System One models only, and a custom endpoint speaks OpenAI or Anthropic text shapes) the row
-    is not an explanation but a chat model offered on a harness that cannot use one."""
-    return any(backend in bs for bs in _CUSTOM_FORMAT_BACKENDS.values())
-
-
 def _integration_serves_backend(integ: dict, backend: str) -> bool:
     """Can this integration actually run a turn on `backend`? For a custom provider this is
     gated by its api_format (see _CUSTOM_FORMAT_BACKENDS); every other provider just needs a
@@ -5018,6 +5033,7 @@ async def admin_integrations_get(request: Request) -> dict:
                 if row.get("name") == hosted.get("name"):
                     row["balance"] = bal
     return {"integrations": public,
+            "hosted_console": HR_HOSTED_CONSOLE,
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
@@ -5754,6 +5770,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     },
     "openai": {
         "gpt-6-astra":   "gpt-6-astra",
+        "gpt-6-sol":     "gpt-6-sol",
+        "gpt-6-luna":    "gpt-6-luna",
         "gpt-5.6-sol":   "gpt-5.6-sol",
         "gpt-5.6-terra": "gpt-5.6-terra",
         "gpt-5.6-luna":  "gpt-5.6-luna",
@@ -5765,6 +5783,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     },
     "azure-foundry": {
         "gpt-6-astra":   "gpt-6-astra",
+        "gpt-6-sol":     "gpt-6-sol",
+        "gpt-6-luna":    "gpt-6-luna",
         "gpt-5.6-sol":   "gpt-5.6-sol",
         "gpt-5.6-terra": "gpt-5.6-terra",
         "gpt-5.6-luna":  "gpt-5.6-luna",
@@ -5776,6 +5796,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     },
     "openrouter": {
         "gpt-6-astra":        "openai/gpt-6-astra",
+        "gpt-6-sol":          "openai/gpt-6-sol",
+        "gpt-6-luna":         "openai/gpt-6-luna",
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
         "gpt-5.6-terra":      "openai/gpt-5.6-terra",
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
@@ -5911,6 +5933,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     # worked around in one vendor's table.
     "llmtr": {
         "gpt-6-astra":        "openai/gpt-6-astra",
+        "gpt-6-sol":          "openai/gpt-6-sol",
+        "gpt-6-luna":         "openai/gpt-6-luna",
         "gpt-5.6-sol":        "openai/gpt-5.6-sol",
         "gpt-5.6-terra":      "openai/gpt-5.6-terra",
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
@@ -6125,7 +6149,7 @@ _VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash
 # order it was written. Add a new model to its family here, not at the end of a catalog.
 _MODEL_ORDER: tuple[str, ...] = (
     # OpenAI
-    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
     "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
     # Anthropic
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8",
@@ -6258,8 +6282,19 @@ _MODEL_CATALOG: dict[str, dict] = {
     # by every provider we route to: openai and azure-foundry as `gpt-6-astra` (Azure model version
     # 2026-09-03, GlobalStandard), openrouter, tokenrouter, vercel and llmtr as `openai/gpt-6-astra`
     # (each provider's own /v1/models list, read the same day).
+    #
+    # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
+    # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
+    # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
+    # luna tiers. Unlike astra they accept `reasoning_effort: "none"`, and with it answer function
+    # tools on /v1/chat/completions (TokenRouter, measured 2026-09-27), the retry the runner's relay
+    # already makes for the gpt-5.6 line; so they are offered wherever gpt-5.6-sol is, the
+    # chat-only bases included, and astra stays on the Responses bases alone ("none" is not a value
+    # it takes: low, medium, high, xhigh). List prices, no markup: sol $2 in / $10 out, cached
+    # $0.20; luna $0.10 / $0.50, cached $0.01; astra $10 / $50, cached $1; all doubled above
+    # 272k prompt tokens as the gpt-5.x line is.
     "codex":  {"default": "gpt-5.4",
-               "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
                           # OpenAI's most capable agentic coding model, there is no 5.6-codex).
@@ -6276,7 +6311,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
     "hermes": {"default": "gpt-5.4",
-               "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
                           "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
@@ -6310,7 +6345,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # and the frontier set was probed per-model through the dsh driver (2026-08-20).
     "dsh": {"default": "deepseek-v4-pro",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash",
-                       "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                       "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6326,7 +6361,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
     "opencode": {"default": "gpt-5.4",
-                 "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                 "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6357,7 +6392,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # any release, and the prefix skips the table entirely rather than tracking it.
     "aider": {"default": "gpt-5.4",
               "models": [
-                  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                  "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                   "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                   "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -6383,7 +6418,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # a stub), so the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
-                 "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -6398,13 +6433,15 @@ _MODEL_CATALOG: dict[str, dict] = {
     # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
     # loopback relay), so the list is theirs. Measured 2026-09-18/19: the Vercel column ran 49 of
     # these ids (239 of 245 scenarios) and the Google column ran the eight gemini ids, so the list
-    # is a measured one rather than an offered one. The id is sent with an `openai/` prefix by the
-    # runner, which is load-bearing: without an explicit provider litellm infers one from the base
-    # url, and a relay url inferred as Vercel produced `Missing credentials …
-    # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn.
+    # is a measured one rather than an offered one. The id is sent with a `litellm_proxy/` prefix by
+    # the runner, which is load-bearing: without an explicit provider litellm infers one from the
+    # base url, and a relay url inferred as Vercel produced `Missing credentials …
+    # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn. It was `openai/` until 2026-09-27, which is
+    # stripped twice on the way to the wire, so an aggregator's openai/<id> reached TokenRouter bare
+    # and was refused; the gpt-6 tokenrouter column found it (runner/server.py, _build_openhands).
     "openhands": {"default": "gpt-5.4",
                   "models": [
-                      "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                      "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                       "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -6423,14 +6460,19 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (the runner sends `custom/<id>`, and providers.py strips the prefix before the request).
     "cheetahclaws": {"default": "gpt-5.4",
                      "models": [
-                         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                         "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                          "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
                          "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
                          "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
                          "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
                          "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
-                         "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
+                         # muse-spark 1.1 and 1.3 are excluded: on the family tour (hr-test,
+                         # 2026-09-26, three attempts) each ran the same edit into a loop of 90-odd
+                         # tool calls after the CLI compacted the conversation, never finished, and
+                         # was stopped at the ten-minute cap; 1.2 sits between them and is not offered
+                         # either. muse-glimmer-30b is untested here and stays offered.
+                         "muse-glimmer-30b",
                          "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
@@ -6438,7 +6480,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "nemotron-3-super"]},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
-                        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                        "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6460,7 +6502,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # see every agent turn fail, not an edge case. Same trap class as _TOKENROUTER_NO_CHANNEL:
     # the CHANNEL decides, not the model.
     "cline": {"default": "gpt-5.4",
-              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+              "models": ["gpt-5.4", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
@@ -6470,7 +6512,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     "pi": {"default": "gpt-5.4",
-           "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+           "models": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6516,6 +6558,9 @@ _MODEL_CATALOG: dict[str, dict] = {
     # unlabelled (_served_model_in / _relay_served_model, runner/server.py, pinned by
     # runner/tests/test_relay_served_model.py). cline and qwen gain the same check for free.
     # So these rows say "the id served it", not merely "the id completed a turn".
+    # gpt-6-sol and gpt-6-luna joined on 2026-09-27 after cline's rows passed all five scenarios on
+    # every connection of the gpt-6 columns (tokenrouter, openrouter, vercel, openai, azure-e2), the
+    # bar this list has always used; goose's own rows follow in the matrix.
     "goose": {"default": "gpt-5.4",
               # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
               # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
@@ -6537,7 +6582,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               # 2026-09-12; the aggregators forward that answer unchanged, so every column showed it (0 of 8
               # artifact/recall checks). The other Claude ids continue such a history. The Responses-only
               # ids stay out: goose is chat-only.
-              "models": ["gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+              "models": ["gpt-5.4", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -6581,8 +6626,9 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # kimi speaks chat/completions only: the runner defines its model with provider type `openai`
 # through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
 # sets), so a Responses-API-only id would be a picker row that fails on send.
-# aider and openhands speak chat/completions through litellm's openai provider (the id is sent
-# `openai/<id>`), so a Responses-API-only id would be a picker row that fails on send.
+# aider and openhands speak chat/completions through litellm (aider under its openai provider, the
+# id sent `openai/<id>`; openhands under litellm's proxy provider, the id sent as it is), so a
+# Responses-API-only id would be a picker row that fails on send.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
@@ -6624,7 +6670,7 @@ _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROP
 # sorts first. When nothing on the instance serves one, hermes keeps its default (the main
 # model), which is today's behaviour and the honest answer: we cannot route to a model that no
 # integration here can reach.
-_VISION_CAPABLE = ("claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5", "gpt-5.6-luna",
+_VISION_CAPABLE = ("claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol",
                    "gpt-5.4", "claude-sonnet-4.6", "claude-opus-5.5", "claude-opus-5", "gpt-5.5")
 
 
@@ -6834,17 +6880,8 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
             models.append({"id": canonical, "label": canonical, "backend": backend,
                            "available": True, "default": canonical == default})
             seen.add(canonical)
-    # A custom model whose api_format this backend can't speak is still LISTED so the operator
-    # can see it exists, but greyed out (available=False) rather than silently omitted — the
-    # picker must not offer a choice that fails at the first call.
-    for canonical, iname in eff_map.items():
-        if canonical in seen:
-            continue
-        integ = integrations.get(iname)
-        if integ and str(integ.get("provider") or "").lower() == "custom" and _custom_can_drive(backend):
-            models.append({"id": canonical, "label": canonical, "backend": backend,
-                           "available": False, "default": canonical == default})
-            seen.add(canonical)
+    # A custom model whose api_format this backend cannot speak is not listed here at all (it
+    # was greyed once, as an explanation; read as the backend offering it: Richard, 2026-09-27).
     if default and default not in seen:
         models.insert(0, {"id": default, "label": default, "backend": backend,
                           "available": ok(default), "default": True})
@@ -7161,7 +7198,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # The harness's configured instructions are the agent's CLAUDE.md (claude) / AGENTS.md (codex) —
     # written into the workspace by the runner, NOT injected as a system prompt. The model keeps the
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
-    agent_doc = str((hv or {}).get("system_prompt") or "")
+    agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
+                                      await _harness_plug_types(harness_id, org, hv))
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -7470,6 +7508,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     if translator.usage:
         rec["usage"] = translator.usage
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
+    await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
@@ -13504,6 +13543,45 @@ async def _media_session_purge(sid: str) -> None:
 # that the record names a WORKSPACE, because that is what a plug belongs to.
 _PLUGS_SERVER = "plugs"
 _PLUGS_ENTRY = {"name": "plugs", "id": "mcp.plugs"}
+
+# What the agent's doc (AGENTS.md / CLAUDE.md) says about the browser when the harness includes
+# it. Codex 0.154 keeps MCP tools behind its tool search, so without a word about them it opened
+# a page with web search and curl while the person watched an empty Browser card (hr-test,
+# 2026-09-27); pi found the tools on its own. Every base reads its doc, so every base gets it.
+_BROWSER_GUIDE = (
+    "## Browser\n"
+    "This task has a live browser that the person can watch and take over. Its tools are on the "
+    "`plugs` server: browser_navigate, browser_snapshot, browser_click, browser_type, browser_press_key, "
+    "browser_scroll, browser_extract_text, browser_screenshot, browser_wait_for, browser_back, "
+    "browser_get_url, browser_list_tabs, browser_switch_tab. Use them for anything on the web: "
+    "opening a page, reading it, filling a form, clicking through. Do not fetch a page with curl, "
+    "wget or a web search instead: the person is watching the browser, and a page fetched another "
+    "way never appears there. If these tools are not in your tool list, look them up (they may be "
+    "deferred) before touching the web any other way.")
+
+
+def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
+    """The harness's instructions plus a section for each included plugin that needs one."""
+    parts = [agent_doc.strip()] if agent_doc and agent_doc.strip() else []
+    if "browser" in plug_types:
+        parts.append(_BROWSER_GUIDE)
+    return "\n\n".join(parts)
+
+
+async def _harness_plug_types(hid: str, org: str, hv: dict | None) -> list[str]:
+    """The plugins a harness includes, by type, from its plugs server's record: [] when it has
+    no enabled plugs entry, or the record cannot be read (the turn runs without the section)."""
+    if not hid or not hv:
+        return []
+    try:
+        servers = _mcp_list(hv)
+        entry = next((e for e in servers if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
+        if not entry or str(entry.get("enabled", True)) in ("False", "false", "0"):
+            return []
+        _, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, servers, entry_id=_PLUGS_ENTRY["id"])
+    except Exception:  # noqa: BLE001
+        return []
+    return [str(x) for x in (rec.get("plugs") or []) if x]
 _PLUG_CALL_LABEL = "PlugCall"
 # The registry that holds plug records: the engine's door on the platform edge (the engine's own
 # ingress admits no in-environment caller). Empty = no registry, so every plug reads as missing.
@@ -14042,8 +14120,8 @@ async def plugs_mcp(request: Request):
 
     name = str(params.get("name") or "")
     args = params.get("arguments") or {}
-    plug, _, tool = name.partition(".")
-    spec = plugs_plane.find(plug, tool) if plug in plugs else None
+    plug, tool = plugs_plane.split_name(name, plugs)
+    spec = plugs_plane.find(plug, tool) if plug else None
     if spec is None or (enabled and enabled.get(plug) is not None and tool not in enabled[plug]):
         return _jsonrpc_result(rid, _tool_text(f"No tool named {name!r} on this server.", True))
     workspace = str(rec.get("workspace") or "")
@@ -14102,7 +14180,63 @@ async def plugs_mcp(request: Request):
 # The record of the browser itself is the plane's registry (browser_plane.registry): one process on
 # a self-hosted instance keeps it in memory; the hosted service keeps it in its control store so
 # every replica the sandbox's calls reach attaches to the one browser instead of opening its own.
+
+# ── the browser's live view ──────────────────────────────────────────────────────────────────
+# What the console shows while a task browses: the vendor's live view of the session's browser,
+# who has control, and when the agent last acted. The live URL is a credential (whoever opens it
+# controls the browser), so it is read through the owned-session route and never put on the feed.
+
+
+@app.get("/v1/sessions/{sid}/browser")
+async def session_browser(sid: str, request: Request) -> dict:
+    await _owned_session(request, sid)
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        return {"session_id": sid, "open": False}
+    return {"session_id": sid, "open": True, "live_url": str(rec.get("live_url") or ""),
+            "control": str(rec.get("control") or "agent"), "opened_at": rec.get("created"),
+            "last_call_at": rec.get("last_call"), "last_tool": str(rec.get("last_tool") or ""),
+            "viewport": rec.get("viewport"), "calls": int(rec.get("calls") or 0), "session_minutes": browser_plane.SESSION_CAP_MIN}
+
+
+class BrowserControlBody(BaseModel):
+    control: str
+
+
+@app.post("/v1/sessions/{sid}/browser/control")
+async def session_browser_control(sid: str, body: BrowserControlBody, request: Request) -> dict:
+    """Hand the browser to the person (`user`) or back to the agent (`agent`). While the person
+    has it, the agent's browser calls are held and told so; nothing is stopped or lost."""
+    await _owned_session(request, sid)
+    who = (body.control or "").strip().lower()
+    if who not in ("user", "agent"):
+        raise HTTPException(400, "control is 'user' or 'agent'")
+    rec = await browser_plane.registry.get(sid) if browser_plane.configured() else None
+    if not rec:
+        raise HTTPException(404, "this task has no open browser")
+    await browser_plane.registry.bump(sid, control=who, control_at=time.time())
+    _browser_notice(sid, "control", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), control=who)
+    return {"session_id": sid, "open": True, "control": who}
+
+
 _browser_open_locks: dict[str, asyncio.Lock] = {}
+# How long one held browser call waits for the person to hand the browser back before answering
+# that it is still theirs (under the MCP clients' 60 s request timeout), and how often it looks.
+BROWSER_HOLD_SLICE_S = float(os.environ.get("HR_BROWSER_HOLD_SLICE_S", "45"))
+BROWSER_HOLD_POLL_S = 0.5
+
+
+def _browser_notice(sid: str, kind: str, hid: str = "", org: str = "", **extra) -> None:
+    """One event on the harness feed for the console's live view: the browser opened, a call ran,
+    a call was held because the person has the browser, control changed hands, or it closed. The
+    in-flight turn's org, harness, member and response id tag it (so it replays to a viewer that
+    connects mid-turn and stays with the member whose session it is); a notice after the turn
+    (the reaper closing an idle browser) carries the record's harness. NEVER the live URL: whoever
+    holds that URL controls the browser, so it travels only through the owned-session route."""
+    buf = _turn_buffers.get(sid) or {}
+    ev = {"type": f"browser.{kind}", "session_id": sid, "at": time.time(), **extra}
+    _bus_publish(org or str(buf.get("org") or ""), hid or str(buf.get("harness") or ""),
+                 str(buf.get("member") or ""), sid, str(buf.get("rid") or ""), ev)
 
 
 async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, tool: str, spec: dict, args: dict,
@@ -14142,6 +14276,7 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
                     await _plug_call_record(hid, sid, org, workspace, plug, "open", "session", started, "ok",
                                             detail={"estimate_usd": estimate, "session_minutes": browser_plane.SESSION_CAP_MIN,
                                                     "vendor": browser_plane.VENDOR, "vendor_session": s.vendor_id})
+                    _browser_notice(sid, "opened", hid=hid, org=org, vendor=browser_plane.VENDOR)
     if s is None:
         try:
             s = await browser_plane.attach(rec)             # this process's attachment to the recorded browser
@@ -14152,6 +14287,31 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
     if (s.allow, s.deny) != (allow, deny):
         s.allow, s.deny, s.host_cache = list(allow), list(deny), {}      # the workspace changed its lists
         await browser_plane.registry.bump(sid, allow=list(allow), deny=list(deny))
+    # THE PERSON MAY HAVE THE BROWSER. The console's live view lets them take over with a click,
+    # and a takeover pauses the agent rather than ending its work: the call WAITS here, without a
+    # token spent, and runs the moment they hand the browser back. Read from the record, since the
+    # takeover is a write from another request (another replica when there are several). A wait
+    # is bounded below the MCP clients' own request timeouts (60 s in the reference SDKs): past
+    # the bound the tool answers, not as an error, that the person still has the browser and the
+    # agent may call again to keep waiting. Measured on hr-test 0.25.7-rc.4 before this: a refusal
+    # made pi end its turn early with "the browser is under user control, so I can't continue".
+    current = await browser_plane.registry.get(sid) if not (rec is None and s.opened) else None
+    if (current or {}).get("control") == "user":
+        _browser_notice(sid, "held", hid=hid, org=org, tool=tool)
+        waited = 0.0
+        while (current or {}).get("control") == "user" and waited < BROWSER_HOLD_SLICE_S:
+            await asyncio.sleep(BROWSER_HOLD_POLL_S)
+            waited += BROWSER_HOLD_POLL_S
+            current = await browser_plane.registry.get(sid)
+        if current is None:
+            return await refused("session closed", "The browser for this task was stopped while the person had it. "
+                                                   "Call again to open a new one.")
+        if current.get("control") == "user":
+            await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "held", "still held",
+                                    detail={"waited_s": round(waited, 1)})
+            return _jsonrpc_result(rid, _tool_text(
+                "The person using this task still has the browser. Call this tool again to keep waiting for it, "
+                "or continue without the browser."))
     async with s.lock:
         if s.closed:
             return await refused("session closed", "The browser for this task was stopped. Call again to open a new one.")
@@ -14168,6 +14328,9 @@ async def _browser_plug_call(rid, hid: str, sid: str, org: str, workspace: str, 
             await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
                                     f"{type(e).__name__}: {e}")
             return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
+    viewport = await browser_plane.viewport_of(s)            # the screen's shape, for the card's frame and cursor
+    await browser_plane.registry.bump(sid, last_call=time.time(), last_tool=tool, viewport=viewport)
+    _browser_notice(sid, "call", hid=hid, org=org, tool=tool, point=s.pointer, viewport=viewport)
     if isinstance(out, tuple) and out[0] == "image":
         png, caption = out[1], out[2]
         stored = None
@@ -14200,6 +14363,7 @@ async def _browser_close(sid: str, reason: str) -> None:
             await browser_plane.detach(s)
         return
     _browser_open_locks.pop(sid, None)
+    _browser_notice(sid, "closed", hid=str(rec.get("hid") or ""), org=str(rec.get("org") or ""), reason=reason)
     try:
         fig = await browser_plane.close_session_browser(rec, s)
     except Exception as e:  # noqa: BLE001
@@ -14671,8 +14835,9 @@ _BASE_CATALOG: dict[str, dict] = {
                           "running commands to complete the task end to end."),
         # opencode's permission keys, verbatim from core/src/v1/config/permission.ts. These are the
         # real names the deny rules match, not display labels — the same trap the claude list warns
-        # about, where a decorated label silently matches nothing and disables no tool.
-        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
+        # about, where a decorated label silently matches nothing and disables no tool. No row for a
+        # write: opencode's `edit` permission covers write and patch (its config.ts folds them in).
+        "tools": [("bash", "Bash"), ("read", "File Read"),
                   ("edit", "Edit"), ("glob", "Glob"), ("grep", "Grep"), ("list", "List"),
                   ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("task", "Task"),
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
@@ -16732,10 +16897,10 @@ async def list_models(request: Request) -> dict:
         models = [{"id": m, "label": m, "backend": b, "available": ok(m),
                     "default": m == c["default"]} for m in c["models"]]
         seen = set(c["models"])
-        # Add models from the effective map that are not already in the catalog.
-        # A model serves this backend only if its integration's api_format is compatible;
-        # on an incompatible backend it is still LISTED (so the operator sees it exists) but
-        # greyed out (available=False) rather than silently omitted.
+        # Add models from the effective map that are not already in the catalog: a custom
+        # endpoint's model, on the backends its api_format drives. Not on the others, not even
+        # greyed: a Claude model under Codex read as "Codex can use Anthropic models" (Richard,
+        # hr-test 2026-09-27), and a backend that can never run a model has no row for it.
         for canonical, iname in eff_map.items():
             if canonical in seen:
                 continue
@@ -16746,10 +16911,7 @@ async def list_models(request: Request) -> dict:
             if _integration_serves_backend(integ, b):
                 models.append({"id": canonical, "label": canonical, "backend": b,
                                "available": True, "default": False})
-            elif _custom_can_drive(b):
-                models.append({"id": canonical, "label": canonical, "backend": b,
-                               "available": False, "default": False})
-            seen.add(canonical)
+                seen.add(canonical)
         out[b] = {"default": c["default"], "models": models}
     return {"backends": out}
 

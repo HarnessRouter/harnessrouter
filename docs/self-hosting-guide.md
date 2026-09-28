@@ -627,6 +627,30 @@ curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses/$HID/servers/plugs" \
 plugin with `"requires": {"plugs": ["browser"]}` in its `plugin.json`; the harness it lands on
 includes the plugin, and the workspace still has to have connected it.
 
+**Watching and taking over.** When a task opens a browser, the console brings up a Browser card
+beside the conversation and streams the vendor's live view of it; the edges of the screen tint
+blue while the agent has the browser and breathe while it acts, and a ghost cursor glides along a
+small arc to wherever the agent last clicked or typed. The browser's screen is landscape whatever
+the card's shape: the card shows the whole screen at the largest size that fits, with its own
+surface around it; beside the conversation it floats, centred, at the height the screen needs,
+with the conversation squeezed to its left (on a phone it sits under the conversation instead;
+drag the divider or go full screen for a larger view). The card's top row carries every action: **Take over**
+(or a click on the screen) makes the view yours to click and type in and pauses the agent, whose
+next browser call waits for you without spending tokens and runs the moment you choose **Hand back
+to the agent** (after 45 seconds of waiting the call answers that you still have the browser and
+the agent may keep waiting or go on without it); **Full screen** fills the window and **Close**
+puts the card away. The card
+closes itself when the browser closes; the **Browser** button in the task header, there whenever
+the harness includes the browser plugin, opens it at any time, with or without a browser in it.
+A harness that includes the plugin also tells its agent so, in a Browser section of the agent's
+instructions file: use the browser tools for the web and never curl or a web search instead
+(Codex keeps its MCP tools behind a tool search and reached for curl without it).
+Behind it: `GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which
+is a credential and is served only to the session's owner) and
+`POST /v1/sessions/{sid}/browser/control` with `{"control": "user"}` or `{"control": "agent"}`;
+the harness event feed carries `browser.opened`, `browser.call` (with the point the agent acted on
+and the page's viewport), `browser.held`, `browser.control` and `browser.closed` (never the address).
+
 **The browser.** The browser runs in Browser Use Cloud and is driven from this instance; the agent
 never holds the browser's address or the key. Set the key in the container's environment:
 
