@@ -739,12 +739,11 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
           <FilePreview file={preview} onClose={() => setPreview(null)} />
         </div>
       </>}
-      {browserDocked && <>
-        <div className="wbx-vresize" onMouseDown={onPreviewResize} title="Drag to resize" />
+      {browserDocked && (
         <div className="wbx-preview-pane wbx-browser-pane" style={{ width: previewW, flex: '0 0 auto' }}>
-          <BrowserPane harnessId={harnessId} sessionId={liveSid ?? ''} live={browser} busy={busy} mode="docked" onClose={closeBrowserPane} />
+          <BrowserPane harnessId={harnessId} sessionId={liveSid ?? ''} live={browser} busy={busy} mode="docked" onClose={closeBrowserPane} onResizeStart={onPreviewResize} />
         </div>
-      </>}
+      )}
       {browserShown && pane.mode !== 'docked' && (
         <BrowserPane harnessId={harnessId} sessionId={liveSid ?? ''} live={browser} busy={busy} mode={pane.mode} onClose={closeBrowserPane} />
       )}

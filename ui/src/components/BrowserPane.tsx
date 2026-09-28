@@ -89,8 +89,10 @@ function GhostCursor({ point, viewport, tool, at, host }: {
   );
 }
 
-export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }: {
+export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, onResizeStart }: {
   harnessId: string; sessionId: string; live: BrowserState | undefined; busy: boolean; mode: PaneMode; onClose: () => void;
+  /** docked: dragging the card's left edge resizes its column (the conversation takes the rest) */
+  onResizeStart?: (e: React.MouseEvent) => void;
 }) {
   const [info, setInfo] = useState<BrowserInfo | null>(null);
   const [pending, setPending] = useState(false);
@@ -146,6 +148,9 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
   const card = (
     <div className={'wbx-browser-card is-' + mode + (open ? (control === 'user' ? ' is-user' : ' is-agent') : ' is-empty') + (acting ? ' is-acting' : '')}
          role="region" aria-label="Browser">
+      {mode === 'docked' && onResizeStart && (
+        <div className="wbx-browser-grip" onMouseDown={onResizeStart} title="Drag to resize" aria-hidden="true" />
+      )}
       <div className="wbx-browser-bar">
         <span className={'wbx-live-dot' + (acting ? ' is-on' : control === 'user' && open ? ' is-user' : open ? ' is-idle' : '')} aria-hidden="true" />
         <div className="wbx-browser-title">
