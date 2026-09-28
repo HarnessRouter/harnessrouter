@@ -107,10 +107,12 @@ def _vendor_client() -> httpx.AsyncClient:
 
 async def vendor_create(timeout_min: int, metadata: dict) -> dict:
     """A browser in the vendor's cloud: no proxy, no CAPTCHA solving, no recording, so the only
-    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency."""
+    unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency. Resizable, so the
+    live view can give the browser the shape of the card it is shown in (an emulated viewport set
+    over CDP changed the page's layout but not what the vendor streams: hr-test, 2026-09-28)."""
     async with _vendor_client() as c:
         r = await c.post(f"{API_BASE}/browsers", json={
-            "timeout": int(timeout_min), "proxyCountryCode": None, "solveCaptchas": False,
+            "timeout": int(timeout_min), "proxyCountryCode": None, "solveCaptchas": False, "allowResizing": True,
             "enableRecording": False, "metadata": {k: str(v)[:100] for k, v in metadata.items()}})
     if r.status_code == 402:
         raise BrowserRefused("vendor_credits", "The browser service has no credit left. Tell the person.")
@@ -235,7 +237,6 @@ class Session:
         self.lock = asyncio.Lock()
         self.closed = False
         self.opened = False                     # this call made the browser at the vendor: the caller writes the open row once
-        self.view: dict | None = dict(rec.get("view") or {}) or None   # the page's laid-out size, the console's box shape (set_view)
         self.pointer: dict | None = None        # where the agent last acted (the element's centre), for the console's ghost cursor; kept across navigations so the next action glides from there
 
 
@@ -435,7 +436,6 @@ async def attach(rec: dict) -> Session:
         pages = list(getattr(s.context, "pages", None) or [])
         s.page = pages[0] if pages else await s.context.new_page()
         s.page.set_default_timeout(30000)
-        await set_view(s, s.view)
         on = getattr(s.context, "on", None)
         if callable(on):
             on("page", lambda pg: asyncio.ensure_future(_follow_new_tab(s, sid, pg)))
@@ -674,32 +674,6 @@ async def _mark(s: Session, loc) -> None:
         s.pointer = {"x": round(float(box["x"]) + float(box["width"]) / 2, 1), "y": round(float(box["y"]) + float(box["height"]) / 2, 1)}
 
 
-# The page is laid out in the shape of the screen it is shown on. The console posts the box its
-# live view fills; the page's viewport takes that aspect at a width of at least VIEW_MIN_W (sites
-# keep their desktop layout there) and at most VIEW_MAX_W, so the vendor's view fills the card
-# instead of a landscape page sitting in a band at the top of a portrait one (Richard, 2026-09-27).
-VIEW_MIN_W, VIEW_MAX_W, VIEW_MIN_H, VIEW_MAX_H = 768, 1920, 400, 3456
-
-
-def page_size_for(box_w: int, box_h: int) -> dict:
-    w = max(VIEW_MIN_W, min(VIEW_MAX_W, int(box_w)))
-    h = round(w * int(box_h) / max(1, int(box_w)))
-    return {"w": w, "h": max(VIEW_MIN_H, min(VIEW_MAX_H, h))}
-
-
-async def set_view(s: Session, size: dict | None) -> None:
-    """Lay the current page out at `size` (the record's `view`), best effort; a page that cannot be
-    resized keeps its shape. Called when the console posts a box, when a process attaches, and
-    when the agent switches tabs, so every tab and every replica shows the same shape."""
-    if not size or s.page is None:
-        return
-    s.view = {"w": int(size["w"]), "h": int(size["h"])}
-    try:
-        await s.page.set_viewport_size({"width": s.view["w"], "height": s.view["h"]})
-    except Exception:  # noqa: BLE001
-        pass
-
-
 async def viewport_of(s: Session) -> dict:
     """The page's own layout viewport (window.innerWidth/innerHeight), the coordinate space of
     `pointer`. Asked of the page, not of the context: the vendor's default context carries its
@@ -830,7 +804,6 @@ async def call(s: Session, name: str, args: dict):
             raise BrowserToolError(f"There is no tab {i}; there are {len(pages)}.")
         s.page = pages[i]
         s.page.set_default_timeout(30000)
-        await set_view(s, s.view)
         return f"Current tab is now {i}: {await _where(s)}"
     raise BrowserToolError(f"No tool named browser.{name}.")
 

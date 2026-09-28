@@ -630,9 +630,9 @@ includes the plugin, and the workspace still has to have connected it.
 **Watching and taking over.** When a task opens a browser, the console brings up a Browser card
 beside the conversation and streams the vendor's live view of it; the edges of the screen tint
 blue while the agent has the browser and breathe while it acts, and a ghost cursor glides along a
-small arc to wherever the agent last clicked or typed. The page is laid out in the shape of the
-card (at least 768 pixels wide), so the view fills it; full screen gives the page the window's
-shape. The card's top row carries every action: **Take over**
+small arc to wherever the agent last clicked or typed. The browser takes the shape of the card it
+is shown in, so the page fills it, in the card, in full screen and floating. The card's top row
+carries every action: **Take over**
 (or a click on the screen) makes the view yours to click and type in and pauses the agent, whose
 next browser call waits for you without spending tokens and runs the moment you choose **Hand back
 to the agent** (after 45 seconds of waiting the call answers that you still have the browser and
@@ -642,8 +642,7 @@ closes itself when the browser closes; the **Browser** button in the task header
 the harness includes the browser plugin, opens it at any time, with or without a browser in it.
 Behind it: `GET /v1/sessions/{sid}/browser` (open or not, who has it, the live view address, which
 is a credential and is served only to the session's owner) and
-`POST /v1/sessions/{sid}/browser/control` with `{"control": "user"}` or `{"control": "agent"}`,
-`POST /v1/sessions/{sid}/browser/view` with the box the view fills, `{"w": 508, "h": 769}`;
+`POST /v1/sessions/{sid}/browser/control` with `{"control": "user"}` or `{"control": "agent"}`;
 the harness event feed carries `browser.opened`, `browser.call` (with the point the agent acted on
 and the page's viewport), `browser.held`, `browser.control` and `browser.closed` (never the address).
 

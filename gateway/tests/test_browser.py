@@ -184,13 +184,9 @@ class Page:
         self.clicks, self.pressed, self.history = [], [], []
         self.keyboard, self.mouse = Keyboard(self), Mouse()
         self.slow = 0.0
-        self.viewport = None
 
     def set_default_timeout(self, ms):
         pass
-
-    async def set_viewport_size(self, size):
-        self.viewport = dict(size)
 
     async def goto(self, url, wait_until=None):
         if self.slow:
@@ -431,7 +427,7 @@ def test_a_turn_browses_and_the_session_is_priced_metered_and_stopped(client, wo
     assert out["isError"] is False, out
     text = out["content"][0]["text"]
     assert text.startswith("Opened https://example.com/ (Example Domain)") and 'e1 link "More information..." href=https://www.iana.org/domains/example' in text
-    assert ven.created == [{"timeout": 20, "proxyCountryCode": None, "solveCaptchas": False, "enableRecording": False,
+    assert ven.created == [{"timeout": 20, "proxyCountryCode": None, "solveCaptchas": False, "allowResizing": True, "enableRecording": False,
                             "metadata": {"harness": hid, "session": sid}}]
     assert browsers[-1].cdp == f"{CDP}/bu_1" and browsers[-1].contexts[0].kw == {"accept_downloads": False, "viewport": {"width": 1280, "height": 800}}
 
@@ -887,25 +883,3 @@ def test_the_person_takes_the_browser_over_and_the_agent_waits(client, world):
     finally:
         gw._bus_publish = orig
 
-
-def test_the_page_takes_the_shape_of_the_screen_it_is_shown_on(client, world):
-    """The console posts the box its live view fills; the page is laid out at that aspect, at least
-    768 wide and at most 1920, on the page now and on the record for every replica and tab."""
-    reg, ven, posted = world
-    reg.record = _record()
-    hid = _harness(client)
-    _include(client, hid)
-    sid = _session_of(hid)
-    tok = gw._mint_hosted_cred(hid, sid, _key(hid))
-    assert client.post(f"/v1/sessions/{sid}/browser/view", json={"w": 508, "h": 769}, headers=HEADERS).status_code == 404
-    assert _call(client, tok, "navigate", url="example.com")["isError"] is False
-    r = client.post(f"/v1/sessions/{sid}/browser/view", json={"w": 508, "h": 769}, headers=HEADERS)
-    assert r.status_code == 200 and r.json()["view"] == {"w": 768, "h": 1163}, r.text      # a portrait card: 768 wide, the card's aspect
-    s = browser_plane._SESSIONS[sid]
-    assert s.page.viewport == {"width": 768, "height": 1163} and s.view == {"w": 768, "h": 1163}
-    assert asyncio.run(browser_plane.registry.get(sid))["view"] == {"w": 768, "h": 1163}
-    r = client.post(f"/v1/sessions/{sid}/browser/view", json={"w": 1416, "h": 830}, headers=HEADERS)
-    assert r.json()["view"] == {"w": 1416, "h": 830}                                        # full screen: as it is
-    assert client.post(f"/v1/sessions/{sid}/browser/view", json={"w": 10, "h": 769}, headers=HEADERS).status_code == 400
-    assert browser_plane.page_size_for(3000, 400) == {"w": 1920, "h": 400}
-    assert browser_plane.page_size_for(400, 4000) == {"w": 768, "h": 3456}

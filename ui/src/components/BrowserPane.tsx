@@ -32,14 +32,6 @@ async function setControl(sid: string, control: 'user' | 'agent'): Promise<boole
   } catch { return false; }
 }
 
-/** The shape of the box the live view fills: the page is laid out at that aspect, so it fills the card. */
-async function postView(sid: string, w: number, h: number): Promise<void> {
-  try {
-    await harnessFetch(`/api/harness/v1/sessions/${encodeURIComponent(sid)}/browser/view`,
-      { method: 'POST', headers: { ...authHeaders(), 'content-type': 'application/json' }, body: JSON.stringify({ w, h }) });
-  } catch { /* the page keeps its shape */ }
-}
-
 /** The vendor's viewer without its own tabs and toolbar: the card's row is the chrome. */
 function viewerUrl(liveUrl: string): string {
   if (!liveUrl) return '';
@@ -114,22 +106,7 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose }:
     fetchBrowser(sessionId).then((i) => { if (alive) setInfo(i); });
     return () => { alive = false; };
   }, [sessionId, epoch]);
-  // The page takes the shape of the screen it is shown on: the stream's box goes to the session
-  // whenever it changes (debounced), and the browser lays the page out at that aspect.
   const open = live ? live.open : !!info?.open;
-  useEffect(() => {
-    const el = streamRef.current;
-    if (!el || !open) return;
-    let timer = 0, last = '';
-    const send = () => {
-      const w = Math.round(el.clientWidth), h = Math.round(el.clientHeight), key = `${w}x${h}`;
-      if (w < 50 || h < 50 || key === last) return;
-      last = key; void postView(sessionId, w, h);
-    };
-    const ro = new ResizeObserver(() => { window.clearTimeout(timer); timer = window.setTimeout(send, 250); });
-    ro.observe(el); send();
-    return () => { ro.disconnect(); window.clearTimeout(timer); };
-  }, [open, epoch, sessionId, mode]);
   // "acting" fades a few seconds after the agent's last call, so the glow follows the work.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
