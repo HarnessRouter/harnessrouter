@@ -231,9 +231,11 @@ For a task that runs with an environment, a server MUST:
    version.
 
 Two sessions on one environment MUST NOT be able to read each other's working directory or write
-the environment. How a server enforces that is its own business: a per-session container with a
-read-only mount, a per-session user without write permission on a shared directory, or a copy
-made read-only. What a client may rely on is the outcome.
+the environment. A session MUST NOT be able to read an environment its task did not name, nor to
+enumerate the environments a server holds. How a server enforces that is its own business: a
+per-session container with a read-only mount, a per-session user and a per-environment group
+without write permission on a shared directory, or a copy made read-only. What a client may rely
+on is the outcome.
 
 ## 7. Discovery
 

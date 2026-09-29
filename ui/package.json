@@ -7,8 +7,6 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "doc-editor:server": "node ./doc-editor/scripts/collab-server.mjs",
-    "doc-editor:e2e": "node ./doc-editor/scripts/run-e2e.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "type-check": "npx tsc --noEmit",
