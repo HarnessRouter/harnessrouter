@@ -61,7 +61,9 @@ await page.goto(`${BASE}/harnesses?h=${encodeURIComponent(HARNESS)}${sid ? '&sid
 await page.waitForSelector('textarea.wbx-composer-input', { timeout: 30000 });
 
 /** The last turn's server record, once it has settled. */
-const RUNNING = ['running', 'starting', 'in_progress', 'queued'];
+// `done` is the live record's word for a turn that has just finished and may still be half-written (the
+// gateway maps it to completed on the response); a record read at that instant is not settled yet.
+const RUNNING = ['running', 'starting', 'in_progress', 'queued', 'done'];
 async function lastTurn(sidNow) { const r = await api('GET', `/v1/sessions/${sidNow}/turns`); const turns = r.j?.turns || []; return { turns, last: turns[turns.length - 1], rid: r.j?.last_response_id }; }
 async function settle(sidNow, turnsBefore, timeoutS = TURN_CAP_S) {
   const t0 = Date.now();
@@ -82,7 +84,9 @@ async function settle(sidNow, turnsBefore, timeoutS = TURN_CAP_S) {
 async function chooseModel(model) {
   await page.locator('button.ar2-chip[aria-haspopup="listbox"]').first().click();
   const opt = page.locator('button.wbx-model-opt', { hasText: new RegExp('^' + model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)') }).first();
-  await opt.waitFor({ timeout: 10000 });
+  // a model the picker does not offer at all (not mapped on this instance) is "not offered", the
+  // same as a disabled one; the tour goes on and keeps what it has measured
+  try { await opt.waitFor({ timeout: 10000 }); } catch { await page.keyboard.press('Escape'); return false; }
   const disabled = await opt.isDisabled();
   if (disabled) { await page.keyboard.press('Escape'); return false; }
   await opt.click();

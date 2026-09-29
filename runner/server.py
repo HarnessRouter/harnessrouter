@@ -70,12 +70,21 @@ import uuid
 
 import yaml
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 import environments   # the read-only project layer a turn may name (runner/environments.py)
 
 app = FastAPI(title="harness-runner")
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    """Where and why a request failed, never what it carried: FastAPI's default repeats the
+    failing value, which for a missing field is the whole body (the gateway has the same handler)."""
+    errors = [{"loc": list(e.get("loc") or []), "msg": str(e.get("msg") or ""), "type": str(e.get("type") or "")} for e in exc.errors()]
+    return JSONResponse({"detail": errors}, status_code=422)
 app.include_router(environments.router)
 
 WORKSPACE_ROOT = os.environ.get("HARNESS_WORKSPACE", "/workspace")
