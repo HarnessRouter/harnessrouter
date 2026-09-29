@@ -587,7 +587,7 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
               <div className="field"><label>Environment</label>
                 <select value={draft?.environment || ''} disabled={readOnly || environments === null} onChange={(e) => upd({ environment: e.target.value })}>
                   <option value="">None</option>
-                  {(environments || []).map((en) => <option key={en.id} value={en.id}>{en.name}  {en.files.count} {en.files.count === 1 ? 'file' : 'files'} \u00b7 {en.status === 'ready' ? `${en.packages.length} ${en.packages.length === 1 ? 'package' : 'packages'}` : 'not built yet'}</option>)}
+                  {(environments || []).map((en) => <option key={en.id} value={en.id}>{en.name}</option>)}
                 </select></div>
               {draft?.environment && (() => { const en = (environments || []).find((x) => x.id === draft.environment); return en ? (
                 <span className="field-help">{en.status === 'ready'
