@@ -410,7 +410,7 @@ export default function EnvironmentPage() {
             <button className="kit-dialog-x" type="button" onClick={() => setBuildOpen(false)} aria-label="Close"><iconify-icon icon="tabler:x"></iconify-icon></button>
             <h2 id="env-build-title">{build.status === 'building' ? `Building version ${build.version}` : build.status === 'ready' ? `Version ${build.version} is ready` : `Version ${build.version} failed`}</h2>
             <p className="kit-dialog-sub">
-              {build.status === 'building' && <>{build.stage || 'starting'}{buildElapsed !== null && <> \u00b7 {buildElapsed} s</>}</>}
+              {build.status === 'building' && <>{build.stage || 'starting'}{buildElapsed !== null && <> · {buildElapsed} s</>}</>}
               {build.status === 'ready' && <>{build.started_at && build.finished_at ? `${Math.max(0, build.finished_at - build.started_at)} s` : ''}{build.packages ? ` \u00b7 ${build.packages.length} ${build.packages.length === 1 ? 'package' : 'packages'}` : ''}{typeof build.files === 'number' ? ` \u00b7 ${build.files} files` : ''}</>}
               {build.status === 'failed' && (build.error || 'The build failed.')}
             </p>
