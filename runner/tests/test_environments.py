@@ -212,3 +212,71 @@ def test_declared_specs_are_checked_and_the_runtimes_are_what_the_box_has(store)
     E.start_build("henv_d", 1, "declared", spec={"pip": [], "npm": [], "apt": [], "python": rt["python"][-1] if rt["python"] else ""})
     rec = _wait("henv_d", 1)
     assert rec["status"] == "ready" and rec["declared"] == {"pip": [], "npm": [], "apt": []}
+
+
+def test_a_build_writes_its_record_as_each_step_ends_with_the_stage(store, monkeypatch):
+    """The record on disk is what the owner reads while a build runs: written as steps end, with
+    the step's name, not only when the build is over."""
+    writes: list[tuple[str, int]] = []
+    real = E._write_record
+
+    def spy(dst, rec):
+        writes.append((str(rec.get("stage")), len(rec.get("log") or [])))
+        real(dst, rec)
+    monkeypatch.setattr(E, "_write_record", spy)
+    E.write_file("henv_s", "requirements.txt", b"")
+    E.write_file("henv_s", "setup.sh", b"#!/bin/sh\necho preparing\n")
+    E.start_build("henv_s", 1, "staged")
+    rec = _wait("henv_s", 1)
+    assert rec["status"] == "ready" and rec["stage"] == ""
+    stages = [w[0] for w in writes]
+    assert stages[0] == "starting" and "copying files" in stages and "python packages" in stages and "setup.sh" in stages and "finishing" in stages
+    assert len(writes) >= 8, writes     # the start, each stage, and after each command's line and output
+    logs = [w[1] for w in writes]
+    assert logs == sorted(logs) and logs[-1] > logs[0]   # the log only grows between writes
+
+
+def test_a_package_check_asks_the_registry_and_refuses_what_is_not_there(monkeypatch):
+    answers = {
+        "https://pypi.org/pypi/numpy/json": (200, {"info": {"name": "numpy", "version": "2.5.3"}, "releases": {"2.5.3": [], "2.5.2": []}}),
+        "https://pypi.org/pypi/numpyy/json": (404, {}),
+        "https://registry.npmjs.org/@types%2Fnode": (200, {"dist-tags": {"latest": "24.1.0"}, "versions": {"24.1.0": {}, "22.0.0": {}}}),
+        "https://registry.npmjs.org/no-such-pkg-xyz": (404, {}),
+    }
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+    ok = E.check_package("pip", "numpy")
+    assert ok["exists"] is True and ok["latest"] == "2.5.3" and ok["version"] == "" and not ok["error"]
+    pinned = E.check_package("pip", "numpy==2.5.2")
+    assert pinned["exists"] is True and pinned["version"] == "2.5.2"
+    missing_pin = E.check_package("pip", "numpy==9.9")
+    assert missing_pin["exists"] is True and missing_pin["version"] == "" and "9.9 is not published" in missing_pin["error"] and "2.5.3" in missing_pin["error"]
+    gone = E.check_package("pip", "numpyy")
+    assert gone["exists"] is False and "not on PyPI" in gone["error"]
+    scoped = E.check_package("npm", "@types/node@24.1.0")
+    assert scoped["exists"] is True and scoped["name"] == "@types/node" and scoped["version"] == "24.1.0"
+    assert E.check_package("npm", "no-such-pkg-xyz")["exists"] is False
+    down = E.check_package("pip", "requests")
+    assert down["exists"] is None and "could not be asked" in down["error"]
+    with pytest.raises(HTTPException):
+        E.check_package("cargo", "serde")
+    with pytest.raises(HTTPException):
+        E.check_package("pip", "not a spec !!")
+    # apt: the box's own lists
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd[:2])
+        class R:
+            stdout = ""
+            returncode = 0
+        out = R()
+        if cmd[:2] == ["apt-cache", "policy"]:
+            out.stdout = "jq:\n  Installed: (none)\n  Candidate: 1.7.1-3\n" if cmd[2] == "jq" else "N: Unable to locate package nope\n"
+        if cmd[:2] == ["apt-cache", "madison"]:
+            out.stdout = " jq | 1.7.1-3 | http://deb.debian.org bookworm/main amd64 Packages\n"
+        return out
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    monkeypatch.setattr(E, "_apt_lists", lambda: None)
+    apt = E.check_package("apt", "jq=1.7.1-3")
+    assert apt["exists"] is True and apt["latest"] == "1.7.1-3" and apt["version"] == "1.7.1-3"
+    assert E.check_package("apt", "nope")["exists"] is False

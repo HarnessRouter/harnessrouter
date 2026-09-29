@@ -266,6 +266,26 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EnvironmentRuntimes' }
 
+  /v1/environments/packages/check:
+    get:
+      tags: [Environments]
+      operationId: checkEnvironmentPackage
+      summary: What the manager's registry says about a spec, before any build
+      description: |
+        Optional (a server without it answers 404). Whether the name exists, its latest version,
+        and whether an exact pin is published, so a client can refuse a typo where it is typed.
+        `environment_invalid` for a manager other than pip, npm or apt, or a string that is not a spec.
+      parameters:
+        - { name: manager, in: query, required: true, schema: { type: string, enum: [pip, npm, apt] } }
+        - { name: spec, in: query, required: true, schema: { type: string }, description: "A spec as the build takes it: numpy, numpy==2.3.1, sharp@0.33.5, ffmpeg" }
+      responses:
+        '200':
+          description: The registry's answer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentPackageCheck' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
   /v1/environments/{environment_id}:
     parameters:
       - $ref: '#/components/parameters/EnvironmentId'
@@ -1673,6 +1693,21 @@ components:
         version: { type: string }
       additionalProperties: true
 
+    EnvironmentPackageCheck:
+      type: object
+      required: [manager, name, spec, exists]
+      description: What the manager's registry says about a spec, before any build.
+      properties:
+        object: { type: string, const: environment.package }
+        manager: { type: string, enum: [pip, npm, apt] }
+        name: { type: string }
+        spec: { type: string }
+        exists: { type: [boolean, 'null'], description: "null when the registry could not be asked" }
+        latest: { type: string }
+        version: { type: string, description: "The exact pin when it is published; empty otherwise" }
+        error: { type: string, description: "In words: why the spec was refused, or why the registry could not be asked" }
+      additionalProperties: true
+
     EnvironmentRuntimes:
       type: object
       description: What a build can be made with on this server, and nothing that is not there.
@@ -1722,6 +1757,7 @@ components:
         started_at: { type: [integer, 'null'] }
         finished_at: { type: [integer, 'null'] }
         error: { type: string }
+        stage: { type: string, description: "The step a running build is on; empty once it ended" }
         log: { type: string }
         packages: { type: array, items: { $ref: '#/components/schemas/EnvironmentPackage' } }
         files: { type: integer }

@@ -76,6 +76,12 @@ harness object and on `POST /v1/responses`; `environment` on the session object.
   modes still hold for any non-root agent; root is the operator's own choice. Measured on
   hr-test 2026-09-28: before the groups, any session could list and read every environment's
   source and layers; after, a session reads its own and gets EACCES on the others.
+- **While it builds**: the runner writes `.hr-build.json` as each step ends, with `stage` (copying files,
+  python packages, node packages, system packages, setup.sh, finishing) and the log so far; the page
+  polls it every 3 s and shows a strip with the stage, the elapsed seconds and the log tail. Add asks
+  `GET /v1/environments/packages/check` (runner `check_package`: PyPI JSON, the npm registry, the box's
+  apt lists) and refuses a name that is not there or a pin that was never published; a row reads the
+  installed version, or "installing", or "installs on save" with the version the registry reported.
 - **The turn**: the gateway resolves the environment (`metadata.environment` on the request, else the harness's) before
   anything is allocated, passes `{id, slug, entry}` to the runner, stamps the session vertex with
   `environment` and the turn record with the version. The runner resolves the mount before writing

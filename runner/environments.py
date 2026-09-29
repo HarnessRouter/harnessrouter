@@ -45,6 +45,9 @@ import tarfile
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -479,6 +482,100 @@ def runtimes() -> dict:
             "apt": bool(shutil.which("apt-get") and shutil.which("dpkg"))}
 
 
+REGISTRY_TIMEOUT = 8
+_apt_lists_at = 0.0
+
+
+def spec_parts(spec: str, manager: str) -> tuple[str, str]:
+    """A spec's name and exact pin: npm's name@version, pip's name==version, apt's name=version.
+    A range (>=, ~=, ...) is a name with no pin; the installer resolves it at build time."""
+    s = spec.strip()
+    if manager == "npm":
+        i = s.rfind("@")
+        return (s[:i], s[i + 1:]) if i > 0 else (s, "")
+    for sep in ("==", "="):
+        if sep in s:
+            n, v = s.split(sep, 1)
+            return n.strip(), v.strip()
+    for sep in (">=", "<=", "~=", "!=", ">", "<"):
+        if sep in s:
+            return s.split(sep, 1)[0].strip(), ""
+    return s, ""
+
+
+def _http_json(url: str) -> tuple[int, dict]:
+    req = urllib.request.Request(url, headers={"User-Agent": "harnessrouter-environments/1", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=REGISTRY_TIMEOUT) as r:
+            return r.status, json.loads(r.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+
+
+def _apt_lists() -> None:
+    """apt's package lists, refreshed at most every six hours: what a build's apt would see."""
+    global _apt_lists_at
+    if time.time() - _apt_lists_at < 6 * 3600:
+        return
+    subprocess.run(["apt-get", "update", "-qq"], capture_output=True, timeout=180, env=_tool_env())
+    _apt_lists_at = time.time()
+
+
+def check_package(manager: str, spec: str) -> dict:
+    """What the manager's registry says about a declared package before any build: whether the
+    name exists, its latest version, and whether an exact pin is published. pip asks PyPI, npm the
+    npm registry, apt this box's own package lists (the ones a build would download from). A typo
+    is refused at the moment it is typed instead of failing a build minutes later. `exists` is
+    None when the registry could not be asked; the build is then the check."""
+    manager = (manager or "").strip().lower()
+    if manager not in ("pip", "npm", "apt"):
+        raise HTTPException(400, "manager must be pip, npm or apt")
+    spec = (spec or "").strip()
+    if not _SPEC_RE.match(spec):
+        raise HTTPException(400, "that is not a package spec")
+    name, pin = spec_parts(spec, manager)
+    out = {"manager": manager, "name": name, "spec": spec, "exists": None, "latest": "", "version": "", "error": ""}
+    try:
+        if manager == "pip":
+            st, j = _http_json(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
+            if st == 404:
+                out.update(exists=False, error=f"{name} is not on PyPI")
+                return out
+            if st != 200:
+                raise RuntimeError(f"PyPI answered {st}")
+            info = j.get("info") or {}
+            out.update(exists=True, latest=str(info.get("version") or ""), name=str(info.get("name") or name))
+            versions = set((j.get("releases") or {}).keys())
+        elif manager == "npm":
+            st, j = _http_json("https://registry.npmjs.org/" + urllib.parse.quote(name, safe="@").replace("/", "%2F"))
+            if st == 404:
+                out.update(exists=False, error=f"{name} is not on the npm registry")
+                return out
+            if st != 200:
+                raise RuntimeError(f"the npm registry answered {st}")
+            out.update(exists=True, latest=str((j.get("dist-tags") or {}).get("latest") or ""))
+            versions = set((j.get("versions") or {}).keys())
+        else:
+            _apt_lists()
+            env = _tool_env()
+            r = subprocess.run(["apt-cache", "policy", name], capture_output=True, text=True, timeout=60, env=env)
+            cand = next((ln.split(":", 1)[1].strip() for ln in r.stdout.splitlines() if ln.strip().startswith("Candidate:")), "")
+            if not cand or cand == "(none)":
+                out.update(exists=False, error=f"{name} is not in this server's apt sources")
+                return out
+            out.update(exists=True, latest=cand)
+            m = subprocess.run(["apt-cache", "madison", name], capture_output=True, text=True, timeout=60, env=env)
+            versions = {ln.split("|")[1].strip() for ln in m.stdout.splitlines() if ln.count("|") >= 2}
+        if pin:
+            if pin in versions:
+                out["version"] = pin
+            else:
+                out["error"] = f"{name} {pin} is not published; the latest is {out['latest']}"
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as e:
+        out.update(exists=None, error=f"the registry could not be asked: {str(e)[:120]}")
+    return out
+
+
 def clean_specs(specs) -> list[str]:
     """Declared packages as short spec strings, each checked against one shape."""
     out: list[str] = []
@@ -532,9 +629,14 @@ def _tool_env() -> dict:
     return env
 
 
-def _run(log: list[str], cmd: list[str], cwd: str, env: dict, deadline: float, run_as: dict | None = None) -> None:
+def _run(log: list[str], cmd: list[str], cwd: str, env: dict, deadline: float, run_as: dict | None = None,
+         flush=None) -> None:
+    """One build command. `flush` writes the record after the command line and again after its
+    output, so a build's log is readable while the build runs, not only when it ends."""
     left = max(1, int(deadline - time.time()))
     log.append(f"$ {' '.join(cmd)}")
+    if flush:
+        flush()
     try:
         r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=left, **(run_as or {}))
     except subprocess.TimeoutExpired:
@@ -543,6 +645,8 @@ def _run(log: list[str], cmd: list[str], cwd: str, env: dict, deadline: float, r
         log.append(r.stdout.rstrip()[-20000:])
     if r.stderr.strip():
         log.append(r.stderr.rstrip()[-20000:])
+    if flush:
+        flush()
     if r.returncode != 0:
         raise RuntimeError(f"{cmd[0]} exited {r.returncode}")
 
@@ -570,24 +674,24 @@ def _packages(dst: pathlib.Path, env: dict, run_as: dict | None = None) -> list[
     return out
 
 
-def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: dict, scratch: str, deadline: float) -> None:
+def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: dict, scratch: str, deadline: float, flush=None) -> None:
     """System packages, unpacked into the layer rather than installed into the box: apt resolves
     and downloads each named package with the dependencies the image lacks, and dpkg unpacks every
     archive under <version>/apt, which a turn puts on PATH and LD_LIBRARY_PATH. The image's own
     packages stay the image's; nothing here changes the container."""
     cache = pathlib.Path(scratch) / "apt-archives"
     cache.mkdir(parents=True, exist_ok=True)
-    _run(log, ["apt-get", "update", "-qq"], str(dst), env, deadline)
+    _run(log, ["apt-get", "update", "-qq"], str(dst), env, deadline, flush=flush)
     _run(log, ["apt-get", "install", "-y", "--download-only", "--reinstall", "-o", f"Dir::Cache::archives={cache}",
                "-o", "Debug::NoLocking=1", *[n.split("=", 1)[0] if "=" in n and not n.startswith("=") else n for n in names]],
-         str(dst), env, deadline)
+         str(dst), env, deadline, flush=flush)
     debs = sorted(cache.glob("*.deb"))
     if not debs:
         raise RuntimeError("apt downloaded nothing for " + ", ".join(names))
     out = dst / "apt"
     out.mkdir(exist_ok=True)
     for deb in debs:
-        _run(log, ["dpkg", "-x", str(deb), str(out)], str(dst), env, deadline)
+        _run(log, ["dpkg", "-x", str(deb), str(out)], str(dst), env, deadline, flush=flush)
     (out / ".packages").write_text("\n".join(d.name for d in debs) + "\n")
     log.append(f"apt: unpacked {len(debs)} archive(s) into apt/")
 
@@ -661,8 +765,20 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
     started = int(time.time())
     log: list[str] = []
     rec = {"version": n, "status": "building", "started_at": started, "finished_at": None, "error": "",
-           "packages": [], "files": 0, "bytes": 0, "log": log, "runtime": {},
+           "packages": [], "files": 0, "bytes": 0, "log": log, "runtime": {}, "stage": "starting",
            "declared": {"pip": pip_specs, "npm": npm_specs, "apt": apt_specs}}
+
+    def flush() -> None:
+        """The record on disk IS what the owner sees while the build runs: written as each step ends."""
+        try:
+            _write_record(dst, rec)
+        except OSError:
+            pass
+
+    def stage(name: str) -> None:
+        rec["stage"] = name
+        flush()
+
     try:
         _claim(env_id)
         gid = env_gid(env_id)
@@ -674,6 +790,7 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
             os.chmod(dst.parent, 0o750)
         deadline = time.time() + BUILD_TIMEOUT
         env = _tool_env()
+        stage("copying files")
         log.append(f"copying the project ({source_stat(env_id)['count']} files)")
         shutil.copytree(src, dst, symlinks=False, dirs_exist_ok=True,
                         ignore=lambda d, names: [x for x in names if x in NOT_COPIED])
@@ -687,53 +804,58 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
                 _own(dst, gid, gid)
                 os.chown(scratch, gid, gid)
             if pip_specs or (dst / "requirements.txt").is_file() or (dst / "pyproject.toml").is_file():
+                stage("python packages")
                 # The interpreter the owner chose, when the box has it; the image's python3 otherwise.
                 python = (shutil.which(f"python{want_py}", path=env.get("PATH")) if want_py else None) \
                     or shutil.which("python3", path=env.get("PATH")) or "python3"
-                _run(log, [python, "-m", "venv", ".venv"], str(dst), env, deadline, as_build)
+                _run(log, [python, "-m", "venv", ".venv"], str(dst), env, deadline, as_build, flush)
                 pip = str(dst / ".venv" / "bin" / "pip")
                 if (dst / "requirements.txt").is_file():
-                    _run(log, [pip, "install", "-r", "requirements.txt"], str(dst), env, deadline, as_build)
+                    _run(log, [pip, "install", "-r", "requirements.txt"], str(dst), env, deadline, as_build, flush)
                 if (dst / "pyproject.toml").is_file():
-                    _run(log, [pip, "install", "."], str(dst), env, deadline, as_build)
+                    _run(log, [pip, "install", "."], str(dst), env, deadline, as_build, flush)
                 if pip_specs:
-                    _run(log, [pip, "install", *pip_specs], str(dst), env, deadline, as_build)
+                    _run(log, [pip, "install", *pip_specs], str(dst), env, deadline, as_build, flush)
                 try:
                     rec["runtime"]["python"] = subprocess.run([str(dst / ".venv" / "bin" / "python"), "-c", "import platform; print(platform.python_version())"],
                                                               capture_output=True, text=True, timeout=30, env=env, **as_build).stdout.strip()
                 except (OSError, subprocess.TimeoutExpired):
                     pass
             if npm_specs or (dst / "package.json").is_file():
+                stage("node packages")
                 npm = shutil.which("npm", path=env.get("PATH")) or "npm"
                 if (dst / "package.json").is_file():
                     _run(log, [npm, "ci" if (dst / "package-lock.json").is_file() else "install", "--no-audit", "--no-fund"],
-                         str(dst), env, deadline, as_build)
+                         str(dst), env, deadline, as_build, flush)
                 if npm_specs:
                     if not (dst / "package.json").is_file():
                         (dst / "package.json").write_text(json.dumps({"name": slug or "environment", "version": "0.0.0", "private": True}, indent=2) + "\n")
                         if as_build:
                             os.chown(dst / "package.json", gid, gid)
-                    _run(log, [npm, "install", "--no-audit", "--no-fund", "--save", *npm_specs], str(dst), env, deadline, as_build)
+                    _run(log, [npm, "install", "--no-audit", "--no-fund", "--save", *npm_specs], str(dst), env, deadline, as_build, flush)
                 try:
                     rec["runtime"]["node"] = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=10, env=env).stdout.strip().lstrip("v")
                 except (OSError, subprocess.TimeoutExpired):
                     pass
             if apt_specs:   # apt-get and dpkg -x run none of the packages' code; apt's lists need root
-                _apt_into_layer(log, dst, apt_specs, env, scratch, deadline)
+                stage("system packages")
+                _apt_into_layer(log, dst, apt_specs, env, scratch, deadline, flush)
             if (dst / "setup.sh").is_file():
-                _run(log, ["bash", "setup.sh"], str(dst), {**env, "ENV_ROOT": str(dst)}, deadline, as_build)
+                stage("setup.sh")
+                _run(log, ["bash", "setup.sh"], str(dst), {**env, "ENV_ROOT": str(dst)}, deadline, as_build, flush)
+            stage("finishing")
             rec["packages"] = _packages(dst, env, as_build)
             if (dst / "apt").is_dir():
                 rec["packages"] += _apt_packages(dst)
         _read_only(dst, gid)
         rec["files"], rec["bytes"] = _size(dst)
-        rec["status"], rec["finished_at"] = "ready", int(time.time())
+        rec["status"], rec["finished_at"], rec["stage"] = "ready", int(time.time()), ""
         log.append(f"ready: {rec['files']} files, {len(rec['packages'])} packages, {int(time.time()) - started}s")
         _write_record(dst, rec)
         if activate:
             activate_version(env_id, n, slug)
     except Exception as e:  # noqa: BLE001 — the record IS the report; nothing else sees this thread
-        rec["status"], rec["finished_at"], rec["error"] = "failed", int(time.time()), str(e)[:500]
+        rec["status"], rec["finished_at"], rec["error"], rec["stage"] = "failed", int(time.time()), str(e)[:500], ""
         log.append(f"failed: {e}")
         try:
             _write_record(dst, rec)
@@ -937,6 +1059,11 @@ async def r_import(env_id: str, request: Request, replace: int = 0, git_url: str
 @router.get("/environments/runtimes")
 def r_runtimes() -> dict:
     return runtimes()
+
+
+@router.get("/environments/packages/check")
+def r_check_package(manager: str, spec: str) -> dict:
+    return check_package(manager, spec)
 
 
 @router.post("/environments/{env_id}/build")
