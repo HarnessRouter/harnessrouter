@@ -4717,12 +4717,10 @@ def _minimax_mcp_config(home: pathlib.Path, mcp_servers: list[dict] | None) -> p
         if url:
             entry: dict = {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "http",
                            "url": url}
-            hdrs: dict = {}
-            auth = sv.get("auth")
-            if auth:
-                hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
-            if isinstance(sv.get("headers"), dict):
-                hdrs.update({str(k): str(v) for k, v in sv["headers"].items() if k and v is not None})
+            # One place for a server's headers, for every writer and the bridge (_mcp_headers):
+            # this writer had its own copy, which is how eight other writers came to drop `auth`
+            # and lose the browser entirely. A copy that agrees today drifts tomorrow.
+            hdrs = _mcp_headers(sv)
             if hdrs:
                 entry["headers"] = hdrs
         elif sv.get("command"):

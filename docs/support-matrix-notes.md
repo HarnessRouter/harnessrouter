@@ -1739,6 +1739,43 @@ one provider at a time. What was measured, on the 0.5.4 release archive (`mcode 
   or withheld, which halved the system prompt measured at a stub (14.7k -> 7.8k characters).
 - The CLI fetches a public model catalog once per run (`models.dev`, with `MAVIS_REGION=en`); no
   login, telemetry or update check happens in `exec`.
+### The browser column's `0 of 1` is the instance's missing key, not the base (2026-09-29)
+
+`plugs/browser.py` reported `0 of 1 bases drive the browser` for minimax, twice, with
+`no browser navigate/click in the trace (no browser tool at all)`. Every link of the chain was
+checked on a build of this branch rather than inferred from that sentence, and **every one of them
+works**:
+
+- the runner wrote the `plugs` server into `$MINIMAX_DATA_DIR/mcp.json` as `type: http` with the
+  per-turn bearer in `Authorization`;
+- the gateway's Browser section reached the agent's doc (the global `AGENTS.md` this base uses),
+  naming all thirteen tools;
+- the CLI connected and **the request carried all thirteen** `mcp__plugs__browser_*` tools
+  (its own `llm-call.json`);
+- **the model called them** — `browser_navigate` then `browser_get_url` (its own transcript).
+
+What came back: `"The browser service is not set up on this deployment. Tell the person."`, which is
+`gateway/app.py`'s own refusal when `browser_plane.configured()` is false — the instance has no
+`BROWSER_USE_API_KEY`, exactly as `plugs/browser.py`'s docstring says ("without it every base
+reports the refusal it got"). The model then told the person, which is the right answer to a browser
+that is not there.
+
+**Established before anything else, because a column with one base cannot say whose defect it is:**
+a second base on the same build, instance and model — `qwen`, one of the fifteen that passed this
+column 15 of 15 on rc.17 — fails **identically**, with the same refusal in its answer. So this is not
+this base's defect and not this PR's.
+
+The trace had the evidence all along: two `plug` rows, `outcome: refused`, `error: "not configured"`,
+for `navigate` and `get_url`. The column counts only rows whose outcome is `ok`, so it rendered two
+refused calls as *"no browser tool at all"* — the opposite of what happened, and the reason two people
+went looking for a missing-tools defect. A maintainer item, below.
+
+Separately, and because a copy that agrees today drifts tomorrow: this base's MCP writer now takes a
+server's headers from `_mcp_headers`, the one helper every writer and the bridge share, instead of
+its own inline copy of the same three lines. Its own copy was correct — the bearer is in the file and
+the server accepted it — but eight writers that kept their own copy are why the browser column was
+5 of 15 before rc.16.
+
 ### The family tour's seven silent failures were the relay, not the context window (2026-09-29)
 
 The first tour on this base passed 7 of 14 families in one conversation: every family from kimi-k3
