@@ -2,16 +2,27 @@
 
 All notable changes to the Unified Harness Protocol.
 
-## 2026-09-28
+## 2026-09-28 (patched 2026-09-29)
 
 Additive to `2026-09-12`: every request and object valid under the previous version is valid here.
+
+**Patch of 2026-09-29, same version.** The task-side reference to an environment is
+`metadata.environment`, not a top-level request field: the task surface is a Responses request
+and `metadata` is its extension point, where `harness_id` already travels
+([Tasks §1.2](versions/2026-09-28/tasks.md#12-selecting-a-harness),
+[Environments §5](versions/2026-09-28/environments.md#5-attaching-an-environment)). The response
+reports `metadata.environment` beside `session_id`. The harness and session objects keep
+`environment` as an ordinary field. The published chapter had carried the field at the top level
+for one day; the schema, the conformance suite (`2026.9.28.post1`: EN-05 sends it in `metadata`,
+EN-07 asserts the response echo) and the reference server (0.26.7) changed together.
 
 - **Environments** ([Environments](versions/2026-09-28/environments.md)), the Environments
   sub-protocol, optional at every class behind the `environments` capability. An environment is a
   project's files and installed dependencies, built once and mounted read-only at a fixed path in
   every session that names it, beside the session's own writable working directory. The chapter
   defines the object (`henv_`), files by path and whole-project import, builds and versions with
-  an active pointer and rollback, the `environment` field on the harness object and on a task,
+  an active pointer and rollback, the `environment` field on the harness object and
+  `metadata.environment` on a task,
   what a session sees (the mount, the variables, the instruction, the record), and the errors.
 - The session object carries `environment` ([Sessions §3](versions/2026-09-28/sessions.md#3-inspecting-a-session)).
 - New error codes: `environment_not_found`, `environment_not_ready`, `environment_busy`,
