@@ -119,6 +119,8 @@ def run_base(call, base: str, model: str, keep: bool, log) -> dict:
                 break
             time.sleep(5)
         ok_tools = [r["tool"] for r in rows if r.get("outcome") == "ok"]
+        refused = [r for r in rows if r.get("outcome") not in ("ok", None) and r["tool"] != "session"]
+        out["refused"] = sorted({f"{r['tool']}: {r.get('error') or r.get('outcome')}" for r in refused})
         stop = next((r for r in rows if r["tool"] == "session"), None)
         out["tools"] = sorted(set(t for t in ok_tools if t != "session"))
         out["missing"] = [t for t in NEEDED if t not in ok_tools]
@@ -131,7 +133,13 @@ def run_base(call, base: str, model: str, keep: bool, log) -> dict:
             if status != "completed":
                 why.append(f"status {status or 'unknown'}" + (f": {str((d.get('error') or {}).get('message') or '')[:120]}" if isinstance(d, dict) and d.get("error") else ""))
             if out["missing"]:
-                why.append("no browser " + "/".join(out["missing"]) + " in the trace" + (" (used " + ", ".join(out["tools"]) + ")" if out["tools"] else " (no browser tool at all)"))
+                # a call the plane refused is a call that was made: say so, with the plane's own words,
+                # instead of "no browser tool at all" (2026-09-29: an instance without BROWSER_USE_API_KEY
+                # read as a missing-tools defect)
+                if out["refused"]:
+                    why.append("the browser calls were refused: " + "; ".join(out["refused"])[:200])
+                else:
+                    why.append("no browser " + "/".join(out["missing"]) + " in the trace" + (" (used " + ", ".join(out["tools"]) + ")" if out["tools"] else " (no browser call in the trace at all)"))
             if not reached:
                 why.append(f"answered without {REACHED}: {text[-160:].strip()!r}")
             if not out["stopped"]:
