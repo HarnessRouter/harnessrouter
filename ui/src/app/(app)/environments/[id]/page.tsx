@@ -96,9 +96,12 @@ export default function EnvironmentPage() {
   const reload = useCallback(async () => {
     try {
       const [e, t, h] = await Promise.all([getEnvironment(id), listEnvironmentFiles(id), environmentHarnesses(id).catch(() => [])]);
-      setEnv(e); setEntries(t.entries); setHarnesses(h);
+      // The latest build's record is read BEFORE the page state moves: a status of building opens
+      // the pop-up, and with the record read afterwards the pop-up showed the previous version's
+      // outcome for a moment (the hosted port's finding, 2026-09-29).
+      const b = e.latestVersion ? await getEnvironmentBuild(id, e.latestVersion).catch(() => null) : null;
+      setEnv(e); setEntries(t.entries); setHarnesses(h); setBuild(b);
       if (!pkgDirty) { setDeclared({ pip: (e.declared?.pip || []).map((x) => x.spec), npm: (e.declared?.npm || []).map((x) => x.spec), apt: (e.declared?.apt || []).map((x) => x.spec) }); setPython(e.runtime?.python || ''); }
-      if (e.latestVersion) setBuild(await getEnvironmentBuild(id, e.latestVersion).catch(() => null));
     } catch (e) { setErr(e instanceof Error ? e.message : 'The environment could not be read.'); }
   }, [id, pkgDirty]);
   useEffect(() => { void reload(); }, [reload]);
@@ -145,6 +148,7 @@ export default function EnvironmentPage() {
       await updateEnvironment(id, { name: env.name, description: env.description, entry: env.entry, packages: declared, runtime: { python } });
       setPkgDirty(false);
     }
+    setBuild(null);            // the pop-up waits for the new build's record, never showing the old one
     await buildEnvironment(id);
   });
   /** Add asks the registry first: a name that is not there, or a pin that was never published, is
