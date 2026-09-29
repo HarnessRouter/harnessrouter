@@ -23,7 +23,7 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server  # noqa: E402
 from server import (Auth, _agent_doc_path, _build_kilo, _kilo_denies, _kilo_eof,  # noqa: E402
-                    _kilo_has_session, _kilo_to_claude, _resume_lost)
+                    _kilo_has_session, _kilo_npm, _kilo_to_claude, _resume_lost)
 
 SID = "ses_f1f94c802ffe8og0Qkxjz0Z8e0"
 
@@ -163,6 +163,35 @@ def test_the_relay_token_is_in_env_where_served_model_and_usage_are_found():
     assert server._relay_usage(env) == {"input_tokens": 5}
 
 
+def test_a_claude_id_on_an_aggregator_rides_the_relay():
+    """The observability defect this fixes, pinned. opencode sends a claude id on an aggregator
+    through @ai-sdk/anthropic, which cannot ride the relay (route lookup is by the placeholder
+    BEARER; a Messages client sends x-api-key), and the turn then records NO served model: measured
+    2026-09-27/28 on integration:vercel, one session, gpt-5.4-mini -> 'openai/gpt-5.4-mini' and
+    claude-haiku-4.5 -> None. Through the relay the same id records
+    'anthropic/claude-haiku-4.5' (measured 2026-09-28, same rig)."""
+    for model in ("claude-haiku-4.5", "claude-opus-5.5", "anthropic/claude-fable-5"):
+        assert _kilo_npm(Auth(), model, "tokenrouter") == "@ai-sdk/openai-compatible", model
+    _, cfg, env, _ = _build(provider="tokenrouter",
+                            auth=Auth(provider="tokenrouter", api_key="sk-real",
+                                      base_url="https://gateway.example/v1"))
+    assert cfg["provider"]["hr"]["options"]["baseURL"].startswith("http://127.0.0.1:")
+    assert env["HR_KILO_KEY"].startswith("hr-relay-")
+    assert server._relay_served_model(env) == ""      # the route exists; nothing has answered yet
+
+
+def test_only_a_direct_anthropic_connection_keeps_messages():
+    """A direct Anthropic endpoint speaks nothing else, and the relay cannot front it until it
+    speaks x-api-key upstream (the general fix, proposed in the PR body, not done here)."""
+    assert _kilo_npm(Auth(), "claude-haiku-4.5", "anthropic") == "@ai-sdk/anthropic"
+    assert _kilo_npm(Auth(api_format="anthropic"), "claude-haiku-4.5", "tokenrouter") == "@ai-sdk/anthropic"
+    # and everything else keeps opencode's choice
+    assert _kilo_npm(Auth(), "gpt-5.4-mini", "tokenrouter") == "@ai-sdk/openai"          # /responses
+    assert _kilo_npm(Auth(), "qwen3.8-max", "tokenrouter") == "@ai-sdk/openai-compatible"
+    assert _kilo_npm(Auth(), "gpt-5.4", "azure") == "@ai-sdk/openai"
+    assert _kilo_npm(Auth(api_format="openai"), "claude-haiku-4.5", "tokenrouter") == "@ai-sdk/openai-compatible"
+
+
 def test_a_messages_shape_turn_keeps_its_direct_base():
     auth = Auth(provider="anthropic", api_key="sk-ant", base_url="https://api.anthropic.com")
     _, cfg, env, _ = _build(auth=auth, provider="anthropic")
@@ -201,7 +230,15 @@ def test_write_and_apply_patch_are_withheld_through_edit():
 
 
 def test_withholding_the_shell_withholds_every_door_to_it():
-    """background_process takes a `command` and runs it: bash off must mean both are off."""
+    """background_process takes a `command` and runs it: bash off must mean both are off.
+
+    MEASURED both ways on a live instance (2026-09-28, gpt-5.4-mini, vercel), with an oracle no
+    answer can fake — a file whose content is a stamp that exists only in the turn's shell
+    environment: with bash allowed, `background_process` action monitor ran the command and wrote
+    the stamp; with bash disabled, four prompts that pushed for a shell (plain, via
+    background_process, via a subagent, and a subagent the model was ordered to use) produced no
+    stamp anywhere. A subagent DID create an empty proof.txt with apply_patch, which is why the
+    oracle is the stamp and not the file."""
     assert _kilo_denies(["bash"])["background_process"] == "deny"
     assert "background_process" not in _kilo_denies(["webfetch"])
 

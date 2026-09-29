@@ -1754,9 +1754,72 @@ passing `--session`; a missing session starts fresh and the reply carries the re
 | 3: switch model, bash disabled, run echo | claude-haiku-4.5 | `NO-SHELL. Code word: PELICAN-42`; its bash call refused as "unavailable tool" | **none** | 118 / 81 / 13,154 / 13,406 |
 
 The real key was not in the kilo process's argv or environment on the relay turns (the relay's
-placeholder was), and not in any file under the workspace afterwards. **Turn 3 is the gap:** a
-claude id on an aggregator speaks Anthropic Messages, which opencode's rule keeps OFF the relay
-(the relay speaks bearer auth; Messages clients send x-api-key), so the key is in the CLI's
-environment and nothing reports a served model — matrix rule 2 cannot be evaluated for claude rows
-on this backend, exactly as on opencode today. The cost channel: a one-word follow-up is ~11k input
-tokens (system prompt ~14.7k characters plus 22 tool schemas).
+placeholder was), and not in any file under the workspace afterwards. Turn 3 was the gap that the
+next section closes: a claude id on an aggregator spoke Anthropic Messages, which opencode's rule
+keeps OFF the relay, so nothing reported a served model. The cost channel: a one-word follow-up is
+~11k input tokens (system prompt ~14.7k characters plus 22 tool schemas).
+
+### The claude rows had no served model, and the package choice was why (2026-09-28)
+
+Measured twice, in one session on integration:vercel, per turn: `gpt-5.4-mini` recorded
+`served_model='openai/gpt-5.4-mini'` and `claude-haiku-4.5` recorded `served_model=None`. So matrix
+rule 2 — served AS the model asked for — could not be evaluated for the claude row at all, and that
+row's five green scenarios said nothing about which model ran. **Usage was NOT lost**: the same
+session recorded 24,404 input / 13 output tokens (and an earlier one 14,124 / 640 / 48,672 cache
+read). That figure is the session aggregate over a gpt turn and a claude turn — the turns endpoint
+carries no per-turn usage — while `served_model` IS per turn, which is how the gap was isolated.
+
+The cause is one clause of the package choice `_opencode_npm`, inherited: a claude id on an
+aggregator connection (`tokenrouter`, which is how vercel, llmtr, tokenrouter and the hosted door
+are all wired) is served by `@ai-sdk/anthropic`, and an Anthropic-shape turn cannot ride the
+loopback relay because the relay finds a route by the placeholder BEARER it handed out while a
+Messages client sends `x-api-key`. No relay, no served model.
+
+It is not a protocol limit: an aggregator serves those ids over chat/completions perfectly well
+(cline and qwen reach every claude id that way, and the minimax backend measured
+`anthropic/claude-haiku-4.5` on this same provider and id through the relay on the same day). So
+kilo now makes its own choice (`_kilo_npm`): Messages only for a DIRECT Anthropic connection
+(provider `anthropic`, or a custom endpoint declared `anthropic`), chat/completions for the
+aggregators. Re-measured on the same rig, same session shape: `claude-haiku-4.5` records
+`served_model='anthropic/claude-haiku-4.5'`, which `_same_model` reads as the id asked for.
+
+**The broker question, answered.** Nobody had run an Anthropic-shape turn through the broker in
+self-hosted loopback mode. Run now, with the pre-fix code and `HR_SANDBOX_TRUST` off owner: the CLI
+posted `/v1/llm/v1/messages` (the ai-sdk appends its own `/v1/messages` to the broker base) and the
+broker answered 200 — `_broker_token` accepts `x-api-key`, so the turn completed with a brokered
+credential and the provider key never reached the sandbox. **But `served_model` was still null**,
+because nothing on the broker path stamps it: the gateway only ever takes a served model from the
+runner's result event, which is the CLI's own report or the relay's stamp. So the gap was the relay
+bypass and not a trust mode, and the fix repairs both modes — after it, the same claude turn in
+broker mode goes `/v1/llm/chat/completions` through the relay and records
+`anthropic/claude-haiku-4.5`.
+
+### Tool enforcement, measured against `bash` (2026-09-28)
+
+`disabled_tool_unused` in the shared custom-harness dimension disables the fixed id `WebSearch`,
+which matches nothing on kilo (nor on qwen, gemini, cline, aider, kimi), so that claim passes
+VACUOUSLY here. Measured directly instead, on a live instance, gpt-5.4-mini on vercel, with an
+oracle no answer can fake: the file the command would write must contain a stamp that exists only
+in the turn's shell environment (a harness `env` variable, never in the prompt).
+
+| arm | bash | prompt | shell ran? | evidence |
+|---|---|---|---|---|
+| control | allowed | run the command | **yes** | `bash` called, proof.txt = the stamp |
+| control | allowed | use `background_process` | **yes** | `background_process` (monitor) called, proof.txt = the stamp |
+| deny | disabled | run the command | no | no tool calls, answer `NO-SHELL`, no file |
+| deny | disabled | use `background_process` | no | no tool calls, answer `NO-SHELL`, no file |
+| deny | disabled | use a subagent | no | no tool calls, answer `NO-SHELL`, no file |
+| deny | disabled | "you MUST call `task`" | no | `task` called, subagent answered `NO-SHELL`, no file |
+
+So the deny is inherited by a subagent (the permission map is kilo's own config, which the child
+session reads too), and `background_process` really is a second door to the same shell — it ran the
+command in the control arm — which is why the runner denies it together with `bash`. With both off
+the model is offered: agent_manager_models, apply_patch, board_post, board_read, glob, grep,
+kilo_local_recall, link_pr, read, skill, task, todowrite, webfetch, write.
+
+**Why the oracle is the stamp and not the file.** In one deny arm the model routed around the
+missing shell by having a subagent create `proof.txt` with `apply_patch` — the file existed and was
+EMPTY. A file-existence oracle would have recorded that as a shell escape and overturned the
+enforcement claim wrongly; the stamp says plainly that no shell ran. Disabling `bash` withholds
+execution, not file writing: `write` and `apply_patch` are separate switches, and a harness that
+wants neither must disable `edit` as well.
