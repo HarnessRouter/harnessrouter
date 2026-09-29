@@ -1196,6 +1196,42 @@
             "$ref": "#/$defs/EnvironmentPackage"
           }
         },
+        "declared": {
+          "type": "object",
+          "description": "What the owner declared, per manager, as the build installs it beside the project's own\nmanifests: `pip` (`name==1.0`), `npm` (`name@1.0`), `apt` (`name`). Each entry carries\nthe spec as written and its parsed name and version.\n",
+          "properties": {
+            "pip": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DeclaredPackage"
+              }
+            },
+            "npm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DeclaredPackage"
+              }
+            },
+            "apt": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DeclaredPackage"
+              }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "description": "The interpreter a build makes the virtual environment with; empty means the server's default.",
+          "properties": {
+            "python": {
+              "type": "string",
+              "examples": [
+                "3.12"
+              ]
+            }
+          }
+        },
         "versions": {
           "type": "array",
           "items": {
@@ -1220,6 +1256,70 @@
         "updatedAt": {
           "type": "integer",
           "description": "Unix milliseconds"
+        }
+      },
+      "additionalProperties": true
+    },
+    "DeclaredPackage": {
+      "type": "object",
+      "required": [
+        "spec"
+      ],
+      "properties": {
+        "spec": {
+          "type": "string",
+          "description": "As written: moviepy==2.1.1, sharp@0.33.5, ffmpeg"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "EnvironmentRuntimes": {
+      "type": "object",
+      "description": "What a build can be made with on this server, and nothing that is not there.",
+      "properties": {
+        "python": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "examples": [
+            [
+              "3.12",
+              "3.13"
+            ]
+          ]
+        },
+        "node": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "examples": [
+            [
+              "22"
+            ]
+          ]
+        },
+        "os": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "apt": {
+          "type": "boolean",
+          "description": "Whether apt packages can be declared here."
         }
       },
       "additionalProperties": true
@@ -1370,6 +1470,38 @@
         },
         "entry": {
           "type": "string"
+        },
+        "packages": {
+          "type": "object",
+          "description": "Declared packages per manager, as spec strings; omitted on update means unchanged.",
+          "properties": {
+            "pip": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "npm": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "apt": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "python": {
+              "type": "string"
+            }
+          }
         }
       },
       "additionalProperties": true

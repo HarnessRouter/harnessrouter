@@ -10,13 +10,8 @@ import { createEnvironment, deleteEnvironment, listEnvironments, updateEnvironme
 
 /** The packages column: what the active build installed, counted per manager, or the state that explains why there is none. */
 function packagesLine(e: Environment): string {
-  if (e.status === 'ready') {
-    const by: Record<string, number> = {};
-    for (const p of e.packages) by[p.manager] = (by[p.manager] || 0) + 1;
-    const parts = Object.entries(by).map(([m, n]) => `${n} ${m}`);
-    return parts.length ? parts.join(' \u00b7 ') : 'no packages';
-  }
-  return e.status === 'building' ? 'building\u2026' : e.status === 'failed' ? 'build failed' : 'not built yet';
+  const parts = (['pip', 'npm', 'apt'] as const).map((m) => [e.declared?.[m]?.length || 0, m] as const).filter(([n]) => n > 0).map(([n, m]) => `${n} ${m}`);
+  return parts.length ? parts.join(' \u00b7 ') : 'no packages';
 }
 
 export default function EnvironmentsPage() {

@@ -11,13 +11,20 @@ import { SkelPage } from '@/components/Skel';
 import { PrismAsync as SyntaxHL } from 'react-syntax-highlighter';
 import oneLightTheme from 'react-syntax-highlighter/dist/esm/styles/prism/one-light';
 import {
-  activateEnvironmentVersion, buildEnvironment, deleteEnvironmentPath, environmentHarnesses,
-  fmtBytes, getEnvironment, getEnvironmentBuild, importEnvironmentArchive, importEnvironmentGit, listEnvironmentFiles,
-  makeEnvironmentDir, readEnvironmentFile, writeEnvironmentFile,
-  type Environment, type EnvironmentBuildRecord, type EnvironmentFileEntry,
+  buildEnvironment, deleteEnvironmentPath, environmentHarnesses,
+  fmtBytes, getEnvironment, getEnvironmentBuild, importEnvironmentArchive, importEnvironmentGit, listEnvironmentFiles, listRuntimes,
+  makeEnvironmentDir, readEnvironmentFile, updateEnvironment, writeEnvironmentFile,
+  type Environment, type EnvironmentBuildRecord, type EnvironmentFileEntry, type EnvironmentRuntimes, type Manager,
 } from '@/lib/environments';
 
-const STATUS_LABEL: Record<Environment['status'], string> = { empty: 'Not built', building: 'Building', ready: 'Ready', failed: 'Build failed' };
+const MANAGERS: Manager[] = ['pip', 'npm', 'apt'];
+const SPEC_HINT: Record<Manager, string> = { pip: 'name==1.0', npm: 'name@1.0', apt: 'name' };
+/** The parts of a spec as the row shows them: the name, and the version when one was given. */
+function specParts(spec: string, m: Manager): { name: string; version: string } {
+  if (m === 'npm') { const i = spec.lastIndexOf('@'); return i > 0 ? { name: spec.slice(0, i), version: spec.slice(i + 1) } : { name: spec, version: '' }; }
+  for (const sep of ['==', '>=', '<=', '~=', '!=', '=']) { const i = spec.indexOf(sep); if (i > 0) return { name: spec.slice(0, i), version: (sep === '==' || sep === '=' ? '' : sep) + spec.slice(i + sep.length) }; }
+  return { name: spec, version: '' };
+}
 /** The highlighter's language for a file, by extension; plain text for anything else. */
 const LANG: Record<string, string> = {
   py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'tsx', jsx: 'jsx', json: 'json',
@@ -68,6 +75,12 @@ export default function EnvironmentPage() {
   const [busy, setBusy] = useState('');
   const [build, setBuild] = useState<EnvironmentBuildRecord | null>(null);
   const [showLog, setShowLog] = useState(false);
+  const [segment, setSegment] = useState<Manager>('pip');
+  const [declared, setDeclared] = useState<Record<Manager, string[]> | null>(null);   // what the page holds; saved from the head
+  const [python, setPython] = useState('');
+  const [runtimes, setRuntimes] = useState<EnvironmentRuntimes | null>(null);
+  const [spec, setSpec] = useState('');
+  const [pkgDirty, setPkgDirty] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
   const [menu, setMenu] = useState<'add' | null>(null);
   const [git, setGit] = useState({ url: '', ref: '', replace: false });
@@ -79,10 +92,12 @@ export default function EnvironmentPage() {
     try {
       const [e, t, h] = await Promise.all([getEnvironment(id), listEnvironmentFiles(id), environmentHarnesses(id).catch(() => [])]);
       setEnv(e); setEntries(t.entries); setHarnesses(h);
+      if (!pkgDirty) { setDeclared({ pip: (e.declared?.pip || []).map((x) => x.spec), npm: (e.declared?.npm || []).map((x) => x.spec), apt: (e.declared?.apt || []).map((x) => x.spec) }); setPython(e.runtime?.python || ''); }
       if (e.latestVersion) setBuild(await getEnvironmentBuild(id, e.latestVersion).catch(() => null));
     } catch (e) { setErr(e instanceof Error ? e.message : 'The environment could not be read.'); }
-  }, [id]);
+  }, [id, pkgDirty]);
   useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => { listRuntimes().then(setRuntimes).catch(() => setRuntimes(null)); }, []);
   useEffect(() => {
     if (!menu) return;
     const off = (ev: MouseEvent) => { if (!(ev.target as HTMLElement).closest('.env-menu-wrap')) setMenu(null); };
@@ -111,7 +126,28 @@ export default function EnvironmentPage() {
     try { await fn(); await reload(); } catch (e) { setErr(e instanceof Error ? e.message : `${label} failed.`); }
     finally { setBusy(''); }
   };
-  const saveFile = () => act('save', async () => { if (editing === null) return; await writeEnvironmentFile(id, openPath, editing); setFile({ text: editing, bytes: new TextEncoder().encode(editing).length, type: file?.type || 'text/plain' }); setEditing(null); });
+  /** Save changes, from the head: the open file's edit, the declared packages and the runtime, then a
+   *  build, so what a session reads is what the page shows. */
+  const saveChanges = () => act('save', async () => {
+    if (editing !== null) {
+      await writeEnvironmentFile(id, openPath, editing);
+      setFile({ text: editing, bytes: new TextEncoder().encode(editing).length, type: file?.type || 'text/plain' }); setEditing(null);
+    }
+    if (pkgDirty && declared && env) {
+      await updateEnvironment(id, { name: env.name, description: env.description, entry: env.entry, packages: declared, runtime: { python } });
+      setPkgDirty(false);
+    }
+    await buildEnvironment(id);
+  });
+  const addSpec = () => {
+    const t = spec.trim();
+    if (!t || !declared) return;
+    setDeclared({ ...declared, [segment]: [...declared[segment].filter((x) => specParts(x, segment).name !== specParts(t, segment).name), t] });
+    setSpec(''); setPkgDirty(true);
+  };
+  const dropSpec = (m: Manager, x: string) => { if (!declared) return; setDeclared({ ...declared, [m]: declared[m].filter((y) => y !== x) }); setPkgDirty(true); };
+  const dirty = editing !== null || pkgDirty;
+  const installedVersion = (m: Manager, name: string) => env?.packages.find((p) => p.manager === m && p.name.toLowerCase() === name.toLowerCase())?.version || '';
   const createPath = () => act('create', async () => {
     if (!newPath?.value.trim()) return;
     const base = parentDir(); const p = (base ? base + '/' : '') + newPath.value.trim().replace(/^\/+/, '');
@@ -131,7 +167,6 @@ export default function EnvironmentPage() {
   const importGit = () => act('import', async () => { if (!git.url.trim()) return; await importEnvironmentGit(id, git.url.trim(), git.ref.trim(), git.replace); setGitOpen(false); });
   const remove = (p: string) => act('remove', async () => { await deleteEnvironmentPath(id, p); if (sel === p || sel.startsWith(p + '/')) setSel(''); if (openPath === p || openPath.startsWith(p + '/')) { setOpenPath(''); setFile(null); } });
   const startBuild = () => act('build', async () => { await buildEnvironment(id); setTab('packages'); setShowLog(true); });
-  const activate = (n: number) => act('activate', () => activateEnvironmentVersion(id, n));
 
   if (!env && !err) return <SkelPage />;
 
@@ -160,19 +195,55 @@ export default function EnvironmentPage() {
         {env && (
           <div className="env-title-row">
             <h1>{env.name}</h1>
-            <button className="button primary" type="button" disabled={editing === null || busy === 'save'} onClick={() => void saveFile()}>
-              {busy === 'save' ? 'Saving\u2026' : 'Save changes'}</button>
+            <button className="button primary" type="button" disabled={!dirty || busy === 'save' || env.status === 'building'} onClick={() => void saveChanges()}>
+              {busy === 'save' ? 'Saving\u2026' : env.status === 'building' ? 'Building\u2026' : 'Save changes'}</button>
           </div>
         )}
       </div>
 
       <div className="env-body">
         {err && <div className="hr-error" role="alert">{err}</div>}
+        {env?.status === 'failed' && build?.error && (
+          <div className="hr-error env-build-failed" role="alert">
+            <div><strong>The last build failed.</strong> {build.error} Fix the packages or the files and save again.</div>
+            <button className="button small" type="button" onClick={() => setShowLog((v) => !v)}>{showLog ? 'Hide the log' : 'Show the log'}</button>
+            {showLog && <pre className="env-log">{build.log || ''}</pre>}
+          </div>
+        )}
         {env && (
           <div className="env-card">
-            <div className="env-tabs" role="tablist">
-              <button type="button" role="tab" aria-selected={tab === 'files'} className={'env-tab' + (tab === 'files' ? ' is-on' : '')} onClick={() => setTab('files')}>Project files <span>{env.files.count}</span></button>
-              <button type="button" role="tab" aria-selected={tab === 'packages'} className={'env-tab' + (tab === 'packages' ? ' is-on' : '')} onClick={() => setTab('packages')}>Packages <span>{env.status === 'ready' ? env.packages.length : (build?.packages?.length ?? 0)}</span></button>
+            <div className="env-card-head">
+              <div className="env-tabs" role="tablist">
+                <button type="button" role="tab" aria-selected={tab === 'files'} className={'env-tab' + (tab === 'files' ? ' is-on' : '')} onClick={() => setTab('files')}>Project files <span>{env.files.count}</span></button>
+                <button type="button" role="tab" aria-selected={tab === 'packages'} className={'env-tab' + (tab === 'packages' ? ' is-on' : '')} onClick={() => setTab('packages')}>Packages <span>{declared ? MANAGERS.reduce((a, m) => a + declared[m].length, 0) : 0}</span></button>
+              </div>
+              {tab === 'packages' && declared && (
+                <>
+                  <div className="env-segments" role="tablist" aria-label="Package manager">
+                    {MANAGERS.map((m) => (
+                      <button key={m} type="button" role="tab" aria-selected={segment === m} className={'env-segment' + (segment === m ? ' is-on' : '')} onClick={() => setSegment(m)}
+                        disabled={m === 'apt' && runtimes !== null && !runtimes.apt} title={m === 'apt' && runtimes !== null && !runtimes.apt ? 'apt is not available on this instance' : undefined}>
+                        {m} <span>{declared[m].length}</span></button>
+                    ))}
+                  </div>
+                  <label className="env-runtime">
+                    {segment === 'pip' ? 'Python' : segment === 'npm' ? 'Node' : (runtimes?.os.name ? runtimes.os.name[0].toUpperCase() + runtimes.os.name.slice(1) : 'OS')}
+                    {segment === 'pip' ? (
+                      <select value={python || (runtimes?.python[0] ?? '')} onChange={(ev) => { setPython(ev.target.value); setPkgDirty(true); }}>
+                        {(runtimes?.python.length ? runtimes.python : [python || '']).map((v) => <option key={v} value={v}>{v || 'default'}</option>)}
+                      </select>
+                    ) : segment === 'npm' ? (
+                      <select value={runtimes?.node[0] ?? ''} disabled><option value={runtimes?.node[0] ?? ''}>{runtimes?.node[0] ?? ''}</option></select>
+                    ) : (
+                      <select value={runtimes?.os.version ?? ''} disabled><option value={runtimes?.os.version ?? ''}>{runtimes?.os.version ?? ''}</option></select>
+                    )}
+                  </label>
+                  <form className="env-add" onSubmit={(ev) => { ev.preventDefault(); addSpec(); }}>
+                    <input value={spec} placeholder={SPEC_HINT[segment]} aria-label={`Add a ${segment} package`} spellCheck={false} onChange={(ev) => setSpec(ev.target.value)} />
+                    <button className="button" type="submit" disabled={!spec.trim()}>Add</button>
+                  </form>
+                </>
+              )}
             </div>
 
             {tab === 'files' && (
@@ -260,59 +331,19 @@ export default function EnvironmentPage() {
               </div>
             )}
 
-            {tab === 'packages' && (
+            {tab === 'packages' && declared && (
               <div className="env-packages">
-                {env.status === 'empty' && !build ? (
-                  <div className="env-onboard is-packages">
-                    <h2>Nothing built yet</h2>
-                    <p>A build copies the files into a version and installs what they declare. Every Task then finds the packages installed, and nothing is installed again.</p>
-                    <dl className="env-manifests">
-                      <div><dt><code>requirements.txt</code> or <code>pyproject.toml</code></dt><dd>a Python virtualenv, first on PATH</dd></div>
-                      <div><dt><code>package.json</code></dt><dd>npm into node_modules, on NODE_PATH</dd></div>
-                      <div><dt><code>setup.sh</code></dt><dd>runs last, for anything the manifests cannot say</dd></div>
-                    </dl>
-                    <button className="button primary" type="button" disabled={busy === 'build' || !env.files.count} onClick={() => void startBuild()}>
-                      {env.files.count ? 'Build now' : 'Add files first'}</button>
-                  </div>
-                ) : (
-                <div className="env-pk-head">
-                  <span className={'env-status is-' + env.status}><i />{env.status === 'ready' && env.version
-                    ? `Version ${env.version} is what every session reads`
-                    : env.status === 'building' ? `Building version ${env.latestVersion}\u2026`
-                    : env.status === 'failed' ? 'The last build failed; fix the manifests and build again'
-                    : 'Nothing built yet'}</span>
-                  <span className="env-pk-actions">
-                    {build && <button className="button small" type="button" onClick={() => setShowLog((v) => !v)}>{showLog ? 'Hide build log' : 'Build log'}</button>}
-                    <button className="button primary small" type="button" disabled={env.status === 'building' || busy === 'build' || !env.files.count}
-                      title={!env.files.count ? 'Add files first' : 'Snapshot the files and install the packages they declare'} onClick={() => void startBuild()}>
-                      {env.status === 'building' ? 'Building\u2026' : env.version ? 'Rebuild' : 'Build'}</button>
-                  </span>
-                </div>
-                )}
-                {showLog && build && (
-                  <pre className="env-log">{`version ${build.version} · ${build.status}${build.error ? ' · ' + build.error : ''}\n${build.log || ''}`}</pre>
-                )}
-                {env.packages.length > 0 && (
-                  <table className="env-table">
-                    <thead><tr><th>Package</th><th>Version</th><th>Manager</th></tr></thead>
-                    <tbody>{env.packages.map((p) => <tr key={p.manager + p.name}><td><code>{p.name}</code></td><td className="env-mono">{p.version}</td><td>{p.manager}</td></tr>)}</tbody>
-                  </table>
-                )}
-                {env.versions.length > 0 && (
-                  <div className="env-versions">
-                    <h3>Versions</h3>
-                    {env.versions.slice().reverse().map((v) => (
-                      <div key={v.version} className="env-version">
-                        <span className="env-mono">v{v.version}</span>
-                        <span className={'status ' + (v.status === 'ready' ? 'ok' : v.status === 'failed' ? 'err' : 'warn')}>{v.status}</span>
-                        <span className="env-dim">{v.finished_at ? new Date(v.finished_at * 1000).toLocaleString() : ''}{v.packages ? ` · ${v.packages} packages` : ''}{v.bytes ? ` · ${fmtBytes(v.bytes)}` : ''}</span>
-                        {v.status === 'ready' && (env.version === v.version
-                          ? <span className="env-dim">active</span>
-                          : <button className="button small" type="button" disabled={busy === 'activate'} onClick={() => void activate(v.version)}>Use this version</button>)}
-                        {v.error && <span className="env-err">{v.error}</span>}
-                      </div>
-                    ))}
-                  </div>
+                {declared[segment].length ? declared[segment].map((x) => {
+                  const p = specParts(x, segment);
+                  return (
+                    <div key={x} className="env-pkg">
+                      <code className="env-pkg-name">{p.name}</code>
+                      <span className="env-pkg-version">{p.version || installedVersion(segment, p.name) || 'latest'}</span>
+                      <button className="env-pkg-x" type="button" aria-label={`Remove ${p.name}`} onClick={() => dropSpec(segment, x)}><iconify-icon icon="tabler:x"></iconify-icon></button>
+                    </div>
+                  );
+                }) : (
+                  <div className="env-pkg-empty">No {segment} packages yet. Add one above as <code>{SPEC_HINT[segment]}</code>{segment === 'pip' && ' (the project\u2019s requirements.txt is installed too)'}{segment === 'npm' && ' (the project\u2019s package.json is installed too)'}.</div>
                 )}
               </div>
             )}

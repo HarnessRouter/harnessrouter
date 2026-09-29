@@ -5,6 +5,7 @@ rollback, the harness and task references, deletion."""
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import time
@@ -160,3 +161,34 @@ def test_environments_are_scoped_to_the_workspace(api):
     assert not any(x["id"] == eid for x in api.get("/v1/environments", headers={"x-harness-workspace": "ws2"}).json()["environments"])
     assert api.get(f"/v1/environments/{eid}", headers={"x-harness-workspace": "ws2"}).status_code == 404
     assert any(x["id"] == eid for x in api.get("/v1/environments").json()["environments"])   # an org-wide key sees all
+
+
+def test_declared_packages_and_the_runtime_are_kept_and_handed_to_the_build(api, monkeypatch):
+    eid = api.post("/v1/environments", json={"name": "declared-env", "packages": {"pip": ["pyyaml==6.0.2", " bad spec!", "pyyaml==6.0.2"], "npm": ["sharp@0.33.5", "@scope/pkg@1.0.0"], "apt": ["ffmpeg"]}, "runtime": {"python": "3.12"}}).json()["id"]
+    e = api.get(f"/v1/environments/{eid}").json()
+    assert [x["spec"] for x in e["declared"]["pip"]] == ["pyyaml==6.0.2"] and e["declared"]["pip"][0] == {"name": "pyyaml", "version": "6.0.2", "spec": "pyyaml==6.0.2"}
+    assert e["declared"]["npm"][1] == {"name": "@scope/pkg", "version": "1.0.0", "spec": "@scope/pkg@1.0.0"}
+    assert e["declared"]["apt"] == [{"name": "ffmpeg", "version": "", "spec": "ffmpeg"}] and e["runtime"] == {"python": "3.12"}
+    # an update without packages leaves them; one with packages replaces them
+    api.put(f"/v1/environments/{eid}", json={"name": "declared-env", "entry": "python3 run.py"})
+    assert [x["spec"] for x in api.get(f"/v1/environments/{eid}").json()["declared"]["pip"]] == ["pyyaml==6.0.2"]
+    api.put(f"/v1/environments/{eid}", json={"name": "declared-env", "packages": {"pip": [], "npm": [], "apt": []}, "runtime": {"python": ""}})
+    e = api.get(f"/v1/environments/{eid}").json()
+    assert e["declared"] == {"pip": [], "npm": [], "apt": []} and e["runtime"] == {"python": ""}
+    # the build receives the declared lists and the runtime as its body
+    seen = {}
+    real = app._env_runner
+
+    async def spy(method, path, env_id, **kw):
+        if path.endswith("/build") and method == "POST":
+            seen["body"] = json.loads(kw.get("content") or b"{}")
+        return await real(method, path, env_id, **kw)
+    monkeypatch.setattr(app, "_env_runner", spy)
+    api.put(f"/v1/environments/{eid}", json={"name": "declared-env", "packages": {"pip": ["pyyaml==6.0.2"]}, "runtime": {"python": "3.12"}})
+    api.put(f"/v1/environments/{eid}/files/run.py", content=b"print(1)\n")
+    assert api.post(f"/v1/environments/{eid}/build").status_code == 200
+    assert seen["body"] == {"pip": ["pyyaml==6.0.2"], "npm": [], "apt": [], "python": "3.12"}
+    _wait_build(api, eid, 1)   # the runner installs it (network) or fails; either way the record answers
+    monkeypatch.setattr(app, "_env_runner", real)
+    r = api.get("/v1/environments/runtimes")
+    assert r.status_code == 200 and isinstance(r.json().get("python"), list) and "os" in r.json()
