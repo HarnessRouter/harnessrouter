@@ -5541,6 +5541,37 @@ _KILO_ENV = {
 }
 
 
+def _kilo_npm(auth: Auth, model: str, pr: str) -> str:
+    """Which ai-sdk package serves this turn — opencode's choice with ONE clause dropped.
+
+    opencode sends a claude id on an AGGREGATOR (`tokenrouter`, which is how vercel, llmtr,
+    tokenrouter and the hosted door are all wired) through `@ai-sdk/anthropic`, and an
+    Anthropic-shape turn cannot ride the loopback relay: the relay authenticates a route by the
+    placeholder BEARER it handed out, while a Messages client sends `x-api-key`. The turn then runs
+    with no relay in front of it, and the consequence is measured: on 2026-09-27/28, in one session
+    on integration:vercel, `gpt-5.4-mini` recorded `served_model='openai/gpt-5.4-mini'` and
+    `claude-haiku-4.5` recorded `served_model=None` — so rule 2 of docs/harness-verification.md
+    could not be evaluated for the claude row at all, and a green row proved nothing about which
+    model ran.
+
+    An aggregator serves a claude id over chat/completions perfectly well: cline and qwen reach
+    every claude id that way, and minimax measured `anthropic/claude-haiku-4.5` on this same
+    provider and model id through the relay on 2026-09-28. So the package choice, not the protocol,
+    was the reason the observability surface was dark, and on THIS backend the choice is ours.
+
+    A DIRECT Anthropic connection keeps Messages: `api.anthropic.com` speaks nothing else, and the
+    relay would have to speak x-api-key upstream to front it. That is the general fix, it belongs
+    in the relay rather than in one backend, and it would repair opencode, pi, dsh and omp at the
+    same time — see the PR body."""
+    if auth.api_format == "anthropic" or pr == "anthropic":
+        return "@ai-sdk/anthropic"     # a direct Anthropic endpoint; no relay (see above)
+    if auth.api_format == "openai":
+        return "@ai-sdk/openai-compatible"
+    if pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        return "@ai-sdk/openai"          # /v1/responses
+    return "@ai-sdk/openai-compatible"   # /v1/chat/completions
+
+
 def _kilo_denies(tools_disabled: list[str] | None) -> dict:
     """Harness tool ids -> {<key>: "deny"}, plus the always-denied scheduling tools. Catalog labels
     arrive "bash (Bash)"-style; the id is kept. Unknown names are dropped rather than written: the
@@ -5573,7 +5604,7 @@ def _kilo_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | Non
         "$schema": "https://app.kilo.ai/config.json",
         "provider": {
             "hr": {
-                "npm": _opencode_npm(auth, model, pr),
+                "npm": _kilo_npm(auth, model, pr),
                 "options": {"baseURL": base, "apiKey": "{env:%s}" % _KILO_KEY_ENV},
                 "models": {model: {}},
             }
@@ -5627,10 +5658,11 @@ def _build_kilo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     pr = provider or "openai-api"
     if pr not in KILO_PROVIDERS:
         raise HTTPException(400, f"unknown kilo provider '{pr}' (one of {sorted(KILO_PROVIDERS)})")
-    if auth.base_url and auth.api_key and _opencode_npm(auth, model, pr) != "@ai-sdk/anthropic":
+    if auth.base_url and auth.api_key and _kilo_npm(auth, model, pr) != "@ai-sdk/anthropic":
         # opencode's rule, for opencode's reasons: every OpenAI-shape turn rides the loopback
         # relay (shape repairs, Gemini signatures, served model and usage read off the bytes), and
-        # the real key stays in this process. A Messages-shape turn keeps its direct base.
+        # the real key stays in this process. A Messages-shape turn keeps its direct base — which,
+        # after _kilo_npm, is a DIRECT Anthropic connection and nothing else.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
