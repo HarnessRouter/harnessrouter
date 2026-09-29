@@ -116,6 +116,10 @@ if _SESSION_UIDS and _SANDBOX_PER_SESSION:
 if _SESSION_UIDS and os.geteuid() != 0:
     raise RuntimeError("HR_SESSION_UIDS=1 requires the runner to run as root (it switches to a "
                        "per-session uid for every agent process); refusing to start on a shared uid")
+if _SESSION_UIDS:
+    _secured = environments.secure_store()   # environments from before per-environment groups
+    if _secured:
+        print(f"[runner] environments: {_secured} older environment(s) now readable by their own group only", flush=True)
 # Names an agent process must never inherit from the runner's environment. The turn sets the
 # credential it needs explicitly (see turn()); everything else secret-shaped is the product's.
 _SECRET_ENV = re.compile(r"^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$"
@@ -203,11 +207,16 @@ def _session_uid(ws: str) -> int | None:
     return uid if _SESSION_UID_BASE <= uid < _SESSION_UID_BASE + _SESSION_UID_SPAN else None
 
 
-def _as_session(ws: str) -> dict:
+def _as_session(ws: str, env: dict | None = None) -> dict:
     """Popen/run keyword arguments that make a child act as this session. Empty when the wall is
-    off, so every spawn site reads the same with or without it."""
+    off, so every spawn site reads the same with or without it. A turn's agent process (the sites
+    that pass the turn's env) also joins the group of the one environment the turn names, which is
+    what lets it read that environment and no other (runner/environments.py)."""
     uid = _session_uid(ws)
-    return {"user": uid, "group": uid, "extra_groups": []} if uid is not None else {}
+    if uid is None:
+        return {}
+    gid = environments.reader_gid((env or {}).get("HR_ENVIRONMENT"))
+    return {"user": uid, "group": uid, "extra_groups": [gid] if gid is not None else []}
 
 
 def _ensure_passwd(uid: int, home: str) -> None:
@@ -6630,7 +6639,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True, **_as_session(cwd))
+                                start_new_session=True, **_as_session(cwd, env))
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return
@@ -6818,7 +6827,7 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     try:
         proc = subprocess.Popen(["codex", "app-server"], cwd=cwd, env=env, text=True, bufsize=1,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True, **_as_session(cwd))
+                                start_new_session=True, **_as_session(cwd, env))
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn app-server: {e}"[:500], done=True)
         return
@@ -7105,7 +7114,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                start_new_session=True, **_as_session(cwd))
+                                start_new_session=True, **_as_session(cwd, env))
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return

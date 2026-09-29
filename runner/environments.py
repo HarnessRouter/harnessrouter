@@ -29,9 +29,12 @@ with EACCES; that is the enforcement, not an instruction.
 """
 from __future__ import annotations
 
+import grp
+import hashlib
 import json
 import mimetypes
 import platform
+import pwd
 import re
 import os
 import pathlib
@@ -60,6 +63,20 @@ NOT_COPIED = {".venv", "venv", "node_modules", "__pycache__", ".pnpm-store", ".c
 _ID_SAFE = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
 _SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$")   # one declared package
 _ARCH_DIRS = {"amd64": "x86_64-linux-gnu", "arm64": "aarch64-linux-gnu"}
+
+# ── who may read an environment ─────────────────────────────────────────────────────────────────
+# One group per environment, and the environment directory's group IS the record (as a session's
+# uid is its workspace's owner: nothing to keep in sync, and it survives a restart because it lives
+# on the volume). The runner alone reads the source (0700). A built version is the group's to read
+# (0750 / 0640), and an agent process joins that group only for a turn whose harness names the
+# environment, so a session reads the one environment it was given and no other. The store root
+# and the mount directory are traversable, not listable: a session cannot enumerate the rest.
+# Package installs run the packages' own code, so they run as the environment's build identity
+# (uid = gid = the environment's number), never as root. Ownership needs root: a runner that is not
+# root (a dev box, the per-session sandbox, the tests) applies the modes and nothing else.
+GID_BASE = int(os.environ.get("HR_ENV_GID_BASE", "60000") or 60000)
+GID_SPAN = 40000
+_gid_lock = threading.Lock()
 
 router = APIRouter()
 _builds_lock = threading.Lock()
@@ -97,6 +114,135 @@ def active_link(env_id: str) -> pathlib.Path:
 
 def mount_path(slug: str) -> str:
     return os.path.join(ENV_MOUNT, slug)
+
+
+def _root() -> bool:
+    return os.geteuid() == 0
+
+
+def _in_range(gid: int) -> int | None:
+    return gid if GID_BASE <= gid < GID_BASE + GID_SPAN else None
+
+
+def env_gid(env_id: str) -> int | None:
+    """The group that reads this environment's builds, from its directory; None when the
+    directory is not there or predates groups (secure_store gives it one)."""
+    try:
+        return _in_range(os.stat(env_dir(env_id)).st_gid)
+    except OSError:
+        return None
+
+
+def reader_gid(mount: str | None) -> int | None:
+    """The group a turn's process joins for the environment at `mount` (the link the agent is
+    told), read from the active version the link points at; None when there is none."""
+    if not mount:
+        return None
+    try:
+        return _in_range(os.stat(mount).st_gid)
+    except OSError:
+        return None
+
+
+def _account(n: int) -> None:
+    """A group and passwd entry for an environment's number, so a tool that looks itself up (npm
+    does) finds one. Best effort: nothing here needs the entry to exist."""
+    try:
+        grp.getgrgid(n)
+    except KeyError:
+        subprocess.run(["groupadd", "-g", str(n), f"henv{n}"], capture_output=True)
+    try:
+        pwd.getpwuid(n)
+    except KeyError:
+        subprocess.run(["useradd", "-M", "-u", str(n), "-g", str(n), "-s", "/usr/sbin/nologin", "-d", "/nonexistent", f"henv{n}"],
+                       capture_output=True)
+
+
+def _claim(env_id: str) -> pathlib.Path:
+    """The environment's directory with a group of its own: made on first use, its group derived
+    from the id and bumped past any sibling that already holds it, traversable by that group only."""
+    d = env_dir(env_id)
+    if env_gid(env_id) is not None:
+        return d
+    d.mkdir(parents=True, exist_ok=True)
+    if not _root():
+        return d
+    with _gid_lock:
+        taken = set()
+        for sib in pathlib.Path(ENV_ROOT).iterdir():
+            try:
+                taken.add(os.stat(sib).st_gid)
+            except OSError:
+                pass
+        gid = GID_BASE + int(hashlib.sha256(env_id.encode()).hexdigest()[:8], 16) % GID_SPAN
+        while gid in taken:
+            gid = GID_BASE + (gid - GID_BASE + 1) % GID_SPAN
+        os.chown(d, 0, gid)
+        os.chmod(d, 0o750)
+        _account(gid)
+    return d
+
+
+def _source(env_id: str) -> pathlib.Path:
+    """The source directory, the runner's alone."""
+    _claim(env_id)
+    src = source_dir(env_id)
+    src.mkdir(exist_ok=True)
+    os.chmod(src, 0o700)
+    return src
+
+
+def _build_as(env_id: str) -> dict:
+    """Popen/run arguments that make a build step run as the environment's own identity; empty
+    off root, so every step reads the same with or without it."""
+    gid = env_gid(env_id)
+    return {"user": gid, "group": gid, "extra_groups": []} if gid is not None and _root() else {}
+
+
+def _own(path: pathlib.Path, uid: int, gid: int) -> None:
+    """chown -R, a link as itself rather than what it points at."""
+    try:
+        os.lchown(path, uid, gid)
+    except OSError:
+        pass
+    for dirpath, dirnames, filenames in os.walk(path):
+        for name in dirnames + filenames:
+            try:
+                os.lchown(os.path.join(dirpath, name), uid, gid)
+            except OSError:
+                pass
+
+
+def secure_store() -> int:
+    """Every environment made before groups existed (its directory has no group of its own) gets
+    one, its source the runner's alone, its versions the group's: the migration a restart on a box
+    with older environments runs once. Returns how many it changed."""
+    if not _root():
+        return 0
+    root = pathlib.Path(ENV_ROOT)
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o751)
+    n = 0
+    for d in root.iterdir():
+        try:
+            if not d.is_dir() or env_gid(d.name) is not None:
+                continue
+            _claim(d.name)
+            gid = env_gid(d.name)
+            if gid is None:
+                continue
+            if source_dir(d.name).is_dir():
+                os.chmod(source_dir(d.name), 0o700)
+            vers = d / "versions"
+            if vers.is_dir():
+                os.chown(vers, 0, gid)
+                os.chmod(vers, 0o750)
+                for v in vers.iterdir():
+                    _read_only(v, gid)
+            n += 1
+        except Exception:  # noqa: BLE001 — one odd directory must not stop the rest
+            continue
+    return n
 
 
 def _safe_rel(root: pathlib.Path, rel: str) -> pathlib.Path:
@@ -161,8 +307,7 @@ def read_file(env_id: str, rel: str) -> tuple[bytes, str]:
 
 
 def write_file(env_id: str, rel: str, data: bytes) -> dict:
-    src = source_dir(env_id)
-    src.mkdir(parents=True, exist_ok=True)
+    src = _source(env_id)
     p = _safe_rel(src, rel)
     if p.is_dir():
         raise HTTPException(409, "a directory is at that path")
@@ -174,8 +319,7 @@ def write_file(env_id: str, rel: str, data: bytes) -> dict:
 
 
 def make_dir(env_id: str, rel: str) -> dict:
-    src = source_dir(env_id)
-    src.mkdir(parents=True, exist_ok=True)
+    src = _source(env_id)
     p = _safe_rel(src, rel)
     p.mkdir(parents=True, exist_ok=True)
     return {"path": rel.strip("/"), "dir": True}
@@ -223,7 +367,7 @@ def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dic
     src = source_dir(env_id)
     if replace and src.exists():
         shutil.rmtree(src)
-    src.mkdir(parents=True, exist_ok=True)
+    src = _source(env_id)
     written = skipped = 0
     if zipfile.is_zipfile(data_path):
         with zipfile.ZipFile(data_path) as zf:
@@ -388,11 +532,11 @@ def _tool_env() -> dict:
     return env
 
 
-def _run(log: list[str], cmd: list[str], cwd: str, env: dict, deadline: float) -> None:
+def _run(log: list[str], cmd: list[str], cwd: str, env: dict, deadline: float, run_as: dict | None = None) -> None:
     left = max(1, int(deadline - time.time()))
     log.append(f"$ {' '.join(cmd)}")
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=left)
+        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=left, **(run_as or {}))
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{cmd[0]} did not finish within the build's {BUILD_TIMEOUT}s")
     if r.stdout.strip():
@@ -403,12 +547,13 @@ def _run(log: list[str], cmd: list[str], cwd: str, env: dict, deadline: float) -
         raise RuntimeError(f"{cmd[0]} exited {r.returncode}")
 
 
-def _packages(dst: pathlib.Path, env: dict) -> list[dict]:
+def _packages(dst: pathlib.Path, env: dict, run_as: dict | None = None) -> list[dict]:
     out: list[dict] = []
+    run_as = run_as or {}
     pip = dst / ".venv" / "bin" / "pip"
     if pip.is_file():
         try:
-            r = subprocess.run([str(pip), "list", "--format=json"], capture_output=True, text=True, timeout=120, env=env)
+            r = subprocess.run([str(pip), "list", "--format=json"], capture_output=True, text=True, timeout=120, env=env, **run_as)
             for row in json.loads(r.stdout or "[]"):
                 out.append({"manager": "pip", "name": str(row.get("name")), "version": str(row.get("version"))})
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -416,7 +561,7 @@ def _packages(dst: pathlib.Path, env: dict) -> list[dict]:
     if (dst / "node_modules").is_dir():
         try:
             r = subprocess.run(["npm", "ls", "--json", "--depth=0"], cwd=str(dst), capture_output=True, text=True,
-                               timeout=120, env=env)
+                               timeout=120, env=env, **run_as)
             deps = (json.loads(r.stdout or "{}") or {}).get("dependencies") or {}
             for name, info in sorted(deps.items()):
                 out.append({"manager": "npm", "name": name, "version": str((info or {}).get("version") or "")})
@@ -460,23 +605,27 @@ def _apt_packages(dst: pathlib.Path) -> list[dict]:
     return out
 
 
-def _read_only(dst: pathlib.Path) -> None:
-    """Root's, readable by everyone, writable by nobody else: directories 755, files keep their
-    execute bits and lose group/other write."""
-    for dirpath, dirnames, filenames in os.walk(dst):
+def _read_only(dst: pathlib.Path, gid: int | None = None) -> None:
+    """Root's, the environment's group's to read, writable by nobody: directories 750, files 640
+    keeping their execute bit (750). Nobody outside the group sees a byte of it."""
+    own = gid is not None and _root()
+
+    def one(p: str, is_dir: bool) -> None:
         try:
-            os.chmod(dirpath, 0o755)
+            st = os.lstat(p)
+            if own:
+                os.lchown(p, 0, gid)
+            if not stat.S_ISLNK(st.st_mode):
+                os.chmod(p, 0o750 if is_dir or st.st_mode & 0o111 else 0o640)
         except OSError:
             pass
+
+    one(str(dst), True)
+    for dirpath, dirnames, filenames in os.walk(dst):
+        for d in dirnames:
+            one(os.path.join(dirpath, d), True)
         for f in filenames:
-            p = os.path.join(dirpath, f)
-            try:
-                st = os.lstat(p)
-                if stat.S_ISLNK(st.st_mode):
-                    continue
-                os.chmod(p, 0o755 if st.st_mode & 0o111 else 0o644)
-            except OSError:
-                continue
+            one(os.path.join(dirpath, f), False)
 
 
 def _size(dst: pathlib.Path) -> tuple[int, int]:
@@ -515,55 +664,68 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
            "packages": [], "files": 0, "bytes": 0, "log": log, "runtime": {},
            "declared": {"pip": pip_specs, "npm": npm_specs, "apt": apt_specs}}
     try:
+        _claim(env_id)
+        gid = env_gid(env_id)
         if dst.exists():
             shutil.rmtree(dst)
         _write_record(dst, rec)
+        if gid is not None:
+            os.chown(dst.parent, 0, gid)
+            os.chmod(dst.parent, 0o750)
         deadline = time.time() + BUILD_TIMEOUT
         env = _tool_env()
         log.append(f"copying the project ({source_stat(env_id)['count']} files)")
         shutil.copytree(src, dst, symlinks=False, dirs_exist_ok=True,
                         ignore=lambda d, names: [x for x in names if x in NOT_COPIED])
+        as_build = _build_as(env_id)
         with tempfile.TemporaryDirectory(prefix="hr-env-build-") as scratch:
             env["HOME"] = env["TMPDIR"] = scratch
             env["npm_config_cache"] = os.path.join(scratch, "npm-cache")
+            if as_build:
+                # pip, npm and setup.sh run the project's and its packages' own code: as the
+                # environment's identity, which owns this layer and the scratch and nothing else.
+                _own(dst, gid, gid)
+                os.chown(scratch, gid, gid)
             if pip_specs or (dst / "requirements.txt").is_file() or (dst / "pyproject.toml").is_file():
                 # The interpreter the owner chose, when the box has it; the image's python3 otherwise.
                 python = (shutil.which(f"python{want_py}", path=env.get("PATH")) if want_py else None) \
                     or shutil.which("python3", path=env.get("PATH")) or "python3"
-                _run(log, [python, "-m", "venv", ".venv"], str(dst), env, deadline)
+                _run(log, [python, "-m", "venv", ".venv"], str(dst), env, deadline, as_build)
                 pip = str(dst / ".venv" / "bin" / "pip")
                 if (dst / "requirements.txt").is_file():
-                    _run(log, [pip, "install", "-r", "requirements.txt"], str(dst), env, deadline)
+                    _run(log, [pip, "install", "-r", "requirements.txt"], str(dst), env, deadline, as_build)
                 if (dst / "pyproject.toml").is_file():
-                    _run(log, [pip, "install", "."], str(dst), env, deadline)
+                    _run(log, [pip, "install", "."], str(dst), env, deadline, as_build)
                 if pip_specs:
-                    _run(log, [pip, "install", *pip_specs], str(dst), env, deadline)
+                    _run(log, [pip, "install", *pip_specs], str(dst), env, deadline, as_build)
                 try:
                     rec["runtime"]["python"] = subprocess.run([str(dst / ".venv" / "bin" / "python"), "-c", "import platform; print(platform.python_version())"],
-                                                              capture_output=True, text=True, timeout=30, env=env).stdout.strip()
+                                                              capture_output=True, text=True, timeout=30, env=env, **as_build).stdout.strip()
                 except (OSError, subprocess.TimeoutExpired):
                     pass
             if npm_specs or (dst / "package.json").is_file():
                 npm = shutil.which("npm", path=env.get("PATH")) or "npm"
                 if (dst / "package.json").is_file():
                     _run(log, [npm, "ci" if (dst / "package-lock.json").is_file() else "install", "--no-audit", "--no-fund"],
-                         str(dst), env, deadline)
+                         str(dst), env, deadline, as_build)
                 if npm_specs:
                     if not (dst / "package.json").is_file():
                         (dst / "package.json").write_text(json.dumps({"name": slug or "environment", "version": "0.0.0", "private": True}, indent=2) + "\n")
-                    _run(log, [npm, "install", "--no-audit", "--no-fund", "--save", *npm_specs], str(dst), env, deadline)
+                        if as_build:
+                            os.chown(dst / "package.json", gid, gid)
+                    _run(log, [npm, "install", "--no-audit", "--no-fund", "--save", *npm_specs], str(dst), env, deadline, as_build)
                 try:
                     rec["runtime"]["node"] = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=10, env=env).stdout.strip().lstrip("v")
                 except (OSError, subprocess.TimeoutExpired):
                     pass
-            if apt_specs:
+            if apt_specs:   # apt-get and dpkg -x run none of the packages' code; apt's lists need root
                 _apt_into_layer(log, dst, apt_specs, env, scratch, deadline)
             if (dst / "setup.sh").is_file():
-                _run(log, ["bash", "setup.sh"], str(dst), {**env, "ENV_ROOT": str(dst)}, deadline)
-            rec["packages"] = _packages(dst, env)
+                _run(log, ["bash", "setup.sh"], str(dst), {**env, "ENV_ROOT": str(dst)}, deadline, as_build)
+            rec["packages"] = _packages(dst, env, as_build)
             if (dst / "apt").is_dir():
                 rec["packages"] += _apt_packages(dst)
-        _read_only(dst)
+        _read_only(dst, gid)
         rec["files"], rec["bytes"] = _size(dst)
         rec["status"], rec["finished_at"] = "ready", int(time.time())
         log.append(f"ready: {rec['files']} files, {len(rec['packages'])} packages, {int(time.time()) - started}s")
@@ -620,9 +782,9 @@ def ensure_mount(env_id: str, slug: str) -> str:
         raise HTTPException(400, "environment slug is not a path segment")
     if active_version(env_id) is None:
         raise HTTPException(409, "the environment has no built version")
-    os.makedirs(ENV_MOUNT, mode=0o755, exist_ok=True)
+    os.makedirs(ENV_MOUNT, mode=0o751, exist_ok=True)
     try:
-        os.chmod(ENV_MOUNT, 0o755)
+        os.chmod(ENV_MOUNT, 0o751)
     except OSError:
         pass
     target = str(active_link(env_id))
