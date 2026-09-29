@@ -985,8 +985,7 @@ and the turn died after 171 s of retries. No other base sets one; aider's own `u
 switch leaves it out.
 
 **Edit markup rendered as the answer.** A file-writing task's reply card read
-`hello.py ```python <<<<<<< SEARCH ======= print("aider") >>>>>>> REPLACE ``` `. That is aider's
-wire format for an edit; the driver strips it from the text (the text event AND the result event,
+`hello.py ```python wire format for an edit; the driver strips it from the text (the text event AND the result event,
 since the gateway stores the latter as the answer) and reports each edited file as an `Edit` card,
 as file edits render on every other base.
 
@@ -1498,6 +1497,123 @@ TokenRouter behind the switch, as `fill-connection.py` stamped them.
   API) beyond the three pairs above, so `_MODEL_CATALOG["cheetahclaws"]` stays offered, not
   measured, for the rest of its list; and a benchmark column.
 
+
+## The loopback relay answers when the provider does not (2026-09-29)
+
+The first family tour on the minimax base passed 7 of 14 families in one conversation: every family from kimi-k3
+on was recorded `not settled in 600s, stopped (cancelled)` with **no served model, no tool call and
+no reason** — except `glm-5.3-flash`, which passed in 12 s in the middle of the collapse. The
+obvious reading was the blanket 200k context window (above): a history too large for a model's real
+window. **It was not**, and two measurements say so. The conversation at its largest was 219 KB of
+messages plus a 12 KB system prompt and 27 KB of tool schemas — about 65k tokens, under the real
+window of every failing model — and the same families pass on that same session today, with a
+longer history (kimi-k3, qwen3.8-flash and minimax-m3 each re-run by hand, all completed in
+seconds). A conversation too long fails monotonically; this did not.
+
+**It was the loopback relay answering nothing when the provider answered nothing**, in two ways,
+both in `_forward`:
+
+- The upstream call caught only `urllib.error.HTTPError`. A refused connection, one dropped
+  mid-request, or a provider gone silent raised out of the handler; `ThreadingHTTPServer` printed a
+  traceback and closed the client socket **with no HTTP response at all**. The instance's log holds
+  ten of those (`http.client.RemoteDisconnected: Remote end closed connection without response`),
+  two inside the tour's failing window.
+- The relay's own wait was 600 s — the same as the cap above it — so a provider that accepted a
+  request and then went silent could never be REPORTED by the relay: the cap always fired first and
+  the turn was recorded as cancelled with nothing in it. That is the shape of six of the seven.
+
+Both are fixed in `runner/server.py`: transport failures now answer **502** (refused or dropped) or
+**504** (timed out) with `{"error":{"code":"upstream_unavailable",…}}` carrying the provider's own
+failure; a bare drop before any byte is retried once and a timeout is never retried (the provider
+may be generating, and a second request is a second bill); the stream and whole-body reads end
+cleanly and log the reason instead of escaping; and `HR_RELAY_UPSTREAM_TIMEOUT_S` (default 180 s)
+keeps the wait under any turn cap. Pinned by `runner/tests/test_relay_upstream_failure.py`, which
+drives the real handler over a real socket against an upstream that drops, drops-then-answers,
+refuses, and goes silent — the defect was in what reaches the client, not in parsing.
+
+**Proven by re-running the tour twice** on a build of this branch, with the nine families around the
+collapse (`kimi-k3, qwen3.8-flash, glm-5.3-flash, mistral-medium-3.5, step-3.7-flash,
+hunyuan-4-preview, nemotron-3.5-lightning, minimax-m3, gpt-5.4-mini`): **8 of 9 both times, no turn
+anywhere near the cap** — every previously-hanging family completed in 9-52 s with its served model
+and the deck. The two non-passes were not hangs and were not the same family twice:
+
+- run 1, `hunyuan-4-preview`: the turn **completed** with `tencent/hy4-preview` and `tour.pptx` — the
+  tour read the record at the instant it said `done`, the gateway's own word for completed
+  (`_RESP_STATUS_MAP`), which is not in the script's RUNNING list, so it settled early on a
+  half-written record. A shared-script bug, below.
+- run 2, `nemotron-3.5-lightning`: a real, reported failure in 113 s — `Runtime completed without a
+  final assistant response`, and the CLI's transcript gives the mechanism: `stopReason: "length"`.
+  The model hit the output cap with no usable final message. That is the blanket
+  `max_completion_tokens: 16384` above, now with a named victim, and it is the same id the matrix
+  found unstable on its own (run1 FIRST failed, run2 RECYCLE failed, run3 clean 5/5).
+
+And the fixed path was exercised end to end on a real instance rather than only in tests: with the
+connection's base URL pointed at a port nothing listens on, a turn fails in 22 s carrying
+`502 the provider did not answer: URLError: <urlopen error [Errno 111] Connection refused>`.
+
+## agentzero: the first matrix run, and the two defects it found (2026-09-28)
+
+A local instance built from the branch (vercel, the 7 cross-harness ids) ran the matrix TWICE: 29/35
+then 30/35. Every one of the 11 failures across 70 scenario executions was ARTIFACT or RECYCLE;
+first / followup / switch were 70 for 70. The failing SCENARIOS were stable while the failing MODELS
+drifted, which is the shape of a defect in the backend rather than model weakness — and both were.
+custom-harness passed, the plugin matrix was 4/4, samemodel.py clean, connection integration:vercel
+throughout.
+
+**ARTIFACT — "no file card (files: none)" while the card said "Edited a file".** The driver has to
+import Agent Zero from the per-workspace base, and it left the process cwd there. Agent Zero resolves
+its OWN paths against that base, but a tool that takes a path FROM THE MODEL does not: text_editor
+writes with a bare `open(path)` (plugins/_text_editor/helpers/file_ops.write_file), so
+"hello-agentzero.txt" landed in `.harness/agentzero/base/` — inside the prefix /produced excludes.
+The models that failed were the ones that passed a RELATIVE path; a model that passed an absolute one,
+or that used the terminal (whose cwd Agent Zero sets itself), passed. Hence "intermittent". The turn
+now runs with the workspace as its cwd. A/B against a scripted provider, same relative write: before,
+the file is in the base and the workspace holds nothing; after, it is in the workspace root.
+
+**RECYCLE — the recall answered the injected greeting.** Agent Zero opens every fresh conversation
+with a FABRICATED exchange: agent_init adds a user message "Hello!"
+(prompts/fw.initial_user_message.md) and an assistant greeting, so its web UI never starts empty. So
+the transcript's first user message was one the person never sent, and "what exact word did I ask you
+to reply with in my very first message" was answered — correctly, for that transcript — with "Hello",
+"Hello!", "none" or "you did not ask me to reply with any specific word". THE HISTORY WAS NEVER LOST:
+reproduced on a local runner with a real checkpoint + hydrate, the recall failed while `ctx_window`
+(Agent Zero's own record of the prompt it sent) held both M1 and M2. The greeting is now overridden
+through the framework's own mechanism — extension classes merge by FILE NAME, first occurrence
+winning, and usr/extensions comes before the bundled ones — by a no-op `_10_initial_message.py`.
+A pin bump that renames the bundled file silently restores the greeting, so the name is pinned by a
+test.
+
+**Proof of the fixes**, on the three models that failed reliably (claude-haiku-4.5, which failed
+recycle in both runs; gemini-3.5-flash-lite and grok-4.20, which failed artifact in both): the five
+scenarios through a local runner, with a real checkpoint and a real /hydrate that wipes the workspace
+and restores it — 3 sequences each, **9 of 9 sequences and 45 of 45 scenarios green**, every artifact
+written through text_editor (the path that used to deliver nothing) and every recall answering its own
+M1 word.
+
+**The disabled tool, measured against a REAL tool.** `disabled_tool_unused` passes vacuously on this
+base as on the others (the shared dimension disables the fixed id `WebSearch`, which no new harness
+has — a maintainer item, not patched around here). Measured directly instead, with
+`code_execution_tool` disabled and a scripted provider that calls it anyway, at all three tool
+sources:
+- **directly**: the tool's whole section leaves the system prompt (23,140 -> 19,116 chars,
+  `code_execution_tool` x7 -> x0), the call is refused before it executes, and no file is written.
+  `input` goes with it (`### input:` present with the shell enabled, absent with it disabled) —
+  it types into the same terminal.
+- **through `parallel`**: the job is refused (`status: error`) and no file is written; enabled, the
+  same job writes it.
+- **through a subordinate** (`call_subordinate`, profile `developer`): refused, no file; enabled, the
+  subordinate writes it. Asked of Agent Zero's own resolver, the policy the driver writes to
+  usr/plugins/_tool_access/config.json reaches all six bundled profiles.
+One honest limit, live on claude-haiku-4.5 with the shell disabled: it delegated to three subordinate
+profiles and then ANSWERED "Darwin" anyway. Nothing ran — the gate above is what the deterministic
+arms prove — the model fabricated the output. A withheld tool is withheld; it does not stop a model
+from claiming its result.
+
+**Cosmetic, fixed in the same pass**: the answer used to name the absolute sandbox path
+(`/data/workspaces/hsess…/fib.py`) because the environment prompt gives the workdir absolutely. The
+prompt now asks for paths relative to the working directory when the agent names a file to the reader;
+on the same fib task the answer became "Created and ran `fib.py` in the workspace". A nudge, not a
+guarantee.
 
 ## The gpt-6 line: sol and luna beside astra (2026-09-27)
 
