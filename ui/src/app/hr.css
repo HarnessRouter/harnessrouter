@@ -1051,16 +1051,16 @@ body.hr-resizing iframe { pointer-events: none; }
    The shelf: one row per environment. The page: a white head (back link, name, status, actions,
    facts), then a card with two tabs; the files tab is a tree beside the open file. */
 .env-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
-.env-row { display: grid; grid-template-columns: minmax(200px, 2fr) 120px 80px 110px 90px minmax(120px, 1fr); align-items: center; gap: 12px;
-  padding: 12px 16px; border-top: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: 13.5px; }
+.env-row { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(100px, 1fr) minmax(140px, 1.6fr) auto; align-items: center; gap: 12px;
+  padding: 10px 16px; border-top: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: 13.5px; }
 .env-row:first-child { border-top: 0; }
-.env-row-head { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface-subtle); }
-a.env-row:hover { background: var(--surface-subtle); }
-.env-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.env-name iconify-icon { font-size: 18px; color: var(--muted); flex: none; }
-.env-name > span { display: flex; flex-direction: column; min-width: 0; }
-.env-name strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.env-name em { font-style: normal; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+.env-row-head { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); background: var(--surface-subtle); padding-top: 9px; padding-bottom: 9px; }
+.env-row:hover { background: color-mix(in srgb, var(--surface-subtle) 55%, transparent); }
+.env-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.env-name:hover { color: var(--accent); }
+.env-row-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.env-row-actions .button { margin-left: 6px; }
+.env-row .env-mono { color: var(--muted); font-size: 12.5px; }
 .env-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 .env-mono em { font-style: normal; color: var(--muted); }
 .env-dim { color: var(--muted); font-size: 12.5px; }
@@ -1095,8 +1095,8 @@ a.env-row:hover { background: var(--surface-subtle); }
   .env-onboard, .env-onboard.is-files { margin: 32px auto; }
 }
 @media (max-width: 900px) {
-  .env-row { grid-template-columns: minmax(160px, 2fr) 110px 70px; }
-  .env-row > :nth-child(n+4) { display: none; }
+  .env-row { grid-template-columns: minmax(140px, 1.4fr) auto; }
+  .env-row > :nth-child(2), .env-row > :nth-child(3) { display: none; }
 }
 
 .env-head { padding: 22px 36px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
@@ -1128,11 +1128,15 @@ a.env-row:hover { background: var(--surface-subtle); }
 .env-rename input { font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 8px; min-width: 160px; }
 .env-help { margin: -4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
 .env-body { padding: 24px 36px 34px; }
-.env-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.env-tabs { display: flex; gap: 4px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-.env-tab { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border: 0; border-radius: 8px; background: transparent; cursor: pointer;
+.env-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.env-card > .env-files, .env-card > .env-packages { border-top: 1px solid var(--line); }
+.env-tabs { display: inline-flex; gap: 2px; margin: 12px 16px; padding: 4px; border-radius: 10px; background: var(--surface-subtle); }
+.env-card > .env-tabs { align-self: flex-start; }
+.env-tab { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border: 0; border-radius: 8px; background: transparent; cursor: pointer;
   font: inherit; font-size: 13.5px; font-weight: 600; color: var(--muted); }
-.env-tab.is-on { background: var(--surface-subtle); color: var(--ink); }
+.env-tab.is-on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(15, 23, 42, .08), 0 0 0 1px var(--line); }
+.env-tab span { color: var(--muted); }
+.env-tab.is-on span { color: var(--accent); }
 .env-tab span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--accent); }
 .env-files { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 520px; }
 .env-tree-pane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
@@ -1158,13 +1162,12 @@ a.env-row:hover { background: var(--surface-subtle); }
 .env-view-head code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .env-view-empty { padding: 40px 16px; color: var(--muted); font-size: 13px; }
 .env-binary { padding: 24px 16px; color: var(--muted); font-size: 13px; }
-.env-code { margin: 0; padding: 14px 0; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.7; color: var(--ink); }
-.env-line { display: flex; }
-.env-ln { flex: none; width: 48px; padding-right: 16px; text-align: right; color: var(--line-strong); user-select: none; }
-.env-lt { white-space: pre; }
+.env-code { flex: 1; min-width: 0; overflow: auto; cursor: text; }
+.env-code pre { margin: 0 !important; }
 .env-editor { flex: 1; min-height: 480px; margin: 0; padding: 14px 16px; border: 0; outline: none; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.7; color: var(--ink); background: transparent; }
 .env-packages { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .env-pk-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.env-pk-actions { display: inline-flex; align-items: center; gap: 8px; }
 .env-pk-head code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .env-log { margin: 0; padding: 12px 14px; max-height: 320px; overflow: auto; background: var(--surface-subtle); border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; color: var(--ink); }
 .env-table { width: 100%; border-collapse: collapse; font-size: 13px; }

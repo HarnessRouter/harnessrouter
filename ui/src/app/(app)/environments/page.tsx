@@ -6,16 +6,26 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { SkelRows } from '@/components/Skel';
-import { createEnvironment, fmtBytes, listEnvironments, type Environment } from '@/lib/environments';
+import { createEnvironment, deleteEnvironment, listEnvironments, updateEnvironment, type Environment } from '@/lib/environments';
 
-const STATUS_LABEL: Record<Environment['status'], string> = { empty: 'Not built', building: 'Building', ready: 'Ready', failed: 'Build failed' };
-const STATUS_CLASS: Record<Environment['status'], string> = { empty: 'neutral', building: 'warn', ready: 'ok', failed: 'err' };
+/** The packages column: what the active build installed, counted per manager, or the state that explains why there is none. */
+function packagesLine(e: Environment): string {
+  if (e.status === 'ready') {
+    const by: Record<string, number> = {};
+    for (const p of e.packages) by[p.manager] = (by[p.manager] || 0) + 1;
+    const parts = Object.entries(by).map(([m, n]) => `${n} ${m}`);
+    return parts.length ? parts.join(' \u00b7 ') : 'no packages';
+  }
+  return e.status === 'building' ? 'building\u2026' : e.status === 'failed' ? 'build failed' : 'not built yet';
+}
 
 export default function EnvironmentsPage() {
   const router = useRouter();
   const [items, setItems] = useState<Environment[] | null>(null);
   const [err, setErr] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Environment | null>(null);
+  const [confirm, setConfirm] = useState<string>('');
   const [form, setForm] = useState({ name: '', description: '', entry: '' });
   const [busy, setBusy] = useState(false);
 
@@ -35,19 +45,31 @@ export default function EnvironmentsPage() {
     if (!form.name.trim()) return;
     setBusy(true); setErr('');
     try {
-      const e = await createEnvironment({ name: form.name.trim(), description: form.description.trim(), entry: form.entry.trim() });
-      setCreating(false); setForm({ name: '', description: '', entry: '' });
-      router.push(`/environments/${e.id}`);
-    } catch (e) { setErr(e instanceof Error ? e.message : 'The environment could not be created.'); }
+      if (editing) {
+        await updateEnvironment(editing.id, { name: form.name.trim(), description: form.description.trim(), entry: form.entry.trim() });
+        setEditing(null); setForm({ name: '', description: '', entry: '' }); await reload();
+      } else {
+        const e = await createEnvironment({ name: form.name.trim(), description: form.description.trim(), entry: form.entry.trim() });
+        setCreating(false); setForm({ name: '', description: '', entry: '' });
+        router.push(`/environments/${e.id}`);
+      }
+    } catch (e) { setErr(e instanceof Error ? e.message : 'The environment could not be saved.'); }
     finally { setBusy(false); }
   };
+  const remove = async (id: string) => {
+    setBusy(true); setErr('');
+    try { await deleteEnvironment(id); setConfirm(''); await reload(); }
+    catch (e) { setErr(e instanceof Error ? e.message : 'The environment could not be deleted.'); }
+    finally { setBusy(false); }
+  };
+  const openEdit = (e: Environment) => { setForm({ name: e.name, description: e.description, entry: e.entry }); setEditing(e); };
 
   return (
     <section className="view is-active collection-view" id="view-environments"><div className="page">
       <div className="page-header">
         <div>
           <h1>Environments</h1>
-          <p>A project and its installed dependencies, built once and opened by every Task that uses it. Sessions read it at its own path and keep their outputs in their own workspace.</p>
+          <p>Project files and packages that a harness opens in every session.</p>
         </div>
         <div className="page-actions">
           <button className="button primary" type="button" onClick={() => setCreating(true)}>
@@ -75,27 +97,41 @@ export default function EnvironmentsPage() {
 
       {items !== null && items.length > 0 && (
         <div className="env-list">
-          <div className="env-row env-row-head"><span>Name</span><span>Status</span><span>Version</span><span>Files</span><span>Packages</span><span>Updated</span></div>
+          <div className="env-row env-row-head"><span>Environment</span><span>Project files</span><span>Packages</span><span /></div>
           {items.map((e) => (
-            <a key={e.id} className="env-row" href={`/environments/${e.id}`}>
-              <span className="env-name"><iconify-icon icon="tabler:stack-2"></iconify-icon><span><strong>{e.name}</strong><em>{e.mount}</em></span></span>
-              <span><span className={'status ' + STATUS_CLASS[e.status]}>{STATUS_LABEL[e.status]}</span></span>
-              <span className="env-mono">{e.version ? `v${e.version}` : '—'}</span>
-              <span className="env-mono">{e.files.count}{e.files.bytes ? <em> {fmtBytes(e.files.bytes)}</em> : null}</span>
-              <span className="env-mono">{e.status === 'ready' ? e.packages.length : '—'}</span>
-              <span className="env-dim">{e.updatedAt ? new Date(e.updatedAt).toLocaleString() : ''}</span>
-            </a>
+            <div key={e.id} className="env-row">
+              <a className="env-name" href={`/environments/${e.id}`} title={e.description || e.mount}>{e.name}</a>
+              <span className="env-mono">{e.files.count} {e.files.count === 1 ? 'file' : 'files'}</span>
+              <span className="env-mono">{packagesLine(e)}</span>
+              <span className="env-row-actions">
+                {confirm === e.id ? (
+                  <>
+                    <span className="env-dim">Delete every version and file?</span>
+                    <button className="button danger small" type="button" disabled={busy} onClick={() => void remove(e.id)}>Delete</button>
+                    <button className="button small" type="button" onClick={() => setConfirm('')}>Keep</button>
+                  </>
+                ) : (
+                  <>
+                    <button className="icon-button" type="button" aria-label={`Edit ${e.name}`} title="Name, description, how it is run" onClick={() => openEdit(e)}><iconify-icon icon="tabler:pencil"></iconify-icon></button>
+                    <button className="icon-button" type="button" aria-label={`Delete ${e.name}`} title="Delete" onClick={() => setConfirm(e.id)}><iconify-icon icon="tabler:trash"></iconify-icon></button>
+                    <a className="button small" href={`/environments/${e.id}`}>Open</a>
+                  </>
+                )}
+              </span>
+            </div>
           ))}
         </div>
       )}
 
-      {creating && (
+      {(creating || editing) && (
         <div className="kit-overlay" role="dialog" aria-modal="true" aria-labelledby="env-new-title"
-             onMouseDown={(ev) => { if (ev.target === ev.currentTarget) setCreating(false); }}>
+             onMouseDown={(ev) => { if (ev.target === ev.currentTarget) { setCreating(false); setEditing(null); } }}>
           <div className="kit-dialog">
-            <button className="kit-dialog-x" type="button" onClick={() => setCreating(false)} aria-label="Close"><iconify-icon icon="tabler:x"></iconify-icon></button>
-            <h2 id="env-new-title">New environment</h2>
-            <p className="kit-dialog-sub">Name it after the project. Sessions will find it at a path made from the name; that path does not change afterwards.</p>
+            <button className="kit-dialog-x" type="button" onClick={() => { setCreating(false); setEditing(null); }} aria-label="Close"><iconify-icon icon="tabler:x"></iconify-icon></button>
+            <h2 id="env-new-title">{editing ? editing.name : 'New environment'}</h2>
+            <p className="kit-dialog-sub">{editing
+              ? <>Sessions keep finding it at <code>{editing.mount}</code>; the name, the description and how it is run can change.</>
+              : 'Name it after the project. Sessions will find it at a path made from the name; that path does not change afterwards.'}</p>
             <div className="kit-custom">
               <label className="kit-field"><span>Name</span>
                 <input value={form.name} placeholder="Content Studio" autoFocus onChange={(ev) => setForm({ ...form, name: ev.target.value })}
@@ -108,8 +144,8 @@ export default function EnvironmentsPage() {
             </div>
             <div className="kit-dialog-actions">
               <span className="kit-dialog-spacer" />
-              <button className="button" type="button" onClick={() => setCreating(false)}>Cancel</button>
-              <button className="button primary" type="button" disabled={busy || !form.name.trim()} onClick={() => void create()}>{busy ? 'Creating…' : 'Create'}</button>
+              <button className="button" type="button" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</button>
+              <button className="button primary" type="button" disabled={busy || !form.name.trim()} onClick={() => void create()}>{busy ? (editing ? 'Saving\u2026' : 'Creating\u2026') : editing ? 'Save' : 'Create'}</button>
             </div>
           </div>
         </div>
