@@ -198,12 +198,21 @@ A harness names the environment its tasks read, and a task may name a different 
 ```
 
 ```json
-{ "input": "Render the teaser for episode 12.", "metadata": { "harness_id": "chrn_…" },
-  "environment": "henv_2f1c9d4e8a7b4c3d9e6f5a4b3c2d1e0f" }
+{ "input": "Render the teaser for episode 12.",
+  "metadata": { "harness_id": "chrn_…", "environment": "henv_2f1c9d4e8a7b4c3d9e6f5a4b3c2d1e0f" } }
 ```
 
 - `environment` on a harness ([Harnesses §2](harnesses.md#2-the-harness-object)) is the default
-  for every task of that harness; the task's own field overrides it for that task.
+  for every task of that harness; `metadata.environment` on a task overrides it for that task.
+  The response reports the environment the task read as `metadata.environment`, beside
+  `metadata.session_id`.
+
+> **Why is the task's environment in `metadata` rather than a top-level field?**
+> For the reason the harness is ([Tasks §1.2](tasks.md#12-selecting-a-harness)): the task surface
+> is a Responses request, and `metadata` is the extension point that surface defines for
+> caller-supplied context. A harness and a session are this protocol's own objects, so on them
+> `environment` is an ordinary field; a task request is not, so on it the environment travels
+> where the harness does. Every Responses SDK can send it today.
 - A server MUST refuse a harness write that names an environment outside the caller's scope, or
   none at all, with `environment_not_found`.
 - A server MUST refuse a task whose environment is not `ready` **before the task starts**:
@@ -226,9 +235,9 @@ For a task that runs with an environment, a server MUST:
    `NODE_PATH` begin with the environment, `PROJECT_ROOT` names `mount`;
 4. tell the agent, in its instructions, where the project is, that it is read-only and shared, that
    its dependencies are installed, where to write, and the `entry` when the owner gave one;
-5. record which environment and version the turn read: the session object carries
-   `environment` ([Sessions §3](sessions.md#3-inspecting-a-session)), and the turn's record the
-   version.
+5. record which environment and version the turn read: the response carries
+   `metadata.environment`, the session object carries `environment`
+   ([Sessions §3](sessions.md#3-inspecting-a-session)), and the turn's record the version.
 
 Two sessions on one environment MUST NOT be able to read each other's working directory or write
 the environment. A session MUST NOT be able to read an environment its task did not name, nor to
