@@ -1099,7 +1099,10 @@ body.hr-resizing iframe { pointer-events: none; }
   .env-row > :nth-child(2), .env-row > :nth-child(3) { display: none; }
 }
 
-.env-head { padding: 22px 36px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
+/* The page is the viewport: the head, then the card filling what is left with one margin on all four
+   sides; the tree, the open file and the packages scroll inside the card, never the page. */
+.env-root { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+.env-head { flex: none; padding: 22px 36px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .env-back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); text-decoration: none; }
 .env-back:hover { color: var(--ink); }
 .env-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
@@ -1127,8 +1130,10 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-rename { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 1; }
 .env-rename input { font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 8px; min-width: 160px; }
 .env-help { margin: -4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
-.env-body { padding: 24px 36px 34px; }
-.env-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.env-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 24px; }
+.env-body > .hr-error { flex: none; }
+.env-card { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.env-card-head { flex: none; }
 .env-card > .env-files, .env-card > .env-packages { border-top: 1px solid var(--line); }
 .env-card-head { display: flex; align-items: center; gap: 14px; padding: 12px 16px; flex-wrap: wrap; }
 .env-tabs { display: inline-flex; gap: 2px; padding: 4px; border-radius: 10px; background: var(--surface-subtle); }
@@ -1150,8 +1155,8 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-tab span { color: var(--muted); }
 .env-tab.is-on span { color: var(--accent); }
 .env-tab span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--accent); }
-.env-files { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 520px; }
-.env-tree-pane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+.env-files { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.env-tree-pane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .env-tree-tools { display: flex; align-items: center; gap: 4px; padding: 12px 10px 8px; }
 .env-find { flex: 1; display: flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--muted); min-width: 0; }
 .env-find input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--ink); }
@@ -1169,15 +1174,16 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-node-x { display: none; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 12px; }
 .env-node:hover .env-node-x { display: inline-flex; }
 .env-tree-empty { padding: 16px 14px; color: var(--muted); font-family: var(--font-sans, -apple-system, 'Inter', system-ui, sans-serif); font-size: 13px; line-height: 1.5; white-space: normal; }
-.env-view { display: flex; flex-direction: column; min-width: 0; }
+.env-view { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.env-view-head { flex: none; }
 .env-view-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
 .env-view-head code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .env-view-empty { padding: 40px 16px; color: var(--muted); font-size: 13px; }
 .env-binary { padding: 24px 16px; color: var(--muted); font-size: 13px; }
 .env-code { flex: 1; min-width: 0; overflow: auto; cursor: text; }
 .env-code pre { margin: 0 !important; }
-.env-editor { flex: 1; min-height: 480px; margin: 0; padding: 14px 16px; border: 0; outline: none; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.7; color: var(--ink); background: transparent; }
-.env-packages { display: flex; flex-direction: column; min-height: 400px; }
+.env-editor { flex: 1; min-height: 0; margin: 0; padding: 14px 16px; border: 0; outline: none; resize: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.7; color: var(--ink); background: transparent; }
+.env-packages { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .env-pkg { display: grid; grid-template-columns: minmax(0, 1fr) auto 32px; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
 .env-pkg-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .env-pkg-version { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--muted); }
@@ -1188,12 +1194,14 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-build-failed { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .env-log { margin: 0; padding: 12px 14px; max-height: 320px; overflow: auto; background: var(--surface-subtle); border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; color: var(--ink); }
 @media (max-width: 900px) {
+  .env-root { height: calc(100vh - 53px); }   /* under the mobile bar */
   .env-head { padding: 18px 16px 14px; }
   .env-title-row h1 { font-size: 24px; }
   .env-add { margin-left: 0; width: 100%; }
   .env-add input { flex: 1; width: auto; }
-  .env-body { padding: 16px 0 24px; }
+  .env-body { padding: 16px; }
   .env-files { grid-template-columns: minmax(0, 1fr); }
-  .env-tree-pane { border-right: 0; border-bottom: 1px solid var(--line); max-height: 320px; }
+  .env-files { grid-template-rows: auto minmax(0, 1fr); }
+  .env-tree-pane { border-right: 0; border-bottom: 1px solid var(--line); max-height: 40%; }
   .env-ln { width: 40px; padding-right: 10px; }
 }
