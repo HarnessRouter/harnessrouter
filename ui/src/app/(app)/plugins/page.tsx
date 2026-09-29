@@ -9,17 +9,28 @@ import { useRouter } from 'next/navigation';
 import { SkelRows } from '@/components/Skel';
 import { listPlugs, setPlug, plugAttachments, type Plug } from '@/lib/harness';
 
-const ICON: Record<string, string> = { browser: 'tabler:world', github: 'tabler:brand-github', vercel: 'tabler:triangle', insforge: 'tabler:database' };
+const ICON: Record<string, string> = { browser: 'tabler:world', github: 'tabler:brand-github', vercel: 'tabler:triangle', insforge: 'tabler:database', microsoft365: 'tabler:brand-office' };
 const BLURB: Record<string, string> = {
   browser: 'A real web browser the agent can open, read, click through and screenshot.',
   github: 'The repository this workspace connects: files, branches and pull requests.',
   vercel: 'The project this workspace connects: deployments and domains.',
   insforge: 'The backend this workspace connects: its tables and records.',
+  microsoft365: 'The SharePoint sites and people this workspace approves: their files, mail and calendar, read through your own Microsoft Entra application.',
 };
 const FIELD_LABEL: Record<string, string> = {
   allow_domains: 'Only these sites', deny_domains: 'Never these sites', token: 'Access token', api_key: 'API key',
   repo: 'Repository (owner/name)', owner: 'Owner', default_branch: 'Default branch', project: 'Project', project_id: 'Project id',
   team_id: 'Team id', url: 'Address', region: 'Region',
+  tenant_id: 'Directory (tenant) id', client_id: 'Application (client) id', client_secret: 'Client secret',
+  sites: 'SharePoint sites', users: 'People',
+};
+// Settings that are lists of names, typed comma-separated: the browser's site lists, a plug's approved resources.
+const LIST_FIELDS = new Set(['allow_domains', 'deny_domains', 'sites', 'users']);
+const PLACEHOLDER: Record<string, string> = {
+  allow_domains: 'example.com, docs.example.org (empty means any public site)', deny_domains: 'ads.example.com',
+  tenant_id: 'e89476d8-…', client_id: 'the application (client) id from the app registration',
+  sites: 'contoso.sharepoint.com:/sites/Engineering, contoso.sharepoint.com:/sites/Sales',
+  users: 'alice@contoso.com, bob@contoso.com (their OneDrive, mail and calendar)',
 };
 const STATUS_LABEL: Record<Plug['status'], string> = { connected: 'Connected', disabled: 'Disabled', needs_auth: 'Needs auth', missing: 'Not connected' };
 const listOf = (v: unknown) => (Array.isArray(v) ? v.map(String).join(', ') : '');
@@ -50,7 +61,7 @@ export default function PluginsPage() {
 
   const open = (p: Plug) => {
     const f: Record<string, string> = {};
-    for (const k of p.config_fields) f[k] = p.type === 'browser' ? listOf(p.config[k]) : String(p.config[k] ?? '');
+    for (const k of p.config_fields) f[k] = LIST_FIELDS.has(k) ? listOf(p.config[k]) : String(p.config[k] ?? '');
     for (const k of p.secrets_needed) f[k] = '';
     setForm(f); setEditing(p);
   };
@@ -59,7 +70,7 @@ export default function PluginsPage() {
     try {
       const body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> } = { enabled };
       if (withForm) {
-        body.config = Object.fromEntries(p.config_fields.map((k) => [k, p.type === 'browser' ? domainsOf(form[k] || '') : (form[k] || '')]));
+        body.config = Object.fromEntries(p.config_fields.map((k) => [k, LIST_FIELDS.has(k) ? domainsOf(form[k] || '') : (form[k] || '')]));
         const secrets = Object.fromEntries(p.secrets_needed.filter((k) => (form[k] || '').trim()).map((k) => [k, form[k].trim()]));
         if (Object.keys(secrets).length) body.secrets = secrets;
       }
@@ -128,7 +139,7 @@ export default function PluginsPage() {
                 {editing.config_fields.map((k) => (
                   <div className="field" key={k}><label htmlFor={`plug-${k}`}>{FIELD_LABEL[k] || k}</label>
                     <input id={`plug-${k}`} type="text" value={form[k] || ''}
-                      placeholder={editing.type === 'browser' ? (k === 'allow_domains' ? 'example.com, docs.example.org (empty means any public site)' : 'ads.example.com') : ''}
+                      placeholder={PLACEHOLDER[k] || ''}
                       onChange={(e) => setForm({ ...form, [k]: e.target.value })} /></div>
                 ))}
                 {editing.secrets_needed.length > 0 && <span className="field-help">This plugin runs on the credential you enter here, kept in this instance and never shown again. Every call an agent makes lands in the account that credential belongs to.</span>}

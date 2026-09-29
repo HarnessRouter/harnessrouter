@@ -609,6 +609,41 @@ Disabled, Not connected), what it costs, and how many harnesses include it.
 | GitHub | The connected repository: files, branches, commits, pull requests. | An access token and the repository (`owner/name`). |
 | Vercel | The connected project: deployments and domains. | An access token, the project id and team id. |
 | InsForge | The connected backend: its tables and records. | The API key and the backend's address. |
+| Microsoft 365 | The SharePoint sites and people the workspace approves: their files (SharePoint, OneDrive), mail and calendar, and the directory's people. Eight read tools; nothing is written. | Your own Microsoft Entra application (directory id, application id, client secret) with admin-consented application permissions, and the lists of approved sites and people. See below. |
+
+### Microsoft 365
+
+The plug runs as an application you register in your own Microsoft Entra directory, so the
+organization's administrator decides what it may read, and the plug narrows that further to the
+sites and people you list. Register the application once:
+
+```bash
+GRAPH=00000003-0000-0000-c000-000000000000
+APP=$(az ad app create --display-name "HarnessRouter Microsoft 365 plug" --query appId -o tsv)
+az ad sp create --id "$APP" >/dev/null
+for perm in User.Read.All Sites.Read.All Files.Read.All Mail.Read Calendars.Read; do
+  id=$(az ad sp show --id $GRAPH --query "appRoles[?value=='$perm'].id" -o tsv)
+  az ad app permission add --id "$APP" --api $GRAPH --api-permissions "$id=Role"
+done
+az ad app permission admin-consent --id "$APP"
+az ad app credential reset --id "$APP" --append --display-name harnessrouter --years 1 --query password -o tsv
+```
+
+The last line prints the client secret once. On the **Plugins** page choose **Connect** on the
+Microsoft 365 row and enter the directory (tenant) id, the application (client) id, the client
+secret, the SharePoint sites the agent may read as `hostname:/sites/name`, and the people whose
+OneDrive, mailbox and calendar it may read, by sign-in address. Any resource outside those lists is
+refused before Microsoft is asked; anything the administrator did not consent to is refused by
+Microsoft, and the agent is told to report a refusal rather than work around it. A permission you
+leave out (say, `Mail.Read`) leaves the matching tools refusing with Microsoft's own sentence.
+
+What the agent gets: `resources` (what is approved), `find_people`, `list_files`, `search_files`,
+`read_file` (text files by content, other files by their facts and address), `list_mail`,
+`read_mail`, `list_events`. Every call is one audit row on the session, with the site, person, path
+or folder it addressed. The identity is the application's (a workload identity); a person's
+delegated identity through On-Behalf-Of is the next step and takes the same tools. The directory
+behind an Azure subscription alone has no Microsoft 365 licence: files and mail need a licensed
+seat, while `find_people` reads the directory as soon as the application is consented.
 
 **Turning a plugin on.** Open **Plugins**, and on the row choose **Turn on** (the browser) or
 **Connect** (a plugin that needs a credential; the credential is kept in the instance's secret store
