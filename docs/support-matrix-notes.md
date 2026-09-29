@@ -1644,3 +1644,34 @@ cell.
 in place and writes the session id; `GET /v1/traces/{sid}/all?compact=0` is the trace, one JSON
 object per line, and `GET /v1/sessions?limit=N` lists the recent sessions when the id was not
 kept. A hosted install has the broker path only; the relay finding is the self-hosted image's.
+
+## Environments column (2026-09-29, 0.26.11 and 0.26.12)
+
+`scripts/support-matrix/environments/column.py`: every base but System One runs three tasks on one
+environment (`proof-studio-57543`: tabulate from pip, qrcode from npm, jq from apt, built once), each
+task in its base's default model, judged by the server's record: the turn completed, the trace holds
+no install command, the answer shows the package used from the environment (its path under the mount
+or the store, the command's output), and the session names the environment.
+
+| base | pip (tabulate) | npm (qrcode) | apt (jq) | install commands | seconds |
+|---|---|---|---|---:|---:|
+| codex | pass | pass | pass | 0 | 54 |
+| claude-code | pass | pass | pass | 0 | 43 |
+| hermes | pass | pass | pass | 0 | 98 |
+| pi | pass | pass | pass | 0 | 37 |
+| omp | pass | pass | pass | 0 | 75 |
+| dsh | pass | pass | pass | 0 | 97 |
+| goose | pass | pass | pass | 0 | 53 |
+| opencode | pass | pass | pass | 0 | 54 |
+| aider | pass | pass | pass | 0 | 53 |
+| kimi | pass | pass | pass | 0 | 72 |
+| openhands | pass | pass | pass | 0 | 78 |
+| cheetahclaws | pass | pass | pass | 0 | 53 |
+| qwen | pass | pass | pass | 0 | 48 |
+| gemini | pass | pass | pass | 0 | 47 |
+| cline | pass | pass | pass | 0 | 37 |
+
+15 of 15 bases; 45 of 45 tasks; every task one command, no install anywhere. The
+first pass judged three answers by their labels rather than their evidence (aider paraphrases the
+printed lines; omp's shell reports `jq --version` as jaq while `which jq` and the sorted output are the
+environment's); the judges now read the evidence, and the two bases rerun clean on 0.26.12.
