@@ -21,6 +21,7 @@ import { fetchTraceWindow, statsFor, p95Of, avgCreditsOf, timeAgo, type TraceCar
 // hosted workspace. Hidden and inert on hosted builds.
 import { SELF_HOSTED } from '@/lib/edition';
 import { CloudUploadDialog } from '@/components/CloudUploadDialog';
+import { listEnvironments, type Environment } from '@/lib/environments';
 import { statusOne, type CloudStatus } from '@/lib/cloud-upload';
 
 type Skill = CustomHarness['skills'][number];
@@ -39,6 +40,8 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   const oob = oobById(id);
   const [saved, setSaved] = useState<CustomHarness | null>(null);
   const [draft, setDraft] = useState<CustomHarness | null>(null);
+  const [environments, setEnvironments] = useState<Environment[] | null>(null);
+  useEffect(() => { listEnvironments().then(setEnvironments).catch(() => setEnvironments([])); }, []);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -579,7 +582,24 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           </section>
 
           <section className="form-section">
-            <div><h3>Environment</h3><p>Variables every Task's shell and tools start with. Put a secret behind a request header or a stored secret, never as a literal; the agent never sees the value in its prompt, and anything it prints is redacted from the record.</p></div>
+            <div><h3>Project environment</h3><p>A project and its installed dependencies, built once on the Environments page. Every Task of this Harness then starts with it in place, read-only at its own path, and keeps its outputs in the Task's own workspace.</p></div>
+            <div className="field-stack">
+              <div className="field"><label>Environment</label>
+                <select value={draft?.environment || ''} disabled={readOnly || environments === null} onChange={(e) => upd({ environment: e.target.value })}>
+                  <option value="">None</option>
+                  {(environments || []).map((en) => <option key={en.id} value={en.id}>{en.name}{en.status === 'ready' ? ` (v${en.version}, ${en.mount})` : ' (not built yet)'}</option>)}
+                </select></div>
+              {draft?.environment && (() => { const en = (environments || []).find((x) => x.id === draft.environment); return en ? (
+                <span className="field-help">{en.status === 'ready'
+                  ? <>Every Task reads <code>{en.mount}</code> (version {en.version}) and its {en.packages.length} installed {en.packages.length === 1 ? 'package' : 'packages'}. <a href={`/environments/${en.id}`}>Open the environment</a>.</>
+                  : <>This environment has no built version yet, so Tasks on this Harness are refused until it is built. <a href={`/environments/${en.id}`}>Build it</a>.</>}</span>
+              ) : <span className="field-help">This environment is no longer there; choose another or none.</span>; })()}
+              {!draft?.environment && <span className="field-help">{environments && environments.length === 0 ? <>No environments yet. <a href="/environments">Create one</a> to give Tasks a ready project.</> : 'Tasks start from an empty workspace.'}</span>}
+            </div>
+          </section>
+
+          <section className="form-section">
+            <div><h3>Environment variables</h3><p>Variables every Task's shell and tools start with. Put a secret behind a request header or a stored secret, never as a literal; the agent never sees the value in its prompt, and anything it prints is redacted from the record.</p></div>
             <div className="field-stack">
               <div className="section-actions"><strong>{Object.keys(draft?.env || {}).length} variables</strong>
                 {!readOnly && <button className="button small" type="button" onClick={() => setEnvRows((r) => [...r, { name: '', value: '' }])}><iconify-icon icon="tabler:plus"></iconify-icon>Add variable</button>}</div>
