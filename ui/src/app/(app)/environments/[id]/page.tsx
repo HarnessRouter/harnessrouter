@@ -14,7 +14,7 @@ import {
   buildEnvironment, deleteEnvironmentPath, environmentHarnesses,
   fmtBytes, getEnvironment, getEnvironmentBuild, importEnvironmentArchive, importEnvironmentGit, listEnvironmentFiles, listRuntimes,
   makeEnvironmentDir, readEnvironmentFile, updateEnvironment, writeEnvironmentFile,
-  type Environment, type EnvironmentBuildRecord, type EnvironmentFileEntry, type EnvironmentRuntimes, type Manager,
+  type Environment, type EnvironmentBuildRecord, type EnvironmentFileEntry, type EnvironmentRuntimes, type Manager, checkPackage,
 } from '@/lib/environments';
 
 const MANAGERS: Manager[] = ['pip', 'npm', 'apt'];
@@ -80,6 +80,10 @@ export default function EnvironmentPage() {
   const [python, setPython] = useState('');
   const [runtimes, setRuntimes] = useState<EnvironmentRuntimes | null>(null);
   const [spec, setSpec] = useState('');
+  const [checking, setChecking] = useState(false);          // the registry is being asked about the spec in the Add field
+  const [addErr, setAddErr] = useState('');                  // what the registry said when it refused the spec
+  const [resolved, setResolved] = useState<Record<string, string>>({});   // `${manager}:${name}` → the version the registry reported on Add
+  const [now, setNow] = useState(() => Date.now());          // ticks while a build runs, for the elapsed seconds
   const [pkgDirty, setPkgDirty] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
   const [menu, setMenu] = useState<'add' | null>(null);
@@ -107,7 +111,8 @@ export default function EnvironmentPage() {
   useEffect(() => {
     if (env?.status !== 'building') return;
     const t = setInterval(() => void reload(), 3000);
-    return () => clearInterval(t);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => { clearInterval(t); clearInterval(tick); };
   }, [env?.status, reload]);
 
   const tree = useMemo(() => treeOf(entries || []), [entries]);
@@ -139,15 +144,39 @@ export default function EnvironmentPage() {
     }
     await buildEnvironment(id);
   });
-  const addSpec = () => {
+  /** Add asks the registry first: a name that is not there, or a pin that was never published, is
+   *  refused here with the registry's own answer instead of failing a build minutes later. What
+   *  the registry reported (the pin, else the latest) is what the row shows until a build installs it. */
+  const addSpec = async () => {
     const t = spec.trim();
-    if (!t || !declared) return;
-    setDeclared({ ...declared, [segment]: [...declared[segment].filter((x) => specParts(x, segment).name !== specParts(t, segment).name), t] });
-    setSpec(''); setPkgDirty(true);
+    if (!t || !declared || checking) return;
+    setChecking(true); setAddErr('');
+    try {
+      const c = await checkPackage(segment, t);
+      if (c.exists === false || (c.exists && c.error)) { setAddErr(c.error || `${c.name} was not found.`); return; }
+      if (c.error) setAddErr(c.error);   // the registry could not be asked: added anyway; the build is then the check
+      const name = specParts(t, segment).name;
+      setDeclared({ ...declared, [segment]: [...declared[segment].filter((x) => specParts(x, segment).name !== name), t] });
+      setResolved((r) => ({ ...r, [`${segment}:${name.toLowerCase()}`]: c.version || c.latest || '' }));
+      setSpec(''); setPkgDirty(true);
+    } catch (e) { setAddErr(e instanceof Error ? e.message : 'The package could not be checked.'); }
+    finally { setChecking(false); }
   };
   const dropSpec = (m: Manager, x: string) => { if (!declared) return; setDeclared({ ...declared, [m]: declared[m].filter((y) => y !== x) }); setPkgDirty(true); };
   const dirty = editing !== null || pkgDirty;
   const installedVersion = (m: Manager, name: string) => env?.packages.find((p) => p.manager === m && p.name.toLowerCase() === name.toLowerCase())?.version || '';
+  /** What a row's version column says: the version the active build installed, else that a build
+   *  is installing it now, else that it installs on save, with the version the registry reported. */
+  const rowState = (m: Manager, x: string): { text: string; note: string } => {
+    const p = specParts(x, m);
+    const installed = installedVersion(m, p.name);
+    if (installed && (!p.version || p.version === installed)) return { text: installed, note: '' };
+    const known = p.version || resolved[`${m}:${p.name.toLowerCase()}`] || '';
+    if (env?.status === 'building') return { text: known, note: 'installing' };
+    return { text: known || 'latest', note: 'installs on save' };
+  };
+  const logTail = (log: string, n: number) => log.split('\n').filter((l) => l.trim()).slice(-n).join('\n');
+  const buildElapsed = build?.started_at ? Math.max(0, Math.round(now / 1000 - build.started_at)) : null;
   const createPath = () => act('create', async () => {
     if (!newPath?.value.trim()) return;
     const base = parentDir(); const p = (base ? base + '/' : '') + newPath.value.trim().replace(/^\/+/, '');
@@ -203,6 +232,16 @@ export default function EnvironmentPage() {
 
       <div className="env-body">
         {err && <div className="hr-error" role="alert">{err}</div>}
+        {env?.status === 'building' && (
+          <div className="env-build-live" role="status" aria-live="polite">
+            <div className="env-build-live-head">
+              <strong>Building version {build?.version ?? env.latestVersion ?? ''}</strong>
+              {build?.stage && <span>{build.stage}</span>}
+              {buildElapsed !== null && <span>{buildElapsed} s</span>}
+            </div>
+            {build?.log && <pre className="env-log">{logTail(build.log, 12)}</pre>}
+          </div>
+        )}
         {env?.status === 'failed' && build?.error && (
           <div className="hr-error env-build-failed" role="alert">
             <div><strong>The last build failed.</strong> {build.error} Fix the packages or the files and save again.</div>
@@ -238,9 +277,9 @@ export default function EnvironmentPage() {
                       <select value={runtimes?.os.version ?? ''} disabled><option value={runtimes?.os.version ?? ''}>{runtimes?.os.version ?? ''}</option></select>
                     )}
                   </label>
-                  <form className="env-add" onSubmit={(ev) => { ev.preventDefault(); addSpec(); }}>
-                    <input value={spec} placeholder={SPEC_HINT[segment]} aria-label={`Add a ${segment} package`} spellCheck={false} onChange={(ev) => setSpec(ev.target.value)} />
-                    <button className="button" type="submit" disabled={!spec.trim()}>Add</button>
+                  <form className="env-add" onSubmit={(ev) => { ev.preventDefault(); void addSpec(); }}>
+                    <input value={spec} placeholder={SPEC_HINT[segment]} aria-label={`Add a ${segment} package`} spellCheck={false} onChange={(ev) => { setSpec(ev.target.value); if (addErr) setAddErr(''); }} />
+                    <button className="button" type="submit" disabled={!spec.trim() || checking}>{checking ? 'Checking\u2026' : 'Add'}</button>
                   </form>
                 </>
               )}
@@ -333,12 +372,14 @@ export default function EnvironmentPage() {
 
             {tab === 'packages' && declared && (
               <div className="env-packages">
+                {addErr && <div className="env-add-error" role="alert">{addErr}</div>}
                 {declared[segment].length ? declared[segment].map((x) => {
                   const p = specParts(x, segment);
+                  const st = rowState(segment, x);
                   return (
                     <div key={x} className="env-pkg">
                       <code className="env-pkg-name">{p.name}</code>
-                      <span className="env-pkg-version">{p.version || installedVersion(segment, p.name) || 'latest'}</span>
+                      <span className="env-pkg-version">{st.text}{st.note && <em className="env-pkg-note">{st.note}</em>}</span>
                       <button className="env-pkg-x" type="button" aria-label={`Remove ${p.name}`} onClick={() => dropSpec(segment, x)}><iconify-icon icon="tabler:x"></iconify-icon></button>
                     </div>
                   );

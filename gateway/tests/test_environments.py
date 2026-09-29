@@ -204,3 +204,17 @@ def test_the_task_names_its_environment_in_metadata_like_the_harness():
     assert app._task_environment_ref(NS(metadata=None), hv) == "henv_harness"
     assert app._task_environment_ref(NS(metadata={}), None) == ""
     assert not hasattr(app.CreateResponseBody.model_fields, "environment") and "environment" not in app.CreateResponseBody.model_fields
+
+
+def test_the_package_check_is_the_registrys_answer_and_refuses_a_manager_it_cannot_build_with(api, monkeypatch):
+    answers = {"https://pypi.org/pypi/pip/json": (200, {"info": {"name": "pip", "version": "25.2"}, "releases": {"25.2": []}}),
+               "https://pypi.org/pypi/nope-nope-nope/json": (404, {})}
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+    r = api.get("/v1/environments/packages/check?manager=pip&spec=pip")
+    assert r.status_code == 200 and r.json()["object"] == "environment.package" and r.json()["exists"] is True and r.json()["latest"] == "25.2"
+    r = api.get("/v1/environments/packages/check?manager=pip&spec=nope-nope-nope")
+    assert r.status_code == 200 and r.json()["exists"] is False and "not on PyPI" in r.json()["error"]
+    r = api.get("/v1/environments/packages/check?manager=cargo&spec=serde")
+    assert r.status_code == 400 and r.json()["error"]["code"] == "environment_invalid"
+    r = api.get("/v1/environments/packages/check?manager=pip&spec=")
+    assert r.status_code == 400

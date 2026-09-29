@@ -15478,7 +15478,7 @@ def _environment_out(v: dict) -> dict:
             "declared": {m: [_env_spec_parts(x, m) | {"spec": x} for x in _j(v.get(f"pkg_{m}"), [])] for m in _ENV_MANAGERS},
             "runtime": {"python": str(v.get("rt_python") or "")},
             "versions": vers,
-            "build": ({k: latest_rec.get(k) for k in ("version", "status", "started_at", "finished_at", "error")}
+            "build": ({k: latest_rec.get(k) for k in ("version", "status", "started_at", "finished_at", "error", "stage")}
                       if latest_rec else None),
             "member": v.get("member") or "", "workspace": v.get("workspace") or "",
             "createdAt": int(v.get("created_at") or 0), "updatedAt": int(v.get("updated_at") or 0)}
@@ -15554,6 +15554,26 @@ async def environment_runtimes(request: Request) -> dict:
     if r.status_code != 200:
         raise _env_runner_error(r, "the runtimes could not be read")
     return r.json()
+
+
+@app.get("/v1/environments/packages/check")
+async def environment_package_check(request: Request, manager: str = "", spec: str = "") -> dict:
+    """What the manager's registry says about a package before a build: whether the name exists,
+    its latest version, whether an exact pin is published. The console asks on Add, so a typo is
+    refused where it is typed instead of failing a build. Optional in the protocol (Environments §4)."""
+    p = await _principal(request)
+    if not p.get("org"):
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    if manager not in _ENV_MANAGERS:
+        raise uhp_error(400, "environment_invalid", "manager must be pip, npm or apt.")
+    if not spec.strip() or not _env_specs({manager: [spec]}).get(manager):
+        raise uhp_error(400, "environment_invalid", "That is not a package spec.")
+    r = await _env_runner("GET", "/environments/packages/check", "packages", params={"manager": manager, "spec": spec.strip()})
+    if r.status_code == 400:
+        raise uhp_error(400, "environment_invalid", str((r.json() or {}).get("detail") or "That is not a package spec."))
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the registry could not be asked")
+    return {"object": "environment.package", **r.json()}
 
 
 @app.get("/v1/environments/{env_id}")
