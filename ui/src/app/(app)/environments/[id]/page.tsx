@@ -62,6 +62,7 @@ export default function EnvironmentPage() {
   const [renaming, setRenaming] = useState(false);
   const [meta, setMeta] = useState({ name: '', description: '', entry: '' });
   const [gitOpen, setGitOpen] = useState(false);
+  const [menu, setMenu] = useState<'import' | 'more' | null>(null);
   const [git, setGit] = useState({ url: '', ref: '', replace: false });
   const [newPath, setNewPath] = useState<{ kind: 'file' | 'dir'; value: string } | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -75,6 +76,12 @@ export default function EnvironmentPage() {
     } catch (e) { setErr(e instanceof Error ? e.message : 'The environment could not be read.'); }
   }, [id]);
   useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    if (!menu) return;
+    const off = (ev: MouseEvent) => { if (!(ev.target as HTMLElement).closest('.env-menu-wrap')) setMenu(null); };
+    window.addEventListener('mousedown', off);
+    return () => window.removeEventListener('mousedown', off);
+  }, [menu]);
   useEffect(() => {
     if (env?.status !== 'building') return;
     const t = setInterval(() => void reload(), 3000);
@@ -160,32 +167,47 @@ export default function EnvironmentPage() {
               <h1>{env.name}</h1>
             )}
             <div className="env-actions">
-              <span className={'status ' + STATUS_CLASS[env.status]}>{STATUS_LABEL[env.status]}{env.version ? ` · v${env.version}` : ''}</span>
-              <button className="button primary" type="button" disabled={env.status === 'building' || busy === 'build' || !env.files.count}
+              <span className={'env-status is-' + env.status}><i />{STATUS_LABEL[env.status]}{env.version ? ` v${env.version}` : ''}</span>
+              <button className="button primary small" type="button" disabled={env.status === 'building' || busy === 'build' || !env.files.count}
                       title={!env.files.count ? 'Add files first' : 'Snapshot the files and install the packages they declare'} onClick={() => void startBuild()}>
-                <iconify-icon icon="tabler:hammer"></iconify-icon>{env.status === 'building' ? 'Building…' : env.version ? 'Rebuild' : 'Build'}</button>
-              <button className="button" type="button" onClick={() => archiveRef.current?.click()} disabled={busy === 'import'}><iconify-icon icon="tabler:file-zip"></iconify-icon>Import archive</button>
+                {env.status === 'building' ? 'Building\u2026' : env.version ? 'Rebuild' : 'Build'}</button>
+              <span className="env-menu-wrap">
+                <button className="button small" type="button" aria-haspopup="menu" aria-expanded={menu === 'import'} onClick={() => setMenu(menu === 'import' ? null : 'import')}>Import<iconify-icon icon="tabler:chevron-down"></iconify-icon></button>
+                {menu === 'import' && (
+                  <div className="env-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { setMenu(null); archiveRef.current?.click(); }}><iconify-icon icon="tabler:file-zip"></iconify-icon>Archive (zip or tar)</button>
+                    <button type="button" role="menuitem" onClick={() => { setMenu(null); setGitOpen(true); }}><iconify-icon icon="tabler:brand-git"></iconify-icon>Git repository</button>
+                  </div>
+                )}
+              </span>
               <input ref={archiveRef} type="file" hidden accept=".zip,.tar,.tgz,.tar.gz" onChange={(ev) => { void importArchive(ev.target.files); ev.target.value = ''; }} />
-              <button className="button" type="button" onClick={() => setGitOpen(true)}><iconify-icon icon="tabler:brand-git"></iconify-icon>Import from git</button>
-              <button className="button" type="button" onClick={() => setRenaming(true)}><iconify-icon icon="tabler:pencil"></iconify-icon>Rename</button>
-              {confirmDelete ? (
-                <span className="env-confirm">
-                  <span>Delete every version and file?</span>
-                  <button className="button danger small" type="button" disabled={busy === 'delete'} onClick={() => void destroy()}>Delete</button>
-                  <button className="button small" type="button" onClick={() => setConfirmDelete(false)}>Keep</button>
-                </span>
-              ) : (
-                <button className="button" type="button" onClick={() => setConfirmDelete(true)}><iconify-icon icon="tabler:trash"></iconify-icon>Delete</button>
-              )}
+              <span className="env-menu-wrap">
+                <button className="icon-button" type="button" aria-label="More" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><iconify-icon icon="tabler:dots"></iconify-icon></button>
+                {menu === 'more' && (
+                  <div className="env-menu is-right" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { setMenu(null); setRenaming(true); }}><iconify-icon icon="tabler:pencil"></iconify-icon>Rename or edit details</button>
+                    <button type="button" role="menuitem" className="is-danger" onClick={() => { setMenu(null); setConfirmDelete(true); }}><iconify-icon icon="tabler:trash"></iconify-icon>Delete environment</button>
+                  </div>
+                )}
+              </span>
             </div>
           </div>
         )}
-        {env && (
-          <div className="env-facts">
-            <span><em>Path in every session</em><code>{env.mount}</code><span className="env-dim">read-only</span></span>
-            {env.entry && <span><em>Run with</em><code>{env.entry}</code></span>}
-            <span><em>Read by</em>{harnesses.length ? harnesses.map((h) => <a key={h.id} href={`/harnesses/${h.id}`}>{h.name}</a>) : <span className="env-dim">no Harness yet. Name it under a Harness&apos;s settings.</span>}</span>
-            {env.description && <span><em>About</em>{env.description}</span>}
+        {env && !renaming && (
+          <p className="env-sub">
+            <code>{env.mount}</code><span>read-only in every session</span>
+            {env.entry && <><span className="env-sep" /><span>run with</span><code>{env.entry}</code></>}
+            <span className="env-sep" />
+            {harnesses.length
+              ? <span>read by {harnesses.map((h, i) => <span key={h.id}>{i > 0 ? ', ' : ''}<a href={`/harnesses/${h.id}`}>{h.name}</a></span>)}</span>
+              : <span>not named by any Harness yet</span>}
+          </p>
+        )}
+        {confirmDelete && (
+          <div className="env-confirm">
+            <span>Delete this environment, every version and every file? Harnesses that name it will refuse their next Task.</span>
+            <button className="button danger small" type="button" disabled={busy === 'delete'} onClick={() => void destroy()}>Delete</button>
+            <button className="button small" type="button" onClick={() => setConfirmDelete(false)}>Keep</button>
           </div>
         )}
       </div>
@@ -226,12 +248,26 @@ export default function EnvironmentPage() {
                           <span className="env-chev" /><iconify-icon icon="tabler:file"></iconify-icon><span className="env-node-name">{m.path}</span></div>
                       )) : <div className="env-tree-empty">No file matches.</div>
                     ) : tree.length ? tree.map((n) => renderNode(n, 0)) : (
-                      <div className="env-tree-empty">No files yet. Upload files, or import an archive or a git repository from the header.</div>
+                      <div className="env-tree-empty">No files yet.</div>
                     )}
                   </div>
                 </aside>
                 <div className="env-view">
-                  {openPath && file ? (
+                  {!entries?.length && !needle ? (
+                    <div className="env-onboard is-files">
+                      <h2>Put the project in</h2>
+                      <p>The whole folder, as it is on your machine. Folders and relative paths are kept; a build installs its packages afterwards.</p>
+                      <div className="env-choices">
+                        <button type="button" className="env-choice" onClick={() => archiveRef.current?.click()}>
+                          <iconify-icon icon="tabler:file-zip"></iconify-icon><strong>Import an archive</strong><em>A zip or tar of the project folder.</em></button>
+                        <button type="button" className="env-choice" onClick={() => setGitOpen(true)}>
+                          <iconify-icon icon="tabler:brand-git"></iconify-icon><strong>Import from git</strong><em>A repository URL and a branch or tag.</em></button>
+                        <button type="button" className="env-choice" onClick={() => uploadRef.current?.click()}>
+                          <iconify-icon icon="tabler:upload"></iconify-icon><strong>Upload files</strong><em>Pick files; they land at the root.</em></button>
+                      </div>
+                      <span className="env-onboard-note">Or start from nothing with New file in the tree.</span>
+                    </div>
+                  ) : openPath && file ? (
                     <>
                       <div className="env-view-head">
                         <code>{openPath}</code>
@@ -258,14 +294,28 @@ export default function EnvironmentPage() {
 
             {tab === 'packages' && (
               <div className="env-packages">
+                {env.status === 'empty' && !build ? (
+                  <div className="env-onboard is-packages">
+                    <h2>Nothing built yet</h2>
+                    <p>A build copies the files into a version and installs what they declare. Every Task then finds the packages installed, and nothing is installed again.</p>
+                    <dl className="env-manifests">
+                      <div><dt><code>requirements.txt</code> or <code>pyproject.toml</code></dt><dd>a Python virtualenv, first on PATH</dd></div>
+                      <div><dt><code>package.json</code></dt><dd>npm into node_modules, on NODE_PATH</dd></div>
+                      <div><dt><code>setup.sh</code></dt><dd>runs last, for anything the manifests cannot say</dd></div>
+                    </dl>
+                    <button className="button primary" type="button" disabled={busy === 'build' || !env.files.count} onClick={() => void startBuild()}>
+                      {env.files.count ? 'Build now' : 'Add files first'}</button>
+                  </div>
+                ) : (
                 <div className="env-pk-head">
                   {env.status === 'ready' && env.version
                     ? <span>Installed in version {env.version}, the one every session reads.</span>
                     : env.status === 'building' ? <span>Building version {env.latestVersion}…</span>
                     : env.status === 'failed' ? <span>The last build failed. Fix the manifests and build again.</span>
-                    : <span>Nothing built yet. Add a <code>requirements.txt</code>, <code>pyproject.toml</code> or <code>package.json</code> (and a <code>setup.sh</code> for anything else), then build.</span>}
+                    : <span>Nothing built yet.</span>}
                   {build && <button className="button small" type="button" onClick={() => setShowLog((v) => !v)}>{showLog ? 'Hide build log' : 'Build log'}</button>}
                 </div>
+                )}
                 {showLog && build && (
                   <pre className="env-log">{`version ${build.version} · ${build.status}${build.error ? ' · ' + build.error : ''}\n${build.log || ''}`}</pre>
                 )}
