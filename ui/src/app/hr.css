@@ -1193,8 +1193,10 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-pkg-empty code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 .env-build-failed { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .env-log { margin: 0; padding: 12px 14px; max-height: 320px; overflow: auto; background: var(--surface-subtle); border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; color: var(--ink); }
+@media (max-width: 768px) {
+  .env-root { height: calc(100vh - var(--v2-mobilebar-h)); }   /* under the mobile bar, which exists at this width only */
+}
 @media (max-width: 900px) {
-  .env-root { height: calc(100vh - 53px); }   /* under the mobile bar */
   .env-head { padding: 18px 16px 14px; }
   .env-title-row h1 { font-size: 24px; }
   .env-add { margin-left: 0; width: 100%; }
