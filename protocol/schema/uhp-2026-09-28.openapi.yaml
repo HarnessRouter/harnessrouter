@@ -254,6 +254,18 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/UnprocessableEntity' }
 
+  /v1/environments/runtimes:
+    get:
+      tags: [Environments]
+      operationId: listEnvironmentRuntimes
+      summary: The runtimes a build can be made with here
+      responses:
+        '200':
+          description: The runtimes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentRuntimes' }
+
   /v1/environments/{environment_id}:
     parameters:
       - $ref: '#/components/parameters/EnvironmentId'
@@ -1622,6 +1634,21 @@ components:
           type: array
           description: What the active build installed, as the package managers report it.
           items: { $ref: '#/components/schemas/EnvironmentPackage' }
+        declared:
+          type: object
+          description: |
+            What the owner declared, per manager, as the build installs it beside the project's own
+            manifests: `pip` (`name==1.0`), `npm` (`name@1.0`), `apt` (`name`). Each entry carries
+            the spec as written and its parsed name and version.
+          properties:
+            pip: { type: array, items: { $ref: '#/components/schemas/DeclaredPackage' } }
+            npm: { type: array, items: { $ref: '#/components/schemas/DeclaredPackage' } }
+            apt: { type: array, items: { $ref: '#/components/schemas/DeclaredPackage' } }
+        runtime:
+          type: object
+          description: The interpreter a build makes the virtual environment with; empty means the server's default.
+          properties:
+            python: { type: string, examples: ['3.12'] }
         versions:
           type: array
           items: { $ref: '#/components/schemas/EnvironmentVersion' }
@@ -1632,6 +1659,29 @@ components:
             - $ref: '#/components/schemas/EnvironmentVersion'
         createdAt: { type: integer, description: Unix milliseconds }
         updatedAt: { type: integer, description: Unix milliseconds }
+      additionalProperties: true
+
+    DeclaredPackage:
+      type: object
+      required: [spec]
+      properties:
+        spec: { type: string, description: 'As written: moviepy==2.1.1, sharp@0.33.5, ffmpeg' }
+        name: { type: string }
+        version: { type: string }
+      additionalProperties: true
+
+    EnvironmentRuntimes:
+      type: object
+      description: What a build can be made with on this server, and nothing that is not there.
+      properties:
+        python: { type: array, items: { type: string }, examples: [['3.12', '3.13']] }
+        node: { type: array, items: { type: string }, examples: [['22']] }
+        os:
+          type: object
+          properties:
+            name: { type: string }
+            version: { type: string }
+        apt: { type: boolean, description: Whether apt packages can be declared here. }
       additionalProperties: true
 
     EnvironmentPackage:
@@ -1682,6 +1732,17 @@ components:
         name: { type: string, description: Must start with a letter or digit; the slug derives from it. }
         description: { type: string }
         entry: { type: string }
+        packages:
+          type: object
+          description: Declared packages per manager, as spec strings; omitted on update means unchanged.
+          properties:
+            pip: { type: array, items: { type: string } }
+            npm: { type: array, items: { type: string } }
+            apt: { type: array, items: { type: string } }
+        runtime:
+          type: object
+          properties:
+            python: { type: string }
       additionalProperties: true
 
     EnvironmentList:

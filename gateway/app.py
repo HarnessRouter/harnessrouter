@@ -15309,6 +15309,37 @@ class EnvironmentBody(BaseModel):
     name: str
     description: str | None = ""
     entry: str | None = ""     # how the project is run, in the owner's words ("python3 run.py --episode <id>")
+    packages: dict | None = None   # declared per manager: {"pip": ["moviepy==2.1.1"], "npm": ["sharp@0.33.5"], "apt": ["ffmpeg"]}
+    runtime: dict | None = None    # {"python": "3.12"}: the interpreter a build makes the venv with
+
+
+_ENV_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$")
+_ENV_MANAGERS = ("pip", "npm", "apt")
+
+
+def _env_specs(packages: dict | None) -> dict:
+    """The declared packages, each a short spec string of one shape, at most 200 per manager."""
+    out = {}
+    for m in _ENV_MANAGERS:
+        seen: list[str] = []
+        for x in ((packages or {}).get(m) or []):
+            t = str(x or "").strip()
+            if t and _ENV_SPEC_RE.match(t) and t not in seen and len(seen) < 200:
+                seen.append(t)
+        out[m] = seen
+    return out
+
+
+def _env_spec_parts(spec: str, manager: str) -> dict:
+    """A spec string as the console shows it: name and version."""
+    if manager == "npm":
+        i = spec.rfind("@")
+        return {"name": spec[:i], "version": spec[i + 1:]} if i > 0 else {"name": spec, "version": ""}
+    for sep in ("==", ">=", "<=", "~=", "!=", "="):
+        if sep in spec:
+            n, v = spec.split(sep, 1)
+            return {"name": n, "version": (sep if sep not in ("==", "=") else "") + v}
+    return {"name": spec, "version": ""}
 
 
 def _env_slug(name: str) -> str:
@@ -15432,6 +15463,10 @@ def _environment_out(v: dict) -> dict:
             "version": active, "latestVersion": latest or None,
             "files": {"count": int(v.get("files_count") or 0), "bytes": int(v.get("files_bytes") or 0)},
             "packages": _j(v.get("packages"), []),
+            # What the owner declared, per manager, as the console edits it; a build installs these
+            # beside the project's own manifests.
+            "declared": {m: [_env_spec_parts(x, m) | {"spec": x} for x in _j(v.get(f"pkg_{m}"), [])] for m in _ENV_MANAGERS},
+            "runtime": {"python": str(v.get("rt_python") or "")},
             "versions": vers,
             "build": ({k: latest_rec.get(k) for k in ("version", "status", "started_at", "finished_at", "error")}
                       if latest_rec else None),
@@ -15468,10 +15503,13 @@ async def create_environment(body: EnvironmentBody, request: Request) -> dict:
         raise uhp_error(409, "environment_exists", f"An environment is already mounted at /env/{slug}; choose another name.", "name")
     eid = _rid("henv")
     now = str(int(time.time() * 1000))
+    specs = _env_specs(body.packages)
     props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
              "name": name, "slug": slug, "description": str(body.description or "").strip(),
              "entry": str(body.entry or "").strip(), "status": "empty", "active_version": "", "latest_version": "",
              "files_count": "0", "files_bytes": "0", "versions": "[]", "packages": "[]",
+             "pkg_pip": json.dumps(specs["pip"]), "pkg_npm": json.dumps(specs["npm"]), "pkg_apt": json.dumps(specs["apt"]),
+             "rt_python": str((body.runtime or {}).get("python") or "").strip()[:16],
              "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Environment", eid, props)
     return _environment_out({"id": eid, **props})
@@ -15495,6 +15533,19 @@ async def list_environments(request: Request) -> dict:
     return {"environments": items}
 
 
+@app.get("/v1/environments/runtimes")
+async def environment_runtimes(request: Request) -> dict:
+    """What a build can be made with on this instance: the Python minors present, the Node major,
+    the OS release for apt. The console offers these and nothing else."""
+    p = await _principal(request)
+    if not p.get("org"):
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    r = await _env_runner("GET", "/environments/runtimes", "runtimes")
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the runtimes could not be read")
+    return r.json()
+
+
 @app.get("/v1/environments/{env_id}")
 async def get_environment(env_id: str, request: Request) -> dict:
     _, v = await _owned_environment(request, env_id)
@@ -15506,9 +15557,14 @@ async def update_environment(env_id: str, body: EnvironmentBody, request: Reques
     """Name, description and entry. The slug (the mount path) stays: sessions and instructions name it."""
     _, v = await _owned_environment(request, env_id)
     name = str(body.name or "").strip() or str(v.get("name") or "")
-    await _vg_upsert("Environment", env_id, {"name": name, "description": str(body.description or "").strip(),
-                                             "entry": str(body.entry or "").strip(),
-                                             "updated_at": str(int(time.time() * 1000))})
+    props = {"name": name, "description": str(body.description or "").strip(), "entry": str(body.entry or "").strip(),
+             "updated_at": str(int(time.time() * 1000))}
+    if body.packages is not None:
+        specs = _env_specs(body.packages)
+        props.update({"pkg_pip": json.dumps(specs["pip"]), "pkg_npm": json.dumps(specs["npm"]), "pkg_apt": json.dumps(specs["apt"])})
+    if body.runtime is not None:
+        props["rt_python"] = str((body.runtime or {}).get("python") or "").strip()[:16]
+    await _vg_upsert("Environment", env_id, props)
     return _environment_out(await _environment_refresh(await _environment_vertex(str(v.get("org")), env_id) or v))
 
 
@@ -15630,8 +15686,11 @@ async def environment_build(env_id: str, request: Request) -> dict:
     if str(v.get("status") or "") == "building":
         raise uhp_error(409, "environment_busy", "A build is already running.")
     n = int(v.get("latest_version") or 0) + 1
+    spec = {m: json.loads(v.get(f"pkg_{m}") or "[]") for m in _ENV_MANAGERS}
+    spec["python"] = str(v.get("rt_python") or "")
     r = await _env_runner("POST", f"/environments/{env_id}/build", env_id,
-                          params={"version": n, "slug": str(v.get("slug") or ""), "activate": 1})
+                          params={"version": n, "slug": str(v.get("slug") or ""), "activate": 1},
+                          content=json.dumps(spec).encode())
     if r.status_code != 200:
         raise _env_runner_error(r, "the build could not start")
     await _vg_upsert("Environment", env_id, {"status": "building", "latest_version": str(n),
