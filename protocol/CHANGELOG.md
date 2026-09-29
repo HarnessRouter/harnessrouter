@@ -9,7 +9,7 @@ Additive to `2026-09-12`: every request and object valid under the previous vers
 **Patch of 2026-09-29, same version.** The task-side reference to an environment is
 `metadata.environment`, not a top-level request field: the task surface is a Responses request
 and `metadata` is its extension point, where `harness_id` already travels
-([Tasks §1.2](versions/2026-09-28/tasks.md#12-selecting-a-harness),
+([Tasks §1.2](versions/2026-09-28/tasks.md#12-selecting-the-harness),
 [Environments §5](versions/2026-09-28/environments.md#5-attaching-an-environment)). The response
 reports `metadata.environment` beside `session_id`. The harness and session objects keep
 `environment` as an ordinary field. The published chapter had carried the field at the top level
