@@ -6,16 +6,27 @@
 // the Harnesses that read it, and the actions: build, import, rename, delete. Nothing here is
 // derived on the client; every count and status is the service's.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { SkelPage } from '@/components/Skel';
+import { PrismAsync as SyntaxHL } from 'react-syntax-highlighter';
+import oneLightTheme from 'react-syntax-highlighter/dist/esm/styles/prism/one-light';
 import {
-  activateEnvironmentVersion, buildEnvironment, deleteEnvironment, deleteEnvironmentPath, environmentHarnesses,
+  activateEnvironmentVersion, buildEnvironment, deleteEnvironmentPath, environmentHarnesses,
   fmtBytes, getEnvironment, getEnvironmentBuild, importEnvironmentArchive, importEnvironmentGit, listEnvironmentFiles,
-  makeEnvironmentDir, readEnvironmentFile, updateEnvironment, writeEnvironmentFile,
+  makeEnvironmentDir, readEnvironmentFile, writeEnvironmentFile,
   type Environment, type EnvironmentBuildRecord, type EnvironmentFileEntry,
 } from '@/lib/environments';
 
 const STATUS_LABEL: Record<Environment['status'], string> = { empty: 'Not built', building: 'Building', ready: 'Ready', failed: 'Build failed' };
+/** The highlighter's language for a file, by extension; plain text for anything else. */
+const LANG: Record<string, string> = {
+  py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'tsx', jsx: 'jsx', json: 'json',
+  yaml: 'yaml', yml: 'yaml', md: 'markdown', html: 'markup', htm: 'markup', xml: 'markup', svg: 'markup', css: 'css', scss: 'scss',
+  sh: 'bash', bash: 'bash', zsh: 'bash', toml: 'toml', ini: 'ini', cfg: 'ini', env: 'bash', sql: 'sql', go: 'go', rs: 'rust',
+  java: 'java', rb: 'ruby', php: 'php', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cs: 'csharp', swift: 'swift', kt: 'kotlin',
+  r: 'r', txt: 'text', csv: 'text', lock: 'text', dockerfile: 'docker', makefile: 'makefile',
+};
+const langOf = (path: string) => { const name = path.split('/').pop() || ''; const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : name.toLowerCase(); return LANG[ext] || 'text'; };
 const STATUS_CLASS: Record<Environment['status'], string> = { empty: 'neutral', building: 'warn', ready: 'ok', failed: 'err' };
 
 type Node = { name: string; path: string; dir: boolean; bytes: number; children: Node[]; count: number };
@@ -43,7 +54,6 @@ function treeOf(entries: EnvironmentFileEntry[]): Node[] {
 
 export default function EnvironmentPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
   const [env, setEnv] = useState<Environment | null>(null);
   const [entries, setEntries] = useState<EnvironmentFileEntry[] | null>(null);
   const [harnesses, setHarnesses] = useState<{ id: string; name: string; base: string }[]>([]);
@@ -58,11 +68,8 @@ export default function EnvironmentPage() {
   const [busy, setBusy] = useState('');
   const [build, setBuild] = useState<EnvironmentBuildRecord | null>(null);
   const [showLog, setShowLog] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [meta, setMeta] = useState({ name: '', description: '', entry: '' });
   const [gitOpen, setGitOpen] = useState(false);
-  const [menu, setMenu] = useState<'import' | 'more' | null>(null);
+  const [menu, setMenu] = useState<'import' | null>(null);
   const [git, setGit] = useState({ url: '', ref: '', replace: false });
   const [newPath, setNewPath] = useState<{ kind: 'file' | 'dir'; value: string } | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -71,7 +78,7 @@ export default function EnvironmentPage() {
   const reload = useCallback(async () => {
     try {
       const [e, t, h] = await Promise.all([getEnvironment(id), listEnvironmentFiles(id), environmentHarnesses(id).catch(() => [])]);
-      setEnv(e); setEntries(t.entries); setHarnesses(h); setMeta({ name: e.name, description: e.description, entry: e.entry });
+      setEnv(e); setEntries(t.entries); setHarnesses(h);
       if (e.latestVersion) setBuild(await getEnvironmentBuild(id, e.latestVersion).catch(() => null));
     } catch (e) { setErr(e instanceof Error ? e.message : 'The environment could not be read.'); }
   }, [id]);
@@ -125,8 +132,6 @@ export default function EnvironmentPage() {
   const remove = (p: string) => act('remove', async () => { await deleteEnvironmentPath(id, p); if (sel === p || sel.startsWith(p + '/')) setSel(''); if (openPath === p || openPath.startsWith(p + '/')) { setOpenPath(''); setFile(null); } });
   const startBuild = () => act('build', async () => { await buildEnvironment(id); setTab('packages'); setShowLog(true); });
   const activate = (n: number) => act('activate', () => activateEnvironmentVersion(id, n));
-  const saveMeta = () => act('rename', async () => { await updateEnvironment(id, meta); setRenaming(false); });
-  const destroy = () => act('delete', async () => { await deleteEnvironment(id); router.push('/environments'); });
 
   if (!env && !err) return <SkelPage />;
 
@@ -147,7 +152,6 @@ export default function EnvironmentPage() {
     </div>
   );
 
-  const lines = editing === null && file?.text !== null && file?.text !== undefined ? file.text.split('\n') : [];
 
   return (
     <section className="view is-active collection-view" id="view-environment">
@@ -155,59 +159,9 @@ export default function EnvironmentPage() {
         <a className="env-back" href="/environments"><iconify-icon icon="tabler:arrow-left"></iconify-icon>Environments</a>
         {env && (
           <div className="env-title-row">
-            {renaming ? (
-              <div className="env-rename">
-                <input value={meta.name} aria-label="Name" onChange={(ev) => setMeta({ ...meta, name: ev.target.value })} />
-                <input value={meta.description} placeholder="Description" aria-label="Description" onChange={(ev) => setMeta({ ...meta, description: ev.target.value })} />
-                <input value={meta.entry} placeholder="How it is run" aria-label="How it is run" onChange={(ev) => setMeta({ ...meta, entry: ev.target.value })} />
-                <button className="button primary small" type="button" disabled={busy === 'rename'} onClick={() => void saveMeta()}>Save</button>
-                <button className="button small" type="button" onClick={() => { setRenaming(false); setMeta({ name: env.name, description: env.description, entry: env.entry }); }}>Cancel</button>
-              </div>
-            ) : (
-              <h1>{env.name}</h1>
-            )}
-            <div className="env-actions">
-              <span className={'env-status is-' + env.status}><i />{STATUS_LABEL[env.status]}{env.version ? ` v${env.version}` : ''}</span>
-              <button className="button primary small" type="button" disabled={env.status === 'building' || busy === 'build' || !env.files.count}
-                      title={!env.files.count ? 'Add files first' : 'Snapshot the files and install the packages they declare'} onClick={() => void startBuild()}>
-                {env.status === 'building' ? 'Building\u2026' : env.version ? 'Rebuild' : 'Build'}</button>
-              <span className="env-menu-wrap">
-                <button className="button small" type="button" aria-haspopup="menu" aria-expanded={menu === 'import'} onClick={() => setMenu(menu === 'import' ? null : 'import')}>Import<iconify-icon icon="tabler:chevron-down"></iconify-icon></button>
-                {menu === 'import' && (
-                  <div className="env-menu" role="menu">
-                    <button type="button" role="menuitem" onClick={() => { setMenu(null); archiveRef.current?.click(); }}><iconify-icon icon="tabler:file-zip"></iconify-icon>Archive (zip or tar)</button>
-                    <button type="button" role="menuitem" onClick={() => { setMenu(null); setGitOpen(true); }}><iconify-icon icon="tabler:brand-git"></iconify-icon>Git repository</button>
-                  </div>
-                )}
-              </span>
-              <input ref={archiveRef} type="file" hidden accept=".zip,.tar,.tgz,.tar.gz" onChange={(ev) => { void importArchive(ev.target.files); ev.target.value = ''; }} />
-              <span className="env-menu-wrap">
-                <button className="icon-button" type="button" aria-label="More" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><iconify-icon icon="tabler:dots"></iconify-icon></button>
-                {menu === 'more' && (
-                  <div className="env-menu is-right" role="menu">
-                    <button type="button" role="menuitem" onClick={() => { setMenu(null); setRenaming(true); }}><iconify-icon icon="tabler:pencil"></iconify-icon>Rename or edit details</button>
-                    <button type="button" role="menuitem" className="is-danger" onClick={() => { setMenu(null); setConfirmDelete(true); }}><iconify-icon icon="tabler:trash"></iconify-icon>Delete environment</button>
-                  </div>
-                )}
-              </span>
-            </div>
-          </div>
-        )}
-        {env && !renaming && (
-          <p className="env-sub">
-            <code>{env.mount}</code><span>read-only in every session</span>
-            {env.entry && <><span className="env-sep" /><span>run with</span><code>{env.entry}</code></>}
-            <span className="env-sep" />
-            {harnesses.length
-              ? <span>read by {harnesses.map((h, i) => <span key={h.id}>{i > 0 ? ', ' : ''}<a href={`/harnesses/${h.id}`}>{h.name}</a></span>)}</span>
-              : <span>not named by any Harness yet</span>}
-          </p>
-        )}
-        {confirmDelete && (
-          <div className="env-confirm">
-            <span>Delete this environment, every version and every file? Harnesses that name it will refuse their next Task.</span>
-            <button className="button danger small" type="button" disabled={busy === 'delete'} onClick={() => void destroy()}>Delete</button>
-            <button className="button small" type="button" onClick={() => setConfirmDelete(false)}>Keep</button>
+            <h1>{env.name}</h1>
+            <button className="button primary" type="button" disabled={editing === null || busy === 'save'} onClick={() => void saveFile()}>
+              {busy === 'save' ? 'Saving\u2026' : 'Save changes'}</button>
           </div>
         )}
       </div>
@@ -230,6 +184,16 @@ export default function EnvironmentPage() {
                     <button className="icon-button" type="button" title="New folder" aria-label="New folder" onClick={() => setNewPath({ kind: 'dir', value: '' })}><iconify-icon icon="tabler:folder-plus"></iconify-icon></button>
                     <button className="icon-button" type="button" title="Upload files" aria-label="Upload files" onClick={() => uploadRef.current?.click()}><iconify-icon icon="tabler:upload"></iconify-icon></button>
                     <input ref={uploadRef} type="file" hidden multiple onChange={(ev) => { void upload(ev.target.files); ev.target.value = ''; }} />
+                    <span className="env-menu-wrap">
+                      <button className="icon-button" type="button" title="Import a project" aria-label="Import a project" aria-haspopup="menu" aria-expanded={menu === 'import'} onClick={() => setMenu(menu === 'import' ? null : 'import')}><iconify-icon icon="tabler:folder-down"></iconify-icon></button>
+                      {menu === 'import' && (
+                        <div className="env-menu is-right" role="menu">
+                          <button type="button" role="menuitem" onClick={() => { setMenu(null); archiveRef.current?.click(); }}><iconify-icon icon="tabler:file-zip"></iconify-icon>Import an archive</button>
+                          <button type="button" role="menuitem" onClick={() => { setMenu(null); setGitOpen(true); }}><iconify-icon icon="tabler:brand-git"></iconify-icon>Import from git</button>
+                        </div>
+                      )}
+                    </span>
+                    <input ref={archiveRef} type="file" hidden accept=".zip,.tar,.tgz,.tar.gz" onChange={(ev) => { void importArchive(ev.target.files); ev.target.value = ''; }} />
                   </div>
                   {newPath && (
                     <div className="env-newpath">
@@ -271,18 +235,22 @@ export default function EnvironmentPage() {
                     <>
                       <div className="env-view-head">
                         <code>{openPath}</code>
-                        <span className="env-dim">{fmtBytes(file.bytes)}</span>
-                        {file.text !== null && (editing === null
-                          ? <button className="button small" type="button" onClick={() => setEditing(file.text || '')}>Edit</button>
-                          : <><button className="button primary small" type="button" disabled={busy === 'save'} onClick={() => void saveFile()}>Save</button>
-                              <button className="button small" type="button" onClick={() => setEditing(null)}>Cancel</button></>)}
+                        <span className="env-dim">{fmtBytes(file.bytes)}{editing !== null ? ' \u00b7 edited' : ''}</span>
+                        {editing !== null && <button className="button small" type="button" onClick={() => setEditing(null)}>Discard</button>}
                       </div>
                       {file.text === null ? (
                         <div className="env-binary">A binary file ({file.type}, {fmtBytes(file.bytes)}). It is in the environment as uploaded.</div>
                       ) : editing !== null ? (
-                        <textarea className="env-editor" value={editing} spellCheck={false} onChange={(ev) => setEditing(ev.target.value)} />
+                        <textarea className="env-editor" value={editing} spellCheck={false} autoFocus onChange={(ev) => setEditing(ev.target.value)} />
                       ) : (
-                        <pre className="env-code">{lines.map((l, i) => <span key={i} className="env-line"><span className="env-ln">{i + 1}</span><span className="env-lt">{l}</span></span>)}</pre>
+                        <div className="env-code" title="Click to edit" onClick={() => setEditing(file.text || '')}>
+                          <SyntaxHL language={langOf(openPath)} style={oneLightTheme} showLineNumbers
+                            customStyle={{ margin: 0, padding: '14px 0', background: 'transparent', fontSize: 12.5, lineHeight: 1.7, whiteSpace: 'pre', overflowX: 'auto' }}
+                            codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' } }}
+                            lineNumberStyle={{ minWidth: 48, paddingRight: 16, textAlign: 'right', color: 'var(--line-strong)', userSelect: 'none' }}>
+                            {file.text || ' '}
+                          </SyntaxHL>
+                        </div>
                       )}
                     </>
                   ) : (
@@ -308,12 +276,17 @@ export default function EnvironmentPage() {
                   </div>
                 ) : (
                 <div className="env-pk-head">
-                  {env.status === 'ready' && env.version
-                    ? <span>Installed in version {env.version}, the one every session reads.</span>
-                    : env.status === 'building' ? <span>Building version {env.latestVersion}…</span>
-                    : env.status === 'failed' ? <span>The last build failed. Fix the manifests and build again.</span>
-                    : <span>Nothing built yet.</span>}
-                  {build && <button className="button small" type="button" onClick={() => setShowLog((v) => !v)}>{showLog ? 'Hide build log' : 'Build log'}</button>}
+                  <span className={'env-status is-' + env.status}><i />{env.status === 'ready' && env.version
+                    ? `Version ${env.version} is what every session reads`
+                    : env.status === 'building' ? `Building version ${env.latestVersion}\u2026`
+                    : env.status === 'failed' ? 'The last build failed; fix the manifests and build again'
+                    : 'Nothing built yet'}</span>
+                  <span className="env-pk-actions">
+                    {build && <button className="button small" type="button" onClick={() => setShowLog((v) => !v)}>{showLog ? 'Hide build log' : 'Build log'}</button>}
+                    <button className="button primary small" type="button" disabled={env.status === 'building' || busy === 'build' || !env.files.count}
+                      title={!env.files.count ? 'Add files first' : 'Snapshot the files and install the packages they declare'} onClick={() => void startBuild()}>
+                      {env.status === 'building' ? 'Building\u2026' : env.version ? 'Rebuild' : 'Build'}</button>
+                  </span>
                 </div>
                 )}
                 {showLog && build && (
