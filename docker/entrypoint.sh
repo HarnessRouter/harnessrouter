@@ -55,6 +55,8 @@ mkdir -p /etc/profile.d
 cat > /etc/profile.d/hr-environment.sh <<'PROFILE'
 # HarnessRouter: the task's environment (runner/environments.py) stays first on PATH in login shells.
 if [ -n "$HR_ENVIRONMENT" ]; then
+  # the same order runner/environments.py::apply_env sets: apt tools, then node_modules/.bin, then the venv first
+  for d in "$HR_ENVIRONMENT/apt/bin" "$HR_ENVIRONMENT/apt/usr/local/bin" "$HR_ENVIRONMENT/apt/usr/bin"; do [ -d "$d" ] && PATH="$d:$PATH"; done
   [ -d "$HR_ENVIRONMENT/node_modules/.bin" ] && PATH="$HR_ENVIRONMENT/node_modules/.bin:$PATH"
   [ -d "$HR_ENVIRONMENT/.venv/bin" ] && PATH="$HR_ENVIRONMENT/.venv/bin:$PATH" && export VIRTUAL_ENV="$HR_ENVIRONMENT/.venv"
   export PATH
