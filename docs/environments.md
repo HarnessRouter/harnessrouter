@@ -76,7 +76,7 @@ harness object and on `POST /v1/responses`; `environment` on the session object.
   modes still hold for any non-root agent; root is the operator's own choice. Measured on
   hr-test 2026-09-28: before the groups, any session could list and read every environment's
   source and layers; after, a session reads its own and gets EACCES on the others.
-- **The turn**: the gateway resolves the environment (request field, else the harness's) before
+- **The turn**: the gateway resolves the environment (`metadata.environment` on the request, else the harness's) before
   anything is allocated, passes `{id, slug, entry}` to the runner, stamps the session vertex with
   `environment` and the turn record with the version. The runner resolves the mount before writing
   the agent doc (a 409 there fails the turn before any process starts), then sets the variables.

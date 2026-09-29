@@ -1868,8 +1868,8 @@ def en05(ctx):
         ctx.client.delete(f"/v1/harnesses/{(r.json or {}).get('id')}")
     empty = ctx.client.post("/v1/environments", body={"name": f"uhp-conformance-empty-{uuid.uuid4().hex[:6]}"}).json or {}
     ctx.state.setdefault("_cleanup_environments", []).append(empty.get("id"))
-    r = ctx.client.post("/v1/responses", body={"input": PROMPT, "metadata": {"harness_id": h["id"]},
-                                               "environment": empty.get("id"), "stream": False})
+    r = ctx.client.post("/v1/responses", body={"input": PROMPT, "stream": False,
+                                               "metadata": {"harness_id": h["id"], "environment": empty.get("id")}})
     assert r.status == 409 and _error_code(r) == "environment_not_ready", (
         f"a task on an environment with nothing built must be refused with environment_not_ready before it starts: HTTP {r.status} {_error_code(r)!r}")
     return "harness reference reads back; unknown refused; unbuilt refused"
@@ -1905,11 +1905,13 @@ def en07(ctx):
     assert "hello from the environment" in text, f"the agent could not read the file at {mount}: {text[-300:]!r}"
     assert "WRITE_RC=0" not in text or "denied" in text.lower() or "read-only" in text.lower(), (
         f"a write under {mount} must fail (the layer is read-only): {text[-300:]!r}")
-    sid = str(((resp.get("metadata") or {}).get("session_id")) or "")
+    meta = resp.get("metadata") or {}
+    assert meta.get("environment") == e["id"], f"the response must name the environment the task read in metadata.environment: {meta.get('environment')!r}"
+    sid = str(meta.get("session_id") or "")
     if sid:
         s = ctx.client.get(f"/v1/sessions/{sid}").json or {}
         assert s.get("environment") == e["id"], f"the session must name the environment its turn read: {s.get('environment')!r}"
-    return f"read {mount}/data/hello.txt; write refused"
+    return f"read {mount}/data/hello.txt; write refused; metadata.environment reported"
 
 
 @check("EN-08", "Configured environments are cleaned up", "full", f"{SPEC}/environments.md#2-the-environment-object")

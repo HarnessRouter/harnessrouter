@@ -1420,9 +1420,14 @@ components:
         model: { type: string, description: Canonical model id. Omitted means the harness default. }
         metadata:
           type: object
-          description: Client metadata. `harness_id` selects the configured harness.
+          description: |
+            Client metadata, the extension point of the Responses surface. `harness_id` selects the
+            configured harness; `environment` names the environment this task reads, overriding the
+            harness's (capability `environments`), refused with `environment_not_found` or
+            `environment_not_ready` before the task starts.
           properties:
             harness_id: { type: string }
+            environment: { type: string }
           additionalProperties: true
         stream: { type: boolean, default: false }
         previous_response_id: { type: [string, 'null'] }
@@ -1431,11 +1436,6 @@ components:
         max_output_tokens: { type: [integer, 'null'] }
         max_step: { type: [integer, 'null'], description: Agent step (tool-call round) budget }
         timeout_seconds: { type: [integer, 'null'], description: Wall-clock budget }
-        environment:
-          type: string
-          description: |
-            The environment this task reads, overriding the harness's. Refused with
-            `environment_not_found` or `environment_not_ready` before the task starts.
         tools:
           type: array
           items: { type: object, additionalProperties: true }
@@ -1486,6 +1486,9 @@ components:
           type: object
           properties:
             session_id: { type: string }
+            environment:
+              type: string
+              description: The environment the task read, when it read one (capability `environments`).
             requested_model:
               type: string
               description: Present when the server ran a different model than was requested.
