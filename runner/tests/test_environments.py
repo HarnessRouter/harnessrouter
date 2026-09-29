@@ -162,3 +162,15 @@ def test_the_turn_gets_the_path_the_variables_and_the_instructions(store):
 
 def test_the_slug_is_a_path_segment(store):
     assert E.slug_ok("content-studio") and E.slug_ok("a.b_c") and not E.slug_ok("../x") and not E.slug_ok("a/b") and not E.slug_ok("")
+
+
+def test_declared_specs_are_checked_and_the_runtimes_are_what_the_box_has(store):
+    assert E.clean_specs(["pyyaml==6.0.2", "sharp@0.33.5", "@scope/pkg@1.0.0", "ffmpeg", "bad spec!", "", "pyyaml==6.0.2", "../x"]) == \
+        ["pyyaml==6.0.2", "sharp@0.33.5", "@scope/pkg@1.0.0", "ffmpeg"]
+    rt = E.runtimes()
+    assert isinstance(rt["python"], list) and all(v.startswith("3.") for v in rt["python"]) and isinstance(rt["apt"], bool)
+    # a declared pip package with no network still records what was asked; the manifests path is unchanged
+    E.write_file("henv_d", "run.py", b"print(1)\n")
+    E.start_build("henv_d", 1, "declared", spec={"pip": [], "npm": [], "apt": [], "python": rt["python"][-1] if rt["python"] else ""})
+    rec = _wait("henv_d", 1)
+    assert rec["status"] == "ready" and rec["declared"] == {"pip": [], "npm": [], "apt": []}

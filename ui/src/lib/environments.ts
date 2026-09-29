@@ -17,6 +17,8 @@ export interface Environment {
   version: number | null; latestVersion: number | null;
   files: { count: number; bytes: number };
   packages: EnvironmentPackage[];
+  declared: Record<Manager, DeclaredPackage[]>;
+  runtime: { python: string };
   versions: EnvironmentVersion[];
   build: EnvironmentVersion | null;
   member: string; workspace: string; createdAt: number; updatedAt: number;
@@ -26,13 +28,18 @@ export interface EnvironmentBuildRecord {
   started_at?: number | null; finished_at?: number | null; error?: string; log?: string;
   packages?: EnvironmentPackage[]; files?: number; bytes?: number;
 }
+export type Manager = 'pip' | 'npm' | 'apt';
+export interface DeclaredPackage { name: string; version: string; spec: string }
+export interface EnvironmentRuntimes { python: string[]; node: string[]; os: { name: string; version: string }; apt: boolean }
 export interface EnvironmentFileEntry { path: string; dir: boolean; bytes: number; mtime: number; link?: boolean }
 
 export const listEnvironments = () => gw<{ environments: Environment[] }>('GET', '/v1/environments').then((d) => d.environments);
 export const getEnvironment = (id: string) => gw<Environment>('GET', `/v1/environments/${id}`);
-export const createEnvironment = (body: { name: string; description?: string; entry?: string }) =>
+export type EnvironmentInput = { name: string; description?: string; entry?: string; packages?: Record<Manager, string[]>; runtime?: { python: string } };
+export const listRuntimes = () => gw<EnvironmentRuntimes>('GET', '/v1/environments/runtimes');
+export const createEnvironment = (body: EnvironmentInput) =>
   gw<Environment>('POST', '/v1/environments', body);
-export const updateEnvironment = (id: string, body: { name: string; description?: string; entry?: string }) =>
+export const updateEnvironment = (id: string, body: EnvironmentInput) =>
   gw<Environment>('PUT', `/v1/environments/${id}`, body);
 export const deleteEnvironment = (id: string) => gw<{ id: string; deleted: boolean }>('DELETE', `/v1/environments/${id}`);
 export const listEnvironmentFiles = (id: string) =>

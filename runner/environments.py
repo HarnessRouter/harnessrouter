@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import platform
+import re
 import os
 import pathlib
 import shutil
@@ -56,6 +58,8 @@ TREE_MAX = 20_000                                                        # entri
 # thing SPI-001 says not to trust).
 NOT_COPIED = {".venv", "venv", "node_modules", "__pycache__", ".pnpm-store", ".cache", ".hr-build.json"}
 _ID_SAFE = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$")   # one declared package
+_ARCH_DIRS = {"amd64": "x86_64-linux-gnu", "arm64": "aarch64-linux-gnu"}
 
 router = APIRouter()
 _builds_lock = threading.Lock()
@@ -303,6 +307,44 @@ def import_git(env_id: str, url: str, ref: str = "", *, replace: bool = False) -
     return {"imported": "git", "url": url, "ref": ref, **source_stat(env_id)}
 
 
+# ── runtimes ────────────────────────────────────────────────────────────────────────────────────
+def runtimes() -> dict:
+    """What a build can be made with, on this box: the Python minors present as python3.N binaries,
+    the Node major, the OS release for apt. Only what is here; nothing offered that is not."""
+    env = _tool_env()
+    pythons = []
+    for minor in range(8, 20):
+        if shutil.which(f"python3.{minor}", path=env.get("PATH")):
+            pythons.append(f"3.{minor}")
+    node = ""
+    try:
+        node = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=10, env=env).stdout.strip().lstrip("v").split(".")[0]
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    os_name = os_ver = ""
+    try:
+        for line in open("/etc/os-release"):
+            k, _, v = line.strip().partition("=")
+            if k == "ID":
+                os_name = v.strip('"')
+            elif k == "VERSION_ID":
+                os_ver = v.strip('"')
+    except OSError:
+        pass
+    return {"python": pythons, "node": [node] if node else [], "os": {"name": os_name, "version": os_ver},
+            "apt": bool(shutil.which("apt-get") and shutil.which("dpkg"))}
+
+
+def clean_specs(specs) -> list[str]:
+    """Declared packages as short spec strings, each checked against one shape."""
+    out: list[str] = []
+    for x in (specs or []):
+        t = str(x or "").strip()
+        if t and _SPEC_RE.match(t) and t not in out and len(out) < 200:
+            out.append(t)
+    return out
+
+
 # ── builds ──────────────────────────────────────────────────────────────────────────────────────
 def build_record(env_id: str, n: int) -> dict | None:
     p = version_dir(env_id, n) / ".hr-build.json"
@@ -383,6 +425,41 @@ def _packages(dst: pathlib.Path, env: dict) -> list[dict]:
     return out
 
 
+def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: dict, scratch: str, deadline: float) -> None:
+    """System packages, unpacked into the layer rather than installed into the box: apt resolves
+    and downloads each named package with the dependencies the image lacks, and dpkg unpacks every
+    archive under <version>/apt, which a turn puts on PATH and LD_LIBRARY_PATH. The image's own
+    packages stay the image's; nothing here changes the container."""
+    cache = pathlib.Path(scratch) / "apt-archives"
+    cache.mkdir(parents=True, exist_ok=True)
+    _run(log, ["apt-get", "update", "-qq"], str(dst), env, deadline)
+    _run(log, ["apt-get", "install", "-y", "--download-only", "--reinstall", "-o", f"Dir::Cache::archives={cache}",
+               "-o", "Debug::NoLocking=1", *[n.split("=", 1)[0] if "=" in n and not n.startswith("=") else n for n in names]],
+         str(dst), env, deadline)
+    debs = sorted(cache.glob("*.deb"))
+    if not debs:
+        raise RuntimeError("apt downloaded nothing for " + ", ".join(names))
+    out = dst / "apt"
+    out.mkdir(exist_ok=True)
+    for deb in debs:
+        _run(log, ["dpkg", "-x", str(deb), str(out)], str(dst), env, deadline)
+    (out / ".packages").write_text("\n".join(d.name for d in debs) + "\n")
+    log.append(f"apt: unpacked {len(debs)} archive(s) into apt/")
+
+
+def _apt_packages(dst: pathlib.Path) -> list[dict]:
+    """The archives a build unpacked, as manager/name/version, from their file names."""
+    out = []
+    try:
+        for name in (dst / "apt" / ".packages").read_text().split():
+            parts = name[:-4].split("_") if name.endswith(".deb") else []
+            if len(parts) >= 2:
+                out.append({"manager": "apt", "name": parts[0], "version": parts[1].replace("%3a", ":")})
+    except OSError:
+        pass
+    return out
+
+
 def _read_only(dst: pathlib.Path) -> None:
     """Root's, readable by everyone, writable by nobody else: directories 755, files keep their
     execute bits and lose group/other write."""
@@ -427,12 +504,16 @@ def _write_record(dst: pathlib.Path, rec: dict) -> None:
     os.replace(tmp, dst / ".hr-build.json")
 
 
-def _build(env_id: str, n: int, slug: str, activate: bool) -> None:
+def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = None) -> None:
+    spec = spec or {}
+    pip_specs, npm_specs, apt_specs = clean_specs(spec.get("pip")), clean_specs(spec.get("npm")), clean_specs(spec.get("apt"))
+    want_py = str(spec.get("python") or "")   # the node major is the box's one; recorded, not chosen
     src, dst = source_dir(env_id), version_dir(env_id, n)
     started = int(time.time())
     log: list[str] = []
     rec = {"version": n, "status": "building", "started_at": started, "finished_at": None, "error": "",
-           "packages": [], "files": 0, "bytes": 0, "log": log}
+           "packages": [], "files": 0, "bytes": 0, "log": log, "runtime": {},
+           "declared": {"pip": pip_specs, "npm": npm_specs, "apt": apt_specs}}
     try:
         if dst.exists():
             shutil.rmtree(dst)
@@ -445,21 +526,43 @@ def _build(env_id: str, n: int, slug: str, activate: bool) -> None:
         with tempfile.TemporaryDirectory(prefix="hr-env-build-") as scratch:
             env["HOME"] = env["TMPDIR"] = scratch
             env["npm_config_cache"] = os.path.join(scratch, "npm-cache")
-            if (dst / "requirements.txt").is_file() or (dst / "pyproject.toml").is_file():
-                python = shutil.which("python3", path=env.get("PATH")) or "python3"
+            if pip_specs or (dst / "requirements.txt").is_file() or (dst / "pyproject.toml").is_file():
+                # The interpreter the owner chose, when the box has it; the image's python3 otherwise.
+                python = (shutil.which(f"python{want_py}", path=env.get("PATH")) if want_py else None) \
+                    or shutil.which("python3", path=env.get("PATH")) or "python3"
                 _run(log, [python, "-m", "venv", ".venv"], str(dst), env, deadline)
                 pip = str(dst / ".venv" / "bin" / "pip")
                 if (dst / "requirements.txt").is_file():
                     _run(log, [pip, "install", "-r", "requirements.txt"], str(dst), env, deadline)
                 if (dst / "pyproject.toml").is_file():
                     _run(log, [pip, "install", "."], str(dst), env, deadline)
-            if (dst / "package.json").is_file():
+                if pip_specs:
+                    _run(log, [pip, "install", *pip_specs], str(dst), env, deadline)
+                try:
+                    rec["runtime"]["python"] = subprocess.run([str(dst / ".venv" / "bin" / "python"), "-c", "import platform; print(platform.python_version())"],
+                                                              capture_output=True, text=True, timeout=30, env=env).stdout.strip()
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            if npm_specs or (dst / "package.json").is_file():
                 npm = shutil.which("npm", path=env.get("PATH")) or "npm"
-                _run(log, [npm, "ci" if (dst / "package-lock.json").is_file() else "install", "--no-audit", "--no-fund"],
-                     str(dst), env, deadline)
+                if (dst / "package.json").is_file():
+                    _run(log, [npm, "ci" if (dst / "package-lock.json").is_file() else "install", "--no-audit", "--no-fund"],
+                         str(dst), env, deadline)
+                if npm_specs:
+                    if not (dst / "package.json").is_file():
+                        (dst / "package.json").write_text(json.dumps({"name": slug or "environment", "version": "0.0.0", "private": True}, indent=2) + "\n")
+                    _run(log, [npm, "install", "--no-audit", "--no-fund", "--save", *npm_specs], str(dst), env, deadline)
+                try:
+                    rec["runtime"]["node"] = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=10, env=env).stdout.strip().lstrip("v")
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            if apt_specs:
+                _apt_into_layer(log, dst, apt_specs, env, scratch, deadline)
             if (dst / "setup.sh").is_file():
                 _run(log, ["bash", "setup.sh"], str(dst), {**env, "ENV_ROOT": str(dst)}, deadline)
             rec["packages"] = _packages(dst, env)
+            if (dst / "apt").is_dir():
+                rec["packages"] += _apt_packages(dst)
         _read_only(dst)
         rec["files"], rec["bytes"] = _size(dst)
         rec["status"], rec["finished_at"] = "ready", int(time.time())
@@ -479,7 +582,7 @@ def _build(env_id: str, n: int, slug: str, activate: bool) -> None:
             _builds.pop(f"{env_id}:{n}", None)
 
 
-def start_build(env_id: str, n: int, slug: str, activate: bool = True) -> dict:
+def start_build(env_id: str, n: int, slug: str, activate: bool = True, spec: dict | None = None) -> dict:
     if not source_dir(env_id).is_dir():
         raise HTTPException(409, "the environment has no files yet")
     key = f"{env_id}:{n}"
@@ -489,7 +592,7 @@ def start_build(env_id: str, n: int, slug: str, activate: bool = True) -> dict:
         for k, t in _builds.items():
             if k.startswith(env_id + ":") and t.is_alive():
                 raise HTTPException(409, "another version of this environment is building")
-        t = threading.Thread(target=_build, args=(env_id, n, slug, activate), daemon=True, name=f"env-build-{key}")
+        t = threading.Thread(target=_build, args=(env_id, n, slug, activate, spec), daemon=True, name=f"env-build-{key}")
         _builds[key] = t
         t.start()
     return {"version": n, "status": "building"}
@@ -586,6 +689,12 @@ def apply_env(env: dict, applied: dict | None) -> None:
         path_add.append(os.path.join(link, "node_modules", ".bin"))
     if (real / "node_modules").is_dir():
         env["NODE_PATH"] = os.path.join(link, "node_modules") + (":" + env["NODE_PATH"] if env.get("NODE_PATH") else "")
+    if (real / "apt").is_dir():
+        apt = os.path.join(link, "apt")
+        path_add += [os.path.join(apt, "usr", "bin"), os.path.join(apt, "usr", "local", "bin"), os.path.join(apt, "bin")]
+        arch = _ARCH_DIRS.get({"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), ""), "")
+        libs = [os.path.join(apt, "usr", "lib"), os.path.join(apt, "lib")] + ([os.path.join(apt, "usr", "lib", arch), os.path.join(apt, "lib", arch)] if arch else [])
+        env["LD_LIBRARY_PATH"] = ":".join(libs + ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else []))
     if path_add:
         env["PATH"] = ":".join(path_add + [env.get("PATH", "")])
 
@@ -663,11 +772,21 @@ async def r_import(env_id: str, request: Request, replace: int = 0, git_url: str
             pass
 
 
+@router.get("/environments/runtimes")
+def r_runtimes() -> dict:
+    return runtimes()
+
+
 @router.post("/environments/{env_id}/build")
-def r_build(env_id: str, version: int, slug: str, activate: int = 1) -> dict:
+async def r_build(env_id: str, version: int, slug: str, request: Request, activate: int = 1) -> dict:
     if not slug_ok(slug):
         raise HTTPException(400, "environment slug is not a path segment")
-    return start_build(env_id, int(version), slug, bool(activate))
+    raw = await request.body()
+    try:
+        spec = json.loads(raw) if raw else {}
+    except ValueError:
+        raise HTTPException(400, "the build body is not JSON")
+    return start_build(env_id, int(version), slug, bool(activate), spec if isinstance(spec, dict) else {})
 
 
 @router.get("/environments/{env_id}/build")
