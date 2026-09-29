@@ -85,6 +85,8 @@ Three rules make it one thing rather than a shared folder:
 | `latestVersion` | integer or null | server | The newest build, active or not |
 | `files` | object | server | The source's size: what the owner put in, before any build |
 | `packages` | array | server | What the active build installed, as the package managers report it: `manager`, `name`, `version` |
+| `declared` | object | client | What the owner declared, per manager, as spec strings the build installs beside the project's manifests: `pip` (`moviepy==2.1.1`), `npm` (`sharp@0.33.5`), `apt` (`ffmpeg`); read back with each spec's `name` and `version` |
+| `runtime` | object | client | `python`: the interpreter a build makes the virtual environment with, one of `GET /v1/environments/runtimes`; empty for the server's default |
 | `versions` | array | server | Every build: `version`, `status`, times, `error`, size |
 | `build` | object or null | server | The latest build's status |
 
@@ -146,6 +148,7 @@ build; the build installs from the manifests ([§4](#4-builds-and-versions)).
 ## 4. Builds and versions
 
 ```http
+GET  /v1/environments/runtimes                          what a build can be made with here: Python minors, Node major, the OS
 POST /v1/environments/{id}/build                        start a build: the next version
 GET  /v1/environments/{id}/builds/{version}             its record: status, log, packages, size
 GET  /v1/environments/{id}/versions                     every build, and which one is active
@@ -156,6 +159,9 @@ A build snapshots the source into a new version and installs what the project de
 
 | Manifest at the root | What the build runs |
 |---|---|
+| declared `pip` | the same virtual environment (made with `runtime.python` when the server has it), then `pip install` of each spec |
+| declared `npm` | `npm install` of each spec into `node_modules` |
+| declared `apt` | the named packages and the dependencies the image lacks, downloaded by apt and unpacked with dpkg under `apt/` in the version, which a session gets on `PATH` and `LD_LIBRARY_PATH`; nothing is installed into the server |
 | `requirements.txt` | a Python virtual environment at `.venv`, then `pip install -r requirements.txt` |
 | `pyproject.toml` | the same virtual environment, then `pip install .` |
 | `package.json` | `npm ci` when a lockfile is present, else `npm install`, into `node_modules` |
