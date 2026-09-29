@@ -69,7 +69,7 @@ export default function EnvironmentPage() {
   const [build, setBuild] = useState<EnvironmentBuildRecord | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
-  const [menu, setMenu] = useState<'import' | null>(null);
+  const [menu, setMenu] = useState<'add' | null>(null);
   const [git, setGit] = useState({ url: '', ref: '', replace: false });
   const [newPath, setNewPath] = useState<{ kind: 'file' | 'dir'; value: string } | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -182,17 +182,17 @@ export default function EnvironmentPage() {
                     <label className="env-find"><iconify-icon icon="tabler:search"></iconify-icon><input value={q} placeholder="Find a file" aria-label="Find a file" onChange={(ev) => setQ(ev.target.value)} /></label>
                     <button className="icon-button" type="button" title="New file" aria-label="New file" onClick={() => setNewPath({ kind: 'file', value: '' })}><iconify-icon icon="tabler:file-plus"></iconify-icon></button>
                     <button className="icon-button" type="button" title="New folder" aria-label="New folder" onClick={() => setNewPath({ kind: 'dir', value: '' })}><iconify-icon icon="tabler:folder-plus"></iconify-icon></button>
-                    <button className="icon-button" type="button" title="Upload files" aria-label="Upload files" onClick={() => uploadRef.current?.click()}><iconify-icon icon="tabler:upload"></iconify-icon></button>
-                    <input ref={uploadRef} type="file" hidden multiple onChange={(ev) => { void upload(ev.target.files); ev.target.value = ''; }} />
                     <span className="env-menu-wrap">
-                      <button className="icon-button" type="button" title="Import a project" aria-label="Import a project" aria-haspopup="menu" aria-expanded={menu === 'import'} onClick={() => setMenu(menu === 'import' ? null : 'import')}><iconify-icon icon="tabler:folder-down"></iconify-icon></button>
-                      {menu === 'import' && (
+                      <button className="icon-button" type="button" title="Upload files, or import a project" aria-label="Upload files, or import a project" aria-haspopup="menu" aria-expanded={menu === 'add'} onClick={() => setMenu(menu === 'add' ? null : 'add')}><iconify-icon icon="tabler:upload"></iconify-icon></button>
+                      {menu === 'add' && (
                         <div className="env-menu is-right" role="menu">
+                          <button type="button" role="menuitem" onClick={() => { setMenu(null); uploadRef.current?.click(); }}><iconify-icon icon="tabler:upload"></iconify-icon>Upload files</button>
                           <button type="button" role="menuitem" onClick={() => { setMenu(null); archiveRef.current?.click(); }}><iconify-icon icon="tabler:file-zip"></iconify-icon>Import an archive</button>
                           <button type="button" role="menuitem" onClick={() => { setMenu(null); setGitOpen(true); }}><iconify-icon icon="tabler:brand-git"></iconify-icon>Import from git</button>
                         </div>
                       )}
                     </span>
+                    <input ref={uploadRef} type="file" hidden multiple onChange={(ev) => { void upload(ev.target.files); ev.target.value = ''; }} />
                     <input ref={archiveRef} type="file" hidden accept=".zip,.tar,.tgz,.tar.gz" onChange={(ev) => { void importArchive(ev.target.files); ev.target.value = ''; }} />
                   </div>
                   {newPath && (
