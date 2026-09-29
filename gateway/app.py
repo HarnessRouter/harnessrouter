@@ -15413,13 +15413,28 @@ async def _environment_for_turn(org: str, env_id: str) -> dict | None:
     if not v:
         raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment")
     v = await _environment_refresh(v)
-    if str(v.get("status") or "") != "ready" or not str(v.get("active_version") or ""):
+    if not str(v.get("active_version") or ""):   # a rebuild in progress keeps the active version serving
         raise uhp_error(409, "environment_not_ready",
                         "The environment has no built version yet: build it, then run the task.", "environment",
                         {"status": v.get("status") or "empty"})
     slug = str(v.get("slug") or "")
     return {"id": env_id, "slug": slug, "entry": str(v.get("entry") or ""),
             "version": int(v.get("active_version")), "path": f"/env/{slug}"}
+
+
+def _env_status(active, latest_rec: dict | None) -> str:
+    """The environment's status from what the runner holds: `building` while a build runs, whichever
+    version is active (a task keeps reading the active one meanwhile; the page shows the build);
+    `ready` when a version is active; `failed` only when the latest build failed and none is active.
+    Measured 2026-09-29: with `ready` winning over a running rebuild, the console never showed a
+    build of an environment that already had a version."""
+    if latest_rec and latest_rec.get("status") == "building":
+        return "building"
+    if active:
+        return "ready"
+    if latest_rec and latest_rec.get("status") == "failed":
+        return "failed"
+    return "empty"
 
 
 async def _environment_refresh(v: dict) -> dict:
@@ -15434,14 +15449,7 @@ async def _environment_refresh(v: dict) -> dict:
     src, vers, active = live.get("source") or {}, live.get("versions") or [], live.get("active")
     latest = max([int(x.get("version") or 0) for x in vers] or [0])
     latest_rec = next((x for x in vers if int(x.get("version") or 0) == latest), None) if latest else None
-    if active:
-        status = "ready"
-    elif latest_rec and latest_rec.get("status") == "building":
-        status = "building"
-    elif latest_rec and latest_rec.get("status") == "failed":
-        status = "failed"
-    else:
-        status = "empty"
+    status = _env_status(active, latest_rec)
     packages = v.get("packages") or "[]"
     if active and str(active) != str(v.get("active_version") or ""):
         b = await _env_runner("GET", f"/environments/{eid}/build", eid, params={"version": int(active)})

@@ -23,8 +23,9 @@ class, 84 of 84, on `post2`.
 can show progress ([Environments §4](versions/2026-09-28/environments.md#4-builds-and-versions)).
 An optional `GET /v1/environments/packages/check` answers what the manager's registry says about a
 spec before any build (`EnvironmentPackageCheck`), so a client can refuse a typo where it is
-typed. Suite `2026.9.28.post3`: EN-09 exercises the check on a server that offers it; reference
-server 0.26.9.
+typed. The environment's `status` is `building` while a build runs, whichever version is active;
+a task keeps reading the active version meanwhile. Suite `2026.9.28.post3`: EN-09 exercises the
+check on a server that offers it; reference server 0.26.10.
 
 - **Environments** ([Environments](versions/2026-09-28/environments.md)), the Environments
   sub-protocol, optional at every class behind the `environments` capability. An environment is a
