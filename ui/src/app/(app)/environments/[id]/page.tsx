@@ -74,7 +74,8 @@ export default function EnvironmentPage() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
   const [build, setBuild] = useState<EnvironmentBuildRecord | null>(null);
-  const [showLog, setShowLog] = useState(false);
+  const [buildOpen, setBuildOpen] = useState(false);       // the build pop-up: opens when a build starts, stays until closed
+  const termRef = useRef<HTMLPreElement>(null);
   const [segment, setSegment] = useState<Manager>('pip');
   const [declared, setDeclared] = useState<Record<Manager, string[]> | null>(null);   // what the page holds; saved from the head
   const [python, setPython] = useState('');
@@ -110,10 +111,12 @@ export default function EnvironmentPage() {
   }, [menu]);
   useEffect(() => {
     if (env?.status !== 'building') return;
+    setBuildOpen(true);
     const t = setInterval(() => void reload(), 3000);
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => { clearInterval(t); clearInterval(tick); };
   }, [env?.status, reload]);
+  useEffect(() => { const el = termRef.current; if (el) el.scrollTop = el.scrollHeight; }, [build?.log, buildOpen]);
 
   const tree = useMemo(() => treeOf(entries || []), [entries]);
   const needle = q.trim().toLowerCase();
@@ -175,7 +178,6 @@ export default function EnvironmentPage() {
     if (env?.status === 'building') return { text: known, note: 'installing' };
     return { text: known || 'latest', note: 'installs on save' };
   };
-  const logTail = (log: string, n: number) => log.split('\n').filter((l) => l.trim()).slice(-n).join('\n');
   const buildElapsed = build?.started_at ? Math.max(0, Math.round(now / 1000 - build.started_at)) : null;
   const createPath = () => act('create', async () => {
     if (!newPath?.value.trim()) return;
@@ -195,7 +197,7 @@ export default function EnvironmentPage() {
   const importArchive = (files: FileList | null) => act('import', async () => { if (files?.[0]) await importEnvironmentArchive(id, files[0]); });
   const importGit = () => act('import', async () => { if (!git.url.trim()) return; await importEnvironmentGit(id, git.url.trim(), git.ref.trim(), git.replace); setGitOpen(false); });
   const remove = (p: string) => act('remove', async () => { await deleteEnvironmentPath(id, p); if (sel === p || sel.startsWith(p + '/')) setSel(''); if (openPath === p || openPath.startsWith(p + '/')) { setOpenPath(''); setFile(null); } });
-  const startBuild = () => act('build', async () => { await buildEnvironment(id); setTab('packages'); setShowLog(true); });
+  const startBuild = () => act('build', async () => { await buildEnvironment(id); setTab('packages'); setBuildOpen(true); });
 
   if (!env && !err) return <SkelPage />;
 
@@ -224,7 +226,8 @@ export default function EnvironmentPage() {
         {env && (
           <div className="env-title-row">
             <h1>{env.name}</h1>
-            <button className="button primary" type="button" disabled={!dirty || busy === 'save' || env.status === 'building'} onClick={() => void saveChanges()}>
+            <button className="button primary" type="button" disabled={env.status !== 'building' && (!dirty || busy === 'save')}
+              onClick={() => { if (env.status === 'building') setBuildOpen(true); else void saveChanges(); }}>
               {busy === 'save' ? 'Saving\u2026' : env.status === 'building' ? 'Building\u2026' : 'Save changes'}</button>
           </div>
         )}
@@ -232,21 +235,10 @@ export default function EnvironmentPage() {
 
       <div className="env-body">
         {err && <div className="hr-error" role="alert">{err}</div>}
-        {env?.status === 'building' && (
-          <div className="env-build-live" role="status" aria-live="polite">
-            <div className="env-build-live-head">
-              <strong>Building version {build?.version ?? env.latestVersion ?? ''}</strong>
-              {build?.stage && <span>{build.stage}</span>}
-              {buildElapsed !== null && <span>{buildElapsed} s</span>}
-            </div>
-            {build?.log && <pre className="env-log">{logTail(build.log, 12)}</pre>}
-          </div>
-        )}
         {env?.status === 'failed' && build?.error && (
           <div className="hr-error env-build-failed" role="alert">
             <div><strong>The last build failed.</strong> {build.error} Fix the packages or the files and save again.</div>
-            <button className="button small" type="button" onClick={() => setShowLog((v) => !v)}>{showLog ? 'Hide the log' : 'Show the log'}</button>
-            {showLog && <pre className="env-log">{build.log || ''}</pre>}
+            <button className="button small" type="button" onClick={() => setBuildOpen(true)}>Open the log</button>
           </div>
         )}
         {env && (
@@ -407,6 +399,28 @@ export default function EnvironmentPage() {
               <span className="kit-dialog-spacer" />
               <button className="button" type="button" onClick={() => setGitOpen(false)}>Cancel</button>
               <button className="button primary" type="button" disabled={busy === 'import' || !git.url.trim()} onClick={() => void importGit()}>{busy === 'import' ? 'Importing…' : 'Import'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {buildOpen && build && (
+        <div className="kit-overlay" role="dialog" aria-modal="true" aria-labelledby="env-build-title"
+             onMouseDown={(ev) => { if (ev.target === ev.currentTarget) setBuildOpen(false); }}>
+          <div className="kit-dialog env-build-dialog">
+            <button className="kit-dialog-x" type="button" onClick={() => setBuildOpen(false)} aria-label="Close"><iconify-icon icon="tabler:x"></iconify-icon></button>
+            <h2 id="env-build-title">{build.status === 'building' ? `Building version ${build.version}` : build.status === 'ready' ? `Version ${build.version} is ready` : `Version ${build.version} failed`}</h2>
+            <p className="kit-dialog-sub">
+              {build.status === 'building' && <>{build.stage || 'starting'}{buildElapsed !== null && <> \u00b7 {buildElapsed} s</>}</>}
+              {build.status === 'ready' && <>{build.started_at && build.finished_at ? `${Math.max(0, build.finished_at - build.started_at)} s` : ''}{build.packages ? ` \u00b7 ${build.packages.length} ${build.packages.length === 1 ? 'package' : 'packages'}` : ''}{typeof build.files === 'number' ? ` \u00b7 ${build.files} files` : ''}</>}
+              {build.status === 'failed' && (build.error || 'The build failed.')}
+            </p>
+            <pre className="env-term" ref={termRef} aria-live="polite">
+              {(build.log || '').split('\n').map((l, k) => <span key={k} className={l.startsWith('$ ') ? 'env-term-cmd' : undefined}>{l}{'\n'}</span>)}
+              {build.status === 'building' && <span className="env-term-cursor" aria-hidden="true" />}
+            </pre>
+            <div className="kit-dialog-actions">
+              <span className="kit-dialog-spacer" />
+              <button className="button" type="button" onClick={() => setBuildOpen(false)}>{build.status === 'building' ? 'Hide' : 'Close'}</button>
             </div>
           </div>
         </div>
