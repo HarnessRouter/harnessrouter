@@ -691,7 +691,7 @@ shared, with the environment's Python virtualenv and `node_modules` first on `PA
 writable, private to the session, checkpointed, and the only place its outputs come from. Two tasks
 on one environment share every byte of it and cannot read each other's workspace or write the
 environment; behind the write-wall an agent runs as its session's user and the environment is
-root's, so a write fails rather than being merely discouraged. The agent's instruction file says all
+root's, so a write fails rather than being merely discouraged; it is readable by the sessions of the harnesses that name it and by no other session, which cannot list the environments the box holds either. The agent's instruction file says all
 of this, and repeats the "how it is run" line you gave.
 
 On the console, **Environments** (under Build): create one, then put the project in, one file at a
