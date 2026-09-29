@@ -1914,6 +1914,25 @@ def en07(ctx):
     return f"read {mount}/data/hello.txt; write refused; metadata.environment reported"
 
 
+@check("EN-09", "A package check answers for a known name and reports one that is not there", "full",
+       f"{SPEC}/environments.md#4-builds-and-versions")
+def en09(ctx):
+    _environments_supported(ctx)
+    r = ctx.client.get("/v1/environments/packages/check?manager=pip&spec=pip")
+    if r.status == 404:
+        raise Skip("the server offers no package check (optional in Environments §4)")
+    assert r.status == 200, f"the check answered HTTP {r.status}: {r.text[:200]}"
+    j = r.json or {}
+    ctx.validate(j, "EnvironmentPackageCheck")
+    assert j.get("exists") is True and j.get("latest"), f"pip must be known to PyPI with a latest version: {j}"
+    r = ctx.client.get(f"/v1/environments/packages/check?manager=pip&spec=uhp-conformance-no-such-package-{uuid.uuid4().hex[:10]}")
+    assert r.status == 200 and (r.json or {}).get("exists") is False, (
+        f"a name that is not on the registry must be reported as not there, not refused: HTTP {r.status} {r.text[:160]}")
+    r = ctx.client.get("/v1/environments/packages/check?manager=cargo&spec=serde")
+    assert r.status == 400 and _error_code(r) == "environment_invalid", f"a manager the server does not build with must be refused with environment_invalid: HTTP {r.status}"
+    return f"pip {j.get('latest')} known; an unknown name reported; an unknown manager refused"
+
+
 @check("EN-08", "Configured environments are cleaned up", "full", f"{SPEC}/environments.md#2-the-environment-object")
 def en08(ctx):
     ids = [i for i in ctx.state.get("_cleanup_environments") or [] if i]

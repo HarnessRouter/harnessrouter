@@ -10,6 +10,7 @@ export interface EnvironmentPackage { manager: string; name: string; version: st
 export interface EnvironmentVersion {
   version: number; status: 'building' | 'ready' | 'failed' | 'unknown';
   started_at?: number | null; finished_at?: number | null; error?: string; files?: number; bytes?: number; packages?: number;
+  stage?: string;   // the step a running build is on; empty once it ended
 }
 export interface Environment {
   id: string; object: 'environment'; name: string; slug: string; description: string; entry: string;
@@ -27,6 +28,7 @@ export interface EnvironmentBuildRecord {
   id: string; version: number; status: 'building' | 'ready' | 'failed';
   started_at?: number | null; finished_at?: number | null; error?: string; log?: string;
   packages?: EnvironmentPackage[]; files?: number; bytes?: number;
+  stage?: string;   // the step a running build is on; empty once it ended
 }
 export type Manager = 'pip' | 'npm' | 'apt';
 export interface DeclaredPackage { name: string; version: string; spec: string }
@@ -45,6 +47,11 @@ export const deleteEnvironment = (id: string) => gw<{ id: string; deleted: boole
 export const listEnvironmentFiles = (id: string) =>
   gw<{ entries: EnvironmentFileEntry[]; count: number; bytes: number }>('GET', `/v1/environments/${id}/files`);
 export const buildEnvironment = (id: string) => gw<{ version: number; status: string }>('POST', `/v1/environments/${id}/build`);
+// What the manager's registry says about a spec before any build: whether the name exists, its
+// latest version, whether an exact pin is published. exists is null when the registry could not be asked.
+export interface PackageCheck { manager: Manager; name: string; spec: string; exists: boolean | null; latest: string; version: string; error: string }
+export const checkPackage = (manager: Manager, spec: string) =>
+  gw<PackageCheck>('GET', `/v1/environments/packages/check?manager=${manager}&spec=${encodeURIComponent(spec)}`);
 export const getEnvironmentBuild = (id: string, version: number) =>
   gw<EnvironmentBuildRecord>('GET', `/v1/environments/${id}/builds/${version}`);
 export const activateEnvironmentVersion = (id: string, version: number) =>
