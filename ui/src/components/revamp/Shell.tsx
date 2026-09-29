@@ -82,6 +82,22 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
   .map((g) => ({ ...g, items: g.items.filter((n) => !SELF_HOSTED || (n.href && SELF_HOSTED_NAV.includes(n.href))) }))
   .filter((g) => g.items.length > 0);
 
+/** The open-source repository's star count, from the console's own route (which reads GitHub once
+ *  per ten minutes for every open console). Null until it is known, and when GitHub does not answer:
+ *  the pill shows no number then, never a guessed one. 6400 reads as "6.4k". */
+function useGithubStars(): string | null {
+  const [stars, setStars] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/github-stars', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d && Number.isFinite(d.stars)) setStars(d.stars); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (stars === null) return null;
+  return stars >= 1000 ? `${(stars / 1000).toFixed(stars >= 10000 ? 0 : 1)}k` : String(stars);
+}
+
 export function Shell({ children, credits }: { children: React.ReactNode; credits?: number | null }) {
   const pathname = usePathname() || '';
   const router = useRouter();
@@ -159,6 +175,7 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
     return () => mq.removeEventListener('change', sync);
   }, []);
   const railed = (collapseHere ? railHere : navW < 150) && !mobile;
+  const stars = useGithubStars();
   const width = railed ? 64 : navW < 150 ? 268 : navW;
   // The width variable must live on the ROOT, not on the aside: .v2-main is a sibling, and a
   // custom property set inline on the aside never cascades to it — so the content margin stayed
@@ -458,6 +475,14 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
         <div className="v2-foot" ref={acctRef}>
           {/* The four places we live, as a row of marks when the sidebar has the width for it; on
               the icon rail the same four move into the account menu instead. */}
+          {/* The open-source repository with its live star count, just above the marks, as the
+              hosted console has it (Richard, 2026-09-29); the icon rail has no room for a row. */}
+          {!railed && (
+            <a className="v2-starpill" href="https://github.com/HarnessRouter/harnessrouter" target="_blank" rel="noreferrer" aria-label="Star us on GitHub">
+              <iconify-icon icon="tabler:brand-github"></iconify-icon><span>Star us on GitHub</span>
+              {stars && <span className="v2-star" aria-label={`${stars} stars`}><iconify-icon icon="tabler:star"></iconify-icon>{stars}</span>}
+            </a>
+          )}
           {!railed && (
             <div className="v2-socials" aria-label="Community links">
               {SOCIALS.map((x) => (
@@ -495,6 +520,12 @@ export function Shell({ children, credits }: { children: React.ReactNode; credit
                 <button className="menu-item" type="button" onClick={() => { setAcctMenu(false); router.push('/account'); }}><iconify-icon icon="tabler:settings"></iconify-icon>Account settings</button>
               </>)}
               <a className="menu-item" href="https://harnessrouter.ai/docs" target="_blank" rel="noreferrer"><iconify-icon icon="tabler:book-2"></iconify-icon>Docs</a>
+              {railed && (
+                <a className="menu-item menu-item-star" href="https://github.com/HarnessRouter/harnessrouter" target="_blank" rel="noreferrer">
+                  <iconify-icon icon="tabler:brand-github"></iconify-icon>Star us on GitHub
+                  {stars && <span className="v2-star" aria-label={`${stars} stars`}><iconify-icon icon="tabler:star"></iconify-icon>{stars}</span>}
+                </a>
+              )}
               {railed && SOCIALS.map((x) => (
                 <a key={x.label} className="menu-item" href={x.href} target="_blank" rel="noreferrer"><iconify-icon icon={x.icon}></iconify-icon>{x.label}</a>
               ))}
