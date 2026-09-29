@@ -79,7 +79,7 @@ Three rules make it one thing rather than a shared folder:
 | `slug` | string | server | The path segment sessions see, derived from the name at creation. It never changes: a session's instructions name it |
 | `description` | string | client | |
 | `entry` | string | client | How the project is run, in the owner's words. Repeated to the agent verbatim ([§6](#6-what-a-session-sees)) |
-| `status` | string | server | `empty` (nothing built), `building`, `ready` (a version is active), `failed` (the latest build failed and none is active) |
+| `status` | string | server | `empty` (nothing built), `building` (a build is running, whichever version is active: a task keeps reading the active one), `ready` (a version is active), `failed` (the latest build failed and none is active) |
 | `mount` | string | server | Where a session finds it, read-only. `/env/<slug>` on the reference server; a server MAY choose another root, and MUST keep it constant for the environment's lifetime |
 | `version` | integer or null | server | The active build, the one sessions read |
 | `latestVersion` | integer or null | server | The newest build, active or not |
@@ -178,8 +178,10 @@ read-only and stays so.
 reason as `error`. While it builds, the record says which step is running as `stage` (on the
 reference server: `copying files`, `python packages`, `node packages`, `system packages`,
 `setup.sh`, `finishing`) and carries the log so far, so a client can show progress rather than a
-spinner; a server MUST write the record as steps end, not only at the end of the build. One build
-runs at a time per environment (`environment_busy`). When a build
+spinner; a server MUST write the record as steps end, not only at the end of the build. The
+environment's `status` is `building` meanwhile, even when a version is active, and a task on it
+keeps reading the active version. One build runs at a time per environment (`environment_busy`).
+When a build
 succeeds it becomes the active version: the next session to start reads it. A session that started
 earlier keeps the version it started with for the rest of its turn; a server SHOULD let it keep
 that version for later turns too, and MUST say which version a turn read ([§6](#6-what-a-session-sees)).

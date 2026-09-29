@@ -218,3 +218,14 @@ def test_the_package_check_is_the_registrys_answer_and_refuses_a_manager_it_cann
     assert r.status_code == 400 and r.json()["error"]["code"] == "environment_invalid"
     r = api.get("/v1/environments/packages/check?manager=pip&spec=")
     assert r.status_code == 400
+
+
+def test_the_status_says_building_while_a_rebuild_runs_and_ready_wins_over_an_old_failure():
+    """A rebuild of an environment that already has a version is `building` (the page shows the
+    build; the active version keeps serving); `failed` only when nothing is active at all."""
+    assert app._env_status(None, None) == "empty"
+    assert app._env_status(None, {"status": "building"}) == "building"
+    assert app._env_status(1, {"status": "building"}) == "building"
+    assert app._env_status(1, {"status": "ready"}) == "ready"
+    assert app._env_status(1, {"status": "failed"}) == "ready"
+    assert app._env_status(None, {"status": "failed"}) == "failed"
