@@ -40,12 +40,14 @@ mkdir -p "$HARNESS_WORKSPACE"
 # by their session's uid (0700); the runner sets that as it allocates them.
 chown "$PRODUCT:$PRODUCT" "$DATA_DIR" "$HARNESS_WORKSPACE"
 chmod 751 "$DATA_DIR" "$HARNESS_WORKSPACE"        # traversable by sessions, neither listable nor writable
-# Environments (runner/environments.py): project layers built once and read by every session that
-# names one. Root's, readable by every session uid, writable by none: that ownership is the
-# read-only guarantee, so nothing here is handed to $PRODUCT. /env holds the links sessions are told.
+# Environments (runner/environments.py): project layers built once and read by the sessions that
+# name one. Root's, each environment readable by its own group and writable by none: that ownership
+# is the read-only guarantee, so nothing here is handed to $PRODUCT. Both directories are
+# traversable, not listable: a session reaches the environment it was told and enumerates none.
+# /env holds the links sessions are told.
 export HR_ENV_ROOT="${HR_ENV_ROOT:-$DATA_DIR/environments}"
 mkdir -p "$HR_ENV_ROOT" /env
-chmod 755 "$HR_ENV_ROOT" /env
+chmod 751 "$HR_ENV_ROOT" /env
 # A login shell (`bash -lc`, which codex uses for its commands) runs /etc/profile, and Debian's
 # sets PATH from scratch, which dropped the environment's venv and node_modules/.bin that the runner
 # had put first (measured on 0.26.0-rc.1: `python3` was /usr/local's, not the venv's). The runner

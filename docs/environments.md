@@ -56,14 +56,26 @@ harness object and on `POST /v1/responses`; `environment` on the session object.
   with org, workspace, name, slug, description, entry, status, active/latest version, the
   versions list and the active build's packages, refreshed from the runner on reads.
 - **Bytes**: the runner (`runner/environments.py`) owns `/data/environments/<id>/`:
-  `source/` (editable), `versions/<n>/` (a build, root-owned, `a+rX`, with `.hr-build.json`:
+  `source/` (editable, `0700`), `versions/<n>/` (a build, `root:<env group>` `0750/0640`, with `.hr-build.json`:
   status, log, packages, size), `active` → `versions/<n>`. The mount `/env/<slug>` is a link to
   `active`, on the container's rootfs, remade lazily after a restart. Builds run in a thread of
   the runner with the image's own `python3` and `npm`, caches in a scratch directory, a wall clock
   of `HR_ENV_BUILD_TIMEOUT` (1800 s). Dependency directories in the source are never copied.
-- **Read-only**: the write-wall (`HR_SESSION_UIDS`): an agent runs as its session's uid, the layer
-  is root's, `chmod 755/644`, so a write fails with EACCES. Without the wall (a development box)
-  the permissions still hold for any non-root agent; root is the operator's own choice.
+- **Read-only, and read by its own sessions only**: the write-wall (`HR_SESSION_UIDS`): an agent
+  runs as its session's uid, the layer is root's, so a write fails with EACCES. Each environment
+  has a group of its own (`GID_BASE` 60000 + a hash of the id; the environment directory's group
+  IS the record, as the workspace's owner is the session uid's). The source is `0700`, the
+  runner's alone; a built version is `0750/0640`, the group's to read; the agent process joins
+  that group (`extra_groups`) only for a turn whose harness names the environment, so a session
+  reads the one environment it was given and no other. `/data/environments` and `/env` are `0751`:
+  traversable, not listable, so a session cannot enumerate the rest. pip, npm and `setup.sh`
+  run the packages' own code, so a build runs them as the environment's identity
+  (`uid = gid = the environment's number`) that owns the layer under construction and nothing
+  else; apt-get and `dpkg -x` run no package code and stay the runner's. A store from before
+  groups is migrated once at start (`secure_store`). Without the wall (a development box) the
+  modes still hold for any non-root agent; root is the operator's own choice. Measured on
+  hr-test 2026-09-28: before the groups, any session could list and read every environment's
+  source and layers; after, a session reads its own and gets EACCES on the others.
 - **The turn**: the gateway resolves the environment (request field, else the harness's) before
   anything is allocated, passes `{id, slug, entry}` to the runner, stamps the session vertex with
   `environment` and the turn record with the version. The runner resolves the mount before writing
@@ -112,8 +124,10 @@ contract is built like this:
    sharing a layer across sessions is ever needed, the ACA-native shape is a session pool whose
    image bakes the layer, a different product decision; a bind mount is not promised.
 6. **Isolation.** The container is the boundary: one session cannot see another's container at
-   all; the layer is root's and the agent is not; the source and the layers are written only by
-   the API and the build's write SAS.
+   all, and a container holds only the environment its turn named (the hydrate downloads that
+   layer and no other), which is the group model's outcome without the groups; the layer is
+   root's and the agent is not; the source and the layers are written only by the API and the
+   build's write SAS. The build runs in its own job container, never in a session's.
 7. **Versions, rollback, retention.** `active_version` on the vertex is the pointer; the gateway
    passes `version` in the turn body so a hydrate is deterministic, and stamps the session with
    the version it started on, which later turns of that session keep. The active version plus the
