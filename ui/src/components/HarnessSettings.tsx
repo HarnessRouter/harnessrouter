@@ -582,12 +582,12 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
           </section>
 
           <section className="form-section">
-            <div><h3>Project environment</h3><p>A project and its installed dependencies, built once on the Environments page. Every Task of this Harness then starts with it in place, read-only at its own path, and keeps its outputs in the Task's own workspace.</p></div>
+            <div><h3>Workspace</h3><p>Project files and packages every Task opens in.</p></div>
             <div className="field-stack">
               <div className="field"><label>Environment</label>
                 <select value={draft?.environment || ''} disabled={readOnly || environments === null} onChange={(e) => upd({ environment: e.target.value })}>
                   <option value="">None</option>
-                  {(environments || []).map((en) => <option key={en.id} value={en.id}>{en.name}{en.status === 'ready' ? ` (v${en.version}, ${en.mount})` : ' (not built yet)'}</option>)}
+                  {(environments || []).map((en) => <option key={en.id} value={en.id}>{en.name}  {en.files.count} {en.files.count === 1 ? 'file' : 'files'} \u00b7 {en.status === 'ready' ? `${en.packages.length} ${en.packages.length === 1 ? 'package' : 'packages'}` : 'not built yet'}</option>)}
                 </select></div>
               {draft?.environment && (() => { const en = (environments || []).find((x) => x.id === draft.environment); return en ? (
                 <span className="field-help">{en.status === 'ready'
