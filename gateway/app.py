@@ -13641,11 +13641,24 @@ _BROWSER_GUIDE = (
     "deferred) before touching the web any other way.")
 
 
+_M365_GUIDE = (
+    "## Microsoft 365\n"
+    "This task can read the workspace's approved Microsoft 365 resources through the `plugs` server: "
+    "microsoft365_resources (what is approved; read it first), microsoft365_find_people, "
+    "microsoft365_list_files, microsoft365_search_files, microsoft365_read_file (a SharePoint site or a "
+    "person's OneDrive), microsoft365_list_mail, microsoft365_read_mail, microsoft365_list_events (a "
+    "person's mailbox or calendar). Every tool takes the site or person it means; a resource that was not "
+    "approved is refused, and so is anything the organization did not grant, so do not try another way "
+    "around a refusal: report it. These tools read; they write nothing.")
+
+
 def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
     """The harness's instructions plus a section for each included plugin that needs one."""
     parts = [agent_doc.strip()] if agent_doc and agent_doc.strip() else []
     if "browser" in plug_types:
         parts.append(_BROWSER_GUIDE)
+    if "microsoft365" in plug_types:
+        parts.append(_M365_GUIDE)
     return "\n\n".join(parts)
 
 
@@ -13774,7 +13787,27 @@ _PLUG_FORMS: dict[str, dict] = {
     "github": {"secrets": ["token"], "config": ["repo", "owner", "default_branch"], "source": "local"},
     "vercel": {"secrets": ["token"], "config": ["project", "project_id", "team_id"], "source": "local"},
     "insforge": {"secrets": ["api_key"], "config": ["project", "project_id", "url", "region"], "source": "local"},
+    # An enterprise plug: the workspace's own Entra application and the resources it approved, listed
+    # one by one (SharePoint sites as hostname:/sites/name; people by sign-in address).
+    "microsoft365": {"secrets": ["client_secret"], "config": ["tenant_id", "client_id", "sites", "users"], "source": "local",
+                     "lists": ["sites", "users"]},
 }
+
+
+def _plug_list_ok(names, param: str) -> list[str]:
+    """A setting that is a list of names (a plug's approved resources): strings, trimmed, deduplicated."""
+    if names is None or names == "":
+        return []
+    if isinstance(names, str):
+        names = [x for x in re.split(r"[\s,]+", names) if x]
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise uhp_error(400, "invalid_input", f"{param} must be a list of names.", param)
+    out: list[str] = []
+    for n in names:
+        n = n.strip()
+        if n and n not in out:
+            out.append(n)
+    return out
 
 
 def _plug_safe(s: str) -> str:
@@ -13885,6 +13918,8 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
             raise uhp_error(400, "invalid_input", f"{plug_type} has no setting {k!r}.", "config")
         if plug_type == plugs_plane.BROWSER:
             config[k] = _plug_domains_ok(v, k)
+        elif k in form.get("lists", ()):
+            config[k] = _plug_list_ok(v, k)
         elif v in (None, ""):
             config.pop(k, None)
         elif isinstance(v, str):
@@ -14234,16 +14269,20 @@ async def plugs_mcp(request: Request):
         return _jsonrpc_result(rid, _tool_text(
             f"The workspace's {label} plug was not granted {need} access, so {tool} cannot run. The person can "
             "grant it on the app installation and reconnect the plug.", True))
+    # The audit row names the resource the call addressed (a site, a person, a path, a folder, a
+    # repository), so access is accounted for by resource and not only by tool.
+    resource = {k: str(args[k])[:200] for k in ("site", "user", "path", "folder", "repo", "query", "id")
+                if isinstance(args, dict) and args.get(k) not in (None, "")} or None
     try:
         text = await plugs_plane.call(plug, tool, args if isinstance(args, dict) else {}, fields, config)
     except plugs_plane.PlugToolError as e:
-        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", str(e))
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", str(e), detail=resource)
         return _jsonrpc_result(rid, _tool_text(str(e), True))
     except Exception as e:  # noqa: BLE001
         await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
-                                f"{type(e).__name__}: {e}")
+                                f"{type(e).__name__}: {e}", detail=resource)
         return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
-    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "ok")
+    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "ok", detail=resource)
     return _jsonrpc_result(rid, _tool_text(text))
 
 
