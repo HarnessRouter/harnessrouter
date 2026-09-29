@@ -60,10 +60,16 @@ export default function EnvironmentsPage() {
       {items === null && !err && <SkelRows rows={3} />}
 
       {items !== null && items.length === 0 && (
-        <div className="session-empty env-empty">
-          <iconify-icon icon="tabler:stack-2"></iconify-icon>
-          <strong>No environments yet</strong>
-          <span>Create one, import your project (an archive or a git repository), build it, and name it on a Harness. Every Task of that Harness then starts with the project in place and its packages installed.</span>
+        <div className="env-onboard">
+          <span className="env-onboard-mark"><iconify-icon icon="tabler:stack-2"></iconify-icon></span>
+          <h2>Give your Tasks a ready project</h2>
+          <p>An environment is a project and its installed packages, built once. Every Task that uses it starts with the project in place, at the same path, with nothing to install or upload.</p>
+          <ol className="env-steps">
+            <li><span>1</span><strong>Import the project</strong><em>An archive, a git repository, or files, folders kept.</em></li>
+            <li><span>2</span><strong>Build it once</strong><em>Packages from requirements.txt and package.json are installed into it.</em></li>
+            <li><span>3</span><strong>Name it on a Harness</strong><em>Every Task of that Harness reads it, read-only, beside its own workspace.</em></li>
+          </ol>
+          <button className="button primary" type="button" onClick={() => setCreating(true)}><iconify-icon icon="tabler:plus"></iconify-icon>New environment</button>
         </div>
       )}
 
@@ -97,8 +103,8 @@ export default function EnvironmentsPage() {
               <label className="kit-field"><span>Description</span>
                 <input value={form.description} placeholder="What the project does" onChange={(ev) => setForm({ ...form, description: ev.target.value })} /></label>
               <label className="kit-field"><span>How it is run</span>
-                <input value={form.entry} placeholder="python3 run.py --episode <id>" onChange={(ev) => setForm({ ...form, entry: ev.target.value })} />
-                <span className="kit-choice-why">Optional. Told to the agent word for word, so it starts the project the way you do.</span></label>
+                <input value={form.entry} placeholder="python3 run.py --episode <id>" onChange={(ev) => setForm({ ...form, entry: ev.target.value })} /></label>
+              <p className="env-help">Optional. Told to the agent word for word, so it starts the project the way you do.</p>
             </div>
             <div className="kit-dialog-actions">
               <span className="kit-dialog-spacer" />
