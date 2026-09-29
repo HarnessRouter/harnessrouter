@@ -103,9 +103,11 @@ def test_a_build_snapshots_the_source_installs_and_becomes_the_active_read_only_
     assert (v1 / ".venv" / "bin" / "python3").exists() or (v1 / ".venv" / "bin" / "python").exists()
     assert any(p["manager"] == "pip" and p["name"] == "pip" for p in rec["packages"])
     assert rec["files"] > 3 and rec["bytes"] > 0
-    assert oct(os.stat(v1 / "scripts" / "render.py").st_mode & 0o777) == "0o644"
-    assert oct(os.stat(v1 / "run.sh").st_mode & 0o777) == "0o755"
-    assert oct(os.stat(v1).st_mode & 0o777) == "0o755"
+    # the layer is its group's to read and nobody else's; the source is the runner's alone
+    assert oct(os.stat(v1 / "scripts" / "render.py").st_mode & 0o777) == "0o640"
+    assert oct(os.stat(v1 / "run.sh").st_mode & 0o777) == "0o750"
+    assert oct(os.stat(v1).st_mode & 0o777) == "0o750"
+    assert oct(os.stat(E.source_dir("henv_b")).st_mode & 0o777) == "0o700"
     assert E.active_version("henv_b") == 1
     link = E.mount_path("content-studio")
     assert os.path.islink(link) and pathlib.Path(link).resolve() == v1.resolve()
@@ -158,6 +160,42 @@ def test_the_turn_gets_the_path_the_variables_and_the_instructions(store):
     # the mount link survives a restart: remade from the store when it is gone
     os.unlink(link)
     assert E.resolve({"id": "henv_t", "slug": "studio"})["path"] == link and os.path.islink(link)
+
+
+def test_each_environment_gets_its_own_group_and_its_builds_run_as_it(store, monkeypatch):
+    """The group model needs root; what a test process can pin is the allocation, the identity a
+    build step gets, the group a turn joins, and that none of it applies off root."""
+    E.write_file("henv_g1", "a.txt", b"a")
+    assert E.env_gid("henv_g1") is None and E._build_as("henv_g1") == {} and E.secure_store() == 0   # not root: modes only
+    owned, made = {}, []
+    monkeypatch.setattr(E.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(E.os, "chown", lambda p, u, g: owned.__setitem__(str(p), (u, g)))
+    monkeypatch.setattr(E.os, "lchown", lambda p, u, g: owned.__setitem__(str(p), (u, g)))
+    monkeypatch.setattr(E, "_account", lambda n: made.append(n))
+    real_stat = os.stat
+
+    def fake_stat(p, *a, **k):        # the directory's group is the record: replay what chown set
+        st = real_stat(p, *a, **k)
+        if str(p) in owned:
+            class St:
+                st_uid, st_gid, st_mode = owned[str(p)][0], owned[str(p)][1], st.st_mode
+            return St()
+        return st
+    monkeypatch.setattr(E.os, "stat", fake_stat)
+    E._claim("henv_g1"); E._claim("henv_g2")
+    g1, g2 = E.env_gid("henv_g1"), E.env_gid("henv_g2")
+    assert g1 and g2 and g1 != g2 and E.GID_BASE <= g1 < E.GID_BASE + E.GID_SPAN and made == [g1, g2]
+    assert owned[str(E.env_dir("henv_g1"))] == (0, g1) and oct(real_stat(E.env_dir("henv_g1")).st_mode & 0o777) == "0o750"
+    assert E._claim("henv_g1") == E.env_dir("henv_g1") and E.env_gid("henv_g1") == g1      # stable: read back, not reallocated
+    assert E._build_as("henv_g1") == {"user": g1, "group": g1, "extra_groups": []}
+    # a layer made read-only for the group is chowned root:group, links included
+    v = E.version_dir("henv_g1", 1); (v / "bin").mkdir(parents=True); (v / "bin" / "tool").write_bytes(b"#!/bin/sh\n")
+    os.chmod(v / "bin" / "tool", 0o755); os.symlink("tool", v / "bin" / "alias")
+    E._read_only(v, g1)
+    assert owned[str(v)] == (0, g1) and owned[str(v / "bin" / "tool")] == (0, g1) and owned[str(v / "bin" / "alias")] == (0, g1)
+    assert oct(real_stat(v / "bin" / "tool").st_mode & 0o777) == "0o750"
+    # the turn joins the group of the environment at its mount, and no group for a path outside the range
+    assert E.reader_gid(str(v)) == g1 and E.reader_gid(str(store)) is None and E.reader_gid("") is None
 
 
 def test_the_slug_is_a_path_segment(store):
