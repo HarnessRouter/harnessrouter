@@ -38,9 +38,9 @@ job, not a completion.
 
 | | |
 |---|---|
-| **Current version** | `2026-09-12` |
+| **Current version** | `2026-09-28` |
 | **Status** | Draft standard — stable enough to build on, versioned so it can change safely |
-| **Specification** | [`versions/2026-09-12/`](versions/2026-09-12/) |
+| **Specification** | [`versions/2026-09-28/`](versions/2026-09-28/) |
 | **Machine-readable** | [`schema/`](schema/) — OpenAPI 3.1 + JSON Schema 2020-12 |
 | **Conformance suite** | [`conformance/`](conformance/) — runnable, and the definition of "conformant" |
 | **Change process** | [`GOVERNANCE.md`](GOVERNANCE.md) |
@@ -65,17 +65,18 @@ your client depends on, that is a specification bug — please
 
 | Chapter | What it defines |
 |---|---|
-| [Architecture](versions/2026-09-12/architecture.md) | Roles, conformance classes, and the object model |
-| [Lifecycle](versions/2026-09-12/lifecycle.md) | Version negotiation, capability discovery, task lifecycle |
-| [Harnesses](versions/2026-09-12/harnesses.md) | Discovering, selecting and configuring a harness |
-| [Plugins](versions/2026-09-12/plugins.md) | Packages of tools and skills, installed into a harness as one unit |
-| [Tasks](versions/2026-09-12/tasks.md) | Sending work and receiving a result |
-| [Streaming](versions/2026-09-12/streaming.md) | Following progress as it happens |
-| [Sessions](versions/2026-09-12/sessions.md) | Continuing a conversation, and cancelling one |
-| [Files](versions/2026-09-12/files.md) | Sending files in, getting artifacts out |
-| [Errors](versions/2026-09-12/errors.md) | Failure taxonomy, retries and idempotency |
-| [Security](versions/2026-09-12/security.md) | What an implementer must get right, collected in one place |
-| [Schema](versions/2026-09-12/schema.md) | The machine-readable definitions and how to use them |
+| [Architecture](versions/2026-09-28/architecture.md) | Roles, conformance classes, and the object model |
+| [Lifecycle](versions/2026-09-28/lifecycle.md) | Version negotiation, capability discovery, task lifecycle |
+| [Harnesses](versions/2026-09-28/harnesses.md) | Discovering, selecting and configuring a harness |
+| [Plugins](versions/2026-09-28/plugins.md) | Packages of tools and skills, installed into a harness as one unit |
+| [Environments](versions/2026-09-28/environments.md) | A project's files and installed dependencies, built once and read-only in every session that names it |
+| [Tasks](versions/2026-09-28/tasks.md) | Sending work and receiving a result |
+| [Streaming](versions/2026-09-28/streaming.md) | Following progress as it happens |
+| [Sessions](versions/2026-09-28/sessions.md) | Continuing a conversation, and cancelling one |
+| [Files](versions/2026-09-28/files.md) | Sending files in, getting artifacts out |
+| [Errors](versions/2026-09-28/errors.md) | Failure taxonomy, retries and idempotency |
+| [Security](versions/2026-09-28/security.md) | What an implementer must get right, collected in one place |
+| [Schema](versions/2026-09-28/schema.md) | The machine-readable definitions and how to use them |
 
 ## Quick shape of it
 
@@ -98,13 +99,13 @@ The stream is Server-Sent Events. The last event carries the finished `response`
 any files the agent produced. To continue the same conversation, send the next request with
 `previous_response_id` set to the id you just received.
 
-Full walk-through: [Tasks](versions/2026-09-12/tasks.md).
+Full walk-through: [Tasks](versions/2026-09-28/tasks.md).
 
 ## Relationship to the OpenAI Responses API
 
 UHP's task surface is deliberately shaped like the OpenAI Responses API, and a conformant server
-MUST accept the subset of that request body described in [Tasks](versions/2026-09-12/tasks.md) and
-emit the event vocabulary described in [Streaming](versions/2026-09-12/streaming.md).
+MUST accept the subset of that request body described in [Tasks](versions/2026-09-28/tasks.md) and
+emit the event vocabulary described in [Streaming](versions/2026-09-28/streaming.md).
 
 This is a compatibility decision, not an accident. Products already have code that speaks Responses;
 existing SDKs, streaming parsers, and UI components work against a UHP server with no changes. What
@@ -118,7 +119,7 @@ of an existing field. A client that ignores every UHP extension still gets a wor
 
 ## Implementing UHP
 
-1. Read [Architecture](versions/2026-09-12/architecture.md) and pick a conformance class.
+1. Read [Architecture](versions/2026-09-28/architecture.md) and pick a conformance class.
 2. Generate types from [`schema/uhp-2026-09-12.openapi.yaml`](schema/uhp-2026-09-12.openapi.yaml).
 3. Run the [conformance suite](conformance/) against your server while you build:
    ```bash

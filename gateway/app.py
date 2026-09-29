@@ -3956,11 +3956,11 @@ async def llm_broker(path: str, request: Request):
 #      retry. Added the structured error envelope. The old `detail` string is still emitted beside
 #      it, because clients in the wild read it — it is documented as deprecated, not removed under
 #      them.
-UHP_VERSION = "2026-09-12"
+UHP_VERSION = "2026-09-28"
 # Both versions, one code path: 2026-09-12 is additive to 2026-08-11 (plugins, and nothing
 # the earlier version defined changes shape), so the same objects answer either request and
 # the header is the only thing that differs. VERSIONING.md, server rule 3.
-UHP_VERSIONS = [UHP_VERSION, "2026-08-11"]
+UHP_VERSIONS = [UHP_VERSION, "2026-09-12", "2026-08-11"]
 # The Agent Plugins manifest schemas this server installs (Plugins §7). A package targeting
 # another version is refused with unsupported_plugin_schema naming this list.
 UHP_PLUGIN_SCHEMAS = ["https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"]
@@ -3979,6 +3979,7 @@ UHP_CAPABILITIES = {
     "session_sharing": True,
     "idempotency": True,
     "plugins": True,
+    "environments": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 
@@ -7147,7 +7148,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         hdr_vals: dict[str, str] | None = None,
                         partial_messages: bool = False, probe: dict | None = None,
                         codex_appserver: bool = False,
-                        hv: dict | None = None) -> tuple[str, list[dict], dict]:
+                        hv: dict | None = None,
+                        environment: dict | None = None) -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -7232,6 +7234,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     if mcp_servers or skills or skills_suppressed or tools_disabled:
         rec["plugins"] = {"mcp": [m.get("name") for m in mcp_servers], "skills": [s.get("name") for s in skills],
                           "skills_off": skills_suppressed, "tools_off": tools_disabled}
+    if environment:
+        # Provenance: which layer, at which build, this turn read. The session carries the id so its
+        # detail names it; the turn record carries the version, since a rebuild changes what the
+        # next turn sees and the record must say which one this was.
+        rec["environment"] = {"id": environment["id"], "slug": environment["slug"],
+                              "version": environment.get("version"), "path": environment.get("path")}
+        await _vertex_upsert(sid, {"environment": environment["id"], "environment_slug": environment["slug"]})
     # The harness's configured instructions are the agent's CLAUDE.md (claude) / AGENTS.md (codex) —
     # written into the workspace by the runner, NOT injected as a system prompt. The model keeps the
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
@@ -7330,6 +7339,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "plugins": plugin_pkgs, "agent_doc": agent_doc,
                 "skills_suppressed": skills_suppressed, "tools_disabled": turn_tools_off,
+                # The project layer, read-only at /env/<slug> (runner/environments.py): id, slug, entry.
+                "environment": ({"id": environment["id"], "slug": environment["slug"],
+                                 "entry": environment.get("entry") or ""} if environment else None),
                 # Image generation, when an integration can serve it. A per-turn credential for
                 # the broker, never a provider key — see _image_auth.
                 "image_auth": image_auth,
@@ -7877,6 +7889,7 @@ class CreateResponseBody(BaseModel):
     backend: str | None = None     # non-OpenAI convenience: force codex|claude
     max_step: int | None = None         # per-request agent step budget (claude --max-turns)
     timeout_seconds: int | None = None  # per-request wall-clock cap for the turn
+    environment: str | None = None      # an environment id for this task; overrides the harness's (UHP Environments)
 
 
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
@@ -7964,6 +7977,10 @@ async def create_response(body: CreateResponseBody, request: Request):
     # the marketplace model is exactly "callers run it, the owner pays infra". Until entitlements
     # land, the unguessable harness id is the run capability.
     _turn_harness_check(harness_id, hv)
+    # The project layer this task reads: the request's, else the harness's. Resolved and checked
+    # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
+    # failed turn.
+    environment = await _environment_for_turn(org, body.environment or str((hv or {}).get("environment") or ""))
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -8194,7 +8211,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit_bg,
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
-                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
+                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
                     for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -8243,7 +8260,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
-                            timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
+                            timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
                         for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -8301,7 +8318,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
-                timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe)
+                timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -15128,6 +15145,7 @@ class HarnessBody(BaseModel):
     # and HR_CALIBRATION_TOKEN, a credential scoped to that harness and expiring with the turn
     # (docs/dual-loop.md in the System One Harness repository, Appendix B).
     calibrates: str | None = _either("calibrates")
+    environment: str | None = None   # the environment (henv_) this harness's tasks read at /env/<slug>; UHP Environments
 
 
 def _harness_out(v: dict) -> dict:
@@ -15160,6 +15178,7 @@ def _harness_out(v: dict) -> dict:
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
             "timeoutSeconds": int(v.get("timeout_seconds")) if str(v.get("timeout_seconds") or "").isdigit() else None,
             "calibrates": str(v.get("calibrates") or ""),
+            "environment": str(v.get("environment") or ""),
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created}
 
 
@@ -15178,6 +15197,7 @@ def _harness_props(body: HarnessBody) -> dict:
                                               if isinstance(h, str) and str(h).strip()]),
             "env": json.dumps(_env_clean(body.env)),
             "calibrates": str(body.calibrates or "").strip(),
+            "environment": str(body.environment or "").strip(),
             "max_step": str(body.max_step) if body.max_step else "",
             "timeout_seconds": str(body.timeout_seconds) if body.timeout_seconds else ""}
 
@@ -15272,6 +15292,394 @@ async def _skill_bundle_files(sk: dict) -> list:
     if not files and sk.get("content"):
         files = [{"path": "SKILL.md", "content": sk["content"]}]
     return files or []
+
+
+# ── Environments (UHP 2026-09-28, Environments chapter) ───────────────────────────────────────
+# A project's files and its installed dependencies, built once and read by every session that
+# names it: read-only at /env/<slug> beside the session's own writable workspace. The record lives
+# here (org, workspace, name, slug, status, versions); the bytes live with the runner, which owns
+# the data volume, builds the layer in the image's own toolchain and links it where sessions look
+# (runner/environments.py). Every route below is the record plus a call to the runner.
+_ENV_IMPORT_MAX = int(os.environ.get("HR_ENV_IMPORT_MAX_BYTES", str(512 * 1024 * 1024)))   # one archive
+_ENV_FILE_MAX = int(os.environ.get("HR_ENV_FILE_MAX_BYTES", str(64 * 1024 * 1024)))        # one file
+_ENV_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+class EnvironmentBody(BaseModel):
+    name: str
+    description: str | None = ""
+    entry: str | None = ""     # how the project is run, in the owner's words ("python3 run.py --episode <id>")
+
+
+def _env_slug(name: str) -> str:
+    """The path segment sessions see: the name, lower-cased, non-word runs as one dash."""
+    s = re.sub(r"[^a-z0-9._-]+", "-", str(name or "").strip().lower()).strip("-.")
+    return s[:64] if _ENV_SLUG_RE.match(s or "-") else ""
+
+
+async def _env_runner(method: str, path: str, env_id: str, *, params: dict | None = None,
+                      content=None, timeout: float = 120.0) -> httpx.Response:
+    """The runner call an environment route makes. The runner owns the bytes; this process owns the
+    record. `identifier` rides along as every runner call's does, so a per-identifier pool routes
+    an environment's work to one place."""
+    if not POOL_ENDPOINT:
+        raise uhp_error(503, "environment_unavailable", "No runner is configured to hold environments.")
+    kw: dict = {"content": content} if content is not None else {}
+    try:
+        return await _client().request(method, f"{POOL_ENDPOINT}{path}", params={"identifier": env_id, **(params or {})},
+                                       headers=_pool_headers(), timeout=timeout, **kw)
+    except httpx.HTTPError as e:
+        raise uhp_error(502, "environment_unavailable", f"The runner did not answer: {type(e).__name__}.")
+
+
+def _env_runner_error(r: httpx.Response, fallback: str) -> HTTPException:
+    """A runner refusal, in the protocol's envelope: its 4xx is the caller's mistake (a bad path, a
+    version that is not built), anything else is the platform's."""
+    try:
+        msg = (r.json() or {}).get("detail") or fallback
+    except ValueError:
+        msg = fallback
+    if r.status_code == 404:
+        return uhp_error(404, "not_found", str(msg))
+    if r.status_code == 409:
+        return uhp_error(409, "environment_not_ready", str(msg))
+    if 400 <= r.status_code < 500:
+        return uhp_error(422, "environment_invalid", str(msg))
+    return uhp_error(502, "environment_unavailable", f"The runner failed: HTTP {r.status_code}.")
+
+
+async def _environment_vertex(org: str, env_id: str) -> dict | None:
+    if not env_id or not re.fullmatch(r"henv_[0-9a-f]{32}", env_id):
+        return None
+    v = await BACKING.graph.get(env_id, label="Environment")
+    if not v or str(v.get("org") or "") != org or str(v.get("deleted") or "0") == "1":
+        return None
+    return v
+
+
+async def _environment_check_ref(org: str, env_id: str | None) -> None:
+    """A harness may name an environment of its own org, or none."""
+    if env_id and not await _environment_vertex(org, env_id):
+        raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment")
+
+
+async def _environment_for_turn(org: str, env_id: str) -> dict | None:
+    """What a task reads, checked before the turn starts: the environment exists in this org and
+    has a built version. Returns {id, slug, entry, version, path} or None for a task with none."""
+    if not env_id:
+        return None
+    v = await _environment_vertex(org, env_id)
+    if not v:
+        raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment")
+    v = await _environment_refresh(v)
+    if str(v.get("status") or "") != "ready" or not str(v.get("active_version") or ""):
+        raise uhp_error(409, "environment_not_ready",
+                        "The environment has no built version yet: build it, then run the task.", "environment",
+                        {"status": v.get("status") or "empty"})
+    slug = str(v.get("slug") or "")
+    return {"id": env_id, "slug": slug, "entry": str(v.get("entry") or ""),
+            "version": int(v.get("active_version")), "path": f"/env/{slug}"}
+
+
+async def _environment_refresh(v: dict) -> dict:
+    """The record, brought up to date with what the runner holds: the source's size, the versions,
+    the active one and the latest build's status. Persisted when anything moved, so the list (which
+    reads records only) tells the truth a moment after a build finishes."""
+    eid = str(v.get("id") or "")
+    r = await _env_runner("GET", f"/environments/{eid}", eid)
+    if r.status_code != 200:
+        return v
+    live = r.json() or {}
+    src, vers, active = live.get("source") or {}, live.get("versions") or [], live.get("active")
+    latest = max([int(x.get("version") or 0) for x in vers] or [0])
+    latest_rec = next((x for x in vers if int(x.get("version") or 0) == latest), None) if latest else None
+    if active:
+        status = "ready"
+    elif latest_rec and latest_rec.get("status") == "building":
+        status = "building"
+    elif latest_rec and latest_rec.get("status") == "failed":
+        status = "failed"
+    else:
+        status = "empty"
+    packages = v.get("packages") or "[]"
+    if active and str(active) != str(v.get("active_version") or ""):
+        b = await _env_runner("GET", f"/environments/{eid}/build", eid, params={"version": int(active)})
+        if b.status_code == 200:
+            packages = json.dumps((b.json() or {}).get("packages") or [])
+    props = {"status": status, "active_version": str(active or ""), "latest_version": str(latest or ""),
+             "files_count": str(int(src.get("count") or 0)), "files_bytes": str(int(src.get("bytes") or 0)),
+             "versions": json.dumps(vers), "packages": packages}
+    if any(str(v.get(k) or "") != str(val) for k, val in props.items()):
+        await _vg_upsert("Environment", eid, props)
+        v = {**v, **props}
+    return v
+
+
+def _environment_out(v: dict) -> dict:
+    def _j(s, default):
+        try:
+            return json.loads(s) if s else default
+        except Exception:  # noqa: BLE001
+            return default
+    vers = _j(v.get("versions"), [])
+    latest = max([int(x.get("version") or 0) for x in vers] or [0])
+    latest_rec = next((x for x in vers if int(x.get("version") or 0) == latest), None)
+    active = int(v.get("active_version")) if str(v.get("active_version") or "").isdigit() else None
+    slug = str(v.get("slug") or "")
+    return {"id": v.get("id"), "object": "environment", "name": v.get("name") or "", "slug": slug,
+            "description": v.get("description") or "", "entry": v.get("entry") or "",
+            "status": v.get("status") or "empty", "mount": f"/env/{slug}",
+            "version": active, "latestVersion": latest or None,
+            "files": {"count": int(v.get("files_count") or 0), "bytes": int(v.get("files_bytes") or 0)},
+            "packages": _j(v.get("packages"), []),
+            "versions": vers,
+            "build": ({k: latest_rec.get(k) for k in ("version", "status", "started_at", "finished_at", "error")}
+                      if latest_rec else None),
+            "member": v.get("member") or "", "workspace": v.get("workspace") or "",
+            "createdAt": int(v.get("created_at") or 0), "updatedAt": int(v.get("updated_at") or 0)}
+
+
+async def _owned_environment(request: Request, env_id: str) -> tuple[dict, dict]:
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    v = await _environment_vertex(org, env_id)
+    if not v:
+        raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment_id")
+    ws = str(p.get("workspace") or "")
+    if ws and not _workspace_keep(str(v.get("workspace") or ""), ws, bool(p.get("workspace_default"))):
+        raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment_id")
+    return p, v
+
+
+@app.post("/v1/environments")
+async def create_environment(body: EnvironmentBody, request: Request) -> dict:
+    p = await _principal(request)
+    org, member = p.get("org", ""), p.get("member", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    name = str(body.name or "").strip()
+    slug = _env_slug(name)
+    if not name or not slug:
+        raise uhp_error(422, "environment_invalid", "Give the environment a name that starts with a letter or digit.", "name")
+    # One slug per instance: the mount path is a place on the box that runs every session.
+    if any(str(r.get("deleted") or "0") != "1" for r in await BACKING.graph.find("Environment", {"slug": slug})):
+        raise uhp_error(409, "environment_exists", f"An environment is already mounted at /env/{slug}; choose another name.", "name")
+    eid = _rid("henv")
+    now = str(int(time.time() * 1000))
+    props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
+             "name": name, "slug": slug, "description": str(body.description or "").strip(),
+             "entry": str(body.entry or "").strip(), "status": "empty", "active_version": "", "latest_version": "",
+             "files_count": "0", "files_bytes": "0", "versions": "[]", "packages": "[]",
+             "created_at": now, "updated_at": now, "deleted": "0"}
+    await _vg_upsert("Environment", eid, props)
+    return _environment_out({"id": eid, **props})
+
+
+@app.get("/v1/environments")
+async def list_environments(request: Request) -> dict:
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    rows = [r for r in await _vg_list_by_org("Environment", org) if str(r.get("deleted") or "0") != "1"]
+    ws = str(p.get("workspace") or "")
+    if ws:
+        rows = [r for r in rows if _workspace_keep(str(r.get("workspace") or ""), ws, bool(p.get("workspace_default")))]
+    # A build finishes in the runner; a record that says "building" is brought up to date here so
+    # the list never shows a spinner over a layer that is ready.
+    rows = [await _environment_refresh(r) if str(r.get("status") or "") == "building" else r for r in rows]
+    items = [_environment_out(r) for r in rows]
+    items.sort(key=lambda x: x["createdAt"], reverse=True)
+    return {"environments": items}
+
+
+@app.get("/v1/environments/{env_id}")
+async def get_environment(env_id: str, request: Request) -> dict:
+    _, v = await _owned_environment(request, env_id)
+    return _environment_out(await _environment_refresh(v))
+
+
+@app.put("/v1/environments/{env_id}")
+async def update_environment(env_id: str, body: EnvironmentBody, request: Request) -> dict:
+    """Name, description and entry. The slug (the mount path) stays: sessions and instructions name it."""
+    _, v = await _owned_environment(request, env_id)
+    name = str(body.name or "").strip() or str(v.get("name") or "")
+    await _vg_upsert("Environment", env_id, {"name": name, "description": str(body.description or "").strip(),
+                                             "entry": str(body.entry or "").strip(),
+                                             "updated_at": str(int(time.time() * 1000))})
+    return _environment_out(await _environment_refresh(await _environment_vertex(str(v.get("org")), env_id) or v))
+
+
+@app.delete("/v1/environments/{env_id}")
+async def delete_environment(env_id: str, request: Request) -> dict:
+    _, v = await _owned_environment(request, env_id)
+    v = await _environment_refresh(v)
+    if str(v.get("status") or "") == "building":
+        raise uhp_error(409, "environment_busy", "A build is running; wait for it before deleting.")
+    r = await _env_runner("DELETE", f"/environments/{env_id}", env_id, params={"slug": str(v.get("slug") or "")})
+    if r.status_code >= 500:
+        raise _env_runner_error(r, "the environment's files could not be removed")
+    await _vg_upsert("Environment", env_id, {"deleted": "1", "updated_at": str(int(time.time() * 1000))})
+    return {"id": env_id, "deleted": True}
+
+
+@app.get("/v1/environments/{env_id}/files")
+async def environment_files(env_id: str, request: Request) -> dict:
+    """The source tree: every file and directory a person put in, with sizes. Not the built layer."""
+    await _owned_environment(request, env_id)
+    r = await _env_runner("GET", f"/environments/{env_id}/tree", env_id)
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the files could not be listed")
+    return r.json()
+
+
+@app.get("/v1/environments/{env_id}/files/{path:path}")
+async def environment_file(env_id: str, path: str, request: Request) -> Response:
+    await _owned_environment(request, env_id)
+    r = await _env_runner("GET", f"/environments/{env_id}/source", env_id, params={"path": path})
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the file could not be read")
+    return Response(content=r.content, media_type=r.headers.get("content-type") or "application/octet-stream")
+
+
+@app.put("/v1/environments/{env_id}/files/{path:path}")
+async def environment_put_file(env_id: str, path: str, request: Request) -> dict:
+    """One file, its bytes as the body; its directories are made on the way."""
+    await _owned_environment(request, env_id)
+    declared = int(request.headers.get("content-length") or 0)
+    if declared > _ENV_FILE_MAX:
+        raise uhp_error(413, "file_too_large", f"A file may be at most {_ENV_FILE_MAX} bytes.", "path",
+                        {"max_bytes": _ENV_FILE_MAX})
+    data = await request.body()
+    if len(data) > _ENV_FILE_MAX:
+        raise uhp_error(413, "file_too_large", f"A file may be at most {_ENV_FILE_MAX} bytes.", "path",
+                        {"max_bytes": _ENV_FILE_MAX})
+    r = await _env_runner("PUT", f"/environments/{env_id}/source", env_id, params={"path": path.rstrip("/")}, content=data)
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the file could not be written")
+    await _vg_upsert("Environment", env_id, {"updated_at": str(int(time.time() * 1000))})
+    return r.json()
+
+
+class EnvironmentDirectoryBody(BaseModel):
+    path: str
+
+
+@app.post("/v1/environments/{env_id}/directories")
+async def environment_make_directory(env_id: str, body: EnvironmentDirectoryBody, request: Request) -> dict:
+    """An empty directory, by name. Its own request rather than a trailing slash on PUT: a proxy that
+    normalises paths turns `scripts/` into `scripts`, and the result was a 0-byte file (rc.1)."""
+    await _owned_environment(request, env_id)
+    r = await _env_runner("POST", f"/environments/{env_id}/mkdir", env_id, params={"path": str(body.path or "").strip("/")})
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the directory could not be made")
+    await _vg_upsert("Environment", env_id, {"updated_at": str(int(time.time() * 1000))})
+    return r.json()
+
+
+@app.delete("/v1/environments/{env_id}/files/{path:path}")
+async def environment_delete_file(env_id: str, path: str, request: Request) -> dict:
+    await _owned_environment(request, env_id)
+    r = await _env_runner("DELETE", f"/environments/{env_id}/source", env_id, params={"path": path.rstrip("/")})
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the path could not be removed")
+    await _vg_upsert("Environment", env_id, {"updated_at": str(int(time.time() * 1000))})
+    return r.json()
+
+
+class EnvironmentImportBody(BaseModel):
+    git: dict | None = None    # {"url": ..., "ref": ...}
+    replace: bool = False
+
+
+@app.post("/v1/environments/{env_id}/import")
+async def environment_import(env_id: str, request: Request, replace: int = 0) -> dict:
+    """A whole project at once, keeping its tree: a zip or tar archive as the body, or a JSON body
+    naming a git repository. `?replace=1` clears the source first."""
+    await _owned_environment(request, env_id)
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if ctype == "application/json":
+        body = EnvironmentImportBody(**(await request.json() or {}))
+        git = body.git or {}
+        if not str(git.get("url") or ""):
+            raise uhp_error(422, "environment_invalid", "Name a git url, or send an archive as the body.", "git.url")
+        r = await _env_runner("POST", f"/environments/{env_id}/import", env_id, timeout=900.0,
+                              params={"replace": int(bool(replace or body.replace)), "git_url": str(git.get("url")),
+                                      "git_ref": str(git.get("ref") or "")}, content=b"")
+    else:
+        declared = int(request.headers.get("content-length") or 0)
+        if declared > _ENV_IMPORT_MAX:
+            raise uhp_error(413, "file_too_large", f"An import may be at most {_ENV_IMPORT_MAX} bytes.", None,
+                            {"max_bytes": _ENV_IMPORT_MAX})
+        r = await _env_runner("POST", f"/environments/{env_id}/import", env_id, timeout=900.0,
+                              params={"replace": int(bool(replace))}, content=request.stream())
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the import failed")
+    await _vg_upsert("Environment", env_id, {"updated_at": str(int(time.time() * 1000))})
+    return r.json()
+
+
+@app.post("/v1/environments/{env_id}/build")
+async def environment_build(env_id: str, request: Request) -> dict:
+    """Snapshot the source into a new version and install what its manifests declare; the version
+    becomes the one sessions read when the build succeeds. Returns at once; poll the build."""
+    _, v = await _owned_environment(request, env_id)
+    v = await _environment_refresh(v)
+    if str(v.get("status") or "") == "building":
+        raise uhp_error(409, "environment_busy", "A build is already running.")
+    n = int(v.get("latest_version") or 0) + 1
+    r = await _env_runner("POST", f"/environments/{env_id}/build", env_id,
+                          params={"version": n, "slug": str(v.get("slug") or ""), "activate": 1})
+    if r.status_code != 200:
+        raise _env_runner_error(r, "the build could not start")
+    await _vg_upsert("Environment", env_id, {"status": "building", "latest_version": str(n),
+                                             "updated_at": str(int(time.time() * 1000))})
+    return {"id": env_id, "object": "environment.build", "version": n, "status": "building"}
+
+
+@app.get("/v1/environments/{env_id}/builds/{version}")
+async def environment_build_status(env_id: str, version: int, request: Request) -> dict:
+    """The build's record: status, log, packages, size. The record the runner wrote, verbatim."""
+    _, v = await _owned_environment(request, env_id)
+    r = await _env_runner("GET", f"/environments/{env_id}/build", env_id, params={"version": int(version)})
+    if r.status_code != 200:
+        raise _env_runner_error(r, "no such build")
+    rec = r.json() or {}
+    if rec.get("status") in ("ready", "failed") and str(v.get("status") or "") == "building":
+        await _environment_refresh(v)
+    return {"id": env_id, "object": "environment.build", **rec}
+
+
+@app.get("/v1/environments/{env_id}/versions")
+async def environment_versions(env_id: str, request: Request) -> dict:
+    _, v = await _owned_environment(request, env_id)
+    v = await _environment_refresh(v)
+    return {"id": env_id, "active": int(v.get("active_version")) if str(v.get("active_version") or "").isdigit() else None,
+            "versions": json.loads(v.get("versions") or "[]")}
+
+
+@app.post("/v1/environments/{env_id}/versions/{version}/activate")
+async def environment_activate(env_id: str, version: int, request: Request) -> dict:
+    """Point sessions at an older build: rollback, nothing rebuilt."""
+    _, v = await _owned_environment(request, env_id)
+    r = await _env_runner("POST", f"/environments/{env_id}/activate", env_id,
+                          params={"version": int(version), "slug": str(v.get("slug") or "")})
+    if r.status_code != 200:
+        raise _env_runner_error(r, "that version cannot be activated")
+    return _environment_out(await _environment_refresh(v))
+
+
+@app.get("/v1/environments/{env_id}/harnesses")
+async def environment_harnesses(env_id: str, request: Request) -> dict:
+    """The harnesses of the org that read this environment."""
+    p, _ = await _owned_environment(request, env_id)
+    rows = await _vg_list_by_org("Harness", p.get("org", ""))
+    items = [{"id": r.get("id"), "name": r.get("name") or "", "base": r.get("base") or ""}
+             for r in rows if str(r.get("deleted") or "0") != "1" and str(r.get("environment") or "") == env_id]
+    return {"id": env_id, "harnesses": items}
+
 
 # ── Plugins (UHP 2026-09-12, Plugins chapter) ─────────────────────────────────────────────
 # A plugin IS an Agent Plugins 1.0.0 package: plugin.json at the root, MCP servers in mcp.json,
@@ -15815,6 +16223,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     workspace = request.headers.get("x-harness-workspace", "")
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -15931,6 +16340,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     # AFTER the write: _harness_props can still refuse this save (an unsupported base), and a
@@ -16079,6 +16489,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -16210,6 +16621,7 @@ async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
             return None
     body = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""),
                        plugins=[e for e in have if e["name"] != want["name"]] + [kit_plugin])
+    await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org, previous=have, reserved_mcp=reserved_mcp)
     await _vg_upsert("Harness", hid, {"plugins": json.dumps(body.plugins), "skills": json.dumps([]),
                                       "updated_at": str(int(time.time() * 1000))})
@@ -16353,6 +16765,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
     # plugin's own servers must not take, so they count as the harness's here.
+    await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org, reserved_mcp=tuple(
         str(d["name"]) for d in (decl, media_decl) if d and d.get("name")))
     hid = _rid("chrn")
@@ -17059,6 +17472,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     body.base = str(v.get("base") or body.base)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
+    await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     # AFTER the write: see update_harness.

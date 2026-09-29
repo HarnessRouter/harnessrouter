@@ -68,10 +68,10 @@ def _create(api, **cfg):
     return r.json()
 
 
-def test_discovery_advertises_both_versions_and_the_plugin_schemas(api):
+def test_discovery_advertises_every_version_and_the_plugin_schemas(api):
     d = api.get("/v1/uhp").json()
-    assert d["versions"] == ["2026-09-12", "2026-08-11"] and d["default_version"] == "2026-09-12"
-    assert d["capabilities"]["plugins"] is True
+    assert d["versions"] == ["2026-09-28", "2026-09-12", "2026-08-11"] and d["default_version"] == "2026-09-28"
+    assert d["capabilities"]["plugins"] is True and d["capabilities"]["environments"] is True
     assert d["plugin_schemas"] == [MANIFEST_SCHEMA]
     # Both versions from one code path: a 2026-08-11 request is honoured and echoed as such.
     r = api.get("/v1/uhp", headers={"UHP-Version": "2026-08-11"})
