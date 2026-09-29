@@ -193,14 +193,18 @@ body {
 /* main content sits right of the sidebar */
 .v2-main { margin-left: var(--v2-navw, 268px); min-height: 100vh; transition: margin-left .12s ease; }
 
-/* mobile top bar (≤768): the sidebar becomes an overlay drawer */
+/* mobile top bar (≤768): the sidebar becomes an overlay drawer. Its height is one number,
+   --v2-mobilebar-h, that the shell's main area and every viewport-high page root subtract from the
+   viewport; a root that guessed the bar's height was 6px short and the page scrolled by the bar. */
+:root { --v2-mobilebar-h: 47px; }
 .v2-mobilebar { display: none; }
 @media (max-width: 768px) {
   .v2-mobilebar {
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; gap: 10px; box-sizing: border-box; height: var(--v2-mobilebar-h);
     position: sticky; top: 0; z-index: 55;
     background: #fff; border-bottom: 1px solid var(--v2-line); padding: 10px 14px;
   }
+  .v2-main { min-height: calc(100vh - var(--v2-mobilebar-h)); }
   .v2-mobilebar img { width: 20px; height: 20px; }
   .v2-mobilebar strong { font-size: 14px; }
   .v2-mobilebar button {
@@ -340,7 +344,7 @@ body {
   .us-stats { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 768px) {
-  .us-root { height: calc(100vh - 53px); }
+  .us-root { height: calc(100vh - var(--v2-mobilebar-h)); }
   .us-head { padding: 20px 16px 14px; }
   .us-body { padding: 16px 16px 24px; }
   .us-stat-v b { font-size: 22px; }
@@ -419,7 +423,7 @@ body {
   .ak-created, .ak-th-created { display: none; }
 }
 @media (max-width: 768px) {
-  .ak-root { height: calc(100vh - 53px); }
+  .ak-root { height: calc(100vh - var(--v2-mobilebar-h)); }
   .ak-head { padding: 20px 16px 14px; }
   .ak-body { padding: 16px 16px 24px; }
   .ak-search { width: 100%; }
@@ -645,7 +649,7 @@ body {
   .hx-side { width: 250px; }
 }
 @media (max-width: 820px) {
-  .hx-root { height: calc(100vh - 53px); }
+  .hx-root { height: calc(100vh - var(--v2-mobilebar-h)); }
   .hx-root:not(.m-detail) .hx-main { display: none; }
   .hx-root.m-detail .hx-side { display: none; }
   .hx-side { width: 100%; border-right: 0; }
@@ -763,7 +767,7 @@ body {
 }
 /* Phone: list and detail alternate, same as Tasks; the root sits under the mobile top bar. */
 @media (max-width: 768px) {
-  .ar2-root { height: calc(100vh - 53px); }
+  .ar2-root { height: calc(100vh - var(--v2-mobilebar-h)); }
   .ar2-root:not(.m-detail) .ar2-main { display: none; }
   .ar2-root.m-detail .ar2-side { display: none; }
   .ar2-side { width: 100%; border-right: 0; }
