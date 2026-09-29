@@ -40,6 +40,7 @@ import tempfile
 import httpx
 import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -4013,6 +4014,29 @@ def uhp_error(status: int, code: str, message: str, param: str | None = None,
     etype = _UHP_STATUS_TYPE.get(status, ("server_error", "internal_error"))[0]
     return HTTPException(status, {"__uhp__": True, "type": etype, "code": code,
                                   "message": message, "param": param, "detail": detail})
+
+
+
+
+def validation_error_body(exc) -> dict:
+    """A 422's body: where and why the request failed, never what it carried. FastAPI's default
+    repeats each failing value under `input`, and for a missing top-level field that value is the
+    whole body, so a PUT /v1/admin/integrations that omitted model_map came back with the
+    operator's live provider key in the response (a reviewer's finding, 2026-09-29). Anything that
+    persists response bodies (an error reporter, a proxy log, devtools) would have kept it."""
+    errors = []
+    for e in (exc.errors() if hasattr(exc, "errors") else []):
+        errors.append({"loc": list(e.get("loc") or []), "msg": str(e.get("msg") or ""), "type": str(e.get("type") or "")})
+    first = errors[0] if errors else {}
+    param = ".".join(str(x) for x in first.get("loc", []) if x != "body") or None
+    message = (f"{param}: {first['msg']}" if param and first.get("msg") else first.get("msg")) or "The request did not validate."
+    err = {"type": "invalid_request_error", "code": "invalid_request", "message": message, "param": param, "detail": errors}
+    return {"error": err, "detail": errors}
+
+
+@app.exception_handler(RequestValidationError)
+async def _uhp_validation_error(request: Request, exc: RequestValidationError):
+    return JSONResponse(validation_error_body(exc), status_code=422, headers={"UHP-Version": UHP_VERSION})
 
 
 @app.exception_handler(HTTPException)
