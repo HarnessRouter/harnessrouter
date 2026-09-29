@@ -208,7 +208,7 @@ A harness names the environment its tasks read, and a task may name a different 
   `metadata.session_id`.
 
 > **Why is the task's environment in `metadata` rather than a top-level field?**
-> For the reason the harness is ([Tasks §1.2](tasks.md#12-selecting-a-harness)): the task surface
+> For the reason the harness is ([Tasks §1.2](tasks.md#12-selecting-the-harness)): the task surface
 > is a Responses request, and `metadata` is the extension point that surface defines for
 > caller-supplied context. A harness and a session are this protocol's own objects, so on them
 > `environment` is an ordinary field; a task request is not, so on it the environment travels
