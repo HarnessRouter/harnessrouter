@@ -75,3 +75,7 @@ the harness's Browser section in the agent's instructions file is what the agent
 
 The table (`--md`) is the Browser section of docs/support-matrix.md; the run's findings go to
 docs/support-matrix-notes.md like every other column's.
+
+## Environments column
+
+`python3 environments/column.py --base-url ... --api-key ... --environment henv_...` runs three tasks per base (pip, npm, apt) on one built environment and judges each by the trace (no install), the answer (the package's path under the environment) and the session record. See docs/support-matrix-notes.md.
