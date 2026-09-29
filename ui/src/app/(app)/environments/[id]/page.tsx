@@ -50,7 +50,8 @@ export default function EnvironmentPage() {
   const [tab, setTab] = useState<'files' | 'packages'>('files');
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [sel, setSel] = useState<string>('');
+  const [sel, setSel] = useState<string>('');          // the highlighted node: a file or a folder (where new files land)
+  const [openPath, setOpenPath] = useState<string>(''); // the file in the viewer; selecting a folder leaves it in place
   const [file, setFile] = useState<{ text: string | null; bytes: number; type: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [err, setErr] = useState('');
@@ -85,7 +86,7 @@ export default function EnvironmentPage() {
   const matches = useMemo(() => (needle ? (entries || []).filter((e) => !e.dir && e.path.toLowerCase().includes(needle)) : []), [entries, needle]);
 
   const openFile = async (path: string) => {
-    setSel(path); setEditing(null);
+    setSel(path); setOpenPath(path); setEditing(null);
     try { setFile(await readEnvironmentFile(id, path)); } catch (e) { setFile(null); setErr(e instanceof Error ? e.message : 'The file could not be read.'); }
   };
   const toggle = (p: string) => setOpen((s) => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n; });
@@ -96,7 +97,7 @@ export default function EnvironmentPage() {
     try { await fn(); await reload(); } catch (e) { setErr(e instanceof Error ? e.message : `${label} failed.`); }
     finally { setBusy(''); }
   };
-  const saveFile = () => act('save', async () => { if (editing === null) return; await writeEnvironmentFile(id, sel, editing); setFile({ text: editing, bytes: new TextEncoder().encode(editing).length, type: file?.type || 'text/plain' }); setEditing(null); });
+  const saveFile = () => act('save', async () => { if (editing === null) return; await writeEnvironmentFile(id, openPath, editing); setFile({ text: editing, bytes: new TextEncoder().encode(editing).length, type: file?.type || 'text/plain' }); setEditing(null); });
   const createPath = () => act('create', async () => {
     if (!newPath?.value.trim()) return;
     const base = parentDir(); const p = (base ? base + '/' : '') + newPath.value.trim().replace(/^\/+/, '');
@@ -114,7 +115,7 @@ export default function EnvironmentPage() {
   });
   const importArchive = (files: FileList | null) => act('import', async () => { if (files?.[0]) await importEnvironmentArchive(id, files[0]); });
   const importGit = () => act('import', async () => { if (!git.url.trim()) return; await importEnvironmentGit(id, git.url.trim(), git.ref.trim(), git.replace); setGitOpen(false); });
-  const remove = (p: string) => act('remove', async () => { await deleteEnvironmentPath(id, p); if (sel === p || sel.startsWith(p + '/')) { setSel(''); setFile(null); } });
+  const remove = (p: string) => act('remove', async () => { await deleteEnvironmentPath(id, p); if (sel === p || sel.startsWith(p + '/')) setSel(''); if (openPath === p || openPath.startsWith(p + '/')) { setOpenPath(''); setFile(null); } });
   const startBuild = () => act('build', async () => { await buildEnvironment(id); setTab('packages'); setShowLog(true); });
   const activate = (n: number) => act('activate', () => activateEnvironmentVersion(id, n));
   const saveMeta = () => act('rename', async () => { await updateEnvironment(id, meta); setRenaming(false); });
@@ -230,10 +231,10 @@ export default function EnvironmentPage() {
                   </div>
                 </aside>
                 <div className="env-view">
-                  {sel && file ? (
+                  {openPath && file ? (
                     <>
                       <div className="env-view-head">
-                        <code>{sel}</code>
+                        <code>{openPath}</code>
                         <span className="env-dim">{fmtBytes(file.bytes)}</span>
                         {file.text !== null && (editing === null
                           ? <button className="button small" type="button" onClick={() => setEditing(file.text || '')}>Edit</button>
