@@ -192,3 +192,15 @@ def test_declared_packages_and_the_runtime_are_kept_and_handed_to_the_build(api,
     monkeypatch.setattr(app, "_env_runner", real)
     r = api.get("/v1/environments/runtimes")
     assert r.status_code == 200 and isinstance(r.json().get("python"), list) and "os" in r.json()
+
+
+def test_the_task_names_its_environment_in_metadata_like_the_harness():
+    """The task request is a Responses request: its environment travels in metadata beside
+    harness_id (environments.md §5), never as a top-level field; the harness's is the default."""
+    from types import SimpleNamespace as NS
+    hv = {"environment": "henv_harness"}
+    assert app._task_environment_ref(NS(metadata={"harness_id": "chrn_1", "environment": "henv_task"}), hv) == "henv_task"
+    assert app._task_environment_ref(NS(metadata={"harness_id": "chrn_1"}), hv) == "henv_harness"
+    assert app._task_environment_ref(NS(metadata=None), hv) == "henv_harness"
+    assert app._task_environment_ref(NS(metadata={}), None) == ""
+    assert not hasattr(app.CreateResponseBody.model_fields, "environment") and "environment" not in app.CreateResponseBody.model_fields

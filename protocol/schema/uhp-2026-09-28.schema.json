@@ -731,9 +731,12 @@
         },
         "metadata": {
           "type": "object",
-          "description": "Client metadata. `harness_id` selects the configured harness.",
+          "description": "Client metadata, the extension point of the Responses surface. `harness_id` selects the\nconfigured harness; `environment` names the environment this task reads, overriding the\nharness's (capability `environments`), refused with `environment_not_found` or\n`environment_not_ready` before the task starts.\n",
           "properties": {
             "harness_id": {
+              "type": "string"
+            },
+            "environment": {
               "type": "string"
             }
           },
@@ -775,10 +778,6 @@
             "null"
           ],
           "description": "Wall-clock budget"
-        },
-        "environment": {
-          "type": "string",
-          "description": "The environment this task reads, overriding the harness's. Refused with\n`environment_not_found` or `environment_not_ready` before the task starts.\n"
         },
         "tools": {
           "type": "array",
@@ -881,6 +880,10 @@
           "properties": {
             "session_id": {
               "type": "string"
+            },
+            "environment": {
+              "type": "string",
+              "description": "The environment the task read, when it read one (capability `environments`)."
             },
             "requested_model": {
               "type": "string",
