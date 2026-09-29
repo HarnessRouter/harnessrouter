@@ -27,6 +27,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (Auth, BACKENDS, CHECKPOINT_EXCLUDE, _HERMES_RELAY, _MINIMAX_TOOLS,  # noqa: E402
+                    _mcp_headers,
                     _agent_doc_path, _build_minimax, _failure_reason, _minimax_eof,
                     _minimax_has_session, _minimax_home, _minimax_mcp_config, _minimax_to_claude,
                     _relay_served_model, _relay_usage, _resume_lost, _status_from_result,
@@ -347,6 +348,9 @@ def test_mcp_servers_carry_the_declared_transport_and_the_resolved_bearer():
     assert servers["deep_wiki"] == {"type": "sse", "url": "https://mcp.deepwiki.com/sse"}
     assert servers["ctx"] == {"type": "http", "url": "https://mcp.example/mcp",
                               "headers": {"Authorization": "Bearer tok123", "X-A": "1"}}
+    # the bearer comes from the ONE helper every writer shares: eight writers that kept their own
+    # copy dropped `auth` and lost the browser plug entirely (the browser column, 2026-09-27)
+    assert servers["ctx"]["headers"] == _mcp_headers({"auth": "tok123", "headers": {"X-A": "1"}})
     assert servers["probe"] == {"command": "python3", "args": ["probe.py", "--x"], "env": {"A": "b"}}
     assert "nothing" not in servers
 
