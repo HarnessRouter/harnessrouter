@@ -243,6 +243,9 @@ DESCRIPTIONS = {
     "spec/plugins.html":
         "UHP plugins: Agent Plugins packages of tools and skills installed into a harness as one "
         "unit, how they compose with the harness's own, and how a harness exports as one.",
+    "spec/environments.html":
+        "UHP environments: a project's files and installed dependencies, built once and mounted "
+        "read-only at a fixed path in every session that names it.",
     "spec/tasks.html":
         "UHP tasks: one unit of work, input in and result out — the request shape, execution "
         "semantics, and response contract clients build on.",
