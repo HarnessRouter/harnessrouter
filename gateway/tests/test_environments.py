@@ -14,6 +14,7 @@ import zipfile
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "runner"))
@@ -229,3 +230,41 @@ def test_the_status_says_building_while_a_rebuild_runs_and_ready_wins_over_an_ol
     assert app._env_status(1, {"status": "ready"}) == "ready"
     assert app._env_status(1, {"status": "failed"}) == "ready"
     assert app._env_status(None, {"status": "failed"}) == "failed"
+
+
+
+# Module level on purpose: this file has `from __future__ import annotations`, so a model defined
+# inside the test would be a string annotation FastAPI cannot resolve, and the route would read it
+# as a query parameter.
+class _Config422(BaseModel):
+    api_key: str
+
+
+class _Body422(BaseModel):
+    name: str
+    config: _Config422
+    model_map: dict
+
+
+def test_a_request_that_does_not_validate_is_answered_without_its_body():
+    """A 422 says where and why, never what the request carried: FastAPI's default echoed the whole
+    body under `input` for a missing field, provider key included (a reviewer's finding)."""
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+
+    mini = FastAPI()
+
+    @mini.exception_handler(RequestValidationError)
+    async def _h(request, exc):
+        return JSONResponse(app.validation_error_body(exc), status_code=422)
+
+    @mini.put("/integrations")
+    def _put(body: _Body422):
+        return {"ok": True}
+
+    r = TestClient(mini).put("/integrations", json={"name": "Vercel", "config": {"api_key": "vck_live_SECRET_0123456789"}})
+    assert r.status_code == 422
+    assert "SECRET" not in r.text and "vck_live" not in r.text
+    j = r.json()
+    assert j["error"]["code"] == "invalid_request" and j["error"]["param"] == "model_map" and "model_map" in j["error"]["message"]
+    assert j["detail"][0]["loc"] == ["body", "model_map"] and set(j["detail"][0]) == {"loc", "msg", "type"}
