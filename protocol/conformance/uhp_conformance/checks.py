@@ -1798,7 +1798,7 @@ def en02(ctx):
     r = ctx.client.put(f"/v1/environments/{eid}/files/probe/nested/blob.bin", raw=body, content_type="application/octet-stream")
     assert r.status == 200, f"PUT returned HTTP {r.status}"
     r = ctx.client.get(f"/v1/environments/{eid}/files/probe/nested/blob.bin")
-    assert r.status == 200 and r.raw == body, "the bytes must come back exactly as sent"
+    assert r.status == 200 and r.body == body, "the bytes must come back exactly as sent"
     tree = ctx.client.get(f"/v1/environments/{eid}/files").json or {}
     ctx.validate(tree, "EnvironmentFileList")
     paths = {x.get("path") for x in tree.get("entries") or []}
