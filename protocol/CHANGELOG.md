@@ -14,7 +14,9 @@ and `metadata` is its extension point, where `harness_id` already travels
 reports `metadata.environment` beside `session_id`. The harness and session objects keep
 `environment` as an ordinary field. The published chapter had carried the field at the top level
 for one day; the schema, the conformance suite (`2026.9.28.post1`: EN-05 sends it in `metadata`,
-EN-07 asserts the response echo) and the reference server (0.26.7) changed together.
+EN-07 asserts the response echo; `post2`: EN-02 compares the returned bytes, which `post1` could not
+read) and the reference server (0.26.7) changed together. The reference server passes the full
+class, 84 of 84, on `post2`.
 
 - **Environments** ([Environments](versions/2026-09-28/environments.md)), the Environments
   sub-protocol, optional at every class behind the `environments` capability. An environment is a
