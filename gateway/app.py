@@ -5491,6 +5491,7 @@ class _RespTranslator:
         self.requested_model = ""
         self.model_fallback = False
         self.fallback_reason = ""
+        self.environment = ""     # the environment id the turn read: reported beside session_id
         # The connection that served this turn, stamped when the sandbox is dispatched. The session's
         # last_connection carried it before, one value per session; the turns feed and the support
         # matrix read it per turn (a report that said "every turn record" was reading the session).
@@ -5513,6 +5514,8 @@ class _RespTranslator:
         meta: dict = {}
         if self.sid:
             meta["session_id"] = self.sid
+        if self.environment:
+            meta["environment"] = self.environment
         # run metadata: expose the effective vs requested model + fallback, so a caller can see the
         # gateway ran a different (authorized) model than it asked for.
         if self.requested_model and self.requested_model != self.model:
@@ -7889,7 +7892,6 @@ class CreateResponseBody(BaseModel):
     backend: str | None = None     # non-OpenAI convenience: force codex|claude
     max_step: int | None = None         # per-request agent step budget (claude --max-turns)
     timeout_seconds: int | None = None  # per-request wall-clock cap for the turn
-    environment: str | None = None      # an environment id for this task; overrides the harness's (UHP Environments)
 
 
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
@@ -7980,7 +7982,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # The project layer this task reads: the request's, else the harness's. Resolved and checked
     # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
     # failed turn.
-    environment = await _environment_for_turn(org, body.environment or str((hv or {}).get("environment") or ""))
+    environment = await _environment_for_turn(org, _task_environment_ref(body, hv))
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -8163,6 +8165,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         _ignored = [f for f in ("tools", "include") if getattr(body, f, None) is not None]
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
         tr.requested_model, tr.model_fallback, tr.fallback_reason = requested_model, model_fallback, model_fallback_reason
+        tr.environment = str((environment or {}).get("id") or "")
 
         # Broadcast a synthetic turn-start so the bus alone can render a conversation turn from
         # scratch (the native Responses events don't echo the user's prompt).
@@ -15392,6 +15395,13 @@ async def _environment_check_ref(org: str, env_id: str | None) -> None:
     """A harness may name an environment of its own org, or none."""
     if env_id and not await _environment_vertex(org, env_id):
         raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment")
+
+
+def _task_environment_ref(body, hv: dict | None) -> str:
+    """The environment a task reads: `metadata.environment` on the request (the Responses surface's
+    extension point, where `harness_id` also travels: environments.md §5), else the harness's."""
+    meta = getattr(body, "metadata", None) or {}
+    return str(meta.get("environment") or (hv or {}).get("environment") or "").strip()
 
 
 async def _environment_for_turn(org: str, env_id: str) -> dict | None:
