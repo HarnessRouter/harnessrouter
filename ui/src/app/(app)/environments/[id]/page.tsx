@@ -189,7 +189,7 @@ export default function EnvironmentPage() {
 
 
   return (
-    <section className="view is-active collection-view" id="view-environment">
+    <section className="view is-active collection-view env-root" id="view-environment">
       <div className="env-head">
         <a className="env-back" href="/environments"><iconify-icon icon="tabler:arrow-left"></iconify-icon>Environments</a>
         {env && (
