@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import http.server
 import datetime
 import json
@@ -3821,7 +3822,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
+                resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
                 if attempt > 0 and tried_slim:
                     # the blind no-stream_options retry is part of what made this route work
                     flags["drop_stream_options"] = True
@@ -3914,6 +3915,40 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+                # THE PROVIDER DID NOT ANSWER: the connection was refused, dropped mid-request, or
+                # went silent past HR_RELAY_UPSTREAM_TIMEOUT_S. Only HTTPError was caught here, so
+                # such a failure escaped _forward, ThreadingHTTPServer printed a traceback and closed
+                # the socket WITH NO RESPONSE AT ALL — the CLI was left holding a dead connection and
+                # the turn hung until something above killed it. Measured on a support-matrix
+                # instance on 2026-09-29: ten of these, `http.client.RemoteDisconnected: Remote end
+                # closed connection without response`, two inside the family tour's failing window.
+                # A refusal the person can read beats a socket that simply stops.
+                reason = f"{type(e).__name__}: {e}"[:300]
+                if attempt < 2 and isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError)):
+                    # A connection dropped before any byte of the answer is the one transport failure
+                    # worth one more go: it costs nothing upstream (nothing was generated) and an
+                    # aggregator sheds load this way. A timeout is NOT retried — the provider may be
+                    # generating, and a second request would be a second bill.
+                    print(f"[relay] upstream dropped the connection for {tail} model={_body_model}; "
+                          f"sending again ({attempt + 1}/2)", flush=True)
+                    continue
+                print(f"[relay] upstream did not answer {tail} model={_body_model}: {reason}", flush=True)
+                payload = json.dumps({"error": {
+                    "message": f"the provider did not answer: {reason}",
+                    "type": "upstream_unavailable",
+                    "code": "upstream_unavailable"}}).encode()
+                # 504 for a silence we timed out on, 502 for a connection that failed or was dropped.
+                status = 504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502
+                try:
+                    self.send_response(status)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    pass          # the client hung up first; nothing left to tell
+                return
         ctype = resp.headers.get("content-type") or ""
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
@@ -3927,7 +3962,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
             while True:
-                chunk = resp.read(4096)
+                try:
+                    chunk = resp.read(4096)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    # The answer began and then stopped: the provider went silent past the socket's
+                    # timeout, or dropped the connection mid-stream. The status line is long gone, so
+                    # the stream is ENDED here rather than left open — the client reads a truncated
+                    # SSE stream and fails its own turn with its own words, which is what it does
+                    # with any short stream. Before this, the exception escaped _forward and the
+                    # socket was dropped with the chunked body unterminated.
+                    print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: "
+                          f"{type(e).__name__}: {e}"[:300], flush=True)
+                    break
                 if not chunk:
                     break
                 if not flags.get("served_model"):
@@ -3960,7 +4006,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _usage_add(flags, call_usage)
             self.wfile.write(b"0\r\n\r\n")
         else:
-            data = resp.read()
+            try:
+                data = resp.read()
+            except (http.client.HTTPException, TimeoutError, OSError) as e:
+                # Same as the streaming case: the body stopped arriving. The status is already sent,
+                # so the client gets a short body and says so itself.
+                print(f"[relay] upstream stopped mid-body on {tail} model={_body_model}: "
+                      f"{type(e).__name__}: {e}"[:300], flush=True)
+                data = b""
             if not flags.get("served_model"):
                 sm = _served_model_in(data[:65536])
                 if sm:
@@ -4110,6 +4163,17 @@ def _adapt_custom_auth(auth):
         return auth
     base, tok = _bedrock_anthropic_route(f"https://{host}", auth.api_key)
     return auth.model_copy(update={"base_url": base, "api_key": tok})
+
+
+# How long the relay waits for the provider on ONE upstream call, and how long a stalled READ of an
+# answer already begun may block. It must stay BELOW the shortest turn cap anything upstream of it
+# applies, or a provider that accepts a request and then goes silent is indistinguishable from a
+# working turn: the harness's own cap fires first, the turn is cancelled with no served model, no
+# tool call and no reason, and the person is told nothing. That is exactly what the family tour hit
+# on 2026-09-29 (seven of fourteen families "not settled in 600s" on a support-matrix instance whose
+# relay sat in urlopen(timeout=600)). A provider that has said nothing for this long has failed;
+# saying so in seconds is worth more than waiting ten minutes to say nothing.
+HR_RELAY_UPSTREAM_TIMEOUT_S = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S", "180"))
 
 
 def _relay_base_with_version(base_url: str) -> str:

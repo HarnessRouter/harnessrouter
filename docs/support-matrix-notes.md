@@ -1544,6 +1544,65 @@ Measured on the pinned v2.13 (macOS for the driver, Linux arm64 `python:3.12-sli
   `google/gemini-3.1-flash-lite` and non-zero relay usage, and neither the key nor the relay token
   was in the workspace or the turn record.
 
+<!-- Carried onto this branch by cherry-picking 6c477eb from feat/minimax-harness: the relay is
+shared by every backend on that path, and the agentzero full-catalog run of 2026-09-30 hit the same
+defect (ten urlopen timeouts escaping the handler, six truncated chunked reads, no
+upstream_unavailable anywhere in the log). The section below is that commit's own write-up; what it
+changed for this base is under the agentzero heading further down. -->
+
+## The loopback relay answers when the provider does not (2026-09-29)
+
+The first family tour on the minimax base passed 7 of 14 families in one conversation: every family from kimi-k3
+on was recorded `not settled in 600s, stopped (cancelled)` with **no served model, no tool call and
+no reason** — except `glm-5.3-flash`, which passed in 12 s in the middle of the collapse. The
+obvious reading was the blanket 200k context window (above): a history too large for a model's real
+window. **It was not**, and two measurements say so. The conversation at its largest was 219 KB of
+messages plus a 12 KB system prompt and 27 KB of tool schemas — about 65k tokens, under the real
+window of every failing model — and the same families pass on that same session today, with a
+longer history (kimi-k3, qwen3.8-flash and minimax-m3 each re-run by hand, all completed in
+seconds). A conversation too long fails monotonically; this did not.
+
+**It was the loopback relay answering nothing when the provider answered nothing**, in two ways,
+both in `_forward`:
+
+- The upstream call caught only `urllib.error.HTTPError`. A refused connection, one dropped
+  mid-request, or a provider gone silent raised out of the handler; `ThreadingHTTPServer` printed a
+  traceback and closed the client socket **with no HTTP response at all**. The instance's log holds
+  ten of those (`http.client.RemoteDisconnected: Remote end closed connection without response`),
+  two inside the tour's failing window.
+- The relay's own wait was 600 s — the same as the cap above it — so a provider that accepted a
+  request and then went silent could never be REPORTED by the relay: the cap always fired first and
+  the turn was recorded as cancelled with nothing in it. That is the shape of six of the seven.
+
+Both are fixed in `runner/server.py`: transport failures now answer **502** (refused or dropped) or
+**504** (timed out) with `{"error":{"code":"upstream_unavailable",…}}` carrying the provider's own
+failure; a bare drop before any byte is retried once and a timeout is never retried (the provider
+may be generating, and a second request is a second bill); the stream and whole-body reads end
+cleanly and log the reason instead of escaping; and `HR_RELAY_UPSTREAM_TIMEOUT_S` (default 180 s)
+keeps the wait under any turn cap. Pinned by `runner/tests/test_relay_upstream_failure.py`, which
+drives the real handler over a real socket against an upstream that drops, drops-then-answers,
+refuses, and goes silent — the defect was in what reaches the client, not in parsing.
+
+**Proven by re-running the tour twice** on a build of this branch, with the nine families around the
+collapse (`kimi-k3, qwen3.8-flash, glm-5.3-flash, mistral-medium-3.5, step-3.7-flash,
+hunyuan-4-preview, nemotron-3.5-lightning, minimax-m3, gpt-5.4-mini`): **8 of 9 both times, no turn
+anywhere near the cap** — every previously-hanging family completed in 9-52 s with its served model
+and the deck. The two non-passes were not hangs and were not the same family twice:
+
+- run 1, `hunyuan-4-preview`: the turn **completed** with `tencent/hy4-preview` and `tour.pptx` — the
+  tour read the record at the instant it said `done`, the gateway's own word for completed
+  (`_RESP_STATUS_MAP`), which is not in the script's RUNNING list, so it settled early on a
+  half-written record. A shared-script bug, below.
+- run 2, `nemotron-3.5-lightning`: a real, reported failure in 113 s — `Runtime completed without a
+  final assistant response`, and the CLI's transcript gives the mechanism: `stopReason: "length"`.
+  The model hit the output cap with no usable final message. That is the blanket
+  `max_completion_tokens: 16384` above, now with a named victim, and it is the same id the matrix
+  found unstable on its own (run1 FIRST failed, run2 RECYCLE failed, run3 clean 5/5).
+
+And the fixed path was exercised end to end on a real instance rather than only in tests: with the
+connection's base URL pointed at a port nothing listens on, a turn fails in 22 s carrying
+`502 the provider did not answer: URLError: <urlopen error [Errno 111] Connection refused>`.
+
 ## agentzero: the first matrix run, and the two defects it found (2026-09-28)
 
 A local instance built from the branch (vercel, the 7 cross-harness ids) ran the matrix TWICE: 29/35
