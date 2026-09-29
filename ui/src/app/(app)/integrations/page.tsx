@@ -433,15 +433,31 @@ export default function IntegrationsPage() {
                             </div>
                           );
                         }
-                        if (isCustom && (f.key === 'namespace_tools' || f.key === 'web_search')) {
+                        if (isCustom && (f.key === 'namespace_tools' || f.key === 'web_search' || f.key === 'apply_patch_tool_type')) {
                           // Custom Responses endpoints default to function tools only. Keep these
                           // Codex-specific capabilities explicit so an endpoint can opt in safely.
                           if (editing.config['api_format'] !== 'responses') return null;
-                          const enabled = editing.config[f.key] === '1' || editing.config[f.key] === 'true';
-                          const label = f.key === 'namespace_tools' ? 'Enable Codex namespace tools' : 'Enable Codex web search';
+                          const isApplyPatch = f.key === 'apply_patch_tool_type';
+                          const enabled = isApplyPatch
+                            ? (editing.config[f.key] || '').toLowerCase() === 'function'
+                            : editing.config[f.key] === '1' || editing.config[f.key] === 'true';
+                          const label = f.key === 'namespace_tools' ? 'Enable Codex namespace tools'
+                            : isApplyPatch ? 'Use function apply_patch tool' : 'Enable Codex web search';
                           const help = f.key === 'namespace_tools'
                             ? 'Off by default because many Responses endpoints accept function tools only.'
-                            : 'Off by default; enable only when this endpoint accepts Codex web search.';
+                            : isApplyPatch
+                              ? 'Registers the apply_patch tool for models Codex does not know. Needed for file editing on custom endpoints.'
+                              : 'Off by default; enable only when this endpoint accepts Codex web search.';
+                          return (
+                            <div className="field" key={f.key}>
+                              <label>{label}</label>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <button type="button" role="switch" aria-checked={enabled}
+                                  className="toggle-button"
+                                  onClick={() => setEditing({
+                                    ...editing,
+                                    config: { ...editing.config, [f.key]: enabled ? '' : (isApplyPatch ? 'function' : '1') },
+                                  })}
                           return (
                             <div className="field" key={f.key}>
                               <label>{label}</label>

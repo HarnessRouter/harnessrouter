@@ -283,6 +283,10 @@ often reject those tool types. Set `namespace_tools` or `web_search` to `"1"` in
 configuration (or turn the corresponding console switch on) when the endpoint supports them;
 `disabled_tools` still takes precedence for `web_search`.
 
+Models Codex does not know get no `apply_patch` tool unless `apply_patch_tool_type` is set in the
+connection configuration (console switch "Use function apply_patch tool"). Without it the model is
+told to use a tool that does not exist and loops on `unsupported call: apply_patch`.
+
 </details>
 
 <details>

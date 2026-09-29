@@ -1419,6 +1419,7 @@ class Auth(BaseModel):
     full_url: str | None = None            # "1" when the URL is a complete request URL
     namespace_tools: bool | str | None = None  # "1"/true to opt into namespace tools
     web_search: bool | str | None = None       # "1"/true to opt into built-in web search
+    apply_patch_tool_type: str | None = None   # "function" to register apply_patch for unknown models
 
 
 # ── canonical-event normalizers ──────────────────────────────────────────────────
@@ -1987,6 +1988,19 @@ def _codex_web_search_off_for_auth(auth: Auth, tools_disabled: list[str] | None)
         _codex_custom_responses(auth) and _codex_flag(auth.web_search) is not True)
 
 
+def _codex_apply_patch_tool_type(auth: Auth) -> str | None:
+    """The apply_patch registration for models Codex does not know. Codex only adds the
+    handler when the option is set, so without it an unknown model is told to "always use
+    apply_patch" while the tool does not exist (issue #202). Empty means the Codex default;
+    "function" registers the tool. Anything else is a config error, fail fast."""
+    value = (auth.apply_patch_tool_type or "").strip().lower()
+    if not value:
+        return None
+    if value == "function":
+        return "function"
+    raise HTTPException(400, f"unknown codex apply_patch_tool_type '{auth.apply_patch_tool_type}' (use 'function')")
+
+
 def _codex_insert_top_level(cfg: str, value: str) -> str:
     """Insert a setting before the first TOML table so it stays at the document's top level."""
     head, sep, tail = cfg.partition("\n[")
@@ -2047,6 +2061,11 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         # nothing). It goes before the first table header: appended at the end it would belong
         # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
         cfg = _codex_insert_top_level(cfg, 'web_search = "disabled"')
+    apply_patch_tool_type = _codex_apply_patch_tool_type(auth)
+    if apply_patch_tool_type:
+        # Same top-level rule: the key registers the apply_patch handler for models Codex
+        # does not know (issue #202). Unset keeps the Codex default.
+        cfg = _codex_insert_top_level(cfg, f'apply_patch_tool_type = "{apply_patch_tool_type}"')
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
