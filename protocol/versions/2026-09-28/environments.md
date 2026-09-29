@@ -88,7 +88,7 @@ Three rules make it one thing rather than a shared folder:
 | `declared` | object | client | What the owner declared, per manager, as spec strings the build installs beside the project's manifests: `pip` (`moviepy==2.1.1`), `npm` (`sharp@0.33.5`), `apt` (`ffmpeg`); read back with each spec's `name` and `version` |
 | `runtime` | object | client | `python`: the interpreter a build makes the virtual environment with, one of `GET /v1/environments/runtimes`; empty for the server's default |
 | `versions` | array | server | Every build: `version`, `status`, times, `error`, size |
-| `build` | object or null | server | The latest build's status |
+| `build` | object or null | server | The latest build's status, and its `stage` while it runs |
 
 Environments are scoped like harnesses: a caller sees the environments of its own scope
 ([Architecture §5](architecture.md#5-authentication)), and a harness may name only an environment
@@ -149,6 +149,7 @@ build; the build installs from the manifests ([§4](#4-builds-and-versions)).
 
 ```http
 GET  /v1/environments/runtimes                          what a build can be made with here: Python minors, Node major, the OS
+GET  /v1/environments/packages/check?manager=&spec=     what the manager's registry says about a spec, before any build (MAY)
 POST /v1/environments/{id}/build                        start a build: the next version
 GET  /v1/environments/{id}/builds/{version}             its record: status, log, packages, size
 GET  /v1/environments/{id}/versions                     every build, and which one is active
@@ -174,7 +175,11 @@ read-only and stays so.
 
 `POST …/build` returns at once with the version number; the record at `…/builds/{version}` says
 `building`, then `ready` or `failed`, with the installers' own output as `log` and the failure's
-reason as `error`. One build runs at a time per environment (`environment_busy`). When a build
+reason as `error`. While it builds, the record says which step is running as `stage` (on the
+reference server: `copying files`, `python packages`, `node packages`, `system packages`,
+`setup.sh`, `finishing`) and carries the log so far, so a client can show progress rather than a
+spinner; a server MUST write the record as steps end, not only at the end of the build. One build
+runs at a time per environment (`environment_busy`). When a build
 succeeds it becomes the active version: the next session to start reads it. A session that started
 earlier keeps the version it started with for the rest of its turn; a server SHOULD let it keep
 that version for later turns too, and MUST say which version a turn read ([§6](#6-what-a-session-sees)).
@@ -183,6 +188,14 @@ A failed build changes nothing: the previous active version stays active, and `s
 `failed` only when no version is active at all. Rolling back is `POST …/versions/{n}/activate` on
 an earlier finished build; nothing is rebuilt, and a version that never finished cannot be
 activated (`environment_not_ready`).
+
+A server MAY answer `GET /v1/environments/packages/check?manager=&spec=` with what the manager's
+registry says about a spec before any build: whether the name exists, its latest version, and
+whether an exact pin is published (`EnvironmentPackageCheck`: `manager`, `name`, `spec`, `exists`
+true, false, or null when the registry could not be asked, `latest`, `version` for a published
+pin, `error` in words). A client that offers it refuses a typo where it is typed instead of
+failing a build minutes later; a client MUST NOT require it, and a server without it answers
+`404`. The reference server asks PyPI, the npm registry, and its own apt lists.
 
 > **Why versions rather than a rebuild in place?**
 > A rebuild in place would change a layer that sessions are reading at that moment, and a

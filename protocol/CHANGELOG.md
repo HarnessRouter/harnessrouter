@@ -18,6 +18,14 @@ EN-07 asserts the response echo; `post2`: EN-02 compares the returned bytes, whi
 read) and the reference server (0.26.7) changed together. The reference server passes the full
 class, 84 of 84, on `post2`.
 
+**Patch of 2026-09-29, second, same version.** A build's record says which step is running
+(`stage`) and carries its log while it runs, and a server MUST write it as steps end, so a client
+can show progress ([Environments §4](versions/2026-09-28/environments.md#4-builds-and-versions)).
+An optional `GET /v1/environments/packages/check` answers what the manager's registry says about a
+spec before any build (`EnvironmentPackageCheck`), so a client can refuse a typo where it is
+typed. Suite `2026.9.28.post3`: EN-09 exercises the check on a server that offers it; reference
+server 0.26.9.
+
 - **Environments** ([Environments](versions/2026-09-28/environments.md)), the Environments
   sub-protocol, optional at every class behind the `environments` capability. An environment is a
   project's files and installed dependencies, built once and mounted read-only at a fixed path in
