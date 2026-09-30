@@ -6,6 +6,28 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## Claude Sonnet 5.5 (2026-09-30)
+
+Added in 0.26.18 beside Sonnet 5 on every base that offers Sonnet 5, with every provider naming
+its own id (Anthropic `claude-sonnet-5-5`, Bedrock `us.anthropic.claude-sonnet-5-5`, OpenRouter,
+Vercel, TokenRouter and llmtr `anthropic/claude-sonnet-5.5`, all read off the vendors' lists that
+day). Measured on hr-test (0.26.18-rc.1) through the console, on the instance's TokenRouter
+connection, which is where the effective model map sends it:
+
+- 13 of 13 bases pass all five scenarios (first turn, follow-up, model switch, artifact, recycle):
+  claude-code, cline, dsh, hermes, opencode, pi, qwen, aider, kimi, openhands, cheetahclaws, goose,
+  omp. Claude Code runs it on the CLI the image pins (2.1.280); no bump.
+- Family tour on claude-code: one deck conversation handed from the base's default model into
+  Sonnet 5.5 and on to Sonnet 5 completed both turns with the deck produced; the other families of
+  the default list are not offered on Claude Code and were skipped as such.
+- A finding about the switch partner, not about Sonnet 5.5: with the column's partner forced to
+  `claude-opus-5`, omp's switch turn on TokenRouter failed with the provider's own sentence
+  ("Claude Code 2.1.257 does not support this model; version 2.1.280 or newer is required"), the
+  same channel limit Opus 5.5 met on 2026-09-22. Retested with Sonnet 5 as the partner, omp passes
+  all five. Sonnet 5.5 itself served on every base.
+- TokenRouter reports the served id in its dashed form (`claude-sonnet-5-5`) for a request of
+  `claude-sonnet-5.5`; the runner marks that as a substitution by string, and it is the same model.
+
 ## Columns
 
 - **tokenrouter** (the instance's own TokenRouter integration, 26 models): 169 pairs, 832 of 840. opencode with gemini-3.6-flash is refused on its tool schema (`Unknown name "$schema"`); qwen with gpt-5.3-codex answers text turns and fails its tool turn (a Responses-only model on a chat/completions harness; qwen no longer lists it since 0.13.8); Codex refuses gpt-5.3-codex after another model by design.
