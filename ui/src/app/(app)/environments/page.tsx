@@ -77,7 +77,7 @@ export default function EnvironmentsPage() {
       {items === null && !err && <SkelRows rows={3} />}
 
       {/* Nothing yet: the flow the design draws at the top of every environment (you add, built
-          once, every task starts from it), then the one thing to do. */}
+          once, every task starts from it); the one action is the header's button. */}
       {items !== null && items.length === 0 && (
         <div className="env-landing">
           <div className="env-flow">
@@ -86,10 +86,6 @@ export default function EnvironmentsPage() {
             <div><div className="env-flow-k">02 · Built once</div><div className="env-flow-t">A ready snapshot</div><div className="env-flow-m">Packages from requirements.txt and package.json are installed into it.</div></div>
             <span className="env-flow-arrow" aria-hidden="true">→</span>
             <div><div className="env-flow-k">03 · Every task</div><div className="env-flow-t">Starts from it</div><div className="env-flow-m">Every Task of that Harness reads it, read-only, beside its own workspace.</div></div>
-          </div>
-          <div className="env-landing-cta">
-            <span>No environments yet.</span>
-            <button className="button primary" type="button" onClick={() => setCreating(true)}><iconify-icon icon="tabler:plus"></iconify-icon>New environment</button>
           </div>
         </div>
       )}
