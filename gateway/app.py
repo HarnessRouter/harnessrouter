@@ -1822,6 +1822,21 @@ async def _prior_session_totals(prefix: str, manifest: dict | None = None) -> tu
         return 0.0, {}
 
 
+def _card_title(prior: dict, user_text: str, sid: str) -> tuple[str, bool]:
+    """A session card's title, and whether a person chose it. A chosen title (PATCH /v1/sessions,
+    `title_custom` on the card) survives every later turn; otherwise the card is named after the
+    first line of this turn's message, and failing that after the session. ONE decision for the
+    running card written at accept and the terminal card written at finish: the finish used to
+    name the card from the message on its own, so a name the person had given lasted exactly
+    until the next turn ended (a kit's "Direct message" session was renamed after the question it
+    answered, 2026-09-30)."""
+    chosen = str(prior.get("title") or "") if str(prior.get("title_custom") or "") == "1" else ""
+    if chosen:
+        return chosen, True
+    text = (user_text or "").strip()
+    return (text.splitlines()[0][:120] if text else sid[:16]), False
+
+
 async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harness_id: str,
                               backend: str, model: str, user_text: str) -> None:
     """Interim 'running' session card written at turn ACCEPT (before this turn has produced any
@@ -1833,7 +1848,7 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
     _pm = await _prior_manifest(tr.get("prefix") or "")          # the one read of the prior card
     prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "", _pm)
-    prior_title = str(_pm.get("title") or "") if str(_pm.get("title_custom") or "") == "1" else ""
+    title, chosen = _card_title(_pm, user_text, sid)
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
         "member_id": tr.get("member") or member or "",
@@ -1844,9 +1859,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
         # A title the person set survives every later turn. Without this the card is renamed to
         # the first line of whatever you last said — which is why decks ended up called
         # "Change primary color to brown".
-        "title": (prior_title if prior_title
-                  else (user_text.strip().splitlines()[0][:120] if user_text.strip() else sid[:16])),
-        **({"title_custom": "1"} if prior_title else {}),
+        "title": title,
+        **({"title_custom": "1"} if chosen else {}),
         "user_prompt": user_text[:1500], "status": "running",
         "trace_blob": tr.get("prefix"), "chunks": [],
         "finished_at": time.time(), "schema_version": 1,
@@ -2071,6 +2085,10 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
     # Card title/user_prompt come from the RAW user message; rec["prompt"] carries runtime
     # prepends ("[Attached files saved in ...]", instructions) that must not leak into UI.
     prompt = rec.get("user_text") or rec.get("prompt") or ""
+    # The prior card, read once: it holds the title the person chose (kept below), the session's
+    # cost so far (added to below) and the scope fields the index keys need.
+    _pm = await _prior_manifest(tr["prefix"])
+    title, chosen = _card_title(_pm, prompt, sid)
     manifest = {
         "session_id": sid, "org_id": tr.get("org"), "tenant": tr.get("org"),
         "billing_org": tr.get("billing_org") or tr.get("org"),
@@ -2078,7 +2096,8 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
         "workspace": tr.get("workspace") or "",
         "harness_name": tr.get("harness_name") or "", "last_response_id": tr.get("last_response_id") or "",
         "backend": rec.get("backend"), "model": rec.get("model") or "",
-        "title": (prompt.strip().splitlines()[0][:120] if prompt.strip() else sid[:16]),
+        "title": title,
+        **({"title_custom": "1"} if chosen else {}),
         "user_prompt": prompt[:1500], "status": rec.get("status"),
         "connection": rec.get("connection"), "cli_session_id": rec.get("cli_session_id"),
         "served_model": rec.get("served_model") or None,
@@ -2134,7 +2153,7 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
     try:
         await _refresh_pricing_table()
         _this_credits = _run_credits(str(rec.get("model") or ""), _usage, float(_elapsed_s or 0))
-        _prior_credits, _prior_usage = await _prior_session_totals(tr["prefix"])
+        _prior_credits, _prior_usage = await _prior_session_totals(tr["prefix"], _pm)
         _summed_usage = dict(_prior_usage)
         for _k, _v in _usage.items():
             try:
@@ -2156,7 +2175,7 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
         except Exception:  # noqa: BLE001
             pass
     try:
-        await _index_manifest(tr["prefix"], manifest)
+        await _index_manifest(tr["prefix"], manifest, prior=_pm)
     except Exception:  # noqa: BLE001
         pass
 
