@@ -301,7 +301,6 @@ def world(monkeypatch):
     reg, ven, posted = Registry(), Vendor(), []
     rc = httpx.AsyncClient(transport=httpx.MockTransport(reg.handle))
     monkeypatch.setattr(gw, "PLUGS_REGISTRY_URL", "https://registry.example")
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", {ORG})
     monkeypatch.setattr(gw, "_client", lambda: rc)
     monkeypatch.setattr(browser_plane, "API_KEY", VENDOR_KEY)
     monkeypatch.setattr(browser_plane, "transport", httpx.MockTransport(ven.handle))
@@ -583,7 +582,7 @@ def test_caps_and_the_vendor_saying_no(client, world, monkeypatch):
     assert ven.stopped == ["bu_1", "bu_2"] and json.loads(_rows(hid)[-1]["detail"])["minutes"] == 21
 
 
-def test_not_configured_a_stolen_credential_and_the_org_gate(client, world, monkeypatch):
+def test_not_configured_a_stolen_credential_and_a_package_that_requires_plugs(client, world, monkeypatch):
     reg, ven, _ = world
     reg.record = _record()
     hid = _harness(client)
@@ -600,21 +599,19 @@ def test_not_configured_a_stolen_credential_and_the_org_gate(client, world, monk
     stolen = gw._mint_hosted_cred(thief, "sessX", _key(hid))
     out = _call(client, stolen, "navigate", url="https://example.com/")
     assert out["isError"] and "No plugins are connected" in out["content"][0]["text"] and ven.created == []
-    # the org gate: the browser is open to every org; the held plugs are not, by name
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", set())
+    # every plug is open to every org: each connects its own account with its own credential
     sid2 = _session_of(thief)
     tok2 = gw._mint_hosted_cred(thief, sid2, _key(thief))
     out = _call(client, tok2, "navigate", url="https://example.com/")
     assert out["isError"] is False and len(ven.created) == 1
     asyncio.run(gw._browser_close(sid2, "turn_end"))
-    r = _post(client, f"/v1/harnesses/{thief}/servers/plugs", {"plugs": ["browser", "github"]})
-    assert r.status_code == 404 and r.json()["error"]["code"] == "plugs_unavailable" and "GitHub plug" in r.json()["error"]["message"]
+    assert _post(client, f"/v1/harnesses/{thief}/servers/plugs", {"plugs": ["browser", "github"]}).status_code == 200
     assert _post(client, f"/v1/harnesses/{thief}/servers/plugs", {"plugs": ["browser"]}).status_code == 200
     # a package that requires both gets the open one now and the held one when the org is let in
     manifest = {"$schema": PLUGIN_SCHEMA, "name": "needs-both", "version": "1.0.0", "requires": {"plugs": ["browser", "github"]}}
-    r = _post(client, "/v1/harnesses", {"name": "Held", "base": "claude-code",
+    r = _post(client, "/v1/harnesses", {"name": "Both", "base": "claude-code",
                                         "plugins": [{"files": [{"path": "plugin.json", "content": json.dumps(manifest)}]}]})
-    assert r.status_code == 200 and _get(client, f"/v1/harnesses/{r.json()['id']}/servers/mcp.plugs").json()["plugs"] == ["browser"]
+    assert r.status_code == 200 and _get(client, f"/v1/harnesses/{r.json()['id']}/servers/mcp.plugs").json()["plugs"] == ["browser", "github"]
 
 
 def test_a_package_that_requires_the_browser_includes_it_and_the_count_reads_the_bindings(client, world):
