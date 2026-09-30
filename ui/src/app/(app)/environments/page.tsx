@@ -64,7 +64,7 @@ export default function EnvironmentsPage() {
       <div className="page-header">
         <div>
           <h1>Environments</h1>
-          <p>Project files and packages that a harness opens in every session.</p>
+          <p>A working directory and its packages, built once. Attach it to a harness and every task starts ready.</p>
         </div>
         <div className="page-actions">
           <button className="button primary" type="button" onClick={() => setCreating(true)}>
@@ -76,17 +76,21 @@ export default function EnvironmentsPage() {
 
       {items === null && !err && <SkelRows rows={3} />}
 
+      {/* Nothing yet: the flow the design draws at the top of every environment (you add, built
+          once, every task starts from it), then the one thing to do. */}
       {items !== null && items.length === 0 && (
-        <div className="env-onboard">
-          <span className="env-onboard-mark"><iconify-icon icon="tabler:stack-2"></iconify-icon></span>
-          <h2>Give your Tasks a ready project</h2>
-          <p>An environment is a project and its installed packages, built once. Every Task that uses it starts with the project in place, at the same path, with nothing to install or upload.</p>
-          <ol className="env-steps">
-            <li><span>1</span><strong>Import the project</strong><em>An archive, a git repository, or files, folders kept.</em></li>
-            <li><span>2</span><strong>Build it once</strong><em>Packages from requirements.txt and package.json are installed into it.</em></li>
-            <li><span>3</span><strong>Name it on a Harness</strong><em>Every Task of that Harness reads it, read-only, beside its own workspace.</em></li>
-          </ol>
-          <button className="button primary" type="button" onClick={() => setCreating(true)}><iconify-icon icon="tabler:plus"></iconify-icon>New environment</button>
+        <div className="env-landing">
+          <div className="env-flow">
+            <div><div className="env-flow-k">01 · You add</div><div className="env-flow-t">Files and packages</div><div className="env-flow-m">An archive, a git repository, or files, folders kept.</div></div>
+            <span className="env-flow-arrow" aria-hidden="true">→</span>
+            <div><div className="env-flow-k">02 · Built once</div><div className="env-flow-t">A ready snapshot</div><div className="env-flow-m">Packages from requirements.txt and package.json are installed into it.</div></div>
+            <span className="env-flow-arrow" aria-hidden="true">→</span>
+            <div><div className="env-flow-k">03 · Every task</div><div className="env-flow-t">Starts from it</div><div className="env-flow-m">Every Task of that Harness reads it, read-only, beside its own workspace.</div></div>
+          </div>
+          <div className="env-landing-cta">
+            <span>No environments yet.</span>
+            <button className="button primary" type="button" onClick={() => setCreating(true)}><iconify-icon icon="tabler:plus"></iconify-icon>New environment</button>
+          </div>
         </div>
       )}
 
