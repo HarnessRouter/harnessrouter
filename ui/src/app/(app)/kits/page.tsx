@@ -68,7 +68,7 @@ const KIT_MARKS: Record<string, string> = {
   mario: 'M4.5 5.5h7a3 3 0 0 1 3 3v2a2.5 2.5 0 0 1-4.3 1.7L9 11H7l-1.2 1.2A2.5 2.5 0 0 1 1.5 10.5v-2a3 3 0 0 1 3-3M5 7.5v3M3.5 9h3M10.5 8.5h.01M12 10h.01',
 };
 /** The kits whose cover the console ships (public/kit-covers, the README's screenshots at 1400 wide). */
-const KIT_COVERS = new Set(['slides', 'sheets', 'dashboard', 'video', 'mario']);
+const KIT_COVERS = new Set(['slides', 'sheets', 'dashboard', 'video', 'mario', 'workplace']);
 
 const ICON_SLIDERS = 'M2.5 4.5h7M12 4.5h1.5M2.5 11.5h1.5M6.5 11.5h7M10.5 3v3M5 10v3';
 const ICON_SEARCH = 'M7 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10M10.6 10.6 14 14';
