@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'aider' | 'openhands' | 'systemone' | 'cheetahclaws' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'pi-lab' | 'dsh' | 'opencode' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'aider' | 'openhands' | 'systemone' | 'cheetahclaws' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -33,7 +33,17 @@ export interface McpServer {
   url?: string; auth?: string; transport?: string;
 }
 
+export interface PiLabConfig {
+  actionFusion?: boolean;
+  observationPack?: boolean;
+  evidencePreservingReducer?: boolean;
+  onlineContextCompact?: boolean;
+  cacheWriteReadRatio?: number;
+  reducerModel?: string;
+}
+
 export interface CustomHarness {
+  piLab?: PiLabConfig | null;
   id: string;
   name: string;
   base: string;            // base harness id (codex / claude-code)
@@ -99,6 +109,11 @@ export const OOB: OobHarness[] = [
     // Multi-family like Hermes: the gpt + claude catalogs (placeholder until /v1/models lands).
     models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
     systemPrompt: 'You are Pi, a minimal autonomous coding agent. You operate on a real git workspace, reading, writing and editing files and running bash to complete the task end to end.',
+    tools: [], skills: [] },
+  { id: 'pi-lab', name: 'Pi Lab', version: 'v0.1.0', backend: 'pi-lab', status: 'ready',
+    // Pi's own catalog: Pi Lab runs a pinned Pi, so it reaches exactly what Pi reaches.
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are Pi Lab, a Pi-based autonomous coding agent whose efficiency mechanisms are switched per harness. You operate on a real git workspace, reading, writing and editing files and running bash to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'dsh', name: 'DeepSeek Harness', version: 'v0.1.0-rc.7', backend: 'dsh', status: 'ready',
     // Multi-family via dsh-llm-pi-ai (pi's LLM library as a dsh plugin); placeholder until /v1/models lands.
@@ -422,6 +437,7 @@ function harnessBody(input: Partial<CustomHarness> & { name: string; base: strin
     mcp_servers: input.mcpServers || [],
     skills: input.skills || [],
     disabled_tools: input.disabledTools || [],
+    pi_lab: input.base === 'pi-lab' ? input.piLab ?? {} : null,
     plugins: input.plugins || [],
     max_step: input.maxStep || null,
     timeout_seconds: input.timeoutSeconds || null,

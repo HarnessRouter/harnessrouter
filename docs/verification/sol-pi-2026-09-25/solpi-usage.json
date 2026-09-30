@@ -1,0 +1,76 @@
+{
+  "turns": [
+    {
+      "id": "resp_36635c6da6e74bfca83fa4ccd4a2d4fc",
+      "model": "deepseek-v4.1-flash",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 2512,
+        "output_tokens": 12,
+        "total_tokens": 2524
+      }
+    },
+    {
+      "id": "resp_89ec413acfe7430696b7ea05f53afbe9",
+      "model": "deepseek-v4.1-flash",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 111,
+        "output_tokens": 12,
+        "total_tokens": 123,
+        "cache_read_tokens": 2432
+      }
+    },
+    {
+      "id": "resp_f609639f4de24fe2b188f3b1b5bfe49c",
+      "model": "deepseek-v4.1-flash",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 3105,
+        "output_tokens": 217,
+        "total_tokens": 3322,
+        "cache_read_tokens": 4992
+      }
+    },
+    {
+      "id": "resp_773a55fa089f4ee4b01bdce140c19be4",
+      "model": "deepseek-v4.1-flash",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 322,
+        "output_tokens": 12,
+        "total_tokens": 334,
+        "cache_read_tokens": 2560
+      }
+    },
+    {
+      "id": "resp_8aa8bd1da0ef407bbdcdbf60eb7c609e",
+      "model": "deepseek-v4.1-flash",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 8056,
+        "output_tokens": 269,
+        "total_tokens": 8325,
+        "cache_read_tokens": 3584
+      }
+    },
+    {
+      "id": "resp_41fd4164fc02400fac07360ca6832314",
+      "model": "deepseek-v4.1-flash",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 4957,
+        "output_tokens": 101,
+        "total_tokens": 5058,
+        "cache_read_tokens": 4096
+      }
+    }
+  ],
+  "totals": {
+    "input_tokens": 19063,
+    "output_tokens": 623,
+    "cache_read_tokens": 17664
+  },
+  "estimated_cost_if_CNY_per_million": 0.003286242,
+  "billing_note": "Estimate from user-supplied rates assuming CNY per million; not a provider invoice."
+}

@@ -14,7 +14,7 @@ import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 
 const BASE = process.env.BASE;
-const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,cheetahclaws').split(',');   // every built-in chat harness, all fifteen (systemone runs decision models only)
+const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,pi-lab,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,cheetahclaws').split(',');   // every built-in chat harness, all sixteen (systemone runs decision models only)
 const RESULTS = process.env.RESULTS || 'results-custom.json';
 // A harness's other kind of tool is an MCP server. A self-contained instance hosts only the
 // database and media servers, one needing a database and the other costing real money per call, so
@@ -108,6 +108,7 @@ try {
   }
 
   for (const base of BASES) {
+    const disabledTool = base === 'pi-lab' ? 'edit' : 'WebSearch';
     const rec = { base, at: new Date().toISOString() };
     let hid = null;
     try {
@@ -117,9 +118,12 @@ try {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: `matrix custom ${base}`, base,
+          ...(process.env.MODEL ? { default_model: process.env.MODEL } : {}),
           system_prompt: 'You follow your skills exactly.',
           skills: [SKILL('matrix-stamp')],
-          disabled_tools: ['WebSearch'],
+          // Pi Lab inherits Pi's actual tool ids; a nonexistent WebSearch proves nothing.
+          disabled_tools: [disabledTool],
+          ...(base === 'pi-lab' ? { pi_lab: { actionFusion: false } } : {}),
           mcp_servers: MCP_URL === 'off' ? [] : [{ name: MCP_NAME, url: MCP_URL, transport: 'http' }],
         }),
       });
@@ -131,7 +135,7 @@ try {
       const back = await api(`/api/harness/v1/harnesses/${hid}`);
       const h = back.json || {};
       rec.skill_stored = ((h.skills || []).some((s) => (s.name || s.id) === 'matrix-stamp'));
-      rec.tool_disabled_stored = (h.disabledTools || h.disabled_tools || []).includes('WebSearch');
+      rec.tool_disabled_stored = (h.disabledTools || h.disabled_tools || []).includes(disabledTool);
       rec.mcp_stored = MCP_URL === 'off' ? null
         : (h.mcpServers || h.mcp_servers || []).some((m) => String(m.name || '') === MCP_NAME);
 
@@ -172,7 +176,8 @@ try {
       // the three claims, each read from the stored record
       rec.skill_reached = answer.includes(token);              // the bundle got to the agent
       rec.script_ran = files.some((f) => f.includes('stamp.txt'));  // its script actually executed
-      rec.disabled_tool_unused = !tools.some((t) => /websearch/i.test(t));
+      rec.disabled_tool_unused = !tools.some((t) => base === 'pi-lab'
+        ? /^edit(?:\s|$)/i.test(t) : /websearch/i.test(t));
       // The MCP half, in the same harness and the same session: a second turn that can only be
       // answered by calling the declared server. Judged on the CALL, not on what it returned: a
       // public server's prose is not ours to pin, but a tool call is a fact in the record.

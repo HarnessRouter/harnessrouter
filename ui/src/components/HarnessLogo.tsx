@@ -8,6 +8,7 @@ const LOGO: Record<string, string> = {
   'claude-code': '/logos/claude.png',
   codex: '/logos/codex.png',
   pi: '/logos/pi.png',
+  'pi-lab': '/logos/pi.png',   // a pinned Pi with switchable mechanisms; it has no mark of its own
   hermes: '/logos/hermes.png',
   dsh: '/logos/deepseek.png',
   opencode: '/logos/opencode.png',

@@ -5350,3 +5350,10 @@ Measured 2026-09-27 on hr-test (self-hosted, 0.25.7-rc.17). One task in plain wo
 
 15 of 15 bases drive the browser.
 
+## Provider: banban
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| sol-pi | deepseek-v4.1-flash | pass | pass | n/a | pass | pass | sol-pi-banban-acceptance |  |
+
+1 pairs, 4 of 4 scenario runs passed.

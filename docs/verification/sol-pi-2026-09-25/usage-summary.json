@@ -1,0 +1,10 @@
+{
+  "successful_turns": 12,
+  "totals": {
+    "input_tokens": 39636,
+    "output_tokens": 1252,
+    "cache_read_tokens": 44160
+  },
+  "estimated_CNY_if_rates_per_million": 0.006829079999999999,
+  "note": "No provider invoice queried. Initial container spawn failure happened before a model call."
+}

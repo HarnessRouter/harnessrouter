@@ -867,7 +867,7 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,pi-lab,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
@@ -1192,3 +1192,8 @@ Apache-2.0, see [LICENSE](../LICENSE). Third-party notices are in [NOTICE](../NO
 
 The agent CLIs are **not** redistributed here; they are installed on first run under their own
 licenses. Review them before enabling a backend.
+
+
+Pi Lab (Pi with NVIDIA SoL-Pi's mechanisms, both MIT) is installed independently of Pi with a
+locked dependency graph and source checksums. See [the Pi Lab guide](pi-lab.md) for its
+mechanism switches, installation details and current acceptance status.

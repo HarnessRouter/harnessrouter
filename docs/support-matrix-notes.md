@@ -1763,3 +1763,45 @@ before. The hosted platform then took OpenRouter as the route for this model, so
 same twelve bases as this one; its comment keeps the TokenRouter and direct-OpenAI refusal for
 organizations that bring such a key, the rule the self-hosted catalog states.
 
+## sol-pi — Banban / DeepSeek V4.1 Flash, 2026-09-25
+
+Recorded under the backend's first id, `sol-pi`; it has since been renamed `pi-lab`
+(see [Pi Lab](pi-lab.md)) and this column is to be re-run under the new id.
+
+Independent backend: Pi 0.85.1 and NVlabs/SoL-Pi
+1559b5cb12c72da4a485bc50fe326586b216fb19, with four configurable mechanisms.
+Pi transport/normalization are reused; SoL-Pi waits for process EOF because native
+compaction may continue after an `agent_end` event.
+
+Measured on both a dedicated local instance and a fresh core container, holding only `sol-pi-banban-acceptance`:
+4/4 applicable scenarios passed. First turn and follow-up completed, artifact file
+cards matched the stored files, and a forced recycle retained the initial message.
+The served model was `deepseek-v4.1-flash` throughout. Switch is n/a: only this
+model was authorized, so no paid cross-model compatibility is claimed.
+
+The initial runner invocation mistakenly set `EXPECT_CONNECTION` to the unprefixed
+integration name. Every recorded turn actually used the correct full stamp,
+`integration:sol-pi-banban-acceptance`. The raw result is retained unchanged; the
+reviewed result recomputes `foreign` against that exact stamp. No scenario verdict
+was changed and no foreign provider or substituted model was used. The generated
+Banban column now uses the later, unmodified container result with the correct
+EXPECT_CONNECTION. The earlier raw and reviewed local records remain archived.
+
+The custom-harness suite passed skill persistence, execution of its bundled script,
+`stamp.txt` production, the real `edit` tool disabled with Action Fusion off, and
+an actual `mcp__deepwiki` call. It used an explicit Flash default through `MODEL`.
+Twelve successful paid turns across local and container runs; token accounting and
+machine-readable results are retained
+in [the verification record](verification/sol-pi-2026-09-25/README.md).
+
+Local regression: 1,195 passed / 19 skipped; final locked runtime installation,
+scripted CLI restore/switch/reducer checks, UI type-check/build and settings smoke
+passed. These do not certify the broader inherited Pi model catalog. See
+[Pi Lab](pi-lab.md) for configuration, remaining acceptance limits,
+and separate auxiliary reducer accounting.
+
+Core container build/self-host acceptance passed with document preview, media,
+starter kits and built-in skill bundles disabled. Container-level isolation caught
+and verified the fix for a 0700 runtime directory; fresh install and reuse repair
+were both tested as a non-owner uid. See the integration page for the optional
+OfficeCLI/ICU build limitation and the baseline sidebar audit finding.

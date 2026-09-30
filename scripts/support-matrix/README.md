@@ -33,6 +33,11 @@ Rows that fail must carry the reproduced provider error text; a verified list is
 from another instance, since each reaches providers by its own path. Retest a bare `incomplete`
 before excluding a model.
 
+For `custom-harness.mjs`, set `MODEL` to save an explicit default model on each
+temporary harness (for example `MODEL=deepseek-v4.1-flash BASES=pi-lab`). Omit it
+to retain each base's default. This avoids testing an unavailable default on a
+single-model connection.
+
 ## The family tour
 
 One conversation, every model family in turn, on one deliverable (see "The family tour" in

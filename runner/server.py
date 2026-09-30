@@ -512,6 +512,9 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # key for custom providers — neither may travel in a checkpoint tarball.
                       "./.harness/home/.pi/agent/auth.json",
                       "./.harness/home/.pi/agent/models.json",
+                      "./.harness/home/.pi-lab/agent/auth.json",
+                      "./.harness/home/.pi-lab/agent/models.json",
+                      "./.harness/home/.pi-lab/agent/mcp.json",
                       # omp models / auth
                       "./.harness/home/.omp/agent/auth.json",
                       "./.harness/home/.omp/agent/models.json",
@@ -560,6 +563,7 @@ CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
 HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
+PI_LAB_DEFAULT_MODEL = os.environ.get("PI_LAB_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
@@ -667,6 +671,8 @@ def _git_ensure(ws: str) -> None:
         "tmp/", ".gcp-sa.json", ".codex/", ".credentials.json", ".harness/**/.credentials.json",
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
+        ".harness/home/.pi-lab/agent/auth.json", ".harness/home/.pi-lab/agent/models.json",
+        ".harness/home/.pi-lab/agent/mcp.json",
         ".harness/goose/config/secrets.yaml",
         ".cheetahclaws/tasks.json",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
@@ -949,6 +955,9 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
     if backend == "claude":
         rootrels = [".harness/home/.claude/skills", ".claude/skills"]
         entryroot = ".claude/skills"
+    elif backend == "pi-lab":
+        rootrels = [".harness/home/.pi-lab/agent/skills"]
+        entryroot = ".harness/home/.pi-lab/agent/skills"
     elif backend == "pi":
         rootrels = [".harness/home/.pi/agent/skills"]
         entryroot = ".harness/home/.pi/agent/skills"
@@ -1351,7 +1360,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # walking up from the cwd, plus ~/.claude/CLAUDE.md; no source hit for AGENTS.md in
         # 3.5.88), so it takes the CLAUDE.md branch below, and an AGENTS.md in the workspace is
         # never loaded whether or not a CLAUDE.md is there.
-        "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
+        "AGENTS.md" if backend in ("codex", "hermes", "pi", "pi-lab", "dsh", "opencode", "cline", "omp",
                                    "goose", "kimi", "aider", "openhands")
         else "CLAUDE.md")
 
@@ -2484,7 +2493,8 @@ def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
     }}}, indent=2)
 
 
-def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
+def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None, agent_dir=None,
+                  mcp_filename: str = "mcp-adapter.json") -> bool:
     """Write $HOME/.pi/agent/mcp-adapter.json for pi-mcp-adapter (same input contract as the
     claude/codex writers: url + optional auth/headers, or command + args for a plugin's stdio
     server). Returns whether any server was written. The agent-dir location is deliberate:
@@ -2495,7 +2505,8 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
     or .pi/mcp.json at all"; 2.x read mcp.json. A volume that installed 2.x at its first boot kept
     working on the old name while a fresh one resolved 3.x and saw no server at all (hosted,
     2026-09-27: pi listed no MCP tool and grepped the workspace for the tool's name). The
-    entrypoint pins the adapter's version, so the name here is the one that version reads."""
+    entrypoint pins the adapter's version, so the default name here is the one that version reads.
+    Pi Lab supplies its own agent dir and mcp.json for its locked adapter 2.37.0."""
     entries: dict = {}
     for s in servers or []:
         name = _mcp_name((s or {}).get("name") or (s or {}).get("id") or "mcp")
@@ -2512,7 +2523,7 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
         entries[name] = entry
     if not entries:
         return False
-    path = home / ".pi" / "agent" / "mcp-adapter.json"
+    path = (pathlib.Path(agent_dir) if agent_dir else home / ".pi" / "agent") / mcp_filename
     path.parent.mkdir(parents=True, exist_ok=True)
     # directTools: the tools are registered on the agent one by one, as every other CLI lists
     # MCP tools. The adapter's default hides them behind one `mcp` proxy tool (search, then call),
@@ -2527,12 +2538,16 @@ def _pi_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
 
 def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
               resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-              tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
+              tools_disabled: list[str] | None = None, vision: bool = True,
+              agent_dir=None, mcp_extension: str | None = None,
+              mcp_filename: str = "mcp-adapter.json") -> list[str]:
     pr = provider or "anthropic"
     if pr not in PI_PROVIDERS:
         raise HTTPException(400, f"unknown pi provider '{pr}' (one of {sorted(PI_PROVIDERS)})")
     home = pathlib.Path(env.get("HOME") or cwd)
-    (home / ".pi" / "agent").mkdir(parents=True, exist_ok=True)
+    agent_dir = pathlib.Path(agent_dir) if agent_dir else home / ".pi" / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    env["PI_CODING_AGENT_DIR"] = str(agent_dir)
 
     # Provider: native env for the two vendors pi speaks natively WITHOUT a base_url override;
     # everything else (and any base_url override) goes through a models.json custom provider,
@@ -2560,7 +2575,7 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             # workspace's models.json, which is checkpointed. A custom endpoint keeps its own URL.
             relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
             auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
-        (home / ".pi" / "agent" / "models.json").write_text(
+        (agent_dir / "models.json").write_text(
             _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
                             custom_openai=bool(auth.api_format)))
         pname = "hr"
@@ -2590,8 +2605,8 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
         names = ",".join(sorted({x.split(" (")[0].strip() for x in tools_disabled if x and x.strip()}))
         if names:
             cmd += ["--exclude-tools", names]
-    if _pi_write_mcp(home, mcp_servers):
-        ext = os.environ.get("HR_PI_MCP_EXT", "")
+    if _pi_write_mcp(home, mcp_servers, agent_dir, mcp_filename):
+        ext = mcp_extension if mcp_extension is not None else os.environ.get("HR_PI_MCP_EXT", "")
         if ext and os.path.exists(ext):
             cmd += ["--extension", ext]
         else:
@@ -2735,6 +2750,41 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
             ev["model"] = ",".join(served)
         return [ev]
     return []
+
+
+def _pi_lab_to_claude(obj: dict, state: dict) -> list[dict]:
+    # Native compaction can start another agent turn inside the same Pi process.
+    # Only process EOF is terminal for Pi Lab; do not complete an HTTP stream early.
+    if obj.get("type") == "pi_lab_ready":
+        state["_pi_lab_ready"] = {"config": obj.get("config"), "revision": obj.get("revision")}
+        return [{**obj, "type": "system", "subtype": "pi_lab_ready"}]
+    if obj.get("type") == "agent_end":
+        # A retry's agent_end still has to drop the failed attempt's error and text (see _pi_to_claude).
+        return _pi_to_claude(obj, state) if obj.get("willRetry") else []
+    if obj.get("type") == "pi_lab_event":
+        if obj.get("kind") == "provider_response":
+            route = f"{obj.get('provider', '')}/{obj.get('model', '')}"
+            totals = state.setdefault("_pi_lab_aux", {}).setdefault(route, {})
+            for key, value in obj["usage"].items():
+                totals[key] = totals.get(key, 0) + value
+        return [{**obj, "type": "system", "subtype": "pi_lab_reducer"}]
+    return _pi_to_claude(obj, state)
+
+
+def _pi_lab_eof(state: dict, rc: int) -> list[dict]:
+    if not state.get("_pi_lab_ready"):
+        state["_pi_error"] = "Pi Lab's SoL-Pi extension did not initialize; check the pinned runtime and extension installation"
+    if rc and not state.get("_pi_error"):
+        state["_pi_error"] = f"Pi Lab exited with code {rc}"
+    events = _pi_to_claude({"type": "agent_end"}, state)
+    for event in events:
+        # Auxiliary models have their own rates. Preserve their usage separately rather
+        # than charge their tokens at the main model's rate or call main-only cost total.
+        event["pi_lab"] = {**state.get("_pi_lab_ready", {}), "auxiliary_usage": state.get("_pi_lab_aux", {})}
+    return events
+
+
+_pi_lab_to_claude.eof = _pi_lab_eof
 
 
 # ── omp (Oh My Pi, can1357/oh-my-pi CLI) ─────────────────────────────────────────
@@ -6635,6 +6685,8 @@ BACKENDS = {
                "normalize": None},
     "pi": {"providers": sorted(PI_PROVIDERS), "default_model": PI_DEFAULT_MODEL,
            "normalize": _pi_to_claude},
+    "pi-lab": {"providers": sorted(PI_PROVIDERS), "default_model": PI_LAB_DEFAULT_MODEL,
+               "normalize": _pi_lab_to_claude},
     "dsh": {"providers": sorted(DSH_PROVIDERS), "default_model": DSH_DEFAULT_MODEL,
             "normalize": _dsh_to_claude},
     "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
@@ -7872,6 +7924,7 @@ class TurnReq(BaseModel):
     agent_doc: str | None = None           # harness instruction doc → AGENTS.md (codex) / CLAUDE.md (claude)
     skills_suppressed: list[str] | None = None  # built-in skill names to NOT mount (harness disabled them)
     tools_disabled: list[str] | None = None     # built-in tool names to disable (claude: --disallowedTools)
+    pi_lab: dict | None = None                  # a Pi Lab harness's mechanism switches, as saved
     image_auth: dict | None = None         # {base_url, api_key, model} for image generation via the broker
     env: dict | None = None                # variables for the turn process: the harness's own (resolved by the
                                            # gateway, see _caller_env) and the platform's HR_ names (a harness
@@ -8032,6 +8085,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                          vision=bool(req.vision))
+    elif backend == "pi-lab":
+        from pi_lab import build as build_pi_lab
+        model = model or PI_LAB_DEFAULT_MODEL
+        cmd = build_pi_lab(_build_pi, req.provider, auth, model, req.prompt, cwd, env,
+                           config=req.pi_lab, resume_session_id=req.resume_session_id,
+                           mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled, vision=bool(req.vision))
     elif backend == "pi":
         model = model or PI_DEFAULT_MODEL
         cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
