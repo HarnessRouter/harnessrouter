@@ -114,7 +114,7 @@ def test_a_delegated_plug_is_checked_at_entra_then_waits_for_each_persons_sign_i
     r = _req(client, "POST", "/v1/plugs/microsoft365/microsoft/signout", {})
     assert r.status_code == 200, r.text
     p = r.json()
-    assert p["status"] == "needs_auth" and p["config"]["accounts"] == {} and plugs_plane.m365_person_field(MEMBER) not in p["secrets_set"]
+    assert p["status"] == "needs_auth" and p["config"]["accounts"] == {} and p["secrets_set"] == ["client_secret"]   # no orphaned sign-in field
 
 
 def test_the_application_identity_connects_at_once_and_does_not_sign_people_in(client, entra):

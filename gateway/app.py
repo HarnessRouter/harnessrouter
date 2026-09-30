@@ -14114,6 +14114,11 @@ async def microsoft_signout(request: Request) -> dict:
         await _vault_put(org, ref, "")          # the token is gone from the store, not only unreferenced
     accounts = {k: v for k, v in (config.get("accounts") or {}).items() if k != member}
     config["accounts"] = accounts
+    # A sign-in field that belongs to nobody on the record (a person who signed out, or a field
+    # written under an earlier derivation of the name) goes too: the record names only what reads.
+    keep = {plugs_plane.m365_person_field(m) for m in accounts}
+    for stale in [f for f in refs if f.startswith("rt-") and f not in keep]:
+        await _vault_put(org, refs.pop(stale), "")
     delegated = plugs_plane.m365_mode({}, config) == "delegated"
     status = str(rec.get("status") or "connected")
     attention = ""
