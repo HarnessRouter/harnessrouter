@@ -39,7 +39,6 @@ def client():
 def world(monkeypatch):
     ven, posted = tb.Vendor(), []
     monkeypatch.setattr(gw, "PLUGS_REGISTRY_URL", "")          # no engine: the local registry answers
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", {"*"})
     monkeypatch.setattr(browser_plane, "API_KEY", tb.VENDOR_KEY)
     monkeypatch.setattr(browser_plane, "transport", httpx.MockTransport(ven.handle))
     monkeypatch.setattr(browser_plane, "connector", tb._connect)

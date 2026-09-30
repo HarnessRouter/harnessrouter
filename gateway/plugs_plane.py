@@ -52,7 +52,6 @@ class PlugToolError(RuntimeError):
 TYPES: dict[str, str] = {"github": "GitHub", "github_app": "GitHub", "vercel": "Vercel", "insforge": "InsForge",
                          "browser": "Browser"}
 BROWSER = "browser"     # a platform plug: no customer credential; served by the gateway's browser plane
-OPEN_TYPES = {BROWSER}   # open to every org (Richard, 2026-09-24); the rest are held to HR_PLUGS_ORGS while verified
 _ALIAS = {"github_app": "github"}
 RISKS = ("read", "write", "destructive")
 _TOOLS: dict[str, list[dict]] = {}
