@@ -283,6 +283,12 @@ often reject those tool types. Set `namespace_tools` or `web_search` to `"1"` in
 configuration (or turn the corresponding console switch on) when the endpoint supports them;
 `disabled_tools` still takes precedence for `web_search`.
 
+Codex offers no `apply_patch` tool on a custom endpoint (measured on 0.154.0: no model gets it, known
+or not; it exists only inside Codex's own multi-environment executors), so a Codex turn on a custom
+Responses connection tells the model that file edits go through the shell tool and that a call to a
+tool named `apply_patch` is refused. A model that otherwise loops on "unsupported call: apply_patch"
+(issue #202) stops at that instruction.
+
 </details>
 
 <details>
