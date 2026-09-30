@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import time
 
 import httpx
@@ -50,7 +51,7 @@ class PlugToolError(RuntimeError):
 # One plug type answers under its own name; an alias shares another's tools (the OAuth-consent
 # GitHub plug carries the same `token` field as the provisioned one).
 TYPES: dict[str, str] = {"github": "GitHub", "github_app": "GitHub", "vercel": "Vercel", "insforge": "InsForge",
-                         "browser": "Browser"}
+                         "browser": "Browser", "microsoft365": "Microsoft 365"}
 BROWSER = "browser"     # a platform plug: no customer credential; served by the gateway's browser plane
 _ALIAS = {"github_app": "github"}
 RISKS = ("read", "write", "destructive")
@@ -171,6 +172,328 @@ def _need(args: dict, key: str):
     if v is None or v == "":
         raise PlugToolError(f"{key} is required")
     return v
+
+
+# ── Microsoft 365: the organization's own Entra application, as the person or as the application ──
+# The workspace registers ITS OWN Microsoft Entra application (directory id, application id, client
+# secret). Two identities, chosen on the record (`config.mode`):
+#   delegated    each person signs in with Microsoft once (the authorization-code flow, run by the
+#                registry); the plug keeps that person's refresh token, and every call an agent
+#                makes on their behalf runs as them, so SharePoint, OneDrive, Outlook and the
+#                directory answer exactly what that person may see. No list of sites or people
+#                here: Microsoft's own permissions are the boundary (a private site is private).
+#   application  the application's own identity (client credentials), for unattended work, with the
+#                permissions an administrator consented to (Sites.Selected narrows SharePoint to the
+#                sites the administrator granted). It names the site or person it means.
+# Reads only in this slice: files (SharePoint and OneDrive), mail, calendar, sites and people. Each
+# call is one audit row (the plugs server writes it) naming the resource it addressed.
+MICROSOFT365 = "microsoft365"
+GRAPH_API = "https://graph.microsoft.com/v1.0"
+ENTRA_LOGIN = "https://login.microsoftonline.com"
+GRAPH_SCOPE = "https://graph.microsoft.com/.default"
+# What a person is asked to consent to when they sign in (delegated); reads only.
+M365_DELEGATED_SCOPES = ("openid", "profile", "offline_access", "User.Read", "User.ReadBasic.All",
+                         "Sites.Read.All", "Files.Read.All", "Mail.Read", "Calendars.Read")
+M365_TEXT_TYPES = ("text/", "application/json", "application/xml", "application/x-yaml", "application/javascript")
+M365_TEXT_EXT = (".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm", ".log", ".py", ".js", ".ts")
+M365_MAX_CHARS = 60_000
+_m365_tokens: dict[str, tuple[str, float]] = {}      # identity key -> (access token, expires_at)
+
+
+def member_slug(member: str) -> str:
+    """A person's id as a vault-safe name: lowercase, [a-z0-9-], no runs, at most 60 characters."""
+    return re.sub(r"[^a-z0-9]+", "-", str(member or "").lower()).strip("-")[:60]
+
+
+def m365_person_field(member: str) -> str:
+    """The credential field that holds one person's Microsoft refresh token on the plug."""
+    return f"rt-{member_slug(member)}"
+
+
+def m365_mode(fields: dict, config: dict) -> str:
+    mode = str(config.get("mode") or "").strip().lower()
+    return mode if mode in ("delegated", "application") else "delegated"
+
+
+def _m365_msg(r: httpx.Response) -> str:
+    try:
+        d = r.json()
+        e = d.get("error") if isinstance(d, dict) else None
+        if isinstance(e, dict):
+            return str(e.get("message") or e.get("code") or r.text[:200])
+        if isinstance(d, dict) and d.get("error_description"):
+            return str(d["error_description"]).splitlines()[0][:300]
+        if isinstance(d, dict) and d.get("error"):
+            return str(d["error"])[:200]
+    except ValueError:
+        pass
+    return r.text[:200]
+
+
+async def _m365_token(c: httpx.AsyncClient, fields: dict, config: dict) -> str:
+    """An access token for Microsoft Graph as the identity the record names, kept until it expires.
+
+    delegated: the calling person's refresh token (the registry stored it when they signed in; the
+    plugs server hands the person in `config["member"]`) is redeemed for an access token. A person
+    who never signed in, or whose sign-in Microsoft has revoked, is told to sign in on the Plugins
+    page: the agent cannot do it for them and must not borrow anyone else's identity.
+    application: client credentials, the application's own identity."""
+    tenant, client_id, secret = str(config.get("tenant_id") or ""), str(config.get("client_id") or ""), str(fields.get("client_secret") or "")
+    if not (tenant and client_id and secret):
+        raise PlugToolError("The Microsoft 365 plug needs a directory (tenant) id, an application (client) id and its client secret.")
+    if m365_mode(fields, config) == "delegated":
+        member = str(config.get("member") or "")
+        rt = str(fields.get(m365_person_field(member)) or "") if member else ""
+        if not rt:
+            raise PlugToolError("The person running this task has not signed in with Microsoft for this workspace. "
+                                "Ask them to open Plugins, Microsoft 365, and sign in; the agent then acts as them. "
+                                "Do not try another identity.")
+        key = f"rt:{tenant}:{client_id}:{rt[-16:]}"
+        data = {"client_id": client_id, "client_secret": secret, "grant_type": "refresh_token", "refresh_token": rt, "scope": GRAPH_SCOPE}
+        refused = "Microsoft did not accept the person's sign-in ({status}): {why}. They can sign in again on the Plugins page."
+    else:
+        key = f"app:{tenant}:{client_id}:{secret[-6:]}"
+        data = {"client_id": client_id, "client_secret": secret, "grant_type": "client_credentials", "scope": GRAPH_SCOPE}
+        refused = "Microsoft Entra refused the application's sign-in ({status}): {why}"
+    hit = _m365_tokens.get(key)
+    if hit and hit[1] - time.time() > 60:
+        return hit[0]
+    r = await c.post(f"{ENTRA_LOGIN}/{tenant}/oauth2/v2.0/token", data=data)
+    if r.status_code >= 400:
+        raise PlugToolError(refused.format(status=r.status_code, why=_m365_msg(r)))
+    d = r.json()
+    token, ttl = str(d.get("access_token") or ""), int(d.get("expires_in") or 3600)
+    if not token:
+        raise PlugToolError("Microsoft Entra answered without an access token.")
+    _m365_tokens[key] = (token, time.time() + ttl)
+    return token
+
+
+async def _graph(c: httpx.AsyncClient, fields: dict, config: dict, method: str, path: str, *, params=None,
+                 headers: dict | None = None, raw: bool = False):
+    token = await _m365_token(c, fields, config)
+    r = await c.request(method, GRAPH_API + path, params=params,
+                        headers={"Authorization": f"Bearer {token}", "Accept": "application/json", **(headers or {})})
+    if r.status_code >= 400:
+        raise PlugToolError(f"Microsoft Graph answered {r.status_code}: {_m365_msg(r)}")
+    if raw:
+        return r
+    return r.json() if r.content else {}
+
+
+def _m365_site_ok(site: str) -> str:
+    site = site.strip().rstrip("/")
+    if not re.fullmatch(r"[a-z0-9.-]+:/[A-Za-z0-9._/-]+", site, re.I):
+        raise PlugToolError("site must be hostname:/sites/name, as list_sites shows it.")
+    return site
+
+
+def _m365_person(config: dict, args: dict) -> tuple[str, str]:
+    """(Graph prefix, label) for the person a call addresses: `user` when named; otherwise the signed-in
+    person (delegated). The application identity must name the person."""
+    user = str(args.get("user") or "").strip()
+    if user and user.lower() != "me":
+        if "/" in user or "?" in user or "$" in user:
+            raise PlugToolError("user must be a person's sign-in address.")
+        return f"/users/{user}", user
+    if m365_mode({}, config) == "delegated":
+        return "/me", "you"
+    raise PlugToolError("Name the person (user: their sign-in address); the application identity has no self.")
+
+
+def _m365_drive(config: dict, args: dict) -> tuple[str, str]:
+    """The drive root a files call addresses: a SharePoint site's document library (`site`) or a
+    person's OneDrive (`user`, or the signed-in person)."""
+    if args.get("site"):
+        site = _m365_site_ok(str(args["site"]))
+        return f"/sites/{site}/drive", f"site {site}"
+    prefix, who = _m365_person(config, args)
+    return f"{prefix}/drive", f"OneDrive of {who}"
+
+
+def _m365_path(args: dict) -> str:
+    p = str(args.get("path") or "").strip().strip("/")
+    if ".." in p.split("/"):
+        raise PlugToolError("path must not contain '..'.")
+    return p
+
+
+_ITEM = ("name", "id", "size", "lastModifiedDateTime", "webUrl")
+
+
+def _item_out(d: dict) -> dict:
+    out = _pick(d, _ITEM)
+    out["kind"] = "folder" if "folder" in d else "file"
+    if isinstance(d.get("folder"), dict):
+        out["children"] = d["folder"].get("childCount")
+    if isinstance(d.get("file"), dict):
+        out["mimeType"] = d["file"].get("mimeType")
+    if isinstance(d.get("parentReference"), dict) and d["parentReference"].get("path"):
+        out["folder"] = str(d["parentReference"]["path"]).split("root:", 1)[-1] or "/"
+    return out
+
+
+def _site_ref(s: dict) -> str:
+    """hostname:/sites/name for a site Graph returned, from its webUrl."""
+    url = str(s.get("webUrl") or "")
+    m = re.match(r"https?://([^/]+)(/.*)?$", url)
+    return f"{m.group(1)}:{m.group(2) or '/'}" if m else str(s.get("id") or "")
+
+
+@_tool("microsoft365", "resources", "read",
+       "Whose identity this plug runs as and how to address things: read it first. Files live in a SharePoint "
+       "site (site: hostname:/sites/name, see list_sites) or a person's OneDrive; mail and calendar belong to "
+       "a person. As a signed-in person, calls with no site or user are your own.", _obj({}))
+async def _(c, f, cfg, a):
+    mode = m365_mode(f, cfg)
+    out = {"tenant_id": cfg.get("tenant_id"), "identity": "the application (client credentials); reads only",
+           "tools": {"sites": "list_sites", "files": "list_files, search_files, read_file (site or user)",
+                     "mail": "list_mail, read_mail (user)", "calendar": "list_events (user)", "directory": "find_people"}}
+    if mode == "delegated":
+        me = await _graph(c, f, cfg, "GET", "/me", params={"$select": "displayName,userPrincipalName,mail,jobTitle"})
+        out["identity"] = f"you, signed in as {me.get('userPrincipalName') or me.get('mail') or ''} ({me.get('displayName') or ''}); reads only"
+        out["you"] = _pick(me, ("displayName", "userPrincipalName", "mail", "jobTitle"))
+        out["note"] = "What you may read on SharePoint, OneDrive and Outlook is what your account may read."
+    return out
+
+
+@_tool("microsoft365", "find_people", "read",
+       "People in the organization's directory matching a name or address: display name, sign-in address, mail, title, department.",
+       _obj({"query": _s("A name, part of a name, or an address"), "top": _i("How many, at most 50")}, ("query",)))
+async def _(c, f, cfg, a):
+    q = str(_need(a, "query")).replace('"', "")
+    top = min(int(a.get("top") or 10), 50)
+    d = await _graph(c, f, cfg, "GET", "/users",
+                     params={"$search": f'"displayName:{q}" OR "mail:{q}" OR "userPrincipalName:{q}"',
+                             "$select": "id,displayName,userPrincipalName,mail,jobTitle,department", "$top": top},
+                     headers={"ConsistencyLevel": "eventual"})
+    return [_pick(u, ("id", "displayName", "userPrincipalName", "mail", "jobTitle", "department")) for u in d.get("value") or []]
+
+
+@_tool("microsoft365", "list_sites", "read",
+       "SharePoint sites this identity can see, by a search word (or all of them): name, address, and the "
+       "`site` form the files tools take.",
+       _obj({"query": _s("A word in the site's name; * for every site"), "top": _i("How many, at most 100")}))
+async def _(c, f, cfg, a):
+    q = str(a.get("query") or "*").replace("'", "")
+    d = await _graph(c, f, cfg, "GET", "/sites", params={"search": q, "$select": "id,name,displayName,webUrl",
+                                                           "$top": min(int(a.get("top") or 25), 100)})
+    return [{"site": _site_ref(s), **_pick(s, ("name", "displayName", "webUrl", "id"))} for s in d.get("value") or []]
+
+
+@_tool("microsoft365", "list_files", "read",
+       "Files and folders at a path of a SharePoint site's document library, a person's OneDrive, or your own.",
+       _obj({"site": _s("SharePoint site as hostname:/sites/name (from list_sites)"),
+             "user": _s("A person's sign-in address, for their OneDrive; omit for your own"),
+             "path": _s("Folder path under the root; empty for the root"), "top": _i("How many, at most 200")}))
+async def _(c, f, cfg, a):
+    root, where = _m365_drive(cfg, a)
+    path = _m365_path(a)
+    url = f"{root}/root/children" if not path else f"{root}/root:/{path}:/children"
+    d = await _graph(c, f, cfg, "GET", url, params={"$select": "name,id,size,lastModifiedDateTime,webUrl,folder,file,parentReference",
+                                                    "$top": min(int(a.get("top") or 50), 200)})
+    return {"resource": where, "path": "/" + path, "items": [_item_out(x) for x in d.get("value") or []]}
+
+
+@_tool("microsoft365", "search_files", "read",
+       "Search a site's document library, a person's OneDrive, or your own, by name or content.",
+       _obj({"site": _s("SharePoint site as hostname:/sites/name"), "user": _s("A person's sign-in address; omit for your own"),
+             "query": _s("Words to search for"), "top": _i("How many, at most 100")}, ("query",)))
+async def _(c, f, cfg, a):
+    root, where = _m365_drive(cfg, a)
+    q = str(_need(a, "query")).replace("'", "''")
+    d = await _graph(c, f, cfg, "GET", f"{root}/root/search(q='{q}')",
+                     params={"$select": "name,id,size,lastModifiedDateTime,webUrl,folder,file,parentReference", "$top": min(int(a.get("top") or 25), 100)})
+    return {"resource": where, "query": a.get("query"), "items": [_item_out(x) for x in d.get("value") or []]}
+
+
+@_tool("microsoft365", "read_file", "read",
+       "The content of a text file (txt, md, csv, json, yaml, xml, html, code) at a path of a site, a person's "
+       "OneDrive, or your own; for another file type, its facts and address, not its bytes.",
+       _obj({"site": _s("SharePoint site as hostname:/sites/name"), "user": _s("A person's sign-in address; omit for your own"),
+             "path": _s("File path under the root"), "max_chars": _i("At most this many characters of text, up to 60000")}, ("path",)))
+async def _(c, f, cfg, a):
+    root, where = _m365_drive(cfg, a)
+    path = _m365_path(a)
+    if not path:
+        raise PlugToolError("path names the file to read.")
+    meta = await _graph(c, f, cfg, "GET", f"{root}/root:/{path}", params={"$select": "name,id,size,lastModifiedDateTime,webUrl,file,folder"})
+    if "folder" in meta:
+        raise PlugToolError(f"{path} is a folder; list_files reads its entries.")
+    mime = str((meta.get("file") or {}).get("mimeType") or "")
+    name = str(meta.get("name") or path)
+    texty = any(mime.startswith(t) for t in M365_TEXT_TYPES) or name.lower().endswith(M365_TEXT_EXT)
+    out = {"resource": where, "path": "/" + path, **_pick(meta, ("name", "size", "lastModifiedDateTime", "webUrl")), "mimeType": mime}
+    if not texty:
+        out["note"] = "Not a text file: its bytes are not read here. The person can open it at webUrl."
+        return out
+    cap = min(int(a.get("max_chars") or 20_000), M365_MAX_CHARS)
+    r = await _graph(c, f, cfg, "GET", f"{root}/root:/{path}:/content", raw=True)
+    text = r.content.decode("utf-8", "replace")
+    out["content"] = text[:cap]
+    if len(text) > cap:
+        out["truncated"] = f"{len(text) - cap} more characters not shown"
+    return out
+
+
+_MAIL = ("id", "subject", "receivedDateTime", "isRead", "hasAttachments", "bodyPreview", "webLink")
+
+
+def _addr(x) -> str:
+    e = x.get("emailAddress") if isinstance(x, dict) else None
+    return f"{e.get('name') or ''} <{e.get('address') or ''}>".strip() if isinstance(e, dict) else ""
+
+
+@_tool("microsoft365", "list_mail", "read",
+       "The newest messages in a folder of a mailbox (yours, or a person's): subject, sender, date, a preview.",
+       _obj({"user": _s("The person's sign-in address; omit for your own mailbox"),
+             "folder": _s("inbox (default), sentitems, drafts, archive, or a folder id"),
+             "search": _s("Words to search for in the folder"), "top": _i("How many, at most 50")}))
+async def _(c, f, cfg, a):
+    prefix, who = _m365_person(cfg, a)
+    folder = str(a.get("folder") or "inbox").strip()
+    params = {"$select": "id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink", "$top": min(int(a.get("top") or 20), 50)}
+    if a.get("search"):
+        params["$search"] = '"' + str(a["search"]).replace('"', "") + '"'
+    else:
+        params["$orderby"] = "receivedDateTime desc"
+    d = await _graph(c, f, cfg, "GET", f"{prefix}/mailFolders/{folder}/messages", params=params)
+    return {"resource": f"mailbox of {who}", "folder": folder,
+            "messages": [{**_pick(m, _MAIL), "from": _addr(m.get("from"))} for m in d.get("value") or []]}
+
+
+@_tool("microsoft365", "read_mail", "read",
+       "One message of a mailbox (yours, or a person's), as text: subject, sender, recipients, date, body.",
+       _obj({"user": _s("The person's sign-in address; omit for your own mailbox"), "id": _s("The message id from list_mail")}, ("id",)))
+async def _(c, f, cfg, a):
+    prefix, who = _m365_person(cfg, a)
+    mid = str(_need(a, "id"))
+    m = await _graph(c, f, cfg, "GET", f"{prefix}/messages/{mid}",
+                     params={"$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,hasAttachments,body,webLink"},
+                     headers={"Prefer": 'outlook.body-content-type="text"'})
+    body = str((m.get("body") or {}).get("content") or "")
+    return {"resource": f"mailbox of {who}", **_pick(m, ("id", "subject", "receivedDateTime", "hasAttachments", "webLink")),
+            "from": _addr(m.get("from")), "to": [_addr(x) for x in m.get("toRecipients") or []], "cc": [_addr(x) for x in m.get("ccRecipients") or []],
+            "body": body[:M365_MAX_CHARS]}
+
+
+@_tool("microsoft365", "list_events", "read",
+       "A calendar (yours, or a person's) between two moments: subject, start, end, location, organizer, attendees.",
+       _obj({"user": _s("The person's sign-in address; omit for your own calendar"), "start": _s("ISO 8601 start, e.g. 2026-09-29T00:00:00Z"),
+             "end": _s("ISO 8601 end"), "top": _i("How many, at most 100")}, ("start", "end")))
+async def _(c, f, cfg, a):
+    prefix, who = _m365_person(cfg, a)
+    d = await _graph(c, f, cfg, "GET", f"{prefix}/calendarView",
+                     params={"startDateTime": str(_need(a, "start")), "endDateTime": str(_need(a, "end")),
+                             "$select": "id,subject,start,end,location,organizer,attendees,isAllDay,webLink",
+                             "$orderby": "start/dateTime", "$top": min(int(a.get("top") or 50), 100)})
+    out = []
+    for e in d.get("value") or []:
+        out.append({**_pick(e, ("id", "subject", "isAllDay", "webLink")),
+                    "start": (e.get("start") or {}).get("dateTime"), "end": (e.get("end") or {}).get("dateTime"),
+                    "location": (e.get("location") or {}).get("displayName"), "organizer": _addr(e.get("organizer")),
+                    "attendees": [_addr(x) for x in e.get("attendees") or []]})
+    return {"resource": f"calendar of {who}", "events": out}
 
 
 # ── GitHub: the company repository, through an installation token scoped to it ───────────────

@@ -13664,11 +13664,25 @@ _BROWSER_GUIDE = (
     "deferred) before touching the web any other way.")
 
 
+_M365_GUIDE = (
+    "## Microsoft 365\n"
+    "This task can read Microsoft 365 through the `plugs` server, as the person it runs for (their own "
+    "SharePoint, OneDrive, Outlook and directory access) or as the workspace's application: "
+    "microsoft365_resources (whose identity, how to address things; read it first), microsoft365_find_people, "
+    "microsoft365_list_sites, microsoft365_list_files, microsoft365_search_files, microsoft365_read_file (a "
+    "SharePoint site, a person's OneDrive, or your own), microsoft365_list_mail, microsoft365_read_mail, "
+    "microsoft365_list_events (a mailbox or calendar; your own when no person is named). What Microsoft "
+    "refuses is what this identity may not see: report a refusal, never work around it or try another "
+    "identity. These tools read; they write nothing.")
+
+
 def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
     """The harness's instructions plus a section for each included plugin that needs one."""
     parts = [agent_doc.strip()] if agent_doc and agent_doc.strip() else []
     if "browser" in plug_types:
         parts.append(_BROWSER_GUIDE)
+    if "microsoft365" in plug_types:
+        parts.append(_M365_GUIDE)
     return "\n\n".join(parts)
 
 
@@ -13779,6 +13793,10 @@ _PLUG_FORMS: dict[str, dict] = {
     "github": {"secrets": ["token"], "config": ["repo", "owner", "default_branch"], "source": "local"},
     "vercel": {"secrets": ["token"], "config": ["project", "project_id", "team_id"], "source": "local"},
     "insforge": {"secrets": ["api_key"], "config": ["project", "project_id", "url", "region"], "source": "local"},
+    # An enterprise plug: the organization's own Microsoft Entra application. Identity by mode:
+    # "delegated" (each person signs in with Microsoft once; the record then holds one refresh
+    # token per person under rt-<member slug>) or "application" (client credentials).
+    "microsoft365": {"secrets": ["client_secret"], "config": ["tenant_id", "client_id", "mode"], "source": "local"},
 }
 
 
@@ -13821,6 +13839,7 @@ def _plug_record_out(row: dict) -> dict:
             "type": str(row.get("type") or ""), "status": status, "effective_status": status,
             "source": str(row.get("source") or "local"), "vault_tenant": str(row.get("org") or ""),
             "key_refs": key_refs if isinstance(key_refs, list) else [], "config": config if isinstance(config, dict) else {},
+            "attention": str(row.get("attention") or ""),
             "version": int(float(row.get("version") or 1)), "updated_at": row.get("updated_at") or ""}
 
 
@@ -13853,6 +13872,7 @@ def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, sta
             "official": True, "status": status, "config": cfg, "secrets_set": have, "secrets_needed": list(form["secrets"]),
             "config_fields": list(form["config"]), "version": int((rec or {}).get("version") or 0),
             "tools": len(plugs_plane.tools_of(plug_type)),
+            **({"attention": str((rec or {}).get("attention") or "")} if (rec or {}).get("attention") else {}),
             **({"pricing": browser_plane.pricing()} if plug_type == plugs_plane.BROWSER else {})}
 
 
@@ -13910,17 +13930,204 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         refs[field] = ref
     missing = [f for f in form["secrets"] if f not in refs]
     status = "disabled" if not body.enabled else ("needs_auth" if missing else "connected")
+    attention = ""
+    if plug_type == plugs_plane.MICROSOFT365 and body.enabled and not missing:
+        status, attention, config = await _m365_connect(org, config, refs, body.secrets or {})
     version = int((prev or {}).get("version") or 0) + 1
     now = int(time.time() * 1000)
     await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plug_type),
                      {"org": org, "workspace": workspace, "type": plug_type, "status": status, "source": form["source"],
                       "config": json.dumps(config, separators=(",", ":")),
                       "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
+                      "attention": attention,
                       "version": str(version), "updated_at": str(now)})
     _plug_fields_cache.pop(_plug_vid(workspace, plug_type), None)
     status2, rec = await _plug_lookup_local(org, workspace, plug_type)
     print(f"[plugs] {workspace}: {plug_type} {status2} (v{version})", flush=True)
     return _plug_public(org, workspace, plug_type, rec, status2)
+
+
+# ── Microsoft 365 sign-in: the registry runs the authorization-code flow for each person ──────
+# The workspace's Entra application is connected once (its ids and secret, checked at Entra
+# then). With the delegated identity every person then signs in with Microsoft once for the
+# workspace: the registry sends them to Entra with a signed state naming the org, workspace,
+# person and return address, redeems the code it gets back for a refresh token, keeps that token
+# under the person's own field on the record, and remembers who they are. Sign-out forgets both.
+_M365_SIGNIN_ATTENTION = "Sign in with Microsoft so the agent can act as you. Each person signs in once for this workspace."
+_M365_STATE_TTL_S = 15 * 60
+
+
+def _m365_state_sign(payload: dict) -> str:
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
+    return "hrm_" + base64.urlsafe_b64encode(body.encode()).decode().rstrip("=") + "." + sig
+
+
+def _m365_state_verify(tok: str) -> dict | None:
+    try:
+        raw, sig = str(tok or "")[len("hrm_"):].split(".", 1)
+        body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
+        want = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(want, sig):
+            return None
+        st = json.loads(body)
+        if not isinstance(st, dict) or int(st.get("exp") or 0) < time.time():
+            return None
+        return st
+    except Exception:  # noqa: BLE001 - malformed is invalid
+        return None
+
+
+def _m365_redirect_ok(uri: str) -> str:
+    """The console's own address: https, or http on localhost for a developer's box."""
+    u = str(uri or "").strip()
+    if not (u.startswith("https://") or u.startswith("http://localhost") or u.startswith("http://127.0.0.1")):
+        raise uhp_error(400, "invalid_input", "redirect_uri must be an https address (or localhost).", "redirect_uri")
+    return u
+
+
+async def _m365_connect(org: str, config: dict, refs: dict, given: dict) -> tuple[str, str, dict]:
+    """Check the application's ids and secret at Entra when the plug is connected, and decide the
+    record's status by its identity: the application identity also reads the directory and is
+    connected; the delegated identity is connected once a person has signed in, and until then
+    reads needs_auth with the sign-in as its next step. (status, attention, config)."""
+    config = dict(config)
+    config["mode"] = plugs_plane.m365_mode({}, config)
+    accounts = config.get("accounts") if isinstance(config.get("accounts"), dict) else {}
+    config["accounts"] = accounts
+    secret = str(given.get("client_secret") or "").strip() or str(await _vault_get(org, refs.get("client_secret", "")) or "")
+    fields = {"client_secret": secret}
+    try:
+        async with plugs_plane.client() as c:
+            token = await plugs_plane._m365_token(c, fields, {**config, "mode": "application"})
+            if config["mode"] == "application":
+                r = await c.get(f"{plugs_plane.GRAPH_API}/organization", params={"$select": "id,displayName"},
+                                headers={"Authorization": f"Bearer {token}"})
+                if r.status_code >= 400:
+                    raise plugs_plane.PlugToolError(f"Microsoft Graph answered {r.status_code}: {plugs_plane._m365_msg(r)}")
+                orgs = (r.json() or {}).get("value") or []
+                if orgs:
+                    config["directory"] = str(orgs[0].get("displayName") or "")
+    except plugs_plane.PlugToolError as e:
+        raise uhp_error(400, "invalid_credential", str(e), "secrets")
+    if config["mode"] == "application":
+        return "connected", "", config
+    return ("connected" if accounts else "needs_auth"), ("" if accounts else _M365_SIGNIN_ATTENTION), config
+
+
+async def _m365_plug(org: str, workspace: str) -> dict:
+    status, rec = await _plug_lookup_local(org, workspace, plugs_plane.MICROSOFT365)
+    if not rec:
+        raise uhp_error(404, "plug_not_connected", "Connect the Microsoft 365 plugin for this workspace first.", "plug_type")
+    return rec
+
+
+class MicrosoftStartBody(BaseModel):
+    redirect_uri: str
+
+
+class MicrosoftCompleteBody(BaseModel):
+    code: str
+    state: str
+
+
+@app.post("/v1/plugs/microsoft365/microsoft/start")
+async def microsoft_start(body: MicrosoftStartBody, request: Request) -> dict:
+    """Where the person goes to sign in with Microsoft for this workspace's application."""
+    org, member = await _pub_org_member(request)
+    if PLUGS_REGISTRY_URL:
+        raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
+    workspace = _plug_workspace(request)
+    rec = await _m365_plug(org, workspace)
+    config = rec.get("config") or {}
+    if plugs_plane.m365_mode({}, config) != "delegated":
+        raise uhp_error(400, "invalid_input", "This plug runs as the application; it does not sign people in.", "mode")
+    if not member:
+        raise uhp_error(401, "invalid_credential", "Sign in to the console first.")
+    redirect_uri = _m365_redirect_ok(body.redirect_uri)
+    state = _m365_state_sign({"o": org, "w": workspace, "m": member, "r": redirect_uri, "exp": int(time.time()) + _M365_STATE_TTL_S})
+    auth_url = f"{plugs_plane.ENTRA_LOGIN}/{config.get('tenant_id')}/oauth2/v2.0/authorize?" + urllib.parse.urlencode({
+        "client_id": str(config.get("client_id") or ""), "response_type": "code", "redirect_uri": redirect_uri,
+        "response_mode": "query", "scope": " ".join(plugs_plane.M365_DELEGATED_SCOPES), "state": state, "prompt": "select_account"})
+    return {"auth_url": auth_url, "state": state}
+
+
+@app.post("/v1/plugs/microsoft/complete")
+async def microsoft_complete(body: MicrosoftCompleteBody, request: Request) -> dict:
+    """Back from Microsoft: the code is redeemed for the person's refresh token, which the plug keeps
+    under their own field; the state proves this is the sign-in this person started."""
+    org, member = await _pub_org_member(request)
+    st = _m365_state_verify(body.state)
+    if not st or st.get("o") != org or st.get("m") != member:
+        raise uhp_error(400, "invalid_state", "This sign-in was not started here, or it expired. Start it again from the Plugins page.", "state")
+    workspace = str(st.get("w") or "default")
+    rec = await _m365_plug(org, workspace)
+    config = dict(rec.get("config") or {})
+    fields = await _plug_fields(rec)
+    tenant, client_id, secret = str(config.get("tenant_id") or ""), str(config.get("client_id") or ""), str(fields.get("client_secret") or "")
+    async with plugs_plane.client() as c:
+        r = await c.post(f"{plugs_plane.ENTRA_LOGIN}/{tenant}/oauth2/v2.0/token",
+                         data={"client_id": client_id, "client_secret": secret, "grant_type": "authorization_code",
+                               "code": body.code, "redirect_uri": str(st.get("r") or ""), "scope": " ".join(plugs_plane.M365_DELEGATED_SCOPES)})
+        if r.status_code >= 400:
+            raise uhp_error(400, "invalid_credential", f"Microsoft did not complete the sign-in ({r.status_code}): {plugs_plane._m365_msg(r)}", "code")
+        d = r.json()
+        rt, at = str(d.get("refresh_token") or ""), str(d.get("access_token") or "")
+        if not rt:
+            raise uhp_error(400, "invalid_credential", "Microsoft answered without a refresh token; the application may lack the offline_access permission.", "code")
+        me = await c.get(f"{plugs_plane.GRAPH_API}/me", params={"$select": "id,displayName,userPrincipalName"},
+                         headers={"Authorization": f"Bearer {at}"})
+        who = me.json() if me.status_code < 400 else {}
+    field = plugs_plane.m365_person_field(member)
+    ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plugs_plane.MICROSOFT365)}-{_plug_safe(field)}"
+    await _vault_put(org, ref, rt)
+    refs = {str(x.get("field")): str(x.get("ref")) for x in (rec.get("key_refs") or []) if isinstance(x, dict)}
+    refs[field] = ref
+    accounts = dict(config.get("accounts") or {})
+    accounts[member] = {"upn": str(who.get("userPrincipalName") or ""), "name": str(who.get("displayName") or ""),
+                        "id": str(who.get("id") or ""), "signed_in_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    config["accounts"] = accounts
+    version = int(rec.get("version") or 0) + 1
+    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plugs_plane.MICROSOFT365),
+                     {"org": org, "workspace": workspace, "type": plugs_plane.MICROSOFT365, "status": "connected", "source": "local",
+                      "config": json.dumps(config, separators=(",", ":")),
+                      "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
+                      "attention": "", "version": str(version), "updated_at": str(int(time.time() * 1000))})
+    _plug_fields_cache.pop(_plug_vid(workspace, plugs_plane.MICROSOFT365), None)
+    print(f"[plugs] {workspace}: microsoft365 sign-in for {member} ({accounts[member]['upn']})", flush=True)
+    status2, rec2 = await _plug_lookup_local(org, workspace, plugs_plane.MICROSOFT365)
+    return _plug_public(org, workspace, plugs_plane.MICROSOFT365, rec2, status2)
+
+
+@app.post("/v1/plugs/microsoft365/microsoft/signout")
+async def microsoft_signout(request: Request) -> dict:
+    """Forget this person's sign-in: their refresh token and their account on the record. With
+    nobody signed in a delegated plug waits for a sign-in again."""
+    org, member = await _pub_org_member(request)
+    workspace = _plug_workspace(request)
+    rec = await _m365_plug(org, workspace)
+    config = dict(rec.get("config") or {})
+    field = plugs_plane.m365_person_field(member)
+    refs = {str(x.get("field")): str(x.get("ref")) for x in (rec.get("key_refs") or []) if isinstance(x, dict)}
+    ref = refs.pop(field, "")
+    if ref:
+        await _vault_put(org, ref, "")          # the token is gone from the store, not only unreferenced
+    accounts = {k: v for k, v in (config.get("accounts") or {}).items() if k != member}
+    config["accounts"] = accounts
+    delegated = plugs_plane.m365_mode({}, config) == "delegated"
+    status = str(rec.get("status") or "connected")
+    attention = ""
+    if delegated and not accounts and status == "connected":
+        status, attention = "needs_auth", _M365_SIGNIN_ATTENTION
+    version = int(rec.get("version") or 0) + 1
+    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plugs_plane.MICROSOFT365),
+                     {"org": org, "workspace": workspace, "type": plugs_plane.MICROSOFT365, "status": status, "source": "local",
+                      "config": json.dumps(config, separators=(",", ":")),
+                      "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
+                      "attention": attention, "version": str(version), "updated_at": str(int(time.time() * 1000))})
+    _plug_fields_cache.pop(_plug_vid(workspace, plugs_plane.MICROSOFT365), None)
+    status2, rec2 = await _plug_lookup_local(org, workspace, plugs_plane.MICROSOFT365)
+    return _plug_public(org, workspace, plugs_plane.MICROSOFT365, rec2, status2)
 
 
 @app.get("/v1/plugs/{plug_type}/attachments")
@@ -14229,16 +14436,25 @@ async def plugs_mcp(request: Request):
         return _jsonrpc_result(rid, _tool_text(
             f"The workspace's {label} plug was not granted {need} access, so {tool} cannot run. The person can "
             "grant it on the app installation and reconnect the plug.", True))
+    # The audit row names the resource the call addressed (a site, a person, a path, a folder, a
+    # repository), so access is accounted for by resource and not only by tool.
+    resource = {k: str(args[k])[:200] for k in ("site", "user", "path", "folder", "repo", "query", "id")
+                if isinstance(args, dict) and args.get(k) not in (None, "")} or None
+    if plug == plugs_plane.MICROSOFT365:
+        # A delegated identity is the person this session runs for: the plane reads their own
+        # sign-in from the record's fields and never another person's.
+        sv = await _vertex_get(sid) if sid else None
+        config = {**config, "member": str((sv or {}).get("member_id") or (sv or {}).get("member") or "")}
     try:
         text = await plugs_plane.call(plug, tool, args if isinstance(args, dict) else {}, fields, config)
     except plugs_plane.PlugToolError as e:
-        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", str(e))
+        await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error", str(e), detail=resource)
         return _jsonrpc_result(rid, _tool_text(str(e), True))
     except Exception as e:  # noqa: BLE001
         await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "error",
-                                f"{type(e).__name__}: {e}")
+                                f"{type(e).__name__}: {e}", detail=resource)
         return _jsonrpc_result(rid, _tool_text(f"The call failed ({type(e).__name__}). Try again.", True))
-    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "ok")
+    await _plug_call_record(hid, sid, org, workspace, plug, tool, spec["risk"], started, "ok", detail=resource)
     return _jsonrpc_result(rid, _tool_text(text))
 
 

@@ -615,6 +615,7 @@ Disabled, Not connected), what it costs, and how many harnesses include it.
 | GitHub | The connected repository: files, branches, commits, pull requests. | An access token and the repository (`owner/name`). |
 | Vercel | The connected project: deployments and domains. | An access token, the project id and team id. |
 | InsForge | The connected backend: its tables and records. | The API key and the backend's address. |
+| Microsoft 365 | SharePoint sites, OneDrive files, Outlook mail and calendar and the directory's people, read as each signed-in person or as your own application. Nine read tools. | Your organization's Microsoft Entra application (directory id, application id, client secret); then each person signs in with Microsoft once. |
 
 **Turning a plugin on.** Open **Plugins**, and on the row choose **Turn on** (the browser) or
 **Connect** (a plugin that needs a credential; the credential is kept in the instance's secret store
@@ -634,6 +635,55 @@ curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses/$HID/servers/plugs" \
   -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \
   -d '{"plugs":["browser"]}'
 ```
+
+### Microsoft 365
+
+The plug runs through an application you register in your own Microsoft Entra directory, so the
+organization decides what it may do, and Microsoft's own permissions are the boundary: a private
+SharePoint site stays private, a mailbox is its owner's. Two identities, chosen when you connect:
+
+- **Each person signs in with Microsoft** (the default). Every call an agent makes on a person's
+  behalf runs as that person and reads exactly what they may read. Each person signs in once per
+  workspace, from the **Plugins** page; an agent working for someone who has not signed in is told
+  to ask them, and never borrows another identity.
+- **The application itself**, for unattended work, with the application permissions an administrator
+  consented to; it must name the site or person it means.
+
+Register the application once (the delegated permissions are what a person consents to at sign-in;
+add application permissions only for the application identity):
+
+```bash
+GRAPH=00000003-0000-0000-c000-000000000000
+APP=$(az ad app create --display-name "HarnessRouter Microsoft 365" --sign-in-audience AzureADMyOrg \
+      --web-redirect-uris "https://<your console>/plugins" --query appId -o tsv)
+az ad sp create --id "$APP" >/dev/null
+for perm in openid profile offline_access User.Read User.ReadBasic.All Sites.Read.All Files.Read.All Mail.Read Calendars.Read; do
+  id=$(az ad sp show --id $GRAPH --query "oauth2PermissionScopes[?value=='$perm'].id" -o tsv)
+  az ad app permission add --id "$APP" --api $GRAPH --api-permissions "$id=Scope"
+done
+az ad app permission admin-consent --id "$APP"
+az ad app credential reset --id "$APP" --append --display-name harnessrouter --years 1 --query password -o tsv
+```
+
+The last line prints the client secret once. On the **Plugins** page choose **Connect** on the
+Microsoft 365 row and enter the directory (tenant) id, the application (client) id, the client secret
+and the identity. The ids and the secret are checked at Entra as you save. With the delegated
+identity the row then reads **Needs auth** until you choose **Sign in with Microsoft**: Microsoft's
+own sign-in page opens, you come back to the Plugins page, and the plug keeps your sign-in for this
+workspace (its refresh token, in the instance's secret store under your own field) and shows who
+you are. **Sign out** forgets it. Over the API the same steps are
+`POST /v1/plugs/microsoft365/microsoft/start` (`{"redirect_uri": ...}` gives the address to open),
+`POST /v1/plugs/microsoft/complete` (`{"code", "state"}` from the return) and
+`POST /v1/plugs/microsoft365/microsoft/signout`.
+
+What the agent gets: `resources` (whose identity it runs as, how to address a site or a person),
+`find_people`, `list_sites`, `list_files`, `search_files`, `read_file` (a SharePoint site as
+`hostname:/sites/name`, a person's OneDrive, or its own), `list_mail`, `read_mail`, `list_events`.
+Every call is one audit row on the session, naming the site, person, path or folder it addressed.
+What Microsoft refuses is what that identity may not see, and the agent is told to report it rather
+than work around it. The directory behind an Azure subscription alone has no Microsoft 365 licence:
+sign-in, `resources` and `find_people` work there, while files, mail and calendar answer Microsoft's
+own refusal until the tenant holds a licensed seat.
 
 `GET /v1/plugs` lists the catalog with each plugin's state for your workspace;
 `GET /v1/plugs/browser/attachments` says how many harnesses include it. A package can ask for a
