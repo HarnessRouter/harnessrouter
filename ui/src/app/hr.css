@@ -1065,6 +1065,16 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-mono em { font-style: normal; color: var(--muted); }
 .env-dim { color: var(--muted); font-size: 12.5px; }
 /* Empty states: one column, centred, the hierarchy in size and weight; numbered steps, one accent action. */
+/* the shelf with nothing on it: the design's flow strip, then the one thing to do */
+.env-landing { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
+.env-flow { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr); align-items: center; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.env-flow > div { min-width: 0; }
+.env-flow-k { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); }
+.env-flow-t { font-size: 13px; font-weight: 600; color: var(--ink); margin-top: 5px; }
+.env-flow-m { font-size: 12px; line-height: 1.5; color: var(--muted); margin-top: 3px; text-wrap: pretty; }
+.env-flow-arrow { color: #c4beba; font-size: 14px; text-align: center; }
+.env-landing-cta { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13.5px; color: var(--muted); }
+.env-landing-cta .button { display: inline-flex; align-items: center; gap: 6px; }
 .env-onboard { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; max-width: 560px; margin: 56px auto; padding: 0 16px; }
 .env-onboard h2 { margin: 6px 0 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
 .env-onboard p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
@@ -1092,6 +1102,9 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-manifests dd { margin: 0; color: var(--muted); }
 @media (max-width: 720px) {
   .env-steps, .env-choices { grid-template-columns: minmax(0, 1fr); }
+  .env-flow { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .env-flow-arrow { display: none; }
+  .env-landing-cta { flex-direction: column; align-items: flex-start; }
   .env-onboard, .env-onboard.is-files { margin: 32px auto; }
 }
 @media (max-width: 900px) {
