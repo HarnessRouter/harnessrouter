@@ -893,13 +893,18 @@ body.hr-resizing iframe { pointer-events: none; }
   color: var(--accent); background: var(--accent-soft); padding: 2px 7px; border-radius: 999px;
 }
 
-.kit-custom { display: flex; flex-direction: column; gap: 12px; }
+.kit-custom { display: flex; flex-direction: column; gap: 16px; }
 .kit-field { display: flex; flex-direction: column; gap: 5px; }
 .kit-field > span { font-size: 12px; font-weight: 600; color: var(--ink); }
-.kit-field select {
-  width: 100%; padding: 9px 11px; font: inherit; font-size: 13px; color: var(--ink);
-  background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+.kit-field select, .kit-field input {
+  width: 100%; box-sizing: border-box; padding: 9px 12px; font: inherit; font-size: 13.5px; color: var(--ink);
+  background: var(--surface); border: 1px solid #e0dcd9; border-radius: 8px; outline: none;
+  transition: border-color 140ms, box-shadow 140ms;
 }
+.kit-field input::placeholder { color: #b8b2ad; }
+.kit-field input:focus, .kit-field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26, 92, 245, .12); }
+.kit-field > span { font-size: 13px; }
+.kit-custom .env-help { margin: -4px 0 0; }
 
 .kit-dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
 .kit-dialog-spacer { flex: 1; }
@@ -1073,8 +1078,8 @@ body.hr-resizing iframe { pointer-events: none; }
 .env-flow-t { font-size: 13px; font-weight: 600; color: var(--ink); margin-top: 5px; }
 .env-flow-m { font-size: 12px; line-height: 1.5; color: var(--muted); margin-top: 3px; text-wrap: pretty; }
 .env-flow-arrow { color: #c4beba; font-size: 14px; text-align: center; }
-.env-landing-cta { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13.5px; color: var(--muted); }
-.env-landing-cta .button { display: inline-flex; align-items: center; gap: 6px; }
+/* a button's label never breaks into two rows: the header squeezed "New environment" onto two lines at a narrow width */
+.page-actions .button { white-space: nowrap; flex: none; }
 .env-onboard { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; max-width: 560px; margin: 56px auto; padding: 0 16px; }
 .env-onboard h2 { margin: 6px 0 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
 .env-onboard p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
@@ -1104,7 +1109,6 @@ body.hr-resizing iframe { pointer-events: none; }
   .env-steps, .env-choices { grid-template-columns: minmax(0, 1fr); }
   .env-flow { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .env-flow-arrow { display: none; }
-  .env-landing-cta { flex-direction: column; align-items: flex-start; }
   .env-onboard, .env-onboard.is-files { margin: 32px auto; }
 }
 @media (max-width: 900px) {
