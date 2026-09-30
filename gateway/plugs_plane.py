@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import time
@@ -200,14 +201,10 @@ M365_MAX_CHARS = 60_000
 _m365_tokens: dict[str, tuple[str, float]] = {}      # identity key -> (access token, expires_at)
 
 
-def member_slug(member: str) -> str:
-    """A person's id as a vault-safe name: lowercase, [a-z0-9-], no runs, at most 60 characters."""
-    return re.sub(r"[^a-z0-9]+", "-", str(member or "").lower()).strip("-")[:60]
-
-
 def m365_person_field(member: str) -> str:
-    """The credential field that holds one person's Microsoft refresh token on the plug."""
-    return f"rt-{member_slug(member)}"
+    """The credential field that holds one person's Microsoft refresh token on the plug: short and
+    opaque (a hash of the member id), the same derivation the registry writes with."""
+    return "rt-" + hashlib.sha256(str(member or "").strip().lower().encode()).hexdigest()[:16]
 
 
 def m365_mode(fields: dict, config: dict) -> str:

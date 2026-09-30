@@ -123,4 +123,5 @@ def test_tool_names_and_the_type_are_served():
     assert names == ["resources", "find_people", "list_sites", "list_files", "search_files", "read_file", "list_mail", "read_mail", "list_events"]
     assert plugs_plane.TYPES["microsoft365"] == "Microsoft 365"
     assert all(t["risk"] == "read" for t in plugs_plane.tools_of("microsoft365"))
-    assert plugs_plane.member_slug("Member.Ada@Acme") == "member-ada-acme" and plugs_plane.m365_person_field("x y") == "rt-x-y"
+    f = plugs_plane.m365_person_field("Member.Ada@Acme")
+    assert len(f) == 19 and f.startswith("rt-") and f == plugs_plane.m365_person_field(" member.ada@acme ")
