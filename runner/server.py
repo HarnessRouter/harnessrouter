@@ -1985,6 +1985,30 @@ def _codex_custom_responses(auth: Auth) -> bool:
     return str(auth.api_format or "").strip().lower() == "responses"
 
 
+_CODEX_CUSTOM_EDITING = (
+    "## Editing files on this connection\n\n"
+    "There is no `apply_patch` tool here: Codex offers none on a custom endpoint (measured on Codex "
+    "0.154.0: no model gets it, known or not). A call to a tool named `apply_patch` is refused with "
+    "\"unsupported call\"; do not make it and do not retry it. Edit files through the shell tool: write "
+    "a file with a heredoc, change lines with sed or a short python script, or use an editor command, "
+    "then read the file back to check the change.")
+
+
+def _codex_custom_editing_note(backend: str, auth: Auth | None) -> str:
+    """The instruction a Codex turn on a custom Responses endpoint carries about editing files.
+
+    Issue #202 (lab1207's investigation, PR #332): a model Codex does not know called a tool named
+    apply_patch and looped on "unsupported call". The tool is registered only inside Codex's own
+    multi-environment executors (spec_plan.rs: has_environment() and the catalog's
+    apply_patch_tool_type), never for a config.toml key, and never on a custom provider in our
+    deployments: with a stub endpoint recording the request, gpt-5-codex and an unknown model sent
+    the same tool list, without apply_patch, with or without a model catalog declaring it. So the
+    remedy is what the model is told, not a switch: edits go through the shell tool."""
+    if backend != "codex" or auth is None or not _codex_custom_responses(auth):
+        return ""
+    return _CODEX_CUSTOM_EDITING
+
+
 def _codex_namespace_tools_off(auth: Auth) -> bool:
     """Keep Codex's multi-agent namespace out of custom endpoints unless opted in."""
     return _codex_custom_responses(auth) and _codex_flag(auth.namespace_tools) is not True
@@ -7721,6 +7745,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
                 f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
+    note = _codex_custom_editing_note(backend, req.auth)
+    if note:
+        agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + note
     turn_environment = environments.resolve(req.environment)   # 409 when nothing is built: before any process starts
     _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
     # The harness's own variables under the runner's, so nothing a caller names shadows the
