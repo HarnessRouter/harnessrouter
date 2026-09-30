@@ -1,0 +1,73 @@
+{
+ "banban|pi-lab|deepseek-v4.1-flash": {
+  "provider": "banban",
+  "harness": "pi-lab",
+  "model": "deepseek-v4.1-flash",
+  "at": "2026-09-28T12:42:29.516Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 25.64,
+   "tail": "Reply with exactly: M1-deepseek-v4.1-flash PI LAB M1-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess42653c4532a64ea2868c0a62979af67e",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.59,
+   "tail": "Reply with exactly: M2-deepseek-v4.1-flash PI LAB Thought process M2-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": null,
+   "ok": null,
+   "why": "only one model"
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 38.69,
+   "tail": "Create a file named hello-pi-lab.txt containing exactly the word HELLO, then reply DONE. PI LAB Used 2 tools DONE txt hello-pi-lab.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-pi-lab.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi-lab.txt"
+   ],
+   "record_files": [
+    "hello-pi-lab.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.62,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. PI LAB Thought process M1-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess42653c4532a64ea2868c0a62979af67e\",\"checkpoint_sha\":\"9cb220ca83da218bd9054aae904086a51cd1929b4b6d504e272a120175ce69d2\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:pi-lab-banban-acceptance",
+  "connections": [
+   "integration:pi-lab-banban-acceptance"
+  ],
+  "served": [
+   "deepseek-v4.1-flash"
+  ],
+  "substituted": [],
+  "foreign": [],
+  "deleted": 200
+ }
+}

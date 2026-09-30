@@ -2,7 +2,7 @@
 
 These records were taken before the backend was renamed from `sol-pi` to `pi-lab`
 ([Pi Lab](../../pi-lab.md)). They are kept as recorded, with the old id, harness
-and path names; a re-run under `pi-lab` is recorded separately.
+and path names; the re-run under `pi-lab` is [pi-lab-2026-09-28](../pi-lab-2026-09-28/README.md).
 
 Environment: dedicated self-hosted local gateway/runner/console, only one provider
 integration, pinned Pi 0.85.1 and NVlabs SoL-Pi 1559b5cb12c72da4a485bc50fe326586b216fb19.
