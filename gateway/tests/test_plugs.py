@@ -135,7 +135,6 @@ def world(monkeypatch):
     reg, ven, posted = Registry(), Vendor(), []
     rc = httpx.AsyncClient(transport=httpx.MockTransport(reg.handle))
     monkeypatch.setattr(gw, "PLUGS_REGISTRY_URL", "https://registry.example")
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", {ORG})
     monkeypatch.setattr(gw, "_client", lambda: rc)
     monkeypatch.setattr(plugs_plane, "transport", httpx.MockTransport(ven.handle))
     monkeypatch.setattr(plugs_plane, "DEPLOY_POLL_S", 0)
@@ -229,11 +228,6 @@ def test_attach_refusals(client, world, monkeypatch):
     bare = _harness(client, {"x-harness-workspace": ""})
     r = _post(client, f"/v1/harnesses/{bare}/servers/plugs", {"plugs": ["github"]})
     assert r.status_code == 400 and r.json()["error"]["code"] == "workspace_required"
-    # while the feature is held, an org not on the list gets nothing
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", set())
-    r = _post(client, f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["github"]})
-    assert r.status_code == 404 and r.json()["error"]["code"] == "plugs_unavailable"
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", {"*"})
     assert _post(client, f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["github"]}).status_code == 200
 
 
@@ -314,14 +308,10 @@ def test_refusals_by_plug_state_are_not_metered(client, world, monkeypatch):
     refused("needs attention")
     reg.records[(WS, "github")] = _record("github", tenant="global")            # never the platform pool
     refused("needs attention")
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", set())
-    reg.records[(WS, "github")] = _record("github")
-    refused("not available on this account")
     assert ven.calls == [] and posted == []
     assert {r["outcome"] for r in _calls(hid)} == {"refused"}
 
     # a switched-off entry and a token for another harness's record answer the same way
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", {ORG})
     thief = _harness(client)
     _post(client, f"/v1/harnesses/{thief}/servers/plugs", {"plugs": ["github"]})
     stolen = gw._mint_hosted_cred(thief, "sessX", _key(hid))
@@ -400,10 +390,6 @@ def test_a_package_that_requires_plugs_gets_them_on_install(client, world, monke
     # a malformed requires is refused, not guessed at
     r = _post(client, "/v1/harnesses", {"name": "Bad", "base": "claude-code", "plugins": [_package({"plugs": "github"})]})
     assert r.status_code == 422 and "requires" in r.text
-    # held: the package installs, the plugs wait for the org to be let in
-    monkeypatch.setattr(gw, "_PLUGS_ORGS", set())
-    r = _post(client, "/v1/harnesses", {"name": "Held", "base": "claude-code", "plugins": [_package({"plugs": ["github"]})]})
-    assert r.status_code == 200 and r.json()["mcpServers"] == []
 
 
 # ── the tool surface itself ──────────────────────────────────────────────────────────────────
