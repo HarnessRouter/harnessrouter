@@ -11,7 +11,7 @@ def test_a_resumed_thread_carries_this_turns_model_and_settings():
     assert method == "thread/resume"
     assert params["threadId"] == "thr_1"
     assert params["model"] == "gpt-5.3-codex" and params["cwd"] == "/work"
-    assert params["sandbox"] == server._CODEX_SANDBOX and params["approvalPolicy"] == "never"
+    assert params["sandbox"] == server._CODEX_SANDBOX and params["approvalPolicy"] == "on-request"
 
 
 def test_a_fresh_thread_starts_with_the_same_settings():

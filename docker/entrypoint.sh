@@ -821,13 +821,17 @@ install_backends() {
 
   if wanted hermes && [ ! -x "$(backend_bin hermes)" ]; then
     echo "[harnessrouter] installing Hermes (check its upstream license before use)…"
+    # [anthropic]: hermes's own pin of the Anthropic SDK (0.87.0 for 0.19.0). A bare `anthropic`
+    # resolved to the newest SDK, whose 1.x line moved to httpx2 while hermes still builds its
+    # client with httpx.Timeout, so a fresh volume died on every Claude turn with "Invalid timeout
+    # argument ... this SDK uses httpx2" (a customer benchmark, 2026-09-30).
     # boto3: hermes's bedrock provider imports it at call time, and lazy installs are sealed
     # below — without it baked in, every hermes turn on a bedrock-served model died with
     # "The 'boto3' package is required" after 3 retries, while the README advertised
     # bedrock -> "Claude Code, Hermes" (issue #37, measured 2026-08-27 on a fresh volume).
     try_install "Hermes" sh -c "\"$PY\" -m venv \"$TOOLS/venv\" \
         && \"$TOOLS/venv/bin/pip\" install --no-cache-dir -q \
-             'hermes-agent==0.19.0' anthropic boto3 '$HERMES_MCP_PIN'" || true
+             'hermes-agent[anthropic]==0.19.0' boto3 '$HERMES_MCP_PIN'" || true
   fi
 
   [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"
