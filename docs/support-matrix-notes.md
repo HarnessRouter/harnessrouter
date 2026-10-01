@@ -1615,6 +1615,58 @@ prompt now asks for paths relative to the working directory when the agent names
 on the same fib task the answer became "Created and ran `fib.py` in the workspace". A nudge, not a
 guarantee.
 
+## agentzero: the full catalog, and what the 16 failures were (2026-10-01)
+
+The first full-catalog run (all 52 ids, vercel, stopped at 34 pairs after 25 hours) was 154 of 170
+scenarios. The two earlier defects did not come back — nothing in the run has the artifact or
+recycle shape. The 16 failures were two shapes, and NEITHER is in this backend's own code.
+
+**Shape 2, the hangs (1,732-8,114 s, nine hours of wall clock between them), were the loopback
+relay.** gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-pro-preview, grok-4.5, grok-4.20,
+grok-build-0.1 and muse-spark-1.3 each lost one turn — several of them trivial ones ("Reply with
+exactly: M2-…"). The instance's log says what happened: 16 handler escapes, ten
+`urlopen(req, timeout=600)` and six `IncompleteRead` on `resp.read(4096)` — the relay reading an
+upstream that stopped mid-stream — and NOT ONE `upstream_unavailable`. That is the defect fixed on
+`feat/minimax-harness` in 6c477eb, which is not on main and was not in the build that ran; it is
+cherry-picked here (see the relay section above). **Re-run on the fixed relay, all seven ids, the
+five scenarios each through a local runner with a real checkpoint and hydrate: 35 of 35, every turn
+between 3 and 26 s** — against 1,732-8,114 s for the same ids before. A turn that used to hang now
+either completes or fails in seconds with the provider's own words.
+
+**Shape 1 was the provider returning nothing, five times, and the message said so in the harness's
+private words.** claude-fable-5-1, claude-opus-5 (twice) and muse-spark-1.2 ended with
+`HandledException: Agent stopped after 5 consecutive unusable model responses to prevent further API
+charges.` That is Agent Zero's own guard (extensions/python/message_loop_result/_20_empty_response.py):
+it fires when a completion comes back with NEITHER content NOR reasoning, five times running. Correct
+behaviour — it stops paying — but it names a counter nobody outside the harness can see.
+
+The empty completion has two sources on this channel, and both are now visible instead of silent:
+
+- **A refusal. Vercel spells it `content-filter`; the relay only knew `content_filter`.** Measured
+  2026-10-01: `anthropic/claude-fable-5.1` and `anthropic/claude-opus-5` answered a short probe with
+  two SSE events, no content, no reasoning and `"finish_reason":"content-filter"`. `_FINISH_RE`
+  admitted `[a-z_]` only, so on Vercel the field never matched, `last_finish` stayed empty, and the
+  check that turns a refusal into a stated reason — in the runner since the goose column — could
+  never fire there. A dead check reports success. The pattern now takes both spellings and
+  normalises to one, and a turn that FAILED while the relay saw a content filter reports the
+  provider's refusal rather than the harness's sentence (the slot `_failure_reason` already keeps
+  for a provider's refusal). End to end against an upstream that declines: the same turn that said
+  "Agent stopped after 5 consecutive unusable model responses" now says **"the provider declined the
+  request (finish_reason content_filter)"** in 3 s, with the served model and the 10,000 input tokens
+  those five calls cost both on the record.
+- **A stream that ended with nothing** — the relay defect of shape 2, which leaves the client a
+  truncated body and the harness an empty answer. One of the four, muse-spark-1.2's artifact turn
+  (799 s), has a relay escape inside its own window.
+
+**Not reproduced on the fixed build, and said plainly:** claude-fable-5.1 ran all five scenarios
+green, and claude-opus-5 answered BOTH of its failing payloads — the real system prompt and the real
+transcript, replayed raw — with `finish_reason: stop`. So the refusal is something the provider does
+some of the time, not a property of these scenarios; the fixes above make the next one readable
+rather than preventing it. `max_consecutive_unusable_responses` is deliberately left at upstream's 5:
+the same counter also covers the misformat loop, where another try is often what repairs the turn.
+
+Measured cost of this pass, from the gateway's own credits endpoint before and after: **$1.50**.
+
 ## The gpt-6 line: sol and luna beside astra (2026-09-27)
 
 Richard asked whether gpt-6-sol was available and for the line to be expanded at list price on every
