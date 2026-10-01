@@ -6953,6 +6953,32 @@ def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
 # item/agentMessage/delta). Flag-gated; the default codex path stays `codex exec` (batch). We run
 # one turn per app-server process (spawn -> initialize -> thread start/resume -> turn -> done), a
 # single-threaded read loop that also writes the follow-up requests inline as responses arrive.
+def _codex_request_answer(method: str, params: dict) -> tuple[dict | None, str | None]:
+    """The runner's answer to a request FROM the app-server, as (result, error): nobody is
+    attached and the sandbox is the trust boundary, so every approval is granted and every
+    question nobody can answer is declined. A request left pending parks the turn forever
+    (thread status waitingOnApproval): codex 0.154 asks before any MCP tool not marked read-only
+    through mcpServer/elicitation/request, and the runner's silence stalled every plug write
+    (InsForge create_table, Vercel deploy) while reads sailed through (2026-09-30).
+
+    Shapes are codex's own (app-server schema 0.154 to 0.156): permissions want the grant
+    back, approvals want a decision, elicitations want an action (+ the form content on accept),
+    user input wants answers. Anything else gets a JSON-RPC error so codex hears "no" at once."""
+    if method == "item/permissions/requestApproval":
+        return {"permissions": params.get("permissions") or {}}, None     # grant what it asked for
+    if method.endswith("/requestApproval"):
+        return {"decision": "accept"}, None
+    if method == "mcpServer/elicitation/request":
+        meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        if meta.get("codex_approval_kind"):     # codex's own question about an MCP tool: approve it
+            return {"action": "accept", "content": {}}, None
+        return {"action": "decline"}, None      # the MCP server's question: nobody here can answer
+    if method == "item/tool/requestUserInput":
+        return {"answers": {}}, None
+    return None, f"{method} is not answered by this client"
+
+
+
 _CODEX_SANDBOX = os.environ.get("CODEX_APPSERVER_SANDBOX", "danger-full-access")  # kebab enum; env-tunable
 
 
@@ -7043,8 +7069,9 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         proc.stdin.flush()  # type: ignore[union-attr]
         return msg.get("id")
 
-    def reply(mid, result: dict) -> None:
-        proc.stdin.write(json.dumps({"id": mid, "result": result}) + "\n")  # type: ignore[union-attr]
+    def reply(mid, result: dict | None, error: str | None = None) -> None:
+        body = {"id": mid, "error": {"code": -32601, "message": error}} if error else {"id": mid, "result": result}
+        proc.stdin.write(json.dumps(body) + "\n")  # type: ignore[union-attr]
         proc.stdin.flush()  # type: ignore[union-attr]
 
     errbuf: list[str] = []
@@ -7088,13 +7115,13 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                                    "approvalPolicy": _CODEX_APPROVAL, "input": [{"type": "text", "text": prompt}]})
                 continue
             if mid is not None and method:                      # a request FROM the app-server
-                if method.endswith("/requestApproval"):
-                    # The exec policy's "prompt" rules (rm -f among them, default.rules) are
-                    # answered here: the sandbox is the trust boundary, nobody is attached, and
-                    # under approvalPolicy never the same rules REJECTED the command with
-                    # "rm -f style commands are not permitted" and the turn died on a delete inside
-                    # the agent's own workspace (a customer benchmark, 2026-09-30).
-                    reply(mid, {"decision": "accept"})
+                # Every request gets an answer at once (see _codex_request_answer): the exec
+                # policy's "prompt" rules (rm -f among them), codex's question before a write MCP
+                # tool, a permission grant. Under approvalPolicy never the same rules rejected the
+                # command outright and the turn died; left unanswered, the turn parks (2026-09-30).
+                result, err = _codex_request_answer(method, msg.get("params") or {})
+                print(f"[codex] {method}: {'error ' + err if err else json.dumps(result)[:120]}", flush=True)
+                reply(mid, result, err)
                 continue
             p = msg.get("params") or {}                          # a notification
             if method == "item/agentMessage/delta":
