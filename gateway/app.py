@@ -5304,8 +5304,10 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
             # document says what goes on the wire.
             models = [{"canonical": c, "provider_id": pid or c} for c, pid in rows if c]
         else:
-            models = [{"canonical": c, "provider_id": pid}
-                      for c, pid in rows if c and pid and table.get(c) != pid]
+            # A blank wire id is the canonical, as on a custom endpoint; a row that says what the
+            # table already says is not stored.
+            models = [{"canonical": c, "provider_id": pid or c}
+                      for c, pid in rows if c and table.get(c) != (pid or c)]
         # rows_v 2: the rows were written by a version that stores only what the operator typed, so
         # a row naming a model the vendor table does not list is an ADDITION this instance asked
         # for (a model that went GA before the release that lists it). A document without the
