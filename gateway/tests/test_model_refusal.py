@@ -99,3 +99,14 @@ def test_a_custom_messages_endpoint_drives_the_three_bases_that_now_speak_it():
     for b in ("goose", "hermes", "openhands"):
         assert b in gw._CUSTOM_FORMAT_BACKENDS["anthropic"]
     assert "codex" not in gw._CUSTOM_FORMAT_BACKENDS["anthropic"]
+
+
+def test_every_picker_reads_the_one_view():
+    """/v1/models and /v1/bases feed the base pickers; a second copy of the harness route's logic
+    listed custom endpoints only, so a model added to a vendor integration ran but never showed."""
+    src = Path(gw.__file__).read_text()
+    models_route = src[src.index('@app.get("/v1/models")'):src.index('@app.get("/v1/harnesses/{hid}/models")')]
+    bases_route = src[src.index('@app.get("/v1/bases")'):src.index('"builtinSkillsEnumerable": False')]
+    assert "await _harness_models_view({}, b, await _servable_models(org, b))" in models_route
+    assert "await _harness_models_view({}, backend, await _servable_models(org, backend))" in bases_route
+    assert 'provider") or "").lower() != "custom"' not in models_route

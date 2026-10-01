@@ -181,3 +181,12 @@ def test_the_claude_result_names_the_model_from_its_usage_by_model():
     assert out[0]["model"] == "claude-sonnet-4-6"
     named = server._claude_passthrough({"type": "result", "model": "x", "modelUsage": res["modelUsage"]}, {})
     assert named[0]["model"] == "x"
+
+
+def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
+    """hermes builds its own result from its session counters, which carry no cache figures and no
+    model; through the relay the provider's statement is at hand and is what prices the turn."""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("server.py").read_text()
+    body = src[src.index("def _run_hermes_bg("):src.index("# ── HTTP surface")]
+    assert "served = _relay_served_model(env)" in body and "_fill_relay_usage(ev, env)" in body
+    assert body.index("_fill_relay_usage(ev, env)") < body.rindex("append(ev)")   # stamped before the result is appended
