@@ -81,7 +81,7 @@ def test_the_catalog_and_the_browser_connected_here(client, world):
     ven, posted = world
     cat = _req(client, "GET", "/v1/plugs").json()
     assert cat["workspace"] == WS
-    assert [p["type"] for p in cat["plugs"]] == ["browser", "github", "vercel", "insforge"]
+    assert [p["type"] for p in cat["plugs"]] == ["browser", "github", "vercel", "insforge", "microsoft365"]
     b = cat["plugs"][0]
     assert b["status"] == "missing" and b["source"] == "platform" and b["official"] is True and b["tools"] == 13
     assert b["pricing"]["usd_per_unit"] == 0.02 and b["pricing"]["markup"] == 0.0 and b["secrets_needed"] == []
