@@ -223,6 +223,45 @@ and need no edit — they were hand-written lists once, and each silently missed
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.
 
+## What the matrix did not see, and what changed (2026-09-30)
+
+A customer ran twelve of their production tasks across seven bases and nine models on a 2026-09-30
+image and handed back twelve defects. Every scenario of this matrix had passed on the same code.
+The matrix was not wrong about what it measured; these failures lived where it did not look.
+
+**One route.** Every column ran through one aggregator. The customer brought the vendor's own key.
+On that route Claude Code reported no served model (the CLI names none on its result; the relay,
+which stamps one for the aggregator route, was not in the path), so a request for an unlisted
+model ran on the harness default and nothing said so. goose and OpenHands reached the vendor over
+its OpenAI-compatible surface, which cannot cache a prompt, and paid 6 to 8 times the Claude Code
+price per task; hermes crashed on a fresh volume's SDK. None of this exists on the aggregator route.
+*Changed:* a turn with no served model is a finding, never a pass (`unlabelled`, run.mjs and
+render.py); a Claude pair that read no prompt cache across its turns is a finding (`tokens`); the
+three bases take a Messages endpoint natively; hermes installs the SDK its own extra pins; and a
+release's matrix runs the Claude pairs on the vendor's own route as well as the aggregator's.
+
+**Short turns.** The longest scenario ends in a few minutes. The console's proxy cut every
+synchronous turn at 800 s, and the customer's parsing tasks ran 13 to 15 minutes. *Changed:* the
+proxy allows the gateway's hour and logs a dropped upstream with its elapsed time; a release check
+holds one synchronous turn past 800 s through the console's port (`sleep 850`, then a word).
+
+**Working, not priced.** The scenarios asked whether a turn completed, never what it cost. A pair
+that completes at 7 times the price of another is a pass here and a defect to a customer paying for
+it. *Changed:* the matrix records each pair's input tokens and cache reads and prints the cache
+share; `scripts/benchmark` prices the same work across pairs.
+
+**Nothing went wrong on purpose.** No scenario drops a provider stream, asks the exec policy about
+a command, exceeds a Skill's description cap or omits a field a write requires. Each of those is a
+unit test now (`runner/tests/test_codex_reconnect.py`, `gateway/tests/test_model_refusal.py`); a
+matrix cannot produce a provider's 502 at will, and should not pretend to.
+
+**The fresh volume.** The release check brought a fresh volume up and asked whether it answered,
+not what it installed. *Changed:* the check reads the Hermes venv's SDK versions against the pins.
+
+The rule behind all five: a scenario proves the path it takes, and only that path. A route, a
+duration, a price, a failure mode or an installer that no scenario takes is unverified, whatever
+the table says.
+
 ## Beyond working: the benchmark dimension
 
 The matrix asks whether a harness works. `scripts/benchmark` asks how well a harness × model
