@@ -226,7 +226,7 @@ def _agent_spec(job: dict) -> dict:
     # every other base surfaces the same refusal in seconds. Two retries a few seconds apart
     # still cover a blip. Persisted with the agent like the rest of the spec.
     spec: dict = {"llm": {"model": job["model"], "base_url": None, "usage_id": "harness",
-                          "num_retries": 2, "retry_min_wait": 2, "retry_max_wait": 8,
+                          "num_retries": 4, "retry_min_wait": 2, "retry_max_wait": 20,
                           "retry_multiplier": 2},
                   "tools": tools,
                   # THE AGENT DOC IS CONTEXT, NOT A FILE THE MODEL MAY OR MAY NOT OPEN. The SDK
@@ -288,8 +288,13 @@ _CONSOLE_NAMES = {v: k for k, v in _TOOL_NAMES.items()}
 def _action_input(action: dict) -> dict:
     """The action's arguments as the card's input: the SDK's `kind` and bookkeeping fields dropped,
     a terminal action's command under `command` as every other base's shell card carries it."""
-    return {k: v for k, v in action.items()
-            if k not in ("kind", "thought", "security_risk", "summary") and v not in (None, "", [], {})}
+    out = {k: v for k, v in action.items()
+           if k not in ("kind", "thought", "security_risk", "summary") and v not in (None, "", [], {})}
+    # An MCP tool action wraps the call's arguments in `data`; every other base's card shows the
+    # arguments themselves, so this one does too.
+    if set(out) <= {"data", "name"} and isinstance(out.get("data"), dict):
+        return dict(out["data"])
+    return out
 
 
 def _observation_text(obs: dict) -> str:
@@ -526,10 +531,10 @@ def main() -> int:
     # VERCEL_AI_GATEWAY_API_KEY`, a provider-specific variable nothing here would set. The proxy
     # provider reads ITS OWN pair, on the chat path and the Responses path alike; the OpenAI pair
     # is not read on the Responses path ("api_base not set for LiteLLM Proxy responses API").
-    if job.get("api_key"):
-        env["LITELLM_PROXY_API_KEY"] = str(job["api_key"])
-    if job.get("base_url"):
-        env["LITELLM_PROXY_API_BASE"] = str(job["base_url"])
+    # The pair is the route's: the proxy provider's for a litellm_proxy/ id, Anthropic's
+    # (ANTHROPIC_API_KEY, ANTHROPIC_API_BASE) for an anthropic/ id, as the builder sent it.
+    for k, v in (job.get("provider_env") or {}).items():
+        env[str(k)] = str(v)
     # The SDK prints a multi-line banner to STDOUT on import, which is this driver's NDJSON channel
     # for the server's own process; off by its own switch rather than by filtering lines.
     env["OPENHANDS_SUPPRESS_BANNER"] = "1"

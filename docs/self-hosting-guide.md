@@ -248,6 +248,12 @@ Which models that provider serves is not your problem to configure: the product 
 adds to it as providers ship models. Pick the provider, paste the key, and the models it covers
 appear on the row.
 
+A model that shipped after this release is one row away: open the integration, add the model with
+the id the provider uses on the wire, and save. It appears in every model picker the provider
+drives, and a task may name it. A task that names a model no connected provider serves on that
+base is refused before it starts (`400 model_not_available`), never run on another model;
+`GET /v1/harnesses/{id}/models` lists what a harness can run.
+
 <details>
 <summary>Running more than one provider</summary>
 
@@ -611,10 +617,19 @@ Disabled, Not connected), what it costs, and how many harnesses include it.
 
 | Plugin | What the agent gets | What you provide |
 |---|---|---|
-| Browser | A real web browser: open a page, read it, click, type, scroll, wait, take a screenshot, go back, switch tabs. Thirteen tools, no JavaScript evaluation, no downloads. | Nothing on the page. The instance needs a [Browser Use Cloud](https://browser-use.com) key in its environment (below). |
+| Browser | A real web browser: open a page, read it, click, type, scroll, wait, take a screenshot, go back, switch tabs. Thirteen tools, no JavaScript evaluation, no downloads. | Nothing on the page. The instance needs either a [Browser Use Cloud](https://browser-use.com) key or a browser of your own in its environment (below). |
 | GitHub | The connected repository: files, branches, commits, pull requests. | An access token and the repository (`owner/name`). |
 | Vercel | The connected project: deployments and domains. | An access token, the project id and team id. |
 | InsForge | The connected backend: its tables and records. | The API key and the backend's address. |
+
+**Your own browser.** `HR_BROWSER_CDP_URL` on the container (`-e HR_BROWSER_CDP_URL=http://host.docker.internal:9222`
+for a Chrome started on the host with `--remote-debugging-port=9222`, or any Chrome DevTools
+Protocol address) makes that browser the one every task uses, in place of the vendor: no vendor
+session and nothing metered, one browser context per task so tasks do not share cookies or tabs,
+and no live view in the console. The vendor's browser refuses private and local addresses, since
+a page it loads must not reach into the network it runs on; your own browser sits on your own
+network and reaches what your shell already can, so that rule is lifted for it. The site lists
+below still apply.
 
 **Turning a plugin on.** Open **Plugins**, and on the row choose **Turn on** (the browser) or
 **Connect** (a plugin that needs a credential; the credential is kept in the instance's secret store
@@ -891,7 +906,14 @@ uses camelCase) with the new package appended to `plugins`. Installed plugins ro
 
 The record you read back carries what the server derived from the package (`manifest`,
 `mcpServers`, `skills`, and `skipped` for anything it could not load) and a `blob` handle that
-round-trips on the next PUT. The harness's own `mcpServers` and `skills` stay exactly what you wrote
+round-trips on the next PUT. Everything set aside across the harness's packages is also listed
+once under `notLoaded`, with the path and the reason, so a client sees it where the console shows
+"not loaded": a Skill whose `description` runs past the Agent Skills cap of 1,024 characters is
+the usual one, and a run on such a harness goes ahead without that Skill. A `plugin.json` must
+name its schema, `"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"`.
+A Skill that expects environment variables gets them from the harness's `env` field (a name to a
+literal, a `vault:<ref>`, or `$headers.X-Name` for a declared request header); every task's shell
+and tools start with them. The harness's own `mcpServers` and `skills` stay exactly what you wrote
 there; a plugin's components are listed on the plugin. Names must not collide across the harness and
 its enabled plugins. A package that declares a process (a `stdio` server) installs on every base: the
 runner writes one launcher per server and each agent's own MCP client runs it (pi's adapter and dsh's
@@ -940,6 +962,13 @@ authenticate with the key alone: your backend does not need to log in with a pas
 a Console session cookie. Your application's own user authentication and authorization remain
 your responsibility.
 
+**Long tasks.** A request with `"stream": false` holds its connection until the task ends, for up
+to the task's `timeout_seconds` (an hour by default); the console's own proxy allows the same.
+A task you would rather not hold a connection for takes `"background": true`: the response comes
+back at once with the task's id and `status: in_progress`, and `GET /v1/responses/{id}` reports
+it until it ends. Attached files land in the task's working directory under the name you give;
+a relative path in `filename` (`inputs/report.pdf`) puts the file in that folder.
+
 <details>
 <summary>The rest of the surface</summary>
 
@@ -954,7 +983,8 @@ All paths below are relative to the API base above and use the same Bearer key.
 | Read session history | `GET /v1/sessions/{session_id}/turns` |
 | Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
 | Cancel work | `POST /v1/responses/{response_id}/cancel` |
-| Inspect execution | `GET /v1/sessions/{session_id}/turns` for the turns; `GET /v1/traces/{session_id}/all` for the stored event stream of the harness (assistant, tool and result events as the CLI emitted them); `/v1/traces/{session_id}/events?chunk=N` reads one stored chunk. Provider-call spans (the model requests behind a turn) are part of the hosted service's observability, not of this edition |
+| Describe the API | `GET /v1/openapi.json`, the surface above as an OpenAPI document, readable without a login |
+| Inspect execution | `GET /v1/sessions/{session_id}/turns` for the turns; `GET /v1/traces/{session_id}/all` for the stored event stream of the harness as newline-delimited JSON, one event per line (`content-type: application/x-ndjson`; assistant, tool and result events as the CLI emitted them); `/v1/traces/{session_id}/events?chunk=N` reads one stored chunk. Provider-call spans (the model requests behind a turn) are part of the hosted service's observability, not of this edition |
 
 For file attachment and download formats, see the [UHP specification](https://unifiedharnessprotocol.org/spec).
 
