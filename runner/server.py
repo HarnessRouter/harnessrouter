@@ -7457,8 +7457,16 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
                    f"turn was stopped. The provider call hung before returning anything.\n{err_txt}"
                    )[:2000]
     res_txt = final if ok else ("\n\n".join(x for x in (final.strip(), err_txt) if x)[:4000] or err_txt)
-    append({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
-            "result": res_txt, "usage": usage})
+    ev = {"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+          "result": res_txt, "usage": usage}
+    # What the relay saw the provider say: the served model, and the usage with its cache split.
+    # hermes's session counters carry no cache figures, so a Claude turn through the relay read as
+    # uncached and unlabelled on the result (hr-test, 2026-09-30) while the provider had cached it.
+    served = _relay_served_model(env)
+    if served:
+        ev["model"] = served
+    _fill_relay_usage(ev, env)
+    append(ev)
     rec["exit_code"] = rc
     rec["result"] = final
     rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
