@@ -260,6 +260,14 @@ Power agentic features in your product with agent harnesses, including knowledge
       <p>An agent harness turns your brief into a shot plan and calls video tools to generate clips for the timeline.</p>
     </td>
   </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/kit-workplace.png" width="100%" alt="HarnessRouter My Workplace Starter Kit">
+      <h3>My Workplace</h3>
+      <p>A recruiter harness interviews you and installs each teammate as a harness of its own; teammates work together in groups, hand each other files and @mentions, and leave what they make in a shared library.</p>
+    </td>
+    <td width="50%" valign="top"></td>
+  </tr>
 </table>
 
 [**Explore the Starter Kits →**](https://github.com/HarnessRouter/starter-kit)
