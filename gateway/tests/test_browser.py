@@ -692,7 +692,7 @@ def test_the_page_reads_the_price_and_the_tools_from_here(client, world):
                                                  "rounding": "up to the minute, one-minute minimum", "session_cap_minutes": 20,
                                                  "session_estimate_usd": 0.006667}
     rows = client.get("/internal/plugs/pricing", headers=hdr).json()["pricing"]
-    assert [x["type"] for x in rows] == ["browser", "github", "vercel", "insforge"] and rows[1]["usd_per_unit"] == 0.0
+    assert [x["type"] for x in rows] == ["browser", "github", "vercel", "insforge", "microsoft365"] and rows[1]["usd_per_unit"] == 0.0
     r = client.get("/internal/plugs/tools", params={"type": "browser"}, headers=hdr)
     assert r.status_code == 200 and r.json()["label"] == "Browser" and len(r.json()["tools"]) == 13
     assert r.json()["tools"][0] == {"name": "navigate", "description": "Open a web address in the current tab and read what is on the page.", "risk": "write"}

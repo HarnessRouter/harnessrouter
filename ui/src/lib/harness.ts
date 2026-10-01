@@ -564,6 +564,8 @@ export interface Plug {
   status: 'connected' | 'disabled' | 'needs_auth' | 'missing';
   config: Record<string, unknown>; secrets_set: string[]; secrets_needed: string[]; config_fields: string[];
   version: number; tools: number; pricing?: PlugPricing;
+  /** What the plugin waits for before it can serve (a Microsoft 365 plug waiting for a person's sign-in). */
+  attention?: string;
 }
 export const PLUGS_ENTRY_ID = 'mcp.plugs';
 
@@ -574,6 +576,16 @@ export function listPlugs(): Promise<{ workspace: string; plugs: Plug[] }> {
 /** Connect a plugin for the workspace, change its settings, or turn it off. */
 export function setPlug(type: string, body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<Plug> {
   return gw<Plug>('PUT', `/v1/plugs/${encodeURIComponent(type)}`, body);
+}
+/** Microsoft 365 as each person: the member's own sign-in with Microsoft on the workspace's application. */
+export function microsoftStart(redirect_uri: string): Promise<{ auth_url: string; state: string }> {
+  return gw<{ auth_url: string; state: string }>('POST', '/v1/plugs/microsoft365/microsoft/start', { redirect_uri });
+}
+export function microsoftComplete(code: string, state: string): Promise<Plug> {
+  return gw<Plug>('POST', '/v1/plugs/microsoft/complete', { code, state });
+}
+export function microsoftSignout(): Promise<Plug> {
+  return gw<Plug>('POST', '/v1/plugs/microsoft365/microsoft/signout', {});
 }
 export function plugAttachments(type: string): Promise<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }> {
   return gw<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }>('GET', `/v1/plugs/${encodeURIComponent(type)}/attachments`);
