@@ -3558,7 +3558,15 @@ def _served_model_in(data: bytes) -> str:
     return m.group(1).decode("utf-8", "replace") if m else ""
 
 
-_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
+# The hyphen is not cosmetic: Vercel's AI Gateway reports a declined request as "content-filter"
+# while OpenAI's own spelling is "content_filter" (measured 2026-10-01 against ai-gateway.vercel.sh
+# on anthropic/claude-fable-5.1 and anthropic/claude-opus-5 — two SSE events, no content, no
+# reasoning, finish_reason "content-filter"). A pattern that admitted only the underscore matched
+# nothing on that channel, so the one check that turns a provider's refusal into a stated reason was
+# never evaluated there — the person got whatever the CLI made of an empty answer instead
+# (agentzero: "Agent stopped after 5 consecutive unusable model responses", its own loop guard).
+# _finish_reason_in normalises both spellings to the underscore one, so callers compare one form.
+_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_-]{1,40})"')
 
 
 def _usage_fields(u) -> dict:
@@ -3657,7 +3665,7 @@ def _model_metadata_with_context_length(data: bytes) -> bytes:
 def _finish_reason_in(data: bytes) -> str:
     """The last finish_reason an OpenAI-shaped answer names in these bytes ("" when none)."""
     hits = _FINISH_RE.findall(data)
-    return hits[-1].decode() if hits else ""
+    return hits[-1].decode().replace("-", "_") if hits else ""
 
 
 def _relay_last_finish(env: dict) -> str:
@@ -3668,7 +3676,10 @@ def _relay_last_finish(env: dict) -> str:
         if isinstance(v, str) and v.startswith("hr-relay-"):
             route = _HERMES_RELAY["routes"].get(v)
             if route:
-                return str((route[2] or {}).get("last_finish") or "")
+                # normalised the way _finish_reason_in normalises, so a caller compares one
+                # spelling whoever wrote the flag (Vercel says "content-filter", OpenAI
+                # "content_filter")
+                return str((route[2] or {}).get("last_finish") or "").replace("-", "_")
     return ""
 
 
@@ -7167,6 +7178,17 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         tail = "\n".join(errbuf[-30:]).strip()
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
         refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        if not refusal and _relay_last_finish(env) == "content_filter":
+            # THE PROVIDER DECLINED, and the CLI's own account of a failure it could not see is not
+            # the reason. A refused request comes back as an answer with no content and no
+            # reasoning, which each harness narrates in its own internal words: agentzero counts
+            # five of them and stops with "Agent stopped after 5 consecutive unusable model
+            # responses to prevent further API charges" — its loop guard, correct in itself and
+            # about a counter nobody outside it can see. The relay watched the same exchange and
+            # knows what the provider said. The successful-looking case is rewritten above; this is
+            # the same statement for a turn that did fail, in the slot _failure_reason already
+            # keeps for a provider's refusal.
+            refusal = "the provider declined the request (finish_reason content_filter)"
         rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
