@@ -9,7 +9,13 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { SkelRows } from '@/components/Skel';
 import { listPlugs, setPlug, plugAttachments, microsoftStart, microsoftComplete, microsoftSignout, type Plug } from '@/lib/harness';
 
-const ICON: Record<string, string> = { browser: 'tabler:world', github: 'tabler:brand-github', vercel: 'tabler:triangle', insforge: 'tabler:database', microsoft365: 'tabler:brand-office' };
+/** Each service by its own mark (public/plugs): the GitHub and Vercel glyphs, Microsoft 365's logo,
+ *  InsForge's app icon (drawn full-bleed, it carries its own ground), our browser glyph. A type
+ *  without one shows a plug. */
+const MARK: Record<string, { src: string; app?: boolean }> = {
+  github: { src: '/plugs/github.svg' }, vercel: { src: '/plugs/vercel.svg' }, microsoft365: { src: '/plugs/microsoft365.svg' },
+  insforge: { src: '/plugs/insforge.png', app: true }, browser: { src: '/plugs/browser.svg' },
+};
 const BLURB: Record<string, string> = {
   browser: 'A real web browser the agent can open, read, click through and screenshot.',
   github: 'The repository this workspace connects: files, branches and pull requests.',
@@ -119,7 +125,12 @@ export default function PluginsPage() {
               const price = p.pricing ? `$${p.pricing.usd_per_unit.toFixed(2)} per ${p.pricing.unit}, billed at the service's own price` : 'No charge';
               return (
                 <div key={p.type} className="capability-row">
-                  <span className="capability-icon"><iconify-icon icon={ICON[p.type] || 'lucide:plug'}></iconify-icon></span>
+                  <span className={'capability-icon' + (MARK[p.type]?.app ? ' is-app' : '')} aria-hidden="true">
+                    {MARK[p.type]
+                      // eslint-disable-next-line @next/next/no-img-element -- a static brand mark
+                      ? <img src={MARK[p.type].src} alt="" />
+                      : <iconify-icon icon="lucide:plug"></iconify-icon>}
+                  </span>
                   <div className="capability-copy">
                     <strong>{p.label} {p.official && <span className="status neutral">Official</span>} <span className={'status ' + (on ? 'healthy' : p.status === 'needs_auth' ? 'warning' : 'neutral')}>{STATUS_LABEL[p.status]}</span></strong>
                     <span>{BLURB[p.type] || ''} {p.tools} tools · {price}{c ? ` · ${c.attached} of ${c.harnesses} Harnesses include it` : ''}</span>
