@@ -223,6 +223,26 @@ def test_the_model_is_told_to_name_files_the_way_the_reader_sees_them():
     assert "relative to the working directory" in env
 
 
+def test_a_per_turn_file_is_replaced_whole(tmp_path):
+    """Two turns of one session can run at once — the gateway starts the next without stopping a
+    turn still in flight (measured 2026-10-01: a second turn completed in 3.9 s while the first was
+    still running, and the orphan lived to the runner's own cap). Both drivers then write this
+    workspace's config and hook files, and a truncate-then-write would let the other one import an
+    EMPTY extension module and lose that turn's tool cards silently."""
+    f = tmp_path / "x.py"
+    f.write_text("old")
+    drv.write_atomic(f, "new")
+    assert f.read_text() == "new"
+    assert [p.name for p in tmp_path.iterdir()] == ["x.py"]   # no .tmp left behind
+
+
+def test_the_console_log_is_this_turns_own():
+    """A shared name opened O_TRUNC lets a newcomer empty the log of the turn still writing it —
+    the 0-byte console.log a hung turn left behind on the family tour."""
+    src = pathlib.Path(drv.__file__).read_text()
+    assert 'f"console-{os.getpid()}.log"' in src
+
+
 # ── the event hooks ──
 def test_the_response_tool_is_the_answer_not_a_card(capsys):
     drv._STATE.update({"pending": {}, "final": ""})

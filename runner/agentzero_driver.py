@@ -250,6 +250,20 @@ def prepare_base(src: pathlib.Path, home: pathlib.Path, scratch: pathlib.Path) -
     return base
 
 
+def write_atomic(path: pathlib.Path, text: str) -> None:
+    """Write a per-turn file the way a file ANOTHER process may be importing has to be written.
+
+    Two turns of one session can run at once: the gateway starts the next turn without stopping a
+    turn still in flight, and both drivers then share this workspace (measured 2026-10-01 on a local
+    instance — a second turn completed in 3.9 s while the first was still running its shell, and the
+    orphan lived on to the runner's own cap). `Path.write_text` truncates first, so the other
+    driver's import could read an EMPTY extension module and lose that turn's tool cards without a
+    word. A rename is atomic: a reader sees the old file or the new one."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 # A bash with no PS1 of its own prints `bash-5.2$`, which none of upstream's prompt patterns match;
 # without a match the tool cannot tell a finished command from a quiet one and waits out its
 # 15-second no-output timeout on EVERY call (measured: a one-line `echo > file` took 15 s).
@@ -282,24 +296,24 @@ def write_config(base: pathlib.Path, job: dict, src: pathlib.Path) -> None:
     (plug / "_model_config").mkdir(parents=True, exist_ok=True)
     # JSON is YAML, and Agent Zero reads this file with its YAML loader; written as JSON so this
     # module needs nothing beyond the standard library outside Agent Zero's venv.
-    (plug / "_model_config" / "presets.yaml").write_text(
+    write_atomic(plug / "_model_config" / "presets.yaml",
         json.dumps(presets(job["model"], job["base_url"], job.get("provider_timeout")), indent=1))
     for p in DISABLED_PLUGINS:
         (plug / p).mkdir(parents=True, exist_ok=True)
-        (plug / p / ".toggle-0").write_text("")
+        write_atomic(plug / p / ".toggle-0", "")
     # _chat_naming is ALWAYS-ENABLED (its toggle file is ignored), and by default it makes a
     # utility-model call at the end of every turn to name the chat for a sidebar nobody sees —
     # measured at a recorder: a one-word turn was two provider calls, the second this one. Its own
     # switch turns the automatic naming off.
     (plug / "_chat_naming").mkdir(parents=True, exist_ok=True)
-    (plug / "_chat_naming" / "config.json").write_text(json.dumps(
+    write_atomic(plug / "_chat_naming" / "config.json", json.dumps(
         {"automatic_naming": False, "automatic_naming_mode": "always"}))
     (plug / "_code_execution").mkdir(parents=True, exist_ok=True)
-    (plug / "_code_execution" / "config.json").write_text(json.dumps(code_execution_config(src)))
+    write_atomic(plug / "_code_execution" / "config.json", json.dumps(code_execution_config(src)))
     # The harness's AGENTS.md reaches the system prompt through Agent Zero's own include plugin:
     # files matching the pattern anywhere in the workdir are inlined, each to max_file_tokens.
     (plug / "_promptinclude").mkdir(parents=True, exist_ok=True)
-    (plug / "_promptinclude" / "config.json").write_text(json.dumps({
+    write_atomic(plug / "_promptinclude" / "config.json", json.dumps({
         "name_pattern": job.get("agent_doc_name") or "AGENTS.md", "max_depth": 1,
         "max_file_tokens": 16000, "max_file_count": 4, "max_total_tokens": 24000,
         "gitignore": ".harness/**\ntmp/**\n**/node_modules/**\n**/.git/**\n"}))
@@ -309,9 +323,9 @@ def write_config(base: pathlib.Path, job: dict, src: pathlib.Path) -> None:
     # Per-profile would miss a profile, and delegation would hand a withheld tool back (kimi's
     # lesson with built-in subagents).
     (plug / "_tool_access").mkdir(parents=True, exist_ok=True)
-    (plug / "_tool_access" / "config.json").write_text(json.dumps(tool_policy(job.get("tools_disabled"))))
+    write_atomic(plug / "_tool_access" / "config.json", json.dumps(tool_policy(job.get("tools_disabled"))))
     (usr / "prompts").mkdir(parents=True, exist_ok=True)
-    (usr / "prompts" / "agent.system.main.environment.md").write_text(environment_prompt(job["cwd"]))
+    write_atomic(usr / "prompts" / "agent.system.main.environment.md", environment_prompt(job["cwd"]))
     # Settings come from A0_SET_* defaults; a settings.json would override them, and nothing in a
     # turn has a reason to write one.
     with contextlib.suppress(OSError):
@@ -414,10 +428,10 @@ def install_hooks(base: pathlib.Path) -> None:
     for point, code in _HOOK_SRC.items():
         d = base / "usr" / "extensions" / "python" / point
         d.mkdir(parents=True, exist_ok=True)
-        (d / "_99_harnessrouter.py").write_text(code)
+        write_atomic(d / "_99_harnessrouter.py", code)
     d = base / "usr" / "extensions" / "python" / "agent_init"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "_10_initial_message.py").write_text(_INITIAL_MESSAGE_OVERRIDE)
+    write_atomic(d / "_10_initial_message.py", _INITIAL_MESSAGE_OVERRIDE)
 
 
 _STATE: dict = {"pending": {}, "final": "", "steps": 0, "max_turns": None}
@@ -604,8 +618,14 @@ def main(argv: list[str]) -> int:
     # wrong key, the record's reason became `File ".../litellm/llms/openai/openai.py", line 1113,
     # in async_streaming` while the result event carried the real sentence. The driver's result
     # event states the reason; fd 1 is the event channel.
-    console = os.open(str(cwd / "tmp" / "agentzero" / "console.log"),
-                      os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # this turn's
+    # ONE LOG PER TURN PROCESS, not one per workspace: a second turn of the same session can start
+    # while this one still runs (the gateway does not stop the first), and a shared name opened
+    # O_TRUNC means the newcomer empties the log of the turn still writing it — which is exactly
+    # what a hung turn leaves behind, a 0-byte file nobody can read (seen on the family tour's
+    # workspace, 2026-10-01). tmp/ is never checkpointed and the sandbox is recycled, so these do
+    # not accumulate beyond a session's life.
+    console = os.open(str(cwd / "tmp" / "agentzero" / f"console-{os.getpid()}.log"),
+                      os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.dup2(console, 1)
     os.dup2(console, 2)
     sys.stdout = sys.stderr = open(console, "w", buffering=1, closefd=False)

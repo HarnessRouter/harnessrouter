@@ -1719,6 +1719,51 @@ the same counter also covers the misformat loop, where another try is often what
 
 Measured cost of this pass, from the gateway's own credits endpoint before and after: **$1.50**.
 
+## agentzero: the "model switch hangs the turn" report, and what the instance actually shows (2026-10-01)
+
+A family tour on a local instance of this branch was 0 of 13 — the first turn completed in 18.3 s and
+every family after it, each a switch to the next family, was `not settled in 600s` with no served
+model, no tool call and no error — and a hand-made three-turn repro (two turns on gpt-5.4-mini, then
+one on claude-sonnet-5) had its third turn still running at 635 s. Read as "a model switch hangs the
+turn".
+
+**On the same instance, same build, same harness, a switch does not hang.** Six shapes, all through
+the product API against mx-agentzero, every one complete in seconds:
+
+| what was driven | result |
+|---|---|
+| trivial turn, same model twice, then a cross-family switch (gpt-5.4-mini -> claude-sonnet-5) | 4.0 / 3.8 / 3.8 s |
+| same-FAMILY switch then cross-family (gpt-5.4-mini -> gpt-5.4 -> claude-sonnet-5) | all completed |
+| the tour's own first turn (build tour.pptx) then a cross-family switch asking for its first edit | 15.0 s then 16.1 s |
+| a turn cancelled mid-flight, then a cross-family switch in the same session | 5.0 s |
+| the CONSOLE's own request shape (stream:true, metadata.model + session_id, backend), two switches | 5.1 / 3.8 / 3.7 s |
+| a second turn started while another is still in flight in the same session | 3.9 s |
+
+So the question the report asks — any switch, or only a cross-family one — is answered: **neither
+hangs**. Whatever stalled those turns is not the model id changing.
+
+**What the hung turns left behind says where they stopped.** The tour workspace's console log — the
+file this driver points Agent Zero's own stdout and stderr at — is **0 bytes, with its mtime at the
+start of the last hung turn**. The driver got as far as opening that file and then printed nothing:
+no framework banner, no init event, no provider call. Import measured from that same workspace, as
+that session's uid, today: **1.7 s**. So the stall is before the agent loop, which also fits the cost
+— the whole 13-family tour, every turn capped at 600 s, cost $0.4153.
+
+**One lifecycle hazard was found, and it is real.** The gateway starts the next turn of a session
+without stopping a turn still in flight: measured here, a second turn completed in 3.9 s while the
+first was still running its shell, the session's status moved on to the newcomer, and the orphan was
+still alive 164 s later (it runs to the runner's own `MAX_TURN_SECONDS`). Two Agent Zero processes
+then share one workspace — and both write this base's per-turn files. Made safe on this branch
+rather than left to chance: every per-turn file is now written to a temp name and renamed (a
+truncate-then-write let the other process import an EMPTY extension module and lose that turn's tool
+cards without a word), and the console log is per turn PROCESS rather than one shared name opened
+with O_TRUNC — which is how a hung turn comes to leave a 0-byte log behind.
+
+**Not established, and not claimed:** what the driver was waiting on during those 600 s. The
+instrument for the next occurrence is in place and costs nothing: the per-turn console log, plus
+`ps` inside the container while the turn is still hung. One agentzero turn is **275 MB RSS** (peak,
+measured on a 4 GB container), which bounds how many can usefully run at once.
+
 ## The gpt-6 line: sol and luna beside astra (2026-09-27)
 
 Richard asked whether gpt-6-sol was available and for the line to be expanded at list price on every
