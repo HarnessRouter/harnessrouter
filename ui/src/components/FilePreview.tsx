@@ -37,6 +37,7 @@ function kindOf(name: string, mime: string): string {
   if (mime.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(e)) return 'audio';
   if (e === 'csv' || e === 'tsv') return 'csv';
   if (e === 'md' || e === 'markdown') return 'markdown';
+  if (e === 'html' || e === 'htm') return 'html';   // the page itself, or its source: the header switches
   if (SHEET.has(e)) return 'sheet';          // real spreadsheet grid (SheetJS), with sheet tabs
   if (OFFICE_PDF.has(e)) return 'office';     // server converts to pdf for a faithful render
   if (mime.startsWith('text/') || LANG[e] || /(txt|log|env|conf|cfg|gitignore)/.test(e)) return 'code';
@@ -49,9 +50,12 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
   const { url, name } = file;
   const [st, setSt] = useState<{ kind: string; objUrl?: string; text?: string; html?: string; error?: string; sheets?: { name: string; html: string; filled: boolean }[] }>({ kind: 'loading' });
   const [activeSheet, setActiveSheet] = useState(0);
+  // An HTML file opens as the page it is; Source shows what was written. The choice lives in the
+  // header beside the name, so it reads as a property of the file being looked at.
+  const [view, setView] = useState<'preview' | 'source'>('preview');
   useEffect(() => {
     let alive = true; let obj: string | undefined;
-    setSt({ kind: 'loading' }); setActiveSheet(0);
+    setSt({ kind: 'loading' }); setActiveSheet(0); setView('preview');
     // Authenticated fetch (LIVE-B): a bare fetch carries no session, and the server rejects
     // headerless file reads, which used to render the error JSON as the "file content".
     harnessFetch(url, { headers: authHeaders() }).then(async (r) => {
@@ -115,7 +119,7 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
         }
         return;
       }
-      if (kind === 'code' || kind === 'markdown' || kind === 'csv') {
+      if (kind === 'code' || kind === 'markdown' || kind === 'csv' || kind === 'html') {
         const t = await r.text();
         if (!alive) return;
         if (kind === 'csv') setSt({ kind: 'csv', html: csvToTable(t, extOf(name) === 'tsv' ? '\t' : ',') });
@@ -135,6 +139,14 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
       <header className="fp-head">
         <span className="fp-ic"><FileTypeIcon name={name} size={18} /></span>
         <span className="fp-name" title={name}>{name}</span>
+        {st.kind === 'html' && (
+          <div className="fp-seg" role="tablist" aria-label="Show the page or its source">
+            {(['preview', 'source'] as const).map((id) => (
+              <button key={id} type="button" role="tab" aria-selected={view === id}
+                className={'fp-seg-btn' + (view === id ? ' on' : '')} onClick={() => setView(id)}>{id === 'preview' ? 'Preview' : 'Source'}</button>
+            ))}
+          </div>
+        )}
         <button className="fp-icbtn" title="Download" onClick={() => { downloadFile(url, name).catch(() => undefined); }}><IcDownload /></button>
         <button className="fp-icbtn" title="Close" onClick={onClose}><IcX /></button>
       </header>
@@ -154,6 +166,17 @@ export function FilePreview({ file, onClose }: { file: { url: string; name: stri
             {st.text || ''}
           </SyntaxHighlighter>
         )}
+        {st.kind === 'html' && view === 'source' && (
+          <SyntaxHighlighter language="markup" style={oneLight} showLineNumbers
+            customStyle={{ margin: 0, padding: '16px 18px', background: '#FBFBFD', color: '#383A42', fontSize: 12.5, lineHeight: 1.6, whiteSpace: 'pre', overflowX: 'auto' }}
+            lineNumberStyle={{ color: '#B0B4C0', minWidth: '2.4em', paddingRight: '14px' }}
+            codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#383A42', whiteSpace: 'pre' } }}>
+            {st.text || ''}
+          </SyntaxHighlighter>
+        )}
+        {/* The page runs in its own origin with scripts only: a mockup's own script and styles work,
+            and nothing in it can read the console, its cookies or its storage. */}
+        {st.kind === 'html' && view === 'preview' && <iframe className="fp-pdf" title={name} sandbox="allow-scripts" srcDoc={st.text || ''} />}
         {st.kind === 'csv' && <div className="fp-sheet" dangerouslySetInnerHTML={{ __html: st.html || '' }} />}
         {st.kind === 'sheet' && st.sheets && (
           <div className="fp-xlsx">
