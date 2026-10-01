@@ -892,3 +892,35 @@ def test_a_harness_with_the_browser_tells_its_agent_to_use_it():
     doc = gw._agent_doc_with_plugs("Be brief.\n", ["browser"])
     assert doc.startswith("Be brief.\n\n## Browser\n") and "browser_navigate" in doc and "curl" in doc
     assert gw._agent_doc_with_plugs("", ["browser"]) == gw._BROWSER_GUIDE
+
+
+# ── the operator's own browser ───────────────────────────────────────────────────────────────
+def test_the_operators_own_browser_takes_the_vendors_place_whole(client, world, monkeypatch):
+    """HR_BROWSER_CDP_URL: no vendor session, no charge, a context per harness session on the one
+    browser, and the private-address rule lifted (a customer's crawler behind a headful Chrome on
+    its own network, 2026-09-30)."""
+    reg, ven, posted = world
+    monkeypatch.setattr(browser_plane, "API_KEY", "")
+    monkeypatch.setattr(browser_plane, "CDP_URL", "ws://chrome.lan:9222/devtools/browser/own")
+    assert browser_plane.configured() and browser_plane.own_browser()
+    assert browser_plane.pricing()["usd_per_unit"] == 0.0 and browser_plane.session_estimate_usd() == 0.0
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid1, sid2 = _session_of(hid), _session_of(hid)
+    tok1, tok2 = gw._mint_hosted_cred(hid, sid1, _key(hid)), gw._mint_hosted_cred(hid, sid2, _key(hid))
+    out = _call(client, tok1, "navigate", url="https://example.com/")
+    assert out["isError"] is False, out
+    assert ven.created == [] and ven.calls == []                      # the vendor was never asked
+    own = browsers[-1]
+    assert own.cdp == "ws://chrome.lan:9222/devtools/browser/own" and len(own.contexts) == 1
+    # a private address is the operator's own network, not a page's trick
+    out = _call(client, tok1, "navigate", url="http://intranet.example/")
+    assert out["isError"] is False, out
+    # the second session gets its own context on the same browser
+    out = _call(client, tok2, "navigate", url="https://example.com/")
+    assert out["isError"] is False and len(own.contexts) == 2
+    rec = asyncio.run(browser_plane.registry.get(sid1))
+    assert rec["vendor_id"] == "" and rec["live_url"] == ""
+    figures = asyncio.run(browser_plane.close_session_browser(rec, browser_plane.sessions().get(sid1)))
+    assert figures["usd"] == 0.0 and figures["usd_source"] == "own" and ven.stopped == []
