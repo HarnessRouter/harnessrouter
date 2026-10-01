@@ -29,4 +29,4 @@ def test_the_loop_continues_on_a_transient_error_and_answers_approval_requests()
     loop = src[src.index('elif method == "error":'):src.index('elif method == "turn/failed":')]
     assert "if transient:" in loop and "continue" in loop
     assert server._CODEX_APPROVAL == "on-request"
-    assert 'if method.endswith("/requestApproval"):' in src and 'reply(mid, {"decision": "accept"})' in src
+    assert 'result, err = _codex_request_answer(method, msg.get("params") or {})' in src and 'reply(mid, result, err)' in src
