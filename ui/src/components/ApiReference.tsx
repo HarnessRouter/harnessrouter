@@ -396,9 +396,9 @@ curl $BASE/v1/environments/$ENV/builds/1 -H "Authorization: Bearer $KEY"`} />
       </Endpoint>
 
       <Endpoint method="GET" path="/v1/harnesses/{id}/models">
-        <p className="hr-meta">The models this agent may run, its default, and the fallback. A run
-          requesting a model outside this set executes on the fallback, and the substitution is recorded
-          in <code>response.metadata</code> (<code>requested_model</code>, <code>model_fallback</code>).</p>
+        <p className="hr-meta">The models this agent may run and its default. A run requesting a model
+          outside this set is refused before it starts (<code>400 model_not_available</code>); nothing
+          runs on a model the caller did not ask for.</p>
       </Endpoint>
 
       {/* ── Rendering results ───────────────────────────────────────────── */}

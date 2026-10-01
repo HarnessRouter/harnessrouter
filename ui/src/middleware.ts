@@ -49,6 +49,7 @@ function isPublic(path: string): boolean {
     // this is a UHP server before deciding what credential to present. The document is version
     // metadata — no user data.
     || path === '/api/harness/v1/uhp'
+    || path === '/api/harness/v1/openapi.json'
     // A shared task is FOR people without an account: the link is the credential. The page and
     // the data it fetches are public; what they reveal is decided by the gateway, which answers
     // only for a token whose owner has sharing switched on, and with nothing but that session.
