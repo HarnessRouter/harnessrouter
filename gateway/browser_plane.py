@@ -1,5 +1,12 @@
-"""The browser server's plane: a real browser in a vendor's cloud, driven from this gateway over
-the Chrome DevTools Protocol, handed to the agent as a dozen typed tools and nothing else.
+"""The browser server's plane: a real browser, in a vendor's cloud or the operator's own, driven
+from this gateway over the Chrome DevTools Protocol, handed to the agent as a dozen typed tools
+and nothing else.
+
+The operator's own browser (HR_BROWSER_CDP_URL, a Chrome started with --remote-debugging-port or
+any CDP endpoint) takes the vendor's place whole: no vendor session, no live view, no charge, one
+browser context per harness session on the one browser, and the private-address rule lifted,
+since that browser sits on the operator's own network and reaches what the operator's shell
+already can (a customer's crawler behind a headful Chrome broker, 2026-09-30).
 
 One browser session per harness session, made on the first call and stopped at the end of the
 turn, after idle, or at the session cap. The vendor is behind one adapter (Browser Use Cloud
@@ -28,6 +35,7 @@ import urllib.parse
 
 import httpx
 
+CDP_URL = os.environ.get("HR_BROWSER_CDP_URL", "").strip()     # the operator's own browser, instead of the vendor
 API_KEY = os.environ.get("BROWSER_USE_API_KEY", "")
 # The key as a mounted secret file, read at every use: a rotated Key Vault secret reaches a
 # mounted file without a new revision, where an environment variable holds the value the process
@@ -70,12 +78,21 @@ def api_key() -> str:
     return API_KEY
 
 
+def own_browser() -> bool:
+    """Whether the operator's own browser is the browser here."""
+    return bool(CDP_URL)
+
+
 def configured() -> bool:
-    return bool(api_key())
+    return own_browser() or bool(api_key())
 
 
 def pricing() -> dict:
     """The browser's price line, for the page that shows it before a workspace turns it on."""
+    if own_browser():
+        return {"type": "browser", "unit": "browser hour", "usd_per_unit": 0.0, "markup": 0.0,
+                "source": "your own browser", "vendor": "own", "billed_as": UNIT,
+                "rounding": "none", "session_cap_minutes": SESSION_CAP_MIN, "session_estimate_usd": 0.0}
     return {"type": "browser", "unit": "browser hour", "usd_per_unit": round(PRICES["browser.minute"] * 60, 6),
             "markup": 0.0, "source": "vendor list price", "vendor": VENDOR, "billed_as": UNIT,
             "rounding": "up to the minute, one-minute minimum", "session_cap_minutes": SESSION_CAP_MIN,
@@ -83,8 +100,9 @@ def pricing() -> dict:
 
 
 def session_estimate_usd() -> float:
-    """What a session may cost at most, before it starts: the cap in minutes at the list price."""
-    return round(SESSION_CAP_MIN * PRICES["browser.minute"], 6)
+    """What a session may cost at most, before it starts: the cap in minutes at the list price;
+    nothing on the operator's own browser."""
+    return 0.0 if own_browser() else round(SESSION_CAP_MIN * PRICES["browser.minute"], 6)
 
 
 class BrowserRefused(RuntimeError):
@@ -110,7 +128,12 @@ async def vendor_create(timeout_min: int, metadata: dict) -> dict:
     unit that can bill is time. 402 is the vendor's wallet, 429 its concurrency. The screen is the
     vendor's default, landscape: what the live view streams is that screen, whatever the shape of
     the card showing it (measured on hr-test, 2026-09-28: neither an emulated viewport over CDP
-    nor allowResizing changed the streamed frame), so the console fits the frame inside the card."""
+    nor allowResizing changed the streamed frame), so the console fits the frame inside the card.
+
+    The operator's own browser is already running: its record names the CDP address and no
+    vendor session (an empty id is what marks it), and there is no live view of it."""
+    if own_browser():
+        return {"id": "", "cdpUrl": CDP_URL, "liveUrl": ""}
     async with _vendor_client() as c:
         r = await c.post(f"{API_BASE}/browsers", json={
             "timeout": int(timeout_min), "proxyCountryCode": None, "solveCaptchas": False,
@@ -343,6 +366,8 @@ async def _allowed(s: Session, url: str) -> str | None:
     why = host_policy(host, s.allow, s.deny)
     if why:
         return why
+    if not s.vendor_id:
+        return None                 # the operator's own browser, on the operator's own network
     if host not in s.host_cache:
         s.host_cache[host] = await resolves_private(host)
     return "a private or local address" if s.host_cache[host] else None
@@ -419,7 +444,10 @@ async def attach(rec: dict) -> Session:
     s = Session(rec)
     s.browser = await _connect(s.cdp_url)
     try:
-        contexts = list(getattr(s.browser, "contexts", None) or [])
+        # The operator's own browser is shared by every session, so each gets a context of its own
+        # (its own cookies and tabs), made over this attachment's connection and closed with it; a
+        # vendor browser is one session's alone and its default context is the page.
+        contexts = [] if not s.vendor_id else list(getattr(s.browser, "contexts", None) or [])
         s.context = contexts[0] if contexts else await s.browser.new_context(accept_downloads=False, viewport={"width": 1280, "height": 800})
 
         async def gate(route, request):
@@ -506,7 +534,9 @@ async def close_session_browser(rec: dict, s: Session | None) -> dict:
             figures = {}
     usd = vendor_cost(figures)
     source = "vendor"
-    if usd is None:
+    if not rec.get("vendor_id"):
+        usd, source = 0.0, "own"                 # the operator's own browser: nothing to meter
+    elif usd is None:
         usd, source = round(minutes(rec) * PRICES["browser.minute"], 6), "table"
     return {"minutes": minutes(rec), "usd": usd, "usd_source": source, "calls": int(rec.get("calls") or 0),
             "screenshots": int(rec.get("screenshots") or 0), "blocked": list(rec.get("blocked") or [])[:20],

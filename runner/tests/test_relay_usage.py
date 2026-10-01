@@ -122,8 +122,10 @@ def test_usage_is_counted_off_a_json_answer_and_a_streamed_one_through_the_live_
 
 
 def test_a_backend_that_reports_its_own_usage_keeps_it():
-    """The stamp fills an EMPTY usage only: a CLI's own count (codex, claude, goose) is the
-    record, and the relay's count would double nothing and replace nothing. Pinned on the source
-    of the run loop, which needs a live process to exercise."""
+    """The stamp fills an EMPTY usage, and replaces a CLI count only when the provider's carries a
+    cache split the CLI's lacks (_fill_relay_usage, pinned in test_messages_route); a CLI's own
+    split count (codex, claude) is the record. Pinned on the source of the run loop, which needs
+    a live process to exercise: both result sites go through the one helper."""
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("server.py").read_text()
-    assert src.count('if ev.get("type") == "result" and not ev.get("usage"):') == 2
+    assert src.count("_fill_relay_usage(ev, env)") == 2
+    assert src.count('if ev.get("type") == "result" and not ev.get("usage"):') == 0

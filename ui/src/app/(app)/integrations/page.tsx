@@ -551,6 +551,13 @@ export default function IntegrationsPage() {
                       </div>
                     );
                   }
+                  // A model this release does not list yet is one row away: the id a harness asks
+                  // for and the id the provider wants on the wire. The listed models stay the
+                  // product's; only the rows beyond the list are the operator's to edit.
+                  const table = new Set(models.map((m) => m.canonical));
+                  const extra = (editing.models || []).filter((m) => !table.has(m.canonical));
+                  const setExtra = (next: ModelRow[]) => setEditing({
+                    ...editing, models: [...(editing.models || []).filter((m) => table.has(m.canonical)), ...next] });
                   return (
                     <div className="field">
                       <label>Supported models</label>
@@ -566,6 +573,27 @@ export default function IntegrationsPage() {
                           {models.map((m) => <li key={m.canonical}>{m.canonical}</li>)}
                         </ul>
                       </details>
+                      <p className="field-help">
+                        A model newer than this release: add it with the id the provider uses on the wire,
+                        and it appears in every model picker this provider drives.
+                      </p>
+                      {extra.map((r, idx) => (
+                        <div className="itg-model-row" key={idx}>
+                          <input type="text" aria-label="Model id" placeholder="model id, as a harness asks for it"
+                            value={r.canonical}
+                            onChange={(e) => setExtra(extra.map((x, i) => i === idx ? { ...x, canonical: e.target.value } : x))} />
+                          <input type="text" aria-label="Name on the wire" placeholder={r.canonical || 'same as the model id'}
+                            value={r.provider_id === r.canonical ? '' : r.provider_id}
+                            onChange={(e) => setExtra(extra.map((x, i) => i === idx ? { ...x, provider_id: e.target.value } : x))} />
+                          <button type="button" className="button" aria-label="Remove model"
+                            onClick={() => setExtra(extra.filter((_, i) => i !== idx))}>
+                            <iconify-icon icon="tabler:x"></iconify-icon>
+                          </button>
+                        </div>
+                      ))}
+                      <button type="button" className="button" onClick={() => setExtra([...extra, { canonical: '', provider_id: '' }])}>
+                        <iconify-icon icon="tabler:plus"></iconify-icon>Add model
+                      </button>
                     </div>
                   );
                 })()}
