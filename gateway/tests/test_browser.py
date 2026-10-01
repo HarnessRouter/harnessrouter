@@ -914,9 +914,13 @@ def test_the_operators_own_browser_takes_the_vendors_place_whole(client, world, 
     assert ven.created == [] and ven.calls == []                      # the vendor was never asked
     own = browsers[-1]
     assert own.cdp == "ws://chrome.lan:9222/devtools/browser/own" and len(own.contexts) == 1
-    # a private address is the operator's own network, not a page's trick
-    out = _call(client, tok1, "navigate", url="http://intranet.example/")
-    assert out["isError"] is False, out
+    # a private address is the operator's own network, not a page's trick: a resolved one, a
+    # loopback literal and a .local name alike (the name rules refused the last two first)
+    for url in ("http://intranet.example/", "http://127.0.0.1:3000/", "http://console.local/"):
+        out = _call(client, tok1, "navigate", url=url)
+        assert out["isError"] is False, (url, out)
+    assert browser_plane.host_policy("127.0.0.1", [], ["127.0.0.1"], private_ok=True) == "a site this agent is not allowed to visit"
+    assert browser_plane.host_policy("127.0.0.1", [], []) == "a private or local address"
     # the second session gets its own context on the same browser
     out = _call(client, tok2, "navigate", url="https://example.com/")
     assert out["isError"] is False and len(own.contexts) == 2
