@@ -17699,14 +17699,14 @@ async def list_bases(request: Request) -> dict:
     for bid, b in _BASE_CATALOG.items():
         backend = b["backend"]
         cat = _MODEL_CATALOG.get(backend, {})
-        servable = await _servable_models(org, backend)
-        ok = (lambda m: True) if servable is None else (lambda m: m in servable)
+        # the same view every picker reads (see list_models): catalog, custom endpoints, additions
+        view = await _harness_models_view({}, backend, await _servable_models(org, backend))
         out.append({
             "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
             "status": b["status"], "systemPrompt": b["system_prompt"],
             "defaultModel": cat.get("default", ""),
-            "models": [{"id": m, "available": ok(m), "default": m == cat.get("default")}
-                       for m in cat.get("models", [])],
+            "models": [{"id": m["id"], "available": m["available"], "default": m["default"]}
+                       for m in view["models"]],
             "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
                       for n, lbl in b["tools"]],
             # Skills bundled into the image, which every base can use. A base ALSO discovers
@@ -17733,35 +17733,14 @@ async def list_models(request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     # `available` is computed, not asserted: a model with no provider behind it is listed as
     # unavailable so a picker can disable it, instead of offering a choice that fails at run time.
+    # ONE VIEW for every picker: the harness route's (_harness_models_view), which also lists a
+    # custom endpoint's models and the models an operator added to a vendor integration on the
+    # backends they drive. A second copy of that logic here listed custom endpoints only, so an
+    # added model ran but never showed on a base's picker (hr-test, 2026-09-30).
     out = {}
-    # Custom integration models: pulled from the effective model map so they appear in the
-    # picker for every backend that can serve them. A chain (servable=None) is the FALLBACK
-    # for models without a mapping; a model WITH a mapping (custom or otherwise) is still
-    # routable, so it must still be shown.
-    eff_map = await _effective_model_map()
-    integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
     for b, c in _MODEL_CATALOG.items():
-        servable = await _servable_models(org, b)
-        ok = (lambda m: True) if servable is None else (lambda m: m in servable)
-        models = [{"id": m, "label": m, "backend": b, "available": ok(m),
-                    "default": m == c["default"]} for m in c["models"]]
-        seen = set(c["models"])
-        # Add models from the effective map that are not already in the catalog: a custom
-        # endpoint's model, on the backends its api_format drives. Not on the others, not even
-        # greyed: a Claude model under Codex read as "Codex can use Anthropic models" (Richard,
-        # hr-test 2026-09-27), and a backend that can never run a model has no row for it.
-        for canonical, iname in eff_map.items():
-            if canonical in seen:
-                continue
-            integ = integrations.get(iname)
-            # Custom integrations only — same reasoning as _harness_models_view above.
-            if not integ or str(integ.get("provider") or "").lower() != "custom":
-                continue
-            if _integration_serves_backend(integ, b):
-                models.append({"id": canonical, "label": canonical, "backend": b,
-                               "available": True, "default": False})
-                seen.add(canonical)
-        out[b] = {"default": c["default"], "models": models}
+        view = await _harness_models_view({}, b, await _servable_models(org, b))
+        out[b] = {"default": c["default"], "models": view["models"]}
     return {"backends": out}
 
 
