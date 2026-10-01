@@ -70,8 +70,22 @@ for prov, rows in sorted(by.items()):
         if others:
             findings.append(f"{r['harness']} x {r['model']}: served as {', '.join(others)} (the CLI reports the model it ran)")
             notes.insert(0, f"served as {', '.join(others)} (finding below)")
+        # A turn that names no served model is a turn rule 2 could not judge: a finding, not a pass.
+        if r.get('unlabelled'):
+            findings.append(f"{r['harness']} x {r['model']}: {r['unlabelled']} turn(s) report no served model, so rule 2 could not judge them")
+            notes.insert(0, f"{r['unlabelled']} turn(s) unlabelled (finding below)")
+        # A Claude pair that read no prompt cache across its turns paid full price for every token
+        # of its system prompt and tools on every call: a finding, whatever the scenarios say.
+        tk = r.get('tokens') or {}
+        if r['model'].startswith('claude') and tk.get('turns_with_usage') and (r.get('artifact') or {}).get('ok') and not tk.get('cache_read'):
+            findings.append(f"{r['harness']} x {r['model']}: no prompt cache reads over {tk.get('input', 0)} input tokens (every call paid full price)")
+            notes.insert(0, "no prompt cache reads (finding below)")
+        elif tk.get('turns_with_usage') and tk.get('input'):
+            share = tk.get('cache_read', 0) / max(tk.get('input', 0) + tk.get('cache_read', 0), 1)
+            notes.append(f"cache {round(share * 100)}% of input")
         out.append(f"| {r['harness']} | {r['model']} | {mark(r.get('first'))} | {mark(r.get('followup'))} | {mark(sw)}{(' ('+sw['to']+')') if sw.get('to') else ''} | {mark(r.get('artifact'))} | {mark(r.get('recycle'))} | {served} | {' ; '.join(notes).replace('|', '/')} |")
-    clean = [r for r in rows if not r.get('foreign') and all(alias_of(r['model'], x) for x in (r.get('substituted') or []))]
+    clean = [r for r in rows if not r.get('foreign') and not r.get('unlabelled')
+             and all(alias_of(r['model'], x) for x in (r.get('substituted') or []))]
     ok = sum(1 for r in clean for sc in ('first','followup','switch','artifact','recycle') if (r.get(sc) or {}).get('ok') is True)
     tot = sum(1 for r in clean for sc in ('first','followup','switch','artifact','recycle') if (r.get(sc) or {}).get('ok') is not None)
     out += ["", f"{len(rows)} pairs, {ok} of {tot} scenario runs passed" + (f"; {len(rows) - len(clean)} pairs served by another connection or as another model are findings, not counted." if len(clean) < len(rows) else "."), ""]

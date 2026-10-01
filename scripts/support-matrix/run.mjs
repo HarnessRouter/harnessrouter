@@ -177,6 +177,21 @@ try {
           ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && x !== m)).map((t) => String(t.served_model)))]
           : (rec.served.length && !rec.served.some((sm) => sm.split(',').includes(m)) ? rec.served : []);
         if (process.env.EXPECT_CONNECTION) rec.foreign = rec.connections.filter((c) => c !== process.env.EXPECT_CONNECTION);
+        // A turn on this pair's model with NO served model is a turn rule 2 could not judge, and a
+        // finding of its own: the direct Anthropic route on Claude Code reported none for months
+        // (the CLI lists usage by model and names no model on its result), so a substitution there
+        // would have passed as a pass. Reported, never counted as a pass (render.py).
+        rec.unlabelled = turnsList.filter((t) => t && t.model === m && !t.served_model).length;
+        // The pair's prompt-cache share, read off each turn's own usage: cache reads over all input.
+        // A Claude pair whose turns read no cache at all after the artifact scenario (two provider
+        // calls at the least) paid full price for every token of its system prompt and tools, which
+        // is how an aggregator's OpenAI-compatible surface cost 6 to 8 times the Claude Code price
+        // for the same task in a customer's benchmark (2026-09-30) while every scenario here passed.
+        const usages = await Promise.all(turnsList.filter((t) => t && t.id).map((t) => page.evaluate(async (rid) => {
+          const r = await fetch(`/api/harness/v1/responses/${rid}`); return r.ok ? (await r.json()).usage || null : null; }, t.id).catch(() => null)));
+        const inTok = usages.reduce((n, u) => n + (u ? Number(u.input_tokens || 0) : 0), 0);
+        const cached = usages.reduce((n, u) => n + (u ? Number(u.cache_read_tokens || (u.input_tokens_details || {}).cached_tokens || 0) : 0), 0);
+        rec.tokens = { input: inTok, cache_read: cached, turns_with_usage: usages.filter(Boolean).length };
         rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
       }
       const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''}${(rec.served || []).length ? ' served=' + rec.served.join('+') : ''}${(rec.substituted || []).length ? ' SUBSTITUTED=' + rec.substituted.join('+') : ''} deleted=${rec.deleted || '?'}`);
