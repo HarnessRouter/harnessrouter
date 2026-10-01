@@ -742,6 +742,9 @@
     .capability-list { display: grid; gap: 8px; }
     .capability-row { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; gap: 10px; align-items: center; min-height: 48px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
     .capability-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: var(--surface-subtle); color: var(--muted); }
+    .capability-icon img { display: block; width: 16px; height: 16px; }
+    .capability-icon.is-app { background: none; overflow: hidden; }
+    .capability-icon.is-app img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
     .capability-copy strong, .capability-copy span { display: block; }
     .capability-copy strong { font-size: 12.5px; }
     .capability-copy span { margin-top: 3px; color: var(--muted); font-size: 10.5px; }
