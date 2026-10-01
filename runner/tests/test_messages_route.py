@@ -189,4 +189,4 @@ def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("server.py").read_text()
     body = src[src.index("def _run_hermes_bg("):src.index("# ── HTTP surface")]
     assert "served = _relay_served_model(env)" in body and "_fill_relay_usage(ev, env)" in body
-    assert body.index("_fill_relay_usage(ev, env)") < body.index("append(ev)")
+    assert body.index("_fill_relay_usage(ev, env)") < body.rindex("append(ev)")   # stamped before the result is appended
