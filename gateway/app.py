@@ -1355,12 +1355,13 @@ def _integration_models(integ: dict) -> dict[str, str]:
     existing instance keeps serving the old set, with no signal that anything is stale. That is
     exactly what happened — models restored to the source table stayed dark in the picker.
 
-    An override may CHANGE the id used for a model this vendor serves; it may not ADD one the
-    vendor's table doesn't list. That keeps the table the sole authority on what a vendor can
-    reach — and it makes documents written by older versions harmless, because those stored the
-    whole derived list, which would otherwise re-add exactly the models later found unreachable
-    (a stale snapshot is indistinguishable from a deliberate override, so it cannot be trusted
-    to introduce models). Nothing is lost: only canonicals in the catalog can be requested.
+    An override may CHANGE the id used for a model this vendor serves. It may also ADD a model
+    the table does not list yet, on a document the current writer produced (`rows_v` 2): the
+    operator typed the row, so the row is the statement that this endpoint serves that id (a
+    model that went GA on 2026-09-28 was unreachable from a 2026-09-30 image for want of this,
+    and the row that would have fixed it was accepted and ignored). Documents written before
+    the mark stored the whole derived list, and an unlisted row there is a stale snapshot that
+    would re-add exactly the models later found unreachable, so those rows stay ignored.
 
     The "custom" provider is the exception: it has no vendor table, so its stored rows ARE the
     list. Each row pairs a canonical id (what a harness picks) with the name the endpoint wants on
@@ -1382,10 +1383,11 @@ def _integration_models(integ: dict) -> dict[str, str]:
         model_id = str((integ.get("config") or {}).get("model_id") or "").strip()
         return {model_id: model_id} if model_id else {}
     models = dict(_vendor_models(str(integ.get("provider") or "").lower()))
+    additive = integ.get("rows_v") == 2
     for m in (integ.get("models") or []):
         canonical = str(m.get("canonical") or "").strip()
         pid = str(m.get("provider_id") or "").strip()
-        if canonical in models and pid:
+        if canonical and pid and (canonical in models or additive):
             models[canonical] = pid
     return models
 
@@ -4949,14 +4951,15 @@ def _provider_backends(provider: str) -> list[str]:
 _CUSTOM_FORMAT_BACKENDS = {
     # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
-    # goose speaks OpenAI chat/completions only on the path the runner builds (OPENAI_HOST +
-    # OPENAI_BASE_PATH through the relay). Its own anthropic provider takes ANTHROPIC_HOST with no
-    # base-path counterpart and is unprobed, so a custom ANTHROPIC endpoint stays off this set
-    # until it is — the picker greys out what the router cannot actually run.
+    # goose's anthropic provider (ANTHROPIC_HOST, x-api-key, /v1/messages), hermes's anthropic
+    # adapter and OpenHands's litellm anthropic/ route all reach a Messages endpoint through the
+    # runner's relay since 2026-09-30, with prompt caching; the OpenAI-compatible surface of an
+    # Anthropic endpoint cannot cache at all, which cost a benchmark 6 to 8 times the Claude Code
+    # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
                "openhands", "cheetahclaws"},
-    "anthropic": {"claude", "opencode", "pi", "dsh", "omp"},
+    "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
@@ -5226,7 +5229,9 @@ async def admin_connect_poll(code: str, request: Request):
 
 class IntegrationsBody(BaseModel):
     integrations: list[dict]
-    model_map: dict
+    # Absent leaves the stored routes alone (a client that manages integrations alone should not
+    # have to know the map to save; omitting it answered 422 until 2026-09-30). {} clears them.
+    model_map: dict | None = None
     # Optional: a console that predates image routing still saves without wiping the image map.
     # Absent means "leave it alone", which is not the same as an empty dict meaning "clear it".
     image_model_map: dict | None = None
@@ -5301,7 +5306,12 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         else:
             models = [{"canonical": c, "provider_id": pid}
                       for c, pid in rows if c and pid and table.get(c) != pid]
-        out.append({"name": name, "provider": provider, "config": cfg, "models": models})
+        # rows_v 2: the rows were written by a version that stores only what the operator typed, so
+        # a row naming a model the vendor table does not list is an ADDITION this instance asked
+        # for (a model that went GA before the release that lists it). A document without the
+        # mark was written by a version that stored the whole derived list, and its unlisted rows
+        # are a stale snapshot; _integration_models keeps ignoring those.
+        out.append({"name": name, "provider": provider, "config": cfg, "models": models, "rows_v": 2})
     names = {i["name"] for i in out}
     if len(names) != len(out):
         raise HTTPException(400, "integration names must be unique")
@@ -5309,11 +5319,12 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     # console's Delete a no-op: the effective maps claim every servable model on read, so removing
     # the explicit row simply let the claim put it back, and the write returned 200 having changed
     # nothing visible. "Off" needs to be sayable, and this is where it is said.
-    mm = {str(k).strip(): str(v).strip() for k, v in (body.model_map or {}).items()
-          if str(k).strip()}
-    for model, iname in mm.items():
-        if iname and iname not in names:
-            raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
+    mm = None
+    if body.model_map is not None:
+        mm = {str(k).strip(): str(v).strip() for k, v in body.model_map.items() if str(k).strip()}
+        for model, iname in mm.items():
+            if iname and iname not in names:
+                raise HTTPException(400, f"model '{model}' maps to unknown integration '{iname}'")
     imm = None
     if body.image_model_map is not None:
         imm = {str(k).strip(): str(v).strip() for k, v in body.image_model_map.items()
@@ -5339,7 +5350,8 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         prior_imm = await _vault_get(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY)
         await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_PREV_KEY, prior_imm or "{}")
     await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
-    await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
+    if mm is not None:
+        await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
     if imm is not None:
         await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY, json.dumps(imm))
     if body.media_policy is not None:
@@ -5531,9 +5543,6 @@ class _RespTranslator:
         self.handoff: dict | None = None
         # run metadata (CT-124): the model the caller asked for, and whether the gateway substituted
         # the harness's authorized default because the request was unavailable for this backend.
-        self.requested_model = ""
-        self.model_fallback = False
-        self.fallback_reason = ""
         self.environment = ""     # the environment id the turn read: reported beside session_id
         # The connection that served this turn, stamped when the sandbox is dispatched. The session's
         # last_connection carried it before, one value per session; the turns feed and the support
@@ -5559,14 +5568,6 @@ class _RespTranslator:
             meta["session_id"] = self.sid
         if self.environment:
             meta["environment"] = self.environment
-        # run metadata: expose the effective vs requested model + fallback, so a caller can see the
-        # gateway ran a different (authorized) model than it asked for.
-        if self.requested_model and self.requested_model != self.model:
-            meta["requested_model"] = self.requested_model
-        if self.model_fallback:
-            meta["model_fallback"] = True
-            if self.fallback_reason:
-                meta["model_fallback_reason"] = self.fallback_reason
         if self.ignored:
             meta["ignored_fields"] = self.ignored
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
@@ -6333,8 +6334,8 @@ def _map_model(conn: dict, friendly: str) -> str | None:
 # ── model catalog + per-harness policy (CT-124) ─────────────────────────────────────────
 # The curated models each backend serves (mirrors the console harness catalog). This is the
 # authoritative allowed set for server-side permission validation: a request for a model outside
-# the harness's backend family is NOT run — the harness's authorized fallback (its default) runs
-# instead, and the substitution is recorded in the response's run metadata so it is auditable.
+# the harness's backend family is NOT run; it is refused with 400 model_not_available before
+# anything starts (_resolve_model_policy).
 _MODEL_CATALOG: dict[str, dict] = {
     # THE BAR FOR ADDING A MODEL, both halves required:
     #   1. It is a chat model the agent loop can drive — text in, text out, and tool calling.
@@ -6343,9 +6344,10 @@ _MODEL_CATALOG: dict[str, dict] = {
     #      welcome, so a VLM qualifies; a model that only EMITS pixels does not. Enforced by
     #      tests/test_model_catalog_capabilities.py against the live capability data.
     #   2. A real turn on the harness that will run it, completed against the live provider,
-    #      CHECKED FOR SUBSTITUTION. An unauthorized model is silently replaced by the harness
-    #      default and the run records `requested_model` next to it — so a probe that only reads
-    #      "completed" measures the default. Nine models once "passed" a file-writing test that
+    #      CHECKED FOR SUBSTITUTION: the served model read off the response, not the status. A
+    #      model the gateway cannot serve is refused today; a provider may still serve another
+    #      id than the one asked for, and a probe that only reads "completed" measures whatever
+    #      ran. Nine models once "passed" a file-writing test that
     #      was claude-sonnet-4.6 writing the file nine times, because the probe named a harness
     #      id that did not exist and every turn fell back to the claude default.
     # Neither half substitutes for the other, and being listed by an aggregator is not either of
@@ -6887,18 +6889,25 @@ def _harness_model_default(hv: dict | None, backend: str) -> str:
     return str((hv or {}).get("default_model") or _MODEL_CATALOG.get(backend, {}).get("default") or "")
 
 
-async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, org: str = "") -> tuple[str, str, bool, str]:
-    """Server-side model permission for a turn. Returns (effective, requested, fallback?, reason).
-    Empty/bare request -> the harness default (not a fallback). An unauthorized model is replaced by
-    the authorized fallback (the harness default) and flagged."""
+async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, org: str = "") -> str:
+    """The model this turn runs: the request's when this backend can serve it, the harness default
+    when the request names none (or a bare family name).
+
+    A model the backend cannot serve is REFUSED, 400 model_not_available, before anything runs.
+    Until 2026-09-30 it was replaced by the harness default with a note in the run's metadata: a
+    caller who asked for one model was served another, billed for it, and found out in the trace
+    nine runs later (a customer benchmark). An answer from the wrong model is not an answer to
+    the request made; the caller says what runs, and this says no when it cannot."""
     default = _harness_model_default(hv, backend)
     req = (requested or "").strip()
     if not req or req.lower() in _BARE_MODELS:
-        return default, req, False, ""
+        return default
     if await _model_authorized_async(req, backend, org):
-        return req, req, False, ""
-    return default, req, True, (f"model '{req}' is not available for this harness's backend "
-                                f"'{backend}'; used the authorized default '{default}'")
+        return req
+    raise uhp_error(400, "model_not_available",
+                    f"Model '{req}' is not available on the {backend} base of this instance: no connected "
+                    f"provider serves it there. GET /v1/harnesses/{{id}}/models lists the models this "
+                    f"harness can run.", "model")
 async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     """Canonical models something can actually run on this backend.
 
@@ -6962,7 +6971,13 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
         # is already in `curated` with availability computed by the servable path — injecting
         # any MAPPED model instead put llmtr's entire table into the claude picker as available
         # (28 rows where main shows 7, measured 2026-08-27), each one a row that fails on send.
-        if not integ or str(integ.get("provider") or "").lower() != "custom":
+        if not integ:
+            continue
+        provider = str(integ.get("provider") or "").lower()
+        # A model the vendor's table lists is curated somewhere and shown there; an id the operator
+        # added to a vendor integration (rows_v 2) is as much the integration's own as a custom
+        # endpoint's, and absent from every curated list, so it is listed here.
+        if provider != "custom" and canonical in _vendor_models(provider):
             continue
         if _integration_serves_backend(integ, backend):
             models.append({"id": canonical, "label": canonical, "backend": backend,
@@ -8077,10 +8092,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     # harness's fixed backend, not allowed to silently re-route to a different one.
     backend = (_backend_of_harness(hv) or _backend_of_builtin(harness_id)
                or _route_backend(model_req or body.model, body.backend))
-    # Server-side model permission (CT-124): an unauthorized model for this backend is replaced by
-    # the harness's authorized default and the substitution is recorded in the run metadata.
-    model_req, requested_model, model_fallback, model_fallback_reason = await _resolve_model_policy(
-        model_req, hv, backend, org)
+    # Server-side model permission (CT-124): a model this backend cannot serve is refused here.
+    model_req = await _resolve_model_policy(model_req, hv, backend, org)
     # Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
     # via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
     # item.updated (self-healing → batch if it doesn't emit updates). Default off = current batch
@@ -8211,7 +8224,6 @@ async def create_response(body: CreateResponseBody, request: Request):
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
         _ignored = [f for f in ("tools", "include") if getattr(body, f, None) is not None]
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
-        tr.requested_model, tr.model_fallback, tr.fallback_reason = requested_model, model_fallback, model_fallback_reason
         tr.environment = str((environment or {}).get("id") or "")
 
         # Broadcast a synthetic turn-start so the bus alone can render a conversation turn from
@@ -15135,7 +15147,7 @@ def _require_supported_base(base: str) -> str:
     return b
 
 
-def _either(snake: str):
+def _either(snake: str, schema: dict | None = None):
     """A create/update field by its schema name (snake_case, HarnessCreate) OR the name the
     harness object comes back with (camelCase, Harness). A client that mirrors what GET returned
     sent `defaultModel` and the server stored nothing and said nothing: the request answered 200
@@ -15143,7 +15155,50 @@ def _either(snake: str):
     waited out its timeout per task (#199). A field the server understands under one spelling is
     not an unknown field under the other."""
     camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), snake)
-    return Field(default=None, validation_alias=AliasChoices(snake, camel))
+    return Field(default=None, validation_alias=AliasChoices(snake, camel), json_schema_extra=schema)
+
+
+# What the three list fields hold, said in the API's own description (GET /v1/openapi.json).
+# The lists are stored as sent and read by name at turn time, so the runtime type stays `list`;
+# a caller reading the schema saw `{}` for each and had to guess (a customer benchmark, 2026-09-30).
+_FILE_SCHEMA = {"type": "object", "required": ["path"],
+                "properties": {"path": {"type": "string", "description": "relative path inside the package or skill"},
+                               "content": {"type": "string", "description": "the file's text"},
+                               "content_b64": {"type": "string", "description": "the file's bytes, base64 (instead of content)"},
+                               "executable": {"type": "boolean", "description": "mark the file executable (bin/* and hooks/*.sh are by convention)"}}}
+_MCP_SERVERS_SCHEMA = {
+    "description": "The harness's own MCP servers. A remote server is {name, url, transport: http | sse, headers?, "
+                   "auth?}; a process is {name, transport: stdio, command, args?, env?}. `auth` is a bearer token, "
+                   "`vault:<ref>` for a stored secret or `$headers.X-Name` for a declared request header; a header "
+                   "value may use the same forms. `enabled: false` keeps the server without offering it.",
+    "items": {"type": "object", "required": ["name"],
+              "properties": {"name": {"type": "string"},
+                             "transport": {"type": "string", "enum": ["http", "sse", "stdio"], "default": "http"},
+                             "url": {"type": "string", "description": "the server's address (http, sse)"},
+                             "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+                             "auth": {"type": "string", "description": "bearer token, vault:<ref> or $headers.X-Name"},
+                             "command": {"type": "string", "description": "the executable (stdio)"},
+                             "args": {"type": "array", "items": {"type": "string"}},
+                             "env": {"type": "object", "additionalProperties": {"type": "string"}},
+                             "enabled": {"type": "boolean", "default": True}}}}
+_SKILLS_SCHEMA = {
+    "description": "The harness's own Agent Skills: each a folder with SKILL.md (frontmatter `name` equal to the "
+                   "folder name, `description` of at most 1024 characters) and any files beside it.",
+    "items": {"type": "object", "required": ["name"],
+              "properties": {"name": {"type": "string"},
+                             "files": {"type": "array", "items": _FILE_SCHEMA},
+                             "content": {"type": "string", "description": "SKILL.md alone, instead of files"},
+                             "enabled": {"type": "boolean", "default": True}}}}
+_PLUGINS_SCHEMA = {
+    "description": "Installed Agent Plugins packages. A new package is {files: [...]} with plugin.json at its root "
+                   "(it must name \"$schema\": \"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\"), tools "
+                   "in mcp.json and Skills under skills/<name>/SKILL.md. An installed one round-trips as "
+                   "{name, enabled, blob}. The record's `notLoaded` lists what the server set aside and why.",
+    "items": {"type": "object",
+              "properties": {"name": {"type": "string"},
+                             "enabled": {"type": "boolean", "default": True},
+                             "files": {"type": "array", "items": _FILE_SCHEMA},
+                             "blob": {"type": "string", "description": "the installed package's handle, as read back"}}}}
 
 
 class HarnessBody(BaseModel):
@@ -15153,9 +15208,9 @@ class HarnessBody(BaseModel):
     base_label: str | None = _either("base_label")
     default_model: str | None = _either("default_model")
     system_prompt: str | None = _either("system_prompt")
-    mcp_servers: list | None = _either("mcp_servers")
-    skills: list | None = None
-    plugins: list | None = None            # installed Agent Plugins packages (Plugins chapter)
+    mcp_servers: list | None = _either("mcp_servers", _MCP_SERVERS_SCHEMA)
+    skills: list | None = Field(default=None, json_schema_extra=_SKILLS_SCHEMA)
+    plugins: list | None = Field(default=None, json_schema_extra=_PLUGINS_SCHEMA)   # installed Agent Plugins packages
     disabled_tools: list | None = _either("disabled_tools")     # built-in tool names the harness disabled
     max_step: int | None = _either("max_step")            # default agent step budget for this harness's turns
     timeout_seconds: int | None = _either("timeout_seconds")     # default per-turn wall-clock cap
@@ -15194,6 +15249,11 @@ def _harness_out(v: dict) -> dict:
             # Derived by the server from each package on every write, never copied into the two
             # lists above: a client that PUTs back what it read cannot install a plugin twice.
             "plugins": _plugins_of(v),
+            # Every plugin file the server read and set aside (a skill whose description exceeds
+            # the Agent Skills cap, an unknown manifest field), with the path and the reason, so an
+            # API caller sees it where the console shows "not loaded". A create that silently
+            # answered skills: [] cost a benchmark ten runs (2026-09-30).
+            "notLoaded": [{"plugin": p["name"], **s} for p in _plugins_of(v) for s in (p.get("skipped") or [])],
             "disabledTools": [t for t in _parse(v.get("disabled_tools")) if isinstance(t, str)],
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
             "env": _parse_env(v.get("env")),

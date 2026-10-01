@@ -1467,6 +1467,20 @@ def _strip_claude_error_text(obj: dict, state: dict | None = None) -> dict | Non
     return {**obj, "message": {**(obj.get("message") or {}), "content": kept}}
 
 
+def _claude_model_used(result: dict) -> str:
+    """The model that answered, from the CLI's modelUsage (usage keyed by model id): the id with the
+    most output tokens, so a subagent's or a helper's few tokens never name the turn."""
+    mu = result.get("modelUsage")
+    if not isinstance(mu, dict) or not mu:
+        return ""
+    def out_tokens(v) -> int:
+        try:
+            return int((v or {}).get("outputTokens") or (v or {}).get("output_tokens") or 0)
+        except (TypeError, ValueError, AttributeError):
+            return 0
+    return str(max(mu.items(), key=lambda kv: out_tokens(kv[1]))[0] or "")
+
+
 def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
     # Filter out CLI-injected "API Error: …" diagnostics rendered as assistant text (they are
     # not model output; the CLI retries around them). Applies to both batch + partial modes.
@@ -1487,6 +1501,13 @@ def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
             return [{**obj, "subtype": "error", "is_error": True, "result": state["_cli_error"]}]
         if obj.get("is_error") and not str(obj.get("result") or "").strip() and state.get("_cli_error"):
             return [{**obj, "result": state["_cli_error"]}]
+    if obj.get("type") == "result" and not obj.get("model"):
+        # The CLI names no model on its result; it lists usage BY model (modelUsage). The one that
+        # produced the output is the served model, which a direct Anthropic key never sent through
+        # the relay (served_model stayed empty on every Claude Code run of a benchmark, 2026-09-30).
+        served = _claude_model_used(obj)
+        if served:
+            obj = {**obj, "model": served}
     # Default (batch) mode: pass the CLI's stream-json through unchanged — the CLI emits one event
     # per COMPLETE assistant message, so text lands in a batch.
     if not state.get("partial"):
@@ -2949,6 +2970,60 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
 _HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock()}
 
 
+def _with_anthropic_cache(body: bytes) -> bytes:
+    """A Messages request for a Claude model with no cache_control of its own, with two breakpoints:
+    the last system block and the last block of the last user message. Everything before a
+    breakpoint is cached (tools, system, the conversation so far), so in an agent loop each call
+    reads the previous call's prefix and writes only the new tail; this is the shape the Claude
+    CLI and hermes send on their own. A request that already carries a breakpoint is the client's
+    own policy and goes through untouched; a model that is not Claude is left alone, since an
+    aggregator may refuse the field for it."""
+    if b"cache_control" in body or b"claude" not in body.lower():
+        return body
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(doc, dict) or "claude" not in str(doc.get("model") or "").lower():
+        return body
+    mark = {"type": "ephemeral"}
+    changed = False
+    system = doc.get("system")
+    if isinstance(system, str) and system.strip():
+        doc["system"] = [{"type": "text", "text": system, "cache_control": mark}]
+        changed = True
+    elif isinstance(system, list) and system and isinstance(system[-1], dict) and system[-1].get("type") == "text":
+        system[-1]["cache_control"] = mark
+        changed = True
+    msgs = doc.get("messages")
+    if isinstance(msgs, list) and msgs and isinstance(msgs[-1], dict) and msgs[-1].get("role") == "user":
+        last = msgs[-1]
+        content = last.get("content")
+        if isinstance(content, str) and content.strip():
+            last["content"] = [{"type": "text", "text": content, "cache_control": mark}]
+            changed = True
+        elif (isinstance(content, list) and content and isinstance(content[-1], dict)
+              and content[-1].get("type") in ("text", "tool_result", "image", "document")):
+            content[-1]["cache_control"] = mark
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _relay_origin(base_url: str) -> str:
+    """The relay's origin (scheme://host:port) for a client that appends /v1/messages itself:
+    goose's anthropic provider (ANTHROPIC_HOST), the Anthropic SDK hermes uses (ANTHROPIC_BASE_URL)
+    and litellm's anthropic/ route (ANTHROPIC_API_BASE) all do, and the relay strips that /v1
+    before joining the resource onto the upstream base, which carries its own."""
+    u = urllib.parse.urlsplit((base_url or "").rstrip("/"))
+    return f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else (base_url or "").rstrip("/")
+
+
+def _anthropic_native(provider: str, auth: Auth) -> bool:
+    """Whether this turn's endpoint speaks Anthropic Messages: the anthropic provider, or a custom
+    endpoint declared in that format."""
+    return (provider or "").lower() == "anthropic" or str(auth.api_format or "").strip().lower() == "anthropic"
+
+
 def _normalize_openai_chat_body(body: bytes) -> bytes:
     """Repair OpenAI-legal-but-translator-fatal message shapes in one chat-completions body.
 
@@ -3580,6 +3655,21 @@ def _relay_served_model(env: dict) -> str:
     return ""
 
 
+def _fill_relay_usage(ev: dict, env: dict) -> None:
+    """The result's usage from the relay when the CLI reported none, and ALSO when the CLI's count
+    has no cache split while the provider's does: a CLI that sums the provider's input and cache
+    reads into one number bills every cached token at the full input rate (goose and OpenHands
+    on Claude, read at list price in a customer's cost sheet, 2026-09-30). The provider's own
+    statement is the one that prices."""
+    relay = _relay_usage(env)
+    if not relay:
+        return
+    own = ev.get("usage")
+    cached = ("cache_read_tokens", "cache_write_tokens")
+    if not own or (any(relay.get(k) for k in cached) and not any((own or {}).get(k) for k in cached)):
+        ev["usage"] = relay
+
+
 def _relay_usage(env: dict) -> dict:
     """The tokens the provider reported on this turn's route, summed over its calls; {} when the
     turn did not ride the relay or nothing carried usage. Found by the placeholder bearer, exactly
@@ -3605,6 +3695,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         tok = (self.headers.get("authorization") or "").removeprefix("Bearer ").strip()
         if not tok:
             tok = (self.headers.get("x-goog-api-key") or "").strip()     # gemini-cli's header for its key
+        if not tok:
+            tok = (self.headers.get("x-api-key") or "").strip()          # an Anthropic Messages client's header
         return _HERMES_RELAY["routes"].get(tok)
 
     def _forward(self, body: bytes | None) -> None:
@@ -3619,11 +3711,25 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             return
         base, key, flags = route
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
-        drop = {"host", "content-length", "authorization", "x-goog-api-key", "connection",
+        drop = {"host", "content-length", "authorization", "x-goog-api-key", "x-api-key", "connection",
                 "accept-encoding", "transfer-encoding"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        if tail.split("?", 1)[0] == "/messages" and not flags.get("bedrock_anthropic"):
+            # An Anthropic Messages call (goose's and hermes's anthropic providers, litellm's
+            # anthropic/ route, the claude CLI on a custom endpoint). Anthropic reads the key from
+            # x-api-key and nothing else; an aggregator's Messages surface reads a bearer, so both
+            # travel except to Anthropic itself. The body gets cache breakpoints when the client set
+            # none: on the OpenAI-compatible surface these clients used before 2026-09-30 nothing
+            # could be cached, and a benchmark paid 6 to 8 times the Claude Code price for the
+            # same task on goose and OpenHands.
+            headers["x-api-key"] = key
+            if (urllib.parse.urlsplit(base).hostname or "").lower() == "api.anthropic.com":
+                headers.pop("authorization", None)
+            if body is not None:
+                body = _with_anthropic_cache(body)
+                headers["content-length"] = str(len(body))
         if flags.get("google_native"):
             # Google's native API on a provider that serves it (TokenRouter: models/google/<id>:
             # generateContent, measured 2026-09-07). The CLI asks for the canonical id, which its tables
@@ -4033,6 +4139,8 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     treats a default-model config as 'unconfigured' and exits into the setup wizard (verified on
     0.19.0 — bedrock bearer creds alone don't satisfy it). The -z/-m flags still take precedence."""
     p = (provider or "bedrock").lower()
+    if str(auth.api_format or "").strip().lower() == "anthropic":
+        p = "anthropic"             # a custom endpoint in the Messages format is hermes's anthropic provider
     if p not in HERMES_PROVIDERS:
         raise HTTPException(400, f"unknown hermes provider '{p}' (one of {sorted(HERMES_PROVIDERS)})")
     hermes_home = pathlib.Path(env.get("HOME") or cwd) / ".hermes"
@@ -4077,10 +4185,16 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         cfg["auxiliary"] = {"vision": vision}
     # Provider credentials as env — the CLI resolves them at call time.
     if p == "anthropic":
-        if auth.api_key:
+        if auth.api_key and auth.base_url:
+            # Through the relay, as every other hermes route: the real key stays here, the served
+            # model and the provider's own usage (cache reads included) are read as they pass, and
+            # the SDK joins /v1/messages onto the relay's origin. hermes sets its own cache
+            # breakpoints (anthropic_prompt_cache_policy).
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+            env["ANTHROPIC_API_KEY"] = relay_tok
+            env["ANTHROPIC_BASE_URL"] = _relay_origin(relay_base)
+        elif auth.api_key:
             env["ANTHROPIC_API_KEY"] = auth.api_key
-        if auth.base_url:
-            env["ANTHROPIC_BASE_URL"] = auth.base_url
     elif p == "azure-foundry":  # Azure OpenAI (gpt family) — OpenAI-style endpoint + key
         if auth.api_key:
             env["AZURE_FOUNDRY_API_KEY"] = auth.api_key
@@ -5581,13 +5695,13 @@ def _goose_extensions(mcp_servers: list[dict] | None, tools_disabled: list[str] 
 
 
 def _goose_config(root: pathlib.Path, model: str, mcp_servers: list[dict] | None,
-                  tools_disabled: list[str] | None) -> None:
+                  tools_disabled: list[str] | None, provider: str = "openai") -> None:
     """Write <root>/config/config.yaml fresh each turn — the harness config is the source of truth,
     the same contract the agent doc has, so a stale file never outlives the setting that made it.
     Same writer hermes's config.yaml already uses."""
     cdir = root / "config"
     cdir.mkdir(parents=True, exist_ok=True)
-    cfg: dict = {"GOOSE_PROVIDER": "openai", "GOOSE_MODEL": model}
+    cfg: dict = {"GOOSE_PROVIDER": provider, "GOOSE_MODEL": model}
     ext = _goose_extensions(mcp_servers, tools_disabled)
     if ext:
         cfg["extensions"] = ext
@@ -5657,9 +5771,20 @@ def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     root.mkdir(parents=True, exist_ok=True)
     host, base_path = _goose_split_base(auth.base_url or "")
     env["GOOSE_PATH_ROOT"] = str(root)
-    env["OPENAI_API_KEY"] = auth.api_key or ""
-    env["OPENAI_HOST"] = host
-    env["OPENAI_BASE_PATH"] = base_path
+    native = _anthropic_native(pr, auth)
+    if native:
+        # goose's own anthropic provider: ANTHROPIC_HOST is an origin and the provider joins
+        # /v1/messages onto it, the key rides x-api-key, and the request carries goose's cache
+        # breakpoints. Through the relay like the OpenAI path (the relay reads x-api-key and
+        # sends the key the way Anthropic takes it). Until 2026-09-30 an Anthropic endpoint drove
+        # goose over its OpenAI-compatible surface, which cannot cache: a benchmark's audit task
+        # cost $15.80 on goose against $2.08 on Claude Code for the same model.
+        env["ANTHROPIC_API_KEY"] = auth.api_key or ""
+        env["ANTHROPIC_HOST"] = host
+    else:
+        env["OPENAI_API_KEY"] = auth.api_key or ""
+        env["OPENAI_HOST"] = host
+        env["OPENAI_BASE_PATH"] = base_path
     # The sandbox is the trust boundary, so tools are approved up front: nobody is attached to
     # answer a prompt. Same rationale as claude --dangerously-skip-permissions, pi --approve and
     # opencode --auto. NOTE this does NOT weaken disabled tools: auto returns Allow before the
@@ -5670,7 +5795,7 @@ def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # Otherwise every turn pays an extra background model call to invent a session name we never
     # read — the name is ours, set with -n below.
     env["GOOSE_DISABLE_SESSION_NAMING"] = "true"
-    _goose_config(root, model, mcp_servers, tools_disabled)
+    _goose_config(root, model, mcp_servers, tools_disabled, provider="anthropic" if native else "openai")
     # -n names the session on a fresh run and selects it on a resume (get_or_create_session_id
     # matches s.name == name || s.id == name), so it is the handle in both directions and nothing
     # has to be read back out of the stream. --session-id is NOT usable here: it sits in the same
@@ -6269,10 +6394,23 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
     # turn on gpt-5.4, whose api_mode resolves to responses), and nothing else in the stack reads
     # the OpenAI pair once the id carries the proxy prefix (measured in the openhands venv on
     # hr-test, 2026-09-27, both paths, each pair alone and both together). One pair, one reader.
-    env["LITELLM_PROXY_API_KEY"] = auth.api_key or ""
-    env["LITELLM_PROXY_API_BASE"] = auth.base_url
-    job = {"cwd": cwd, "model": f"litellm_proxy/{model}", "prompt": prompt,
-           "base_url": auth.base_url, "api_key": auth.api_key,
+    if _anthropic_native(pr, auth):
+        # litellm's own anthropic route: a Messages request with the cache breakpoints OpenHands
+        # sets for a Claude model (caching_prompt, on by default), against ANTHROPIC_API_BASE,
+        # which litellm 1.94.3 posts to AS GIVEN (get_complete_url returns it unchanged, measured
+        # in the openhands venv on hr-test, 2026-09-30), so the relay's /v1/messages is named here.
+        # The proxy route sent OpenAI chat requests to the endpoint's OpenAI-compatible surface,
+        # where nothing is cached: a benchmark paid $12.28 for an audit task Claude Code did for
+        # $2.08 on the same model.
+        model_id = f"anthropic/{model}"
+        provider_env = {"ANTHROPIC_API_KEY": auth.api_key or "",
+                        "ANTHROPIC_API_BASE": auth.base_url.rstrip("/") + "/messages"}
+    else:
+        model_id = f"litellm_proxy/{model}"
+        provider_env = {"LITELLM_PROXY_API_KEY": auth.api_key or "", "LITELLM_PROXY_API_BASE": auth.base_url}
+    env.update(provider_env)
+    job = {"cwd": cwd, "model": model_id, "prompt": prompt,
+           "base_url": auth.base_url, "api_key": auth.api_key, "provider_env": provider_env,
            "tools_disabled": list(tools_disabled or []),
            # Declared MCP servers reach the agent itself; a parameter accepted and then dropped is
            # the defect aider's bridge already taught this repo, so the test suite pins the whole
@@ -6721,9 +6859,8 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     served = _relay_served_model(env)
                     if served:
                         ev["model"] = served
-                if ev.get("type") == "result" and not ev.get("usage"):
-                    # Same for the tokens: the CLI reported none, the relay counted the provider's.
-                    ev["usage"] = _relay_usage(env)
+                if ev.get("type") == "result":
+                    _fill_relay_usage(ev, env)
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -6751,8 +6888,8 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 served = _relay_served_model(env)
                 if served:
                     ev["model"] = served
-            if ev.get("type") == "result" and not ev.get("usage"):
-                ev["usage"] = _relay_usage(env)
+            if ev.get("type") == "result":
+                _fill_relay_usage(ev, env)
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
@@ -6819,6 +6956,26 @@ def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
 _CODEX_SANDBOX = os.environ.get("CODEX_APPSERVER_SANDBOX", "danger-full-access")  # kebab enum; env-tunable
 
 
+# on-request: the app-server asks before a command its exec policy marks "prompt" (rm -f, among
+# the default rules) and the loop accepts, since the sandbox is the trust boundary. "never" made
+# the same policy reject the command outright, in the model's face, and the turn failed.
+_CODEX_APPROVAL = "on-request"
+
+
+def _codex_error_line(p: dict) -> tuple[str, bool]:
+    """An `error` notification as one line for the record, and whether it is transient: the
+    app-server says so (willRetry) while it reconnects a dropped provider stream, and the turn is
+    still running. The underlying reason rides additionalDetails when the server has one; it is
+    kept on the line so a failed turn names the HTTP error, not only "Reconnecting... 1/5"
+    (gpt-5.6 on Azure, a customer benchmark, 2026-09-30)."""
+    err = p.get("error") if isinstance(p.get("error"), dict) else {}
+    msg = str(p.get("message") or err.get("message") or "codex error").strip()
+    details = str(err.get("additionalDetails") or p.get("additionalDetails") or "").strip()
+    line = f"{msg} ({details[:300]})" if details and details not in msg else msg
+    transient = bool(p.get("willRetry")) or msg.lower().startswith("reconnecting")
+    return line, transient
+
+
 def _codex_thread_request(resume_session_id: str | None, cwd: str, model: str) -> tuple[str, dict]:
     """The app-server request that opens this turn's thread, with its params.
 
@@ -6826,7 +6983,7 @@ def _codex_thread_request(resume_session_id: str | None, cwd: str, model: str) -
     bare keeps the tool set of the model it started with, and a turn on another model family
     (gpt-5.3-codex after gpt-5.5) then narrates its work instead of calling tools (reproduced
     three times, 2026-09-05). One params dict serves both requests so they cannot drift."""
-    params = {"cwd": cwd, "model": model, "sandbox": _CODEX_SANDBOX, "approvalPolicy": "never"}
+    params = {"cwd": cwd, "model": model, "sandbox": _CODEX_SANDBOX, "approvalPolicy": _CODEX_APPROVAL}
     if resume_session_id:
         return "thread/resume", {"threadId": resume_session_id, **params}
     return "thread/start", params
@@ -6886,6 +7043,10 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         proc.stdin.flush()  # type: ignore[union-attr]
         return msg.get("id")
 
+    def reply(mid, result: dict) -> None:
+        proc.stdin.write(json.dumps({"id": mid, "result": result}) + "\n")  # type: ignore[union-attr]
+        proc.stdin.flush()  # type: ignore[union-attr]
+
     errbuf: list[str] = []
     usage: dict = {}
     turn_status = None
@@ -6924,7 +7085,16 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                         append({"type": "system", "subtype": "init", "session_id": thread_id, "model": model})
                         rec["session_id"] = thread_id
                     id_turn = send("turn/start", {"threadId": thread_id, "model": model,
-                                   "approvalPolicy": "never", "input": [{"type": "text", "text": prompt}]})
+                                   "approvalPolicy": _CODEX_APPROVAL, "input": [{"type": "text", "text": prompt}]})
+                continue
+            if mid is not None and method:                      # a request FROM the app-server
+                if method.endswith("/requestApproval"):
+                    # The exec policy's "prompt" rules (rm -f among them, default.rules) are
+                    # answered here: the sandbox is the trust boundary, nobody is attached, and
+                    # under approvalPolicy never the same rules REJECTED the command with
+                    # "rm -f style commands are not permitted" and the turn died on a delete inside
+                    # the agent's own workspace (a customer benchmark, 2026-09-30).
+                    reply(mid, {"decision": "accept"})
                 continue
             p = msg.get("params") or {}                          # a notification
             if method == "item/agentMessage/delta":
@@ -6955,7 +7125,14 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 nu = _norm_token_usage(p)
                 if nu.get("input_tokens") or nu.get("output_tokens"):
                     usage = nu
-            elif method in ("turn/failed", "error"):
+            elif method == "error":
+                line, transient = _codex_error_line(p)
+                errbuf.append(line)
+                if transient:
+                    continue        # the app-server is retrying the provider stream; the turn goes on
+                turn_status = "failed"
+                break
+            elif method == "turn/failed":
                 errbuf.append(str(p.get("message") or (p.get("error") or {}).get("message") or "codex error"))
                 turn_status = "failed"
                 break

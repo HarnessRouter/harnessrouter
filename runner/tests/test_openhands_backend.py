@@ -462,7 +462,11 @@ def test_provider_retries_are_bounded_in_seconds():
     """The SDK's defaults turned a provider that answered the same 503 every time into a 270 s
     turn before the reason was reported; every other base fails in seconds."""
     llm = drv._agent_spec({"model": "m"})["llm"]
-    assert (llm["num_retries"], llm["retry_min_wait"], llm["retry_max_wait"], llm["retry_multiplier"]) == (2, 2, 8, 2)
+    # four retries at 2, 4, 8 and 16 seconds: half a minute covers a provider that drops the
+    # connection mid-run (a 7.5-minute GPT-5.4 run died on one "Server disconnected" with the two
+    # retries of before, 2026-09-30), and a provider that is down is still reported in seconds,
+    # not the SDK's own 270
+    assert (llm["num_retries"], llm["retry_min_wait"], llm["retry_max_wait"], llm["retry_multiplier"]) == (4, 2, 20, 2)
 
 
 def test_the_agent_doc_is_loaded_as_context_on_every_turn():
@@ -494,3 +498,11 @@ def test_a_file_editor_view_is_a_read_card():
     assert call[0][1]["name"] == "Edit"
 
 
+
+
+def test_an_mcp_tool_actions_arguments_are_the_cards_input():
+    """An MCP tool action wraps the call's arguments in `data`; every other base's card shows the
+    arguments themselves (a benchmark's trace reader found {"data": {...}} on this base alone)."""
+    assert drv._action_input({"kind": "MCPToolAction", "name": "wm_find_documents", "data": {"query": "APL 26-018", "limit": 5},
+                              "thought": "", "security_risk": "LOW"}) == {"query": "APL 26-018", "limit": 5}
+    assert drv._action_input({"kind": "TerminalAction", "command": "ls", "is_input": False}) == {"command": "ls", "is_input": False}
