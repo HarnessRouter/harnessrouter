@@ -103,8 +103,12 @@ const results = {};
 // So: withhold a real tool the fixture never uses. Execution, file and search tools are what the skill
 // and the MCP turn need; anything else is fair game, preferred in this order. A base that publishes
 // nothing else records the claim as unmeasurable rather than as a pass.
-const NEEDED_ID = /^(bash|shell|execute|run_command|run_terminal_command|terminal|code_execution_tool|read|read_file|write|edit|search_replace|apply_patch|glob|grep|list_dir|ls|skill|task|search_tool|use_tool|mcp.*)$/i;
-const PREFERRED = /^(todo_write|todowrite|todo|web_?fetch|web_?search|browser.*|board_.*|link_pr)$/i;
+// What the fixture itself needs, by every naming a base has used here: something that EXECUTES (the
+// skill's script), something that reads or writes FILES, whatever loads a SKILL, and the MCP path.
+// Agent Zero names its file tool `text_editor` and its loader `skills_tool`, so a list written from
+// grok's and minimax's names alone picked `text_editor` — the tool the fixture writes with.
+const NEEDED_ID = /^(bash|shell|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|read|read_file|write|write_file|edit|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|ls|skills?_?tool|skill|task|search_tool|use_tool|mcp.*)$/i;
+const PREFERRED = /^(todo_write|todowrite|todo|web_?fetch|web_?search|browser.*|board_.*|link_pr|goal|wait)$/i;
 const pickDisabled = (tools) => {
   const names = (tools || []).map((t) => String((t && t.name) || t || '')).filter(Boolean);
   return names.find((n) => PREFERRED.test(n)) || names.find((n) => !NEEDED_ID.test(n)) || null;
