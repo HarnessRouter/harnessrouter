@@ -198,16 +198,19 @@ def _suffix_match(host: str, patterns: list[str]) -> bool:
     return False
 
 
-def host_policy(host: str, allow: list[str], deny: list[str]) -> str | None:
-    """Why this host may not be reached, or None. Name rules only; the address rule follows."""
+def host_policy(host: str, allow: list[str], deny: list[str], private_ok: bool = False) -> str | None:
+    """Why this host may not be reached, or None. Name rules only; the address rule follows.
+    `private_ok` lifts the private-address names and literals: the operator's own browser sits on
+    the operator's own network (HR_BROWSER_CDP_URL), and a loopback address was still refused here
+    by name after the plane had opened that browser (hr-test, 2026-09-30)."""
     h = (host or "").strip().lower().rstrip(".")
     if not h:
         return "no host"
     if h.startswith("[") and h.endswith("]"):
         h = h[1:-1]
-    if _ip_private(h):
+    if not private_ok and _ip_private(h):
         return "a private or local address"
-    if h == "localhost" or any(h.endswith(s) for s in _PRIVATE_NAMES[1:]):
+    if not private_ok and (h == "localhost" or any(h.endswith(s) for s in _PRIVATE_NAMES[1:])):
         return "a private or local address"
     if deny and _suffix_match(h, deny):
         return "a site this agent is not allowed to visit"
@@ -363,11 +366,12 @@ async def _allowed(s: Session, url: str) -> str | None:
     if u.scheme not in ("http", "https"):
         return f"a {u.scheme or 'non-web'} address" if u.scheme not in ("about", "data", "blob") else None
     host = u.hostname or ""
-    why = host_policy(host, s.allow, s.deny)
+    own = not s.vendor_id           # the operator's own browser, on the operator's own network
+    why = host_policy(host, s.allow, s.deny, private_ok=own)
     if why:
         return why
-    if not s.vendor_id:
-        return None                 # the operator's own browser, on the operator's own network
+    if own:
+        return None
     if host not in s.host_cache:
         s.host_cache[host] = await resolves_private(host)
     return "a private or local address" if s.host_cache[host] else None
