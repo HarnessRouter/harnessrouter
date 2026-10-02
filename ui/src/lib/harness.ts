@@ -587,6 +587,15 @@ export function microsoftComplete(code: string, state: string): Promise<Plug> {
 export function microsoftSignout(): Promise<Plug> {
   return gw<Plug>('POST', '/v1/plugs/microsoft365/microsoft/signout', {});
 }
+export interface PlugTool { name: string; description: string; risk: string }
+/** The tools a plugin serves, the same list the agent gets. */
+export function plugTools(type: string): Promise<{ type: string; label: string; tools: PlugTool[] }> {
+  return gw<{ type: string; label: string; tools: PlugTool[] }>('GET', `/v1/plugs/${encodeURIComponent(type)}/tools`);
+}
+/** Remove a plugin from the workspace: the record and the credential it kept are deleted. */
+export function deletePlug(type: string): Promise<{ type: string; workspace: string; removed: boolean }> {
+  return gw<{ type: string; workspace: string; removed: boolean }>('DELETE', `/v1/plugs/${encodeURIComponent(type)}`);
+}
 export function plugAttachments(type: string): Promise<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }> {
   return gw<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }>('GET', `/v1/plugs/${encodeURIComponent(type)}/attachments`);
 }

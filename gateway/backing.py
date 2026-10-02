@@ -50,6 +50,9 @@ class GraphStore(Protocol):
     async def upsert(self, label: str, vid: str, props: dict, *, raise_on_fail: bool = False) -> None: ...
     async def add_edge(self, label: str, src: str, dst: str) -> None: ...
     async def find(self, label: str, eq: dict | None = None, neq: dict | None = None) -> list[dict]: ...
+    async def delete(self, vid: str, label: str | None = None) -> bool:
+        """Remove one vertex and its edges; False when there was none (or the label differs)."""
+        ...
     async def probe(self) -> None:
         """Raise if the store is unreachable/misconfigured. Used by /readyz, which must FAIL on a
         broken plane — the normal read paths swallow errors and return empty."""
@@ -66,6 +69,9 @@ class BlobStore(Protocol):
 
 class SecretStore(Protocol):
     async def get(self, tenant: str, name: str) -> str | None: ...
+    async def delete(self, tenant: str, name: str) -> None:
+        """Forget a stored secret; nothing happens when there is none."""
+        ...
 
     async def put(self, tenant: str, name: str, value: str, *,
                   require_encryption: bool = False) -> None:
@@ -162,6 +168,20 @@ class SqliteGraphStore:
             await asyncio.to_thread(_do)
         except Exception:  # noqa: BLE001 — best-effort, matches VG edge semantics
             pass
+
+    async def delete(self, vid: str, label: str | None = None) -> bool:
+        def _do():
+            with self._conn() as c:
+                row = c.execute("SELECT label FROM vertices WHERE vid=?", (vid,)).fetchone()
+                if not row or (label is not None and row[0] != label):
+                    return False
+                c.execute("DELETE FROM vertices WHERE vid=?", (vid,))
+                c.execute("DELETE FROM edges WHERE src=? OR dst=?", (vid, vid))
+                return True
+        try:
+            return await asyncio.to_thread(_do)
+        except Exception:  # noqa: BLE001
+            return False
 
     async def find(self, label: str, eq: dict | None = None, neq: dict | None = None) -> list[dict]:
         def _do():
@@ -380,6 +400,12 @@ class FileSecretStore:
             p.write_text(body)
             with contextlib.suppress(OSError):
                 p.chmod(0o600)              # belt to the encryption's braces
+        await asyncio.to_thread(_do)
+
+    async def delete(self, tenant: str, name: str) -> None:
+        def _do():
+            with contextlib.suppress(OSError):
+                self._p(tenant, name).unlink()
         await asyncio.to_thread(_do)
 
 
