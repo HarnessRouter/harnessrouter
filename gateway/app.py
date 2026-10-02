@@ -6389,13 +6389,15 @@ _MODEL_CATALOG: dict[str, dict] = {
     # all read the same day; no 6.1 astra or luna exists yet) is the newest sol: $2 in / $10 out,
     # cached $0.10 (half of gpt-6-sol's), cache write $2.50; above 272k prompt tokens $4 / $15,
     # cached $0.20; 1,050,000 context, 128k output. Unlike gpt-6-sol it refuses `reasoning_effort:
-    # "none"` ("Supported values are: low, medium, high, and xhigh"), so on a connection that passes
-    # chat/completions through (TokenRouter, OpenAI direct) function tools fail on the chat-only
-    # bases, while an aggregator that translates to the Responses API upstream (OpenRouter, Vercel)
-    # serves them (measured 2026-10-02, five scenarios through the console, one column per
-    # connection). As with the gpt-5.6 line on qwen and cline, a row measured working on a path
-    # stays listed and the CHANNEL decides; the bases that refused it on every connection: none.
-    # Not RESPONSES_ONLY: aider (chat completions, no function tools) runs it on every connection.
+    # "none"` ("Supported values are: 'low', 'medium', 'high', and 'xhigh'"), so the CHANNEL decides
+    # (measured 2026-10-02 through the console, five scenarios, one column per connection): a
+    # connection that passes chat/completions through refuses function tools on the chat-only
+    # bases (TokenRouter: kimi, openhands, cheetahclaws, qwen, cline; OpenAI direct and Azure: kimi,
+    # qwen, cline, while openhands reaches both through litellm's Responses path), and an aggregator
+    # that translates to the Responses API upstream serves every base (OpenRouter and Vercel: twelve
+    # of twelve); aider (no function tools) and goose run it on every connection. As with the gpt-5.6 line on
+    # qwen and cline, a row measured working on a path stays listed and the comment names the
+    # channel; no base refused it on every connection. Not RESPONSES_ONLY: aider runs it.
     # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
     # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
     # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
