@@ -1120,3 +1120,4 @@ button.v2-social:hover { background: var(--v2-row); }
 @media (max-width: 768px) {
   .pl { height: calc(100vh - var(--v2-mobilebar-h)); }
   .pl-head { padding: 20px 16px 0; }
+}
