@@ -785,6 +785,10 @@ async def _vault_put(tenant: str, name: str, value: str) -> None:
     await BACKING.secrets.put(tenant, name, value)
 
 
+async def _vault_delete(tenant: str, name: str) -> None:
+    await BACKING.secrets.delete(tenant, name)
+
+
 _VAULT_TENANT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 def _vault_tenant_ok(org: str | None) -> bool:
     # secret-store tenants must be [a-z0-9-], no '--', start/end alnum -> dotted org ids are invalid
@@ -14167,6 +14171,39 @@ async def plug_attachments_public(plug_type: str, request: Request) -> dict:
         if rec and rec.get("harness") == hid and plug_type in (rec.get("plugs") or []):
             attached.append({"id": hid, "name": str(r.get("name") or "")})
     return {"workspace": workspace, "type": plug_type, "harnesses": len(rows), "attached": len(attached), "harness_list": attached}
+
+
+@app.get("/v1/plugs/{plug_type}/tools")
+async def plug_tools_public(plug_type: str, request: Request) -> dict:
+    """The tools a plugin serves, from the same list the agent gets: what the detail sheet shows."""
+    await _pub_org_member(request)
+    if plug_type not in _PLUG_FORMS:
+        raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
+    return {"type": plug_type, "label": plugs_plane.TYPES[plug_type],
+            "tools": [{"name": t["name"], "description": t["description"], "risk": t["risk"]} for t in plugs_plane.tools_of(plug_type)]}
+
+
+@app.delete("/v1/plugs/{plug_type}")
+async def delete_plug(plug_type: str, request: Request) -> dict:
+    """Remove a plugin from the workspace: the record goes and the credential it kept is deleted
+    from the secret store. A harness that includes it keeps its entry and loses the tools on its
+    next task; nothing at the service changes, and the workspace can connect it again."""
+    org, _ = await _pub_org_member(request)
+    if PLUGS_REGISTRY_URL:
+        raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
+    if plug_type not in _PLUG_FORMS:
+        raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
+    workspace = _plug_workspace(request)
+    _status, rec = await _plug_lookup_local(org, workspace, plug_type)
+    if not rec:
+        raise uhp_error(404, "plug_not_connected", f"No {plugs_plane.TYPES[plug_type]} plugin is connected for this workspace.", "plug_type")
+    for r in rec.get("key_refs") or []:
+        if isinstance(r, dict) and r.get("ref"):
+            await _vault_delete(org, str(r["ref"]))
+    await BACKING.graph.delete(_plug_vid(workspace, plug_type), _PLUG_LABEL)
+    _plug_fields_cache.pop(_plug_vid(workspace, plug_type), None)
+    print(f"[plugs] {workspace}: {plug_type} removed", flush=True)
+    return {"type": plug_type, "workspace": workspace, "removed": True}
 
 
 def _plugs_types_ok(plugs: list) -> list[str]:

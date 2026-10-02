@@ -199,3 +199,27 @@ def test_a_harness_created_without_a_workspace_header_is_in_the_default_workspac
     with um.patch.object(gw, "PLUGS_REGISTRY_URL", "http://registry"):
         assert gw._harness_workspace_for_plugs({"workspace": ""}) == ""
         assert gw._harness_workspace_for_plugs({"workspace": "ws1"}) == "ws1"
+
+
+def test_the_sheet_reads_the_tools_and_remove_forgets_the_record_and_its_credential(client, world):
+    """The console's detail sheet lists a plugin's tools from the gateway (the same list the agent
+    gets) and Remove deletes the record and the secret it kept; connecting again starts clean."""
+    r = _req(client, "GET", "/v1/plugs/github/tools")
+    assert r.status_code == 200 and r.json()["label"] == "GitHub"
+    names = [t["name"] for t in r.json()["tools"]]
+    assert "get_file_contents" in names and "create_pull_request" in names
+    assert all(set(t) == {"name", "description", "risk"} for t in r.json()["tools"])
+    assert _req(client, "GET", "/v1/plugs/nonsense/tools").status_code == 404
+
+    r = _req(client, "PUT", "/v1/plugs/github", {"enabled": True, "config": {"repo": "acme/site"}, "secrets": {"token": GH_TOKEN}})
+    assert r.status_code == 200 and r.json()["status"] == "connected", r.text
+    ref = f"plug-{gw._plug_safe(WS)}-github-token"
+    assert asyncio.run(gw.BACKING.secrets.get(ORG, ref)) == GH_TOKEN
+
+    r = _req(client, "DELETE", "/v1/plugs/github")
+    assert r.status_code == 200 and r.json() == {"type": "github", "workspace": WS, "removed": True}
+    assert asyncio.run(gw.BACKING.secrets.get(ORG, ref)) is None
+    cat = {p["type"]: p for p in _req(client, "GET", "/v1/plugs").json()["plugs"]}
+    assert cat["github"]["status"] == "missing" and cat["github"]["secrets_set"] == []
+    assert _req(client, "DELETE", "/v1/plugs/github").status_code == 404
+    assert GH_TOKEN not in "".join(_seen[-6:])
