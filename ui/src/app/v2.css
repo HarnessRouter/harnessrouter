@@ -1120,4 +1120,10 @@ button.v2-social:hover { background: var(--v2-row); }
 @media (max-width: 768px) {
   .pl { height: calc(100vh - var(--v2-mobilebar-h)); }
   .pl-head { padding: 20px 16px 0; }
+  .pl-body { padding: 16px 16px 24px; }
+  .pl-head h1 { font-size: 24px; }
+  .pl-table-head, .pl-row { grid-template-columns: minmax(0, 1fr) 120px; gap: 10px; }
+  .pl-table-head span:nth-child(2), .pl-table-head span:nth-child(3), .pl-row > .pl-source, .pl-row > .pl-mono { display: none; }
+  .pl-row { padding: 12px 14px; }
+  .pl-card { margin: 0; padding: 11px 6px; }
 }
