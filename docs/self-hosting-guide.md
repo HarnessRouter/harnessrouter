@@ -804,6 +804,23 @@ run rather than shipped in the image. Review each tool's upstream terms before u
 policies. Credentials are not baked into the image; model requests follow your chosen provider
 and credentials.
 
+**What the hosted service does that this edition does not.** The protocol, the console and the
+starter kits are the same; these are the parts that need a service a single box does not have:
+
+- **Billing.** Credits, grants, usage in dollars per task and the per-task spend counters belong to
+  the hosted ledger. Here you pay your providers directly; `max_cost_usd` on a task or a harness
+  still caps a turn, read from the provider prices.
+- **Plugins as accounts.** On the hosted service a plugin is the organization's own account kept by
+  a registry and managed only on the Plugins page; here the registry is local to this box, and the
+  browser plugin connects without a credential.
+- **People and workspaces.** The hosted service signs in many members, each with their own
+  sessions, across several workspaces per organization; this box has one login, and every session
+  is that person's.
+- **Live events across replicas.** The hosted gateway runs several replicas and fans a session's
+  live events out across them; this box is one process.
+- **Microsoft 365.** On the hosted service the plugin signs people in through the organization's
+  own Entra application; here it uses the application you register for this box.
+
 ## Why self-host
 
 - **Your keys, your bills, your data.** You control the deployment and provider credentials.
