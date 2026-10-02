@@ -25,17 +25,31 @@ const nextConfig: NextConfig = {
   // and a locked-down permissions policy. The console renders no third-party iframes and is
   // never meant to be embedded, so 'none' is safe and has no functional regression.
   async headers() {
-    return [{
-      source: "/:path*",
-      headers: [
-        { key: "X-Frame-Options", value: "DENY" },
-        { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
-        { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
-        { key: "X-Content-Type-Options", value: "nosniff" },
-        { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-        { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-      ],
-    }];
+    const baseline = [
+      { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+    ];
+    return [
+      {
+        // Public artifact proxies set their own stricter CSP and referrer policy. Next's
+        // configured headers can overwrite route response headers, so exclude them here.
+        source: "/((?!api/share/|[^/]+/[^/]+/workspace/).*)",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          ...baseline,
+        ],
+      },
+      ...["/api/share/:path*", "/:harness/:sid/workspace/:path*"].map((source) => ({
+        source,
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          ...baseline.filter(({ key }) => key !== "Referrer-Policy"),
+        ],
+      })),
+    ];
   },
   webpack: (config) => {
     // NOTE: do NOT alias react/react-dom here — Next.js installs its own layer-aware react
