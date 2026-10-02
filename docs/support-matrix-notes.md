@@ -1697,3 +1697,69 @@ or the store, the command's output), and the session names the environment.
 first pass judged three answers by their labels rather than their evidence (aider paraphrases the
 printed lines; omp's shell reports `jq --version` as jaq while `which jq` and the sorted output are the
 environment's); the judges now read the evidence, and the two bases rerun clean on 0.26.12.
+
+## gpt-6.1-sol (2026-10-02, 0.28.7)
+
+Richard asked for GPT-6.1 Sol on every harness that can run it, in the matrix, at list price, on both
+trees. Read the same day: OpenAI's pricing page names gpt-6.1-sol (released 2026-09-29; no 6.1 astra or
+luna yet) at $2 in / $10 out per 1M, cached input $0.10 (half of gpt-6-sol's $0.20), cache write $2.50,
+and above 272k prompt tokens $4 / $15 (cached $0.20, write $5); 1,050,000 context, 128k output.
+OpenRouter, TokenRouter, Vercel and llmtr list it as `openai/gpt-6.1-sol` (OpenRouter also a `-pro`,
+Vercel also a `-fast`; neither is carried); Azure's catalog names it at model version 2026-09-29. It is
+offered wherever gpt-6-sol is, newest first in the OpenAI family, and it sees images.
+
+**Where it runs.** Unlike gpt-6-sol and gpt-6-luna it refuses `reasoning_effort: "none"` ("Supported
+values are: 'low', 'medium', 'high', and 'xhigh'"), so the relay's none-retry that lets the chat-only
+bases call function tools on /v1/chat/completions does not help it. What decides is the channel: a
+connection that passes chat/completions through refuses the first turn on the chat-only bases, while an
+aggregator that translates chat completions with tools into OpenAI's Responses API upstream serves every
+base, and aider (no function tools) runs it everywhere. openhands reaches OpenAI direct and Azure through
+litellm's Responses path and fails only on TokenRouter. As with the gpt-5.6 line on qwen and cline, a
+row measured working on a path stays listed and the catalog comment names the connections that refuse
+it; no base refused it on every connection, so none left the catalog. It is not Responses-only (aider
+runs it), so RESPONSES_ONLY_MODELS is unchanged.
+
+**Measured** (0.28.7-rc.1 and rc.2 on hr-test, Playwright through the console, one column per
+connection, five scenarios per pair: first, follow-up, switch to gpt-6-sol on the same connection,
+artifact, recall after recycle; the console's switch partner stays on the column's connection):
+
+| connection | bases listed | pairs | scenario runs | refused the first turn |
+|---|---:|---:|---:|---|
+| TokenRouter (sponsorship) | 13 | 8 of 13 | 40 of 40 on the passing pairs | kimi, openhands, cheetahclaws, qwen, cline |
+| OpenRouter | 13 | 13 of 13 | 65 of 65 | none |
+| Vercel AI Gateway | 13 | 13 of 13 | 65 of 65 | none |
+| OpenAI (direct) | 12 (cheetahclaws not wired) | 9 of 12 | 45 of 45 on the passing pairs | kimi, qwen, cline |
+| Azure OpenAI | 12 (cheetahclaws not wired) | 9 of 12 | 45 of 45 on the passing pairs | kimi, qwen, cline |
+
+goose, measured on its own pairs as it was for gpt-6-sol (rc.2, goose in the catalog): five of five connections, 25 of 25 scenario runs, TokenRouter included, so goose carries it.
+
+Runner failures, not model results: four workers lost their headless browser mid-run ("Target page,
+context or browser has been closed": qwen on TokenRouter at its first turn, hermes at its follow-up and
+kimi on Vercel, the Azure worker after aider); each pair was re-measured one worker at a time and the
+table carries the re-measurement (hermes on Vercel: "the session never opened a turn in 120 s" on the
+crashed worker, five of five on the rerun).
+
+**Family tour** (`FAMILIES=gpt-6.1-sol,gpt-6-sol`: one deck conversation per base handed into
+gpt-6.1-sol and on to gpt-6-sol, under the OpenRouter route): codex, hermes, pi, omp, dsh, opencode, kimi,
+openhands, cheetahclaws, qwen and cline passed, 2 of 2 families each in one conversation; aider aborted
+its own first turn twice (13 s, no deck before any switch, its trait since 2026-09-30 and the same on hosted that day); its pair rows pass five of five on every connection, so the model stays listed on aider and the tour's aider first turn stays the open aider item it was.
+
+**Finding, not this model's.** codex, dsh, omp and cline turns carry no `served_model` on this box on any
+connection (a probe on codex with gpt-6-sol answers unlabelled too), so their rows read "turn(s)
+unlabelled" by the rule of 2026-09-30; aider, opencode, pi, openhands, hermes (on three of five
+connections), kimi, qwen and cheetahclaws label theirs. The relay's label is not read on those bases'
+paths: a follow-up, outside this column.
+
+**The record store.** The gpt-6 line's columns (#297, #299) were rendered from records never committed,
+so the Claude Sonnet 5.5 column's regeneration (#351) dropped 175 of their rows from the table. The 149
+rows the store lacked are restored from the document as it stood at #297, marked `reconstructed`, so
+the table says again what was measured then.
+
+**Hosted cross-check** (the HarnessRouter session, same day): on the platform channel the seven
+Responses-capable bases plus aider passed 35 of 35 with the five chat-only bases' first-turn 400 kept
+as evidence; OpenRouter 12 of 12, 48 of 48; Vercel 7 of 7, 35 of 35; tours pass on codex, hermes, dsh,
+pi, omp and opencode (third attempt, a sandbox carry flake), aider aborts on its own first turn as
+before. The hosted platform then took OpenRouter as the route for this model, so its catalog lists the
+same twelve bases as this one; its comment keeps the TokenRouter and direct-OpenAI refusal for
+organizations that bring such a key, the rule the self-hosted catalog states.
+
