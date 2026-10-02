@@ -48,6 +48,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 import backing               # pluggable graph/blob/secret stores (vg | local)
 import media_plane           # the media plane (capability catalog, provider adapters, ffmpeg)
 import plugs_plane           # the plugs surface: the vendor tools behind the hosted plugs server
+from public_artifacts import public_artifact_headers
 import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
@@ -392,6 +393,11 @@ async def _harness_path_prefix(request: Request, call_next):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
     resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # Revocable public views must recheck authorization at the gateway, including metadata
+    # and 404s. Do not let a CDN or browser retain a share after its owner revokes it.
+    if request.url.path.startswith(("/share/", "/w/")):
+        resp.headers["Cache-Control"] = "private, no-store"
+        resp.headers["Referrer-Policy"] = "no-referrer"
     return resp
 # NOTE: do NOT add GZipMiddleware globally — it buffers StreamingResponse to compress, which kills
 # the /v1/responses SSE (no live progress reaches the browser until the turn ends). Trace payloads
@@ -478,9 +484,8 @@ def _reap_spool_dir() -> None:
                 os.unlink(f)
         except OSError:
             pass
-_SHARE_STATE_CACHE: dict[str, tuple[float, bool]] = {}  # sid -> (ts, shared)
 _SHARE_TOKEN_CACHE: dict[str, tuple[float, str]] = {}   # token -> (ts, sid)
-_SHARE_TTL = 10.0                                        # revocation latency ceiling
+_SHARE_TTL = 10.0  # lookup optimization only; never caches permission to read
 # Extracting one member from a tar.gz means decompressing the archive up to that member —
 # ~seconds of CPU on a big checkpoint, paid PER CLICK before this cache. One pass now
 # extracts every user-visible file (node_modules etc. are already hidden, so this is the
@@ -4666,11 +4671,8 @@ async def delete_trace(sid: str, request: Request) -> dict:
         await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
     except Exception:  # noqa: BLE001
         pass
-    # The share resolver caches token -> session and session -> shared for _SHARE_TTL seconds; a
-    # link opened inside that window after the delete still answered (R-07 of the conformance
-    # suite, intermittent by timing). The tombstone is not enough: the caches go with it, as they
-    # do on every revoke.
-    _SHARE_STATE_CACHE.pop(sid, None)
+    # Clear local token lookups as well. Every public read checks durable share state, so
+    # sibling replicas with warm token lookups cannot keep authorizing a deleted session.
     _SHARE_TOKEN_CACHE.clear()
     # §6: a session is deleted with nothing still writing into it. A live turn is stopped first,
     # the same way cancel stops it, so the sandbox cannot repopulate storage that has no owner.
@@ -4714,7 +4716,6 @@ async def delete_trace(sid: str, request: Request) -> dict:
             pass
     await _media_session_purge(sid)
     # 3) drop in-process state (the vertex was tombstoned first, above)
-    _SHARE_STATE_CACHE.pop(sid, None)
     _SHARE_TOKEN_CACHE.clear()
     _session_trace.pop(sid, None)
     return {"id": sid, "object": "session", "deleted": True}
@@ -8791,7 +8792,7 @@ def _preview_media(path: str, media: str, data: bytes) -> str:
     return media or "application/octet-stream"
 
 
-async def _serve_workspace_path(sid: str, path: str) -> Response:
+async def _serve_workspace_path(sid: str, path: str, *, public: bool = False) -> Response:
     path = path.lstrip("/")
     if not path or not _ws_visible(path):
         raise HTTPException(404, "file not found")
@@ -8800,29 +8801,26 @@ async def _serve_workspace_path(sid: str, path: str) -> Response:
         raise HTTPException(404, "file not found")
     data, media, fname = got
     media = _preview_media(path, media, data)
-    return Response(data, media_type=media, headers=_artifact_headers(media, fname))
+    headers = _artifact_headers(media, fname)
+    if public:
+        headers.update(public_artifact_headers())
+    return Response(data, media_type=media, headers=headers)
 
 
 async def _session_shared(sid: str) -> bool:
-    """Single cached flag check — one vertex prop read on miss, no traversal."""
-    now = time.time()
-    hit = _SHARE_STATE_CACHE.get(sid)
-    if hit and now - hit[0] < _SHARE_TTL:
-        return hit[1]
+    """Read durable authorization on every request, including on sibling replicas."""
     v = await _vertex_get(sid)
-    shared = bool(v) and str(v.get("shared") or "") == "1"
-    _SHARE_STATE_CACHE[sid] = (now, shared)
-    return shared
+    return bool(v) and str(v.get("shared") or "") == "1" and v.get("status") != "deleted"
 
 
 @app.get("/w/{harness_id}/{sid}/workspace/{path:path}")
 async def workspace_by_path(harness_id: str, sid: str, path: str) -> Response:
-    """Canonical artifact URL: /{harness}/{session}/workspace/{path}. Access is ONE cached
+    """Canonical artifact URL: /{harness}/{session}/workspace/{path}. Access is one fresh
     session-level check: is the session shared? (The console BFF maps its same-shaped route
     here.) harness_id is part of the address, not the auth — the sid is the lookup key."""
     if not await _session_shared(sid):
         raise HTTPException(404, "file not found")
-    return await _serve_workspace_path(sid, path)
+    return await _serve_workspace_path(sid, path, public=True)
 
 
 @app.get("/a/{sid}/{path:path}")
@@ -8870,11 +8868,9 @@ async def set_session_share(sid: str, request: Request, body: ShareBody | None =
         token = str(v.get("share_token") or "") or ("shr" + uuid.uuid4().hex)
         await _vertex_upsert(sid, {"share_token": token, "shared": "1",
                                    "shared_at": str(time.time())})
-        _SHARE_STATE_CACHE.pop(sid, None)
         _SHARE_TOKEN_CACHE.clear()
         return _share_out(True, token)
     await _vertex_upsert(sid, {"shared": "0"})
-    _SHARE_STATE_CACHE.pop(sid, None)
     _SHARE_TOKEN_CACHE.clear()
     return _share_out(False, str(v.get("share_token") or ""))
 
@@ -8889,7 +8885,6 @@ async def revoke_session_share(sid: str, request: Request) -> dict:
     if not v or str(v.get("tenant") or "") != p.get("org"):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     await _vertex_upsert(sid, {"shared": "0"})
-    _SHARE_STATE_CACHE.pop(sid, None)
     _SHARE_TOKEN_CACHE.clear()
     return _share_out(False, str(v.get("share_token") or "")) | {"deleted": True}
 
@@ -8913,13 +8908,20 @@ async def _share_sid(token: str) -> str | None:
     # box resolve to "not found" while the console happily minted them.
     hit = _SHARE_TOKEN_CACHE.get(tok)
     if hit and time.time() - hit[0] < _SHARE_TTL:
-        return hit[1] or None
-    rows = await BACKING.graph.find("HarnessSession", {"share_token": tok, "shared": "1"})
-    if not rows:
-        _SHARE_TOKEN_CACHE[tok] = (time.time(), "")
+        sid = hit[1]
+    else:
+        rows = await BACKING.graph.find("HarnessSession", {"share_token": tok, "shared": "1"})
+        sid = str(rows[0].get("id") or "") if rows else ""
+        _SHARE_TOKEN_CACHE[tok] = (time.time(), sid)
+    if not sid:
         return None
-    sid = str(rows[0].get("id") or "")
-    _SHARE_TOKEN_CACHE[tok] = (time.time(), sid)
+    # A token lookup is not an authorization grant: another replica may have revoked the
+    # share since this one populated its cache (or a graph index may lag the point read).
+    v = await _vertex_get(sid)
+    if (not v or str(v.get("shared") or "") != "1" or v.get("status") == "deleted"
+            or str(v.get("share_token") or "") != tok):
+        _SHARE_TOKEN_CACHE.pop(tok, None)
+        return None
     return sid
 
 
@@ -8978,9 +8980,7 @@ async def share_file(token: str, path: str) -> Response:
     sid = await _share_sid(token)
     if not sid:
         raise HTTPException(404, "share not found")
-    resp = await _serve_workspace_path(sid, path)
-    resp.headers["Cache-Control"] = "public, max-age=300"
-    return resp
+    return await _serve_workspace_path(sid, path, public=True)
 
 
 @app.get("/v1/responses/{response_id}/input_items")

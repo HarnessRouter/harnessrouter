@@ -25,7 +25,6 @@ def api(monkeypatch):
         return {"org": ORG, "member": "me@local"}
     monkeypatch.setattr(gw, "_principal", principal)
     gw._SHARE_TOKEN_CACHE.clear()
-    gw._SHARE_STATE_CACHE.clear()
     return TestClient(gw.app)
 
 

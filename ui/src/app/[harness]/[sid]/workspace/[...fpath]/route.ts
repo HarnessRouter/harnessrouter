@@ -1,8 +1,9 @@
 // Canonical artifact URL: /{harness}/{session}/workspace/{path}, proxies to the gateway's
-// same-shaped /w/ route. Access is the gateway's single cached session-level shared flag
+// same-shaped /w/ route. Access is the gateway's fresh session-level shared flag
 // (no auth headers injected; the unguessable session id is the lookup key, the flag is the
 // gate). Binary-safe passthrough so html/css/js/img/pdf preview inline with relative assets.
 import type { NextRequest } from 'next/server';
+import { publicShareResponseHeaders } from '@/lib/public-artifact-response';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,17 +16,11 @@ export async function GET(req: NextRequest,
     `/workspace/${(fpath || []).map(encodeURIComponent).join('/')}`;
   try {
     const res = await fetch(target, { cache: 'no-store' });
-    const out: Record<string, string> = {
-      'content-type': res.headers.get('content-type') || 'application/octet-stream',
-    };
-    for (const h of ['content-disposition', 'cache-control', 'x-content-type-options']) {
-      const v = res.headers.get(h);
-      if (v) out[h] = v;
-    }
+    const out = publicShareResponseHeaders(res.headers, true);
     return new Response(res.body, { status: res.status, headers: out });
   } catch {
     return new Response(JSON.stringify({ detail: 'workspace upstream unreachable' }), {
-      status: 502, headers: { 'content-type': 'application/json' },
+      status: 502, headers: publicShareResponseHeaders(new Headers({ 'content-type': 'application/json' }), true),
     });
   }
 }
