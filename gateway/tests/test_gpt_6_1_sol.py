@@ -1,8 +1,10 @@
 """gpt-6.1-sol (OpenAI's pricing page, and the OpenRouter, TokenRouter, Vercel and llmtr /v1/models
-lists, all read 2026-10-02): every provider we route to names it, it leads the gpt-6 family wherever
-that family is offered, and like gpt-6-sol it takes function tools on chat/completions
-(reasoning_effort "none"), so the chat-only bases offer it too. goose is measured-only: it gains the
-id once its own pairs pass, as it did for gpt-6-sol."""
+lists, all read 2026-10-02): every provider we route to names it, and it leads the gpt-6 family
+wherever gpt-6-sol is offered. It refuses reasoning_effort "none", so a connection that passes
+chat/completions through (TokenRouter, OpenAI direct) refuses function tools on the chat-only bases,
+while OpenRouter and Vercel translate to the Responses API and serve them (measured 2026-10-02); as
+with the gpt-5.6 line, a row measured working on a path stays listed. Not Responses-only: aider
+(chat completions, no function tools) runs it everywhere; goose on its own measured pairs."""
 from __future__ import annotations
 
 import sys
@@ -12,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as gw  # noqa: E402
 
 M = "gpt-6.1-sol"
+REFUSED_EVERYWHERE = []
 
 
 def test_every_provider_we_route_to_names_its_own_id():
@@ -25,10 +28,9 @@ def test_every_provider_we_route_to_names_its_own_id():
 def test_it_leads_the_gpt_6_family_wherever_that_family_is_offered():
     for base, cat in gw._MODEL_CATALOG.items():
         models = cat["models"]
-        if base == "goose":
-            assert M not in models                                  # measured-only, see the docstring
-            continue
-        if "gpt-6-sol" in models:
+        if base in REFUSED_EVERYWHERE:
+            assert M not in models, base
+        elif "gpt-6-sol" in models:
             assert models.index(M) == models.index("gpt-6-sol") - (2 if "gpt-6-astra" in models else 1), base
             if "gpt-6-astra" in models:
                 assert models.index(M) + 1 == models.index("gpt-6-astra"), base
@@ -38,11 +40,8 @@ def test_it_leads_the_gpt_6_family_wherever_that_family_is_offered():
     assert o.index(M) + 1 == o.index("gpt-6-astra")
 
 
-def test_it_is_not_responses_only_and_the_chat_only_bases_offer_it():
-    assert M not in gw.RESPONSES_ONLY_MODELS
-    for base in gw.CHAT_ONLY_BACKENDS:
-        if base != "goose" and "gpt-6-sol" in gw._MODEL_CATALOG[base]["models"]:
-            assert M in gw._MODEL_CATALOG[base]["models"], base
+def test_it_is_not_responses_only():
+    assert M not in gw.RESPONSES_ONLY_MODELS            # aider runs it: chat completions, no function tools
 
 
 def test_it_sees_images():
