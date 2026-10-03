@@ -2398,3 +2398,91 @@ EMPTY. A file-existence oracle would have recorded that as a shell escape and ov
 enforcement claim wrongly; the stamp says plainly that no shell ran. Disabling `bash` withholds
 execution, not file writing: `write` and `apply_patch` are separate switches, and a harness that
 wants neither must disable `edit` as well.
+
+## Four bases in one release: kilo, minimax, grok, agentzero (2026-10-03, 0.29.0)
+
+Kilo CLI 7.8.1, MiniMax Code 0.5.4, Grok Build 1.0.41 and Agent Zero v2.13 arrived as four pull requests
+with a fifth for the suite and the relay (#362 to #366). They were merged onto one branch, reviewed, and
+measured together on hr-test from release candidates (rc.2 to rc.5), every scenario driven through the
+console with Playwright. The sections above are the authors' own measurements on their instance; this
+one is the maintainer's, and it is what the columns in `docs/support-matrix.md` (`kilo-default`,
+`minimax-default`, `grok-default`, `agentzero-default`) were rendered from. "default" is the instance's
+own routing: each id ran on the connection the instance serves it with (TokenRouter for most, Vercel,
+OpenRouter, the direct Anthropic, OpenAI and Google connections and two custom endpoints for the rest),
+and each row names it. gpt-6.1-sol, the switch partner of most rows, was routed at OpenRouter as in its
+own column.
+
+**The columns** (full catalog, five scenarios per pair, failed pairs retested once on rc.4):
+
+| base | pairs | scenario runs, first pass | after the retest |
+|---|---:|---:|---:|
+| kilo | 59 | 287 of 295 | 291 of 295 |
+| minimax | 57 | 282 of 285 | 283 of 285 |
+| grok | 56 | 273 of 280 | 279 of 280 |
+| agentzero | 56 | 266 of 280 | 267 of 280 |
+
+**The other dimensions, all four bases:** family tour kilo 13 of 13, minimax 14 of 14, grok 14 of 14,
+agentzero 14 of 14 (one conversation each, rc.5; on rc.4 grok passed 7 of 14 and kilo 13 of 14, see
+below); plugin matrix skills, stdio, SSE and streamable HTTP 4 of 4 each; custom-harness 4 of 4 with
+MCP; browser column 4 of 4.
+
+**What the measurement found, and what was done about each.**
+
+- **A tool schema with a combinator at its root is refused by OpenAI as well as Anthropic.** grok's
+  `use_tool` on gpt-6.1-sol through TokenRouter: `Invalid schema for function 'use_tool': schema must
+  have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/… at the top level`, on every turn. The repair
+  was gated on the claude family; it runs for every model now. It also dropped the root's own
+  `required` and every `allOf` branch's; `required` is the root's, plus every allOf branch's, plus what
+  all alternatives share.
+- **grok on kimi-k3 failed after the answer had arrived.** Moonshot through TokenRouter ends a stream
+  with `"prompt_tokens_details":{"audio_tokens":null,…}`; Grok Build parses token counts as u32
+  (`serialization error: invalid type: null, expected u32`). The relay writes a null count inside usage
+  as 0 on grok's route. Five of five on the retest.
+- **kilo's claude rows on a direct Anthropic connection carried no served model** (claude-sonnet-4.6,
+  claude-haiku-4.5, claude-sonnet-5.5-direct: 4 unlabelled turns each). A Messages-shape turn kept its
+  direct base, which also left the connection's real key in the CLI's environment. The relay has read
+  x-api-key since #352, so every keyed opencode and kilo turn rides it now; the three pairs are
+  labelled and five of five on the retest.
+- **What one model leaves in a conversation ended it for the next.** The tour on rc.4, grok 7 of 14:
+  the first turn's model screenshots the slide and reads the PNG, the client replays that tool result
+  to every later model, and an aggregator's Anthropic translation, Moonshot, and OpenRouter's llama,
+  hunyuan and nemotron endpoints each refused the request for the image in it; a tool call one family
+  streamed with an empty id was refused by Mistral and StepFun (`tool messages must include a non-empty
+  string tool_call_id`); and on kilo, two parallel calls with one id were refused by Mistral
+  (`Duplicate tool call id in assistant message`). The relay now names a refused image in words for
+  that model, fills an empty id, and renames a duplicate once a provider says so
+  (`runner/tests/test_relay_conversation_repairs.py`). grok 14 of 14 and kilo 13 of 13 on rc.5.
+- **Agent Zero had no browser because it never sent the plugs server its credential.** Its MCP writer
+  copied a server's `headers` and dropped `auth`; it takes them from `_mcp_headers` like every other
+  writer. Browser column pass on rc.4. The job no longer rides argv (readable by every session uid in
+  the container; it named the relay route's token and each MCP server's credentials).
+- **Review findings fixed before the columns ran:** a stream that stalled mid-answer was ended as a
+  complete, empty answer; a non-streaming body that stopped arriving became 200 with no content; a
+  dropped connection was resent twice; kilo.json (and opencode.json, Claude Code's mcp.json and the
+  bridge launchers, which had the same hole) carried MCP credentials into checkpoints; a character
+  outside the BMP made grok's config.toml invalid; Agent Zero's dependencies resolved freely on every
+  fresh volume (they install under `runner/agentzero-constraints.txt`, frozen from the measured venv).
+  The relay's upstream wait keeps its 600 s default; hr-test, whose suite caps a turn at 600 s, ran
+  with `HR_RELAY_UPSTREAM_TIMEOUT_S=180`.
+
+**Not offered after two failures of the same kind** (`_NOT_OFFERED`, the reason beside each):
+
+- kilo x llama-3.3-70b (OpenRouter): a runaway of Webfetch calls on the first turn, then the write call
+  printed as text instead of made.
+- minimax x gpt-5.6-terra: answers DONE without writing the file. minimax x gemini-3.5-flash-lite: the
+  artifact turn ends `Conversation history could not be safely updated. Please retry.`
+- grok x deepseek-v4-pro: the artifact turn ends `empty response from model (reasoning_only)`.
+- agentzero x claude-fable-5 and claude-fable-5-1: the provider declines the first turn
+  (`finish_reason content_filter`) with Agent Zero's system prompt; kilo, minimax and grok run both ids.
+
+**Left listed, with the row saying FAIL:** claude-opus-5's artifact and recycle turns on kilo and
+agentzero are declined by the provider's safety policy at the scenario's own words, the same two
+misses kimi's column recorded, and both pass on minimax and grok; agentzero x gemini-3-flash-preview
+answers the recall after a recycle with the previous turn's word twice, the recall trait recorded for
+gpt-6-luna on codex. kilo x gpt-5.3-codex has no switch partner on its connection.
+
+**Open, not this release's:** the console showed three file cards against one in the record on
+minimax x llama-3.3-70b's first artifact turn (it passed on the retest); a display mismatch to chase
+with a kept session. The withheld-tool claim of custom-harness is still judged on a tool the fixture
+never asks for (review of #362), so it cannot fail; the env-stamp oracle described under the minimax
+and kilo sections is the judge to move it to.
