@@ -1164,6 +1164,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "opencode"): "openai-api",
     ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
     ("llmtr", "opencode"): "tokenrouter",
+    # kilo (Kilo CLI) is an opencode fork with opencode's provider layer, built by the runner the
+    # same way (_build_kilo), so its rows are opencode's, row for row.
+    ("anthropic", "kilo"): "anthropic",        ("openai", "kilo"): "openai",
+    ("azure-foundry", "kilo"): "azure",
+    ("openrouter", "kilo"): "openai-api",
+    ("tokenrouter", "kilo"): "tokenrouter",    ("vercel", "kilo"): "tokenrouter",
+    ("llmtr", "kilo"): "tokenrouter",
+    ("custom", "kilo"): "tokenrouter",         ("google", "kilo"): "openai-api",
+    ("harnessrouter", "kilo"): "tokenrouter",
     # kimi reaches every provider the same way qwen does — one OpenAI-compatible surface through
     # the loopback relay — so these rows are qwen's, verbatim, with the backend renamed.
     ("anthropic", "aider"): "anthropic",       ("openai", "aider"): "openai",
@@ -4975,9 +4984,10 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic endpoint cannot cache at all, which cost a benchmark 6 to 8 times the Claude Code
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands", "minimax", "cheetahclaws"},
-    "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
+    "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
+               "aider", "openhands", "minimax", "cheetahclaws"},
+    # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
+    "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
@@ -6752,6 +6762,15 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# kilo (Kilo CLI) is an opencode fork: the same ai-sdk packages chosen per turn by the same function
+# (_opencode_npm), through the same relay, so it is offered opencode's set — Responses-API-only ids
+# included, since @ai-sdk/openai is how both reach them. Measured on kilo so far: gpt-5.4-mini and
+# claude-haiku-4.5, one local E2E on Vercel (docs/support-matrix-notes.md, "The kilo backend"); every
+# other id is offered so the matrix can measure it here, and no column has run yet. claude ids ride
+# Anthropic Messages off the relay, as on opencode, so their turns carry no served model. The wire itself was checked at a stub: kilo 7.8.1 sends the
+# id it is given verbatim (gpt-5.4, claude-sonnet-4.6, gemini-3.8-flash, deepseek-v4-flash), so any
+# substitution would be the provider's, and the relay's served model shows it.
+_MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -15253,6 +15272,29 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("todowrite", "Todo"), ("skill", "Skill"), ("question", "Question")],
         # ask|allow|deny is a real action set, so a denied tool is genuinely absent. Same standing
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
+        "tool_enforcement": "hard",
+    },
+    "kilo": {
+        "label": "Kilo Code", "backend": "kilo", "status": "ready",
+        "system_prompt": ("You are Kilo Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tools Kilo CLI 7.8.1 put in the request's `tools` under the runner's config (captured at
+        # a stub, gpt-5.4 and claude-sonnet-4.6), by those names — which are also its permission keys.
+        # `edit` stands for write and apply_patch too: Kilo gates all three on that one key, so a
+        # separate "write" switch would disable nothing (runner/server.py, _kilo_denies). The
+        # scheduling tools (schedule_wakeup, cron_*, goal) are not listed: the runner always denies
+        # them, because nothing resumes a session later here. No websearch: 7.8.1 offers it only with
+        # Kilo's own gateway or an Exa key.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("edit", "Edit / Write"),
+                  ("glob", "Glob"), ("grep", "Grep"), ("webfetch", "Web Fetch"), ("task", "Task"),
+                  ("todowrite", "Todo"), ("skill", "Skill"),
+                  ("background_process", "Background Process"),
+                  ("kilo_local_recall", "Local Recall"), ("board_post", "Board Post"),
+                  ("board_read", "Board Read"), ("link_pr", "Link PR"),
+                  ("agent_manager_models", "Agent Models")],
+        # HARD, measured: a deny rule removes the tool from the request the model receives (bash,
+        # edit, the scheduling tools each checked at the stub), opencode's action set unchanged.
         "tool_enforcement": "hard",
     },
     "aider": {

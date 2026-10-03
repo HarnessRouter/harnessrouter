@@ -1667,6 +1667,227 @@ the same counter also covers the misformat loop, where another try is often what
 
 Measured cost of this pass, from the gateway's own credits endpoint before and after: **$1.50**.
 
+
+## The agentzero backend: Agent Zero v2.13 (2026-09-27) — behaviour measured, NO column yet
+
+Agent Zero (agent0ai/agent-zero, MIT) is a framework shipped as a Docker image with a web UI: no CLI,
+no headless mode, no PyPI package, no release assets. `runner/agentzero_driver.py` imports it from
+the tagged source tree (digest-pinned in `install_agentzero`) and runs one message per turn through
+its own `AgentContext.communicate`, the path its `/api_message` endpoint takes. No support-matrix
+column has run on this base; the catalog is openhands' list, offered so the matrix can measure it.
+
+Measured on the pinned v2.13 (macOS for the driver, Linux arm64 `python:3.12-slim` for the install):
+
+- **Provider failures are structural.** A wrong key (401) and a dead base url each raised out of the
+  loop (`HandledException`), with an `error` log item and no response-tool text; no error prose ever
+  reaches the answer, so no prefix regex exists. Through a local runner the wrong-key turn failed in
+  6 s with litellm's sentence as the reason.
+- **An endpoint that never answers held a turn past 900 s** (Agent Zero sets no provider timeout).
+  The driver passes `timeout`/`stream_timeout` 300 s (`HR_AGENTZERO_TIMEOUT`) and collapses three
+  nested retry ladders (the OpenAI client's 2, Agent Zero's 2 transient, its `_error_retry` 1) to
+  four attempts: at a 5 s timeout, 110 s before the reason became 29 s.
+- **The model id reaches the provider unchanged** (loopback recorder): `openai/gpt-6-sol`, `gpt-5.4`,
+  `google/gemini-3.1-flash-lite`, `anthropic/claude-sonnet-4.6` each arrived as sent — the openhands
+  double-strip (#296) does not happen here. One provider call per trivial turn once the
+  always-enabled `_chat_naming` plugin's automatic naming is switched off (it was a second call).
+  The system prompt of a one-word turn is about 25.7 KB; relay usage on the first real turn:
+  13,425 input tokens.
+- **Tool policy is hard**, by Agent Zero's own `_tool_access` plugin (prompt filter + execution gate,
+  which `parallel` goes through too). `input` types into the terminal, so it is withheld with
+  `code_execution_tool`. A disabled MCP tool rides the server's own `disabled_tools`: withheld,
+  asked for anyway, the model answered CANNOT and the token never appeared.
+- **Cancel.** The terminal is a pty bash spawned with `start_new_session=True`; a `nohup … &` it
+  started outlived a group kill until the driver kept the shell in its own group (A/B at a
+  scripted recorder).
+- **Not offered, because they cannot run here:** search_engine (SearXNG only its image runs),
+  document_query and memory (FAISS, local embeddings/torch), browser, scheduler, notify_user,
+  a2a_chat, the A0-connector remote tools. The nodejs runtime of code_execution_tool calls
+  `/exe/node_eval.js`, which exists only in upstream's image — a model that picks it gets an error.
+- **Install**: 83 s, venv 569 MB + source 69 MB (Linux arm64). Over the 300 MB bar and in the default
+  `HR_BACKENDS` all the same — the call aider's review already made (see above): the console offers
+  every base the catalogue lists, so a base outside the default install is a base whose first task
+  fails, and the operator's switch is `HR_BACKENDS` itself.
+- **End to end through a local runner** (Vercel, gemini-3.1-flash-lite, 2026-09-27): a shell call +
+  AGENTS.md codeword, a no-tool recall of the first turn, a skill loaded by `skills_tool` whose
+  script ran, a turn with the shell withheld; every result carried `model` =
+  `google/gemini-3.1-flash-lite` and non-zero relay usage, and neither the key nor the relay token
+  was in the workspace or the turn record.
+
+<!-- Carried onto this branch by cherry-picking 6c477eb from feat/minimax-harness: the relay is
+shared by every backend on that path, and the agentzero full-catalog run of 2026-09-30 hit the same
+defect (ten urlopen timeouts escaping the handler, six truncated chunked reads, no
+upstream_unavailable anywhere in the log). The section below is that commit's own write-up; what it
+changed for this base is under the agentzero heading further down. -->
+
+## The loopback relay answers when the provider does not (2026-09-29)
+
+The first family tour on the minimax base passed 7 of 14 families in one conversation: every family from kimi-k3
+on was recorded `not settled in 600s, stopped (cancelled)` with **no served model, no tool call and
+no reason** — except `glm-5.3-flash`, which passed in 12 s in the middle of the collapse. The
+obvious reading was the blanket 200k context window (above): a history too large for a model's real
+window. **It was not**, and two measurements say so. The conversation at its largest was 219 KB of
+messages plus a 12 KB system prompt and 27 KB of tool schemas — about 65k tokens, under the real
+window of every failing model — and the same families pass on that same session today, with a
+longer history (kimi-k3, qwen3.8-flash and minimax-m3 each re-run by hand, all completed in
+seconds). A conversation too long fails monotonically; this did not.
+
+**It was the loopback relay answering nothing when the provider answered nothing**, in two ways,
+both in `_forward`:
+
+- The upstream call caught only `urllib.error.HTTPError`. A refused connection, one dropped
+  mid-request, or a provider gone silent raised out of the handler; `ThreadingHTTPServer` printed a
+  traceback and closed the client socket **with no HTTP response at all**. The instance's log holds
+  ten of those (`http.client.RemoteDisconnected: Remote end closed connection without response`),
+  two inside the tour's failing window.
+- The relay's own wait was 600 s — the same as the cap above it — so a provider that accepted a
+  request and then went silent could never be REPORTED by the relay: the cap always fired first and
+  the turn was recorded as cancelled with nothing in it. That is the shape of six of the seven.
+
+Both are fixed in `runner/server.py`: transport failures now answer **502** (refused or dropped) or
+**504** (timed out) with `{"error":{"code":"upstream_unavailable",…}}` carrying the provider's own
+failure; a bare drop before any byte is retried once and a timeout is never retried (the provider
+may be generating, and a second request is a second bill); the stream and whole-body reads end
+cleanly and log the reason instead of escaping; and `HR_RELAY_UPSTREAM_TIMEOUT_S` (default 180 s)
+keeps the wait under any turn cap. Pinned by `runner/tests/test_relay_upstream_failure.py`, which
+drives the real handler over a real socket against an upstream that drops, drops-then-answers,
+refuses, and goes silent — the defect was in what reaches the client, not in parsing.
+
+**Proven by re-running the tour twice** on a build of this branch, with the nine families around the
+collapse (`kimi-k3, qwen3.8-flash, glm-5.3-flash, mistral-medium-3.5, step-3.7-flash,
+hunyuan-4-preview, nemotron-3.5-lightning, minimax-m3, gpt-5.4-mini`): **8 of 9 both times, no turn
+anywhere near the cap** — every previously-hanging family completed in 9-52 s with its served model
+and the deck. The two non-passes were not hangs and were not the same family twice:
+
+- run 1, `hunyuan-4-preview`: the turn **completed** with `tencent/hy4-preview` and `tour.pptx` — the
+  tour read the record at the instant it said `done`, the gateway's own word for completed
+  (`_RESP_STATUS_MAP`), which is not in the script's RUNNING list, so it settled early on a
+  half-written record. A shared-script bug, below.
+- run 2, `nemotron-3.5-lightning`: a real, reported failure in 113 s — `Runtime completed without a
+  final assistant response`, and the CLI's transcript gives the mechanism: `stopReason: "length"`.
+  The model hit the output cap with no usable final message. That is the blanket
+  `max_completion_tokens: 16384` above, now with a named victim, and it is the same id the matrix
+  found unstable on its own (run1 FIRST failed, run2 RECYCLE failed, run3 clean 5/5).
+
+And the fixed path was exercised end to end on a real instance rather than only in tests: with the
+connection's base URL pointed at a port nothing listens on, a turn fails in 22 s carrying
+`502 the provider did not answer: URLError: <urlopen error [Errno 111] Connection refused>`.
+
+## agentzero: the first matrix run, and the two defects it found (2026-09-28)
+
+A local instance built from the branch (vercel, the 7 cross-harness ids) ran the matrix TWICE: 29/35
+then 30/35. Every one of the 11 failures across 70 scenario executions was ARTIFACT or RECYCLE;
+first / followup / switch were 70 for 70. The failing SCENARIOS were stable while the failing MODELS
+drifted, which is the shape of a defect in the backend rather than model weakness — and both were.
+custom-harness passed, the plugin matrix was 4/4, samemodel.py clean, connection integration:vercel
+throughout.
+
+**ARTIFACT — "no file card (files: none)" while the card said "Edited a file".** The driver has to
+import Agent Zero from the per-workspace base, and it left the process cwd there. Agent Zero resolves
+its OWN paths against that base, but a tool that takes a path FROM THE MODEL does not: text_editor
+writes with a bare `open(path)` (plugins/_text_editor/helpers/file_ops.write_file), so
+"hello-agentzero.txt" landed in `.harness/agentzero/base/` — inside the prefix /produced excludes.
+The models that failed were the ones that passed a RELATIVE path; a model that passed an absolute one,
+or that used the terminal (whose cwd Agent Zero sets itself), passed. Hence "intermittent". The turn
+now runs with the workspace as its cwd. A/B against a scripted provider, same relative write: before,
+the file is in the base and the workspace holds nothing; after, it is in the workspace root.
+
+**RECYCLE — the recall answered the injected greeting.** Agent Zero opens every fresh conversation
+with a FABRICATED exchange: agent_init adds a user message "Hello!"
+(prompts/fw.initial_user_message.md) and an assistant greeting, so its web UI never starts empty. So
+the transcript's first user message was one the person never sent, and "what exact word did I ask you
+to reply with in my very first message" was answered — correctly, for that transcript — with "Hello",
+"Hello!", "none" or "you did not ask me to reply with any specific word". THE HISTORY WAS NEVER LOST:
+reproduced on a local runner with a real checkpoint + hydrate, the recall failed while `ctx_window`
+(Agent Zero's own record of the prompt it sent) held both M1 and M2. The greeting is now overridden
+through the framework's own mechanism — extension classes merge by FILE NAME, first occurrence
+winning, and usr/extensions comes before the bundled ones — by a no-op `_10_initial_message.py`.
+A pin bump that renames the bundled file silently restores the greeting, so the name is pinned by a
+test.
+
+**Proof of the fixes**, on the three models that failed reliably (claude-haiku-4.5, which failed
+recycle in both runs; gemini-3.5-flash-lite and grok-4.20, which failed artifact in both): the five
+scenarios through a local runner, with a real checkpoint and a real /hydrate that wipes the workspace
+and restores it — 3 sequences each, **9 of 9 sequences and 45 of 45 scenarios green**, every artifact
+written through text_editor (the path that used to deliver nothing) and every recall answering its own
+M1 word.
+
+**The disabled tool, measured against a REAL tool.** `disabled_tool_unused` passes vacuously on this
+base as on the others (the shared dimension disables the fixed id `WebSearch`, which no new harness
+has — a maintainer item, not patched around here). Measured directly instead, with
+`code_execution_tool` disabled and a scripted provider that calls it anyway, at all three tool
+sources:
+- **directly**: the tool's whole section leaves the system prompt (23,140 -> 19,116 chars,
+  `code_execution_tool` x7 -> x0), the call is refused before it executes, and no file is written.
+  `input` goes with it (`### input:` present with the shell enabled, absent with it disabled) —
+  it types into the same terminal.
+- **through `parallel`**: the job is refused (`status: error`) and no file is written; enabled, the
+  same job writes it.
+- **through a subordinate** (`call_subordinate`, profile `developer`): refused, no file; enabled, the
+  subordinate writes it. Asked of Agent Zero's own resolver, the policy the driver writes to
+  usr/plugins/_tool_access/config.json reaches all six bundled profiles.
+One honest limit, live on claude-haiku-4.5 with the shell disabled: it delegated to three subordinate
+profiles and then ANSWERED "Darwin" anyway. Nothing ran — the gate above is what the deterministic
+arms prove — the model fabricated the output. A withheld tool is withheld; it does not stop a model
+from claiming its result.
+
+**Cosmetic, fixed in the same pass**: the answer used to name the absolute sandbox path
+(`/data/workspaces/hsess…/fib.py`) because the environment prompt gives the workdir absolutely. The
+prompt now asks for paths relative to the working directory when the agent names a file to the reader;
+on the same fib task the answer became "Created and ran `fib.py` in the workspace". A nudge, not a
+guarantee.
+
+## agentzero: the full catalog, and what the 16 failures were (2026-10-01)
+
+The first full-catalog run (all 52 ids, vercel, stopped at 34 pairs after 25 hours) was 154 of 170
+scenarios. The two earlier defects did not come back — nothing in the run has the artifact or
+recycle shape. The 16 failures were two shapes, and NEITHER is in this backend's own code.
+
+**Shape 2, the hangs (1,732-8,114 s, nine hours of wall clock between them), were the loopback
+relay.** gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-pro-preview, grok-4.5, grok-4.20,
+grok-build-0.1 and muse-spark-1.3 each lost one turn — several of them trivial ones ("Reply with
+exactly: M2-…"). The instance's log says what happened: 16 handler escapes, ten
+`urlopen(req, timeout=600)` and six `IncompleteRead` on `resp.read(4096)` — the relay reading an
+upstream that stopped mid-stream — and NOT ONE `upstream_unavailable`. That is the defect fixed on
+`feat/minimax-harness` in 6c477eb, which is not on main and was not in the build that ran; it is
+cherry-picked here (see the relay section above). **Re-run on the fixed relay, all seven ids, the
+five scenarios each through a local runner with a real checkpoint and hydrate: 35 of 35, every turn
+between 3 and 26 s** — against 1,732-8,114 s for the same ids before. A turn that used to hang now
+either completes or fails in seconds with the provider's own words.
+
+**Shape 1 was the provider returning nothing, five times, and the message said so in the harness's
+private words.** claude-fable-5-1, claude-opus-5 (twice) and muse-spark-1.2 ended with
+`HandledException: Agent stopped after 5 consecutive unusable model responses to prevent further API
+charges.` That is Agent Zero's own guard (extensions/python/message_loop_result/_20_empty_response.py):
+it fires when a completion comes back with NEITHER content NOR reasoning, five times running. Correct
+behaviour — it stops paying — but it names a counter nobody outside the harness can see.
+
+The empty completion has two sources on this channel, and both are now visible instead of silent:
+
+- **A refusal. Vercel spells it `content-filter`; the relay only knew `content_filter`.** Measured
+  2026-10-01: `anthropic/claude-fable-5.1` and `anthropic/claude-opus-5` answered a short probe with
+  two SSE events, no content, no reasoning and `"finish_reason":"content-filter"`. `_FINISH_RE`
+  admitted `[a-z_]` only, so on Vercel the field never matched, `last_finish` stayed empty, and the
+  check that turns a refusal into a stated reason — in the runner since the goose column — could
+  never fire there. A dead check reports success. The pattern now takes both spellings and
+  normalises to one, and a turn that FAILED while the relay saw a content filter reports the
+  provider's refusal rather than the harness's sentence (the slot `_failure_reason` already keeps
+  for a provider's refusal). End to end against an upstream that declines: the same turn that said
+  "Agent stopped after 5 consecutive unusable model responses" now says **"the provider declined the
+  request (finish_reason content_filter)"** in 3 s, with the served model and the 10,000 input tokens
+  those five calls cost both on the record.
+- **A stream that ended with nothing** — the relay defect of shape 2, which leaves the client a
+  truncated body and the harness an empty answer. One of the four, muse-spark-1.2's artifact turn
+  (799 s), has a relay escape inside its own window.
+
+**Not reproduced on the fixed build, and said plainly:** claude-fable-5.1 ran all five scenarios
+green, and claude-opus-5 answered BOTH of its failing payloads — the real system prompt and the real
+transcript, replayed raw — with `finish_reason: stop`. So the refusal is something the provider does
+some of the time, not a property of these scenarios; the fixes above make the next one readable
+rather than preventing it. `max_consecutive_unusable_responses` is deliberately left at upstream's 5:
+the same counter also covers the misformat loop, where another try is often what repairs the turn.
+
+Measured cost of this pass, from the gateway's own credits endpoint before and after: **$1.50**.
+
 ## The gpt-6 line: sol and luna beside astra (2026-09-27)
 
 Richard asked whether gpt-6-sol was available and for the line to be expanded at list price on every
@@ -2102,3 +2323,195 @@ a process that ran with the turn's environment can produce it.
   Measured: with `custom_provider.<id>.models.<model>.limit: {context: 32768, output: 4096}` the same
   request carried `max_completion_tokens: 4096`, so a per-id table would work whenever there are
   measured windows to put in it.
+
+## The kilo backend: Kilo CLI 7.8.1 (2026-09-26/27) — behaviour measured, NO column yet
+
+Kilo CLI (Kilo-Org/kilocode, MIT) is an opencode fork (its README says so; `packages/opencode` in
+the monorepo), and the runner treats it as one: opencode's `run --format json` events, provider
+block, MCP map and `skills.paths` are unchanged at 7.8.1, so `_build_kilo` reuses opencode's package
+choice, MCP translation and normaliser. There is **no matrix column**: this backend has not been run
+on a deployed instance. What follows was measured on the pinned binary (darwin-arm64 build of the
+same release for the local runs, `kilo --version` = `7.8.1`), against a logging stub and, for three
+turns, through a locally started runner on Vercel.
+
+**Where it differs from opencode, each measured:**
+
+- **It phones home unless told not to.** A turn whose provider was on 127.0.0.1 made CONNECTs to
+  `us.i.posthog.com` (telemetry, x2), `models.dev` (catalog, x1) and `api.kilo.ai` (Kilo's gateway
+  provider, x2), logged at a refusing proxy. `KILO_TELEMETRY_LEVEL=off` and
+  `KILO_DISABLE_MODELS_FETCH=1` removed the first two; `"enabled_providers": ["hr"]` in the config
+  removed the third — zero egress besides the provider. The control arm (defaults) is what shows the
+  proxy sees these calls at all. No Kilo login is needed for anything the runner does.
+- **Scheduling tools that promise a later turn** (`schedule_wakeup`, `cancel_wakeup`, `cron_*`,
+  `goal`: "the harness resumes this session with the prompt you give it"). Every turn here is one
+  process the gateway starts, so the runner denies them on every turn.
+- **`write` and `apply_patch` are gated by the `edit` key.** Measured at the stub: denying `write`
+  left `write` and `apply_patch` in the request; denying `edit` removed all three. The catalog offers
+  `edit` only ("Edit / Write"). opencode shares this code (`permission.disabled`), so the opencode
+  base's separate `write` switch is very likely a no-op too — not changed here, flagged.
+- **Two doors to the shell.** With `bash` denied, `background_process` (which takes a `command`) was
+  still offered, so the runner denies both when bash is switched off.
+- **A dead endpoint never fails.** Kilo's "offline guard" parks a turn whose connection drops, probes
+  connectivity, declares the network restored and retries — the retry budget resets on every retry.
+  Measured on the bare CLI: a refused connection ran ten minutes with a retry every five seconds and
+  no output; a server that accepts and drops the connection, 29 "session offline" cycles in 150 s.
+  Through the relay the same thing happened whenever the relay itself dropped the socket (it did not
+  catch `URLError`). The relay now answers an unreachable upstream with a 502 and the reason, which
+  every client reports: through a local runner the dead-URL turn failed in 76 s (the ai-sdk's retries
+  of a 5xx) with `upstream unreachable: [Errno 61] Connection refused`. A Messages-shape turn does not
+  ride the relay and is only bounded by the runner's turn ceiling.
+
+**Failure reporting (checklist #8), free probes:** a 401 is one structural `error` event (APIError,
+`data.message`, `statusCode`) and exit 1 in 4 s; a 503 is retried 6 times over 73 s and then the same
+event. Kilo never narrates a provider failure as assistant text, so no prefix is stripped, and an
+answer that starts "Error: …" stays an answer (both pinned in runner/tests/test_kilo_backend.py). An
+invalid Vercel key through the runner: `failed` in 6 s with Vercel's own sentence.
+
+**Resume.** SQLite `$HOME/.local/share/kilo/kilo.db`, table `session(id TEXT PRIMARY KEY, ...)`; an
+unknown `--session` exits 1 with nothing on stdout. The builder asks the table (read-only) before
+passing `--session`; a missing session starts fresh and the reply carries the resume_lost note
+(measured through the runner).
+
+**Local E2E through a runner, 2026-09-27 (Vercel, three paid turns, one session):**
+
+| turn | model | result | served_model (relay) | usage (in / out / cache read / cache write) |
+|---|---|---|---|---|
+| 1: remember a word, write hello.py, run it | gpt-5.4-mini | `PELICAN-42: 42`, tools glob, write, bash; hello.py produced | `openai/gpt-5.4-mini` | 11,311 / 636 / 32,256 / 0 |
+| 2: "what was the word?" (resumed) | gpt-5.4-mini | `PELICAN-42` | `openai/gpt-5.4-mini` | 2,265 / 40 / 8,704 / 0 |
+| 3: switch model, bash disabled, run echo | claude-haiku-4.5 | `NO-SHELL. Code word: PELICAN-42`; its bash call refused as "unavailable tool" | **none** | 118 / 81 / 13,154 / 13,406 |
+
+The real key was not in the kilo process's argv or environment on the relay turns (the relay's
+placeholder was), and not in any file under the workspace afterwards. Turn 3 was the gap that the
+next section closes: a claude id on an aggregator spoke Anthropic Messages, which opencode's rule
+keeps OFF the relay, so nothing reported a served model. The cost channel: a one-word follow-up is
+~11k input tokens (system prompt ~14.7k characters plus 22 tool schemas).
+
+### The claude rows had no served model, and the package choice was why (2026-09-28)
+
+Measured twice, in one session on integration:vercel, per turn: `gpt-5.4-mini` recorded
+`served_model='openai/gpt-5.4-mini'` and `claude-haiku-4.5` recorded `served_model=None`. So matrix
+rule 2 — served AS the model asked for — could not be evaluated for the claude row at all, and that
+row's five green scenarios said nothing about which model ran. **Usage was NOT lost**: the same
+session recorded 24,404 input / 13 output tokens (and an earlier one 14,124 / 640 / 48,672 cache
+read). That figure is the session aggregate over a gpt turn and a claude turn — the turns endpoint
+carries no per-turn usage — while `served_model` IS per turn, which is how the gap was isolated.
+
+The cause is one clause of the package choice `_opencode_npm`, inherited: a claude id on an
+aggregator connection (`tokenrouter`, which is how vercel, llmtr, tokenrouter and the hosted door
+are all wired) is served by `@ai-sdk/anthropic`, and an Anthropic-shape turn cannot ride the
+loopback relay because the relay finds a route by the placeholder BEARER it handed out while a
+Messages client sends `x-api-key`. No relay, no served model.
+
+It is not a protocol limit: an aggregator serves those ids over chat/completions perfectly well
+(cline and qwen reach every claude id that way, and the minimax backend measured
+`anthropic/claude-haiku-4.5` on this same provider and id through the relay on the same day). So
+kilo now makes its own choice (`_kilo_npm`): Messages only for a DIRECT Anthropic connection
+(provider `anthropic`, or a custom endpoint declared `anthropic`), chat/completions for the
+aggregators. Re-measured on the same rig, same session shape: `claude-haiku-4.5` records
+`served_model='anthropic/claude-haiku-4.5'`, which `_same_model` reads as the id asked for.
+
+**The broker question, answered.** Nobody had run an Anthropic-shape turn through the broker in
+self-hosted loopback mode. Run now, with the pre-fix code and `HR_SANDBOX_TRUST` off owner: the CLI
+posted `/v1/llm/v1/messages` (the ai-sdk appends its own `/v1/messages` to the broker base) and the
+broker answered 200 — `_broker_token` accepts `x-api-key`, so the turn completed with a brokered
+credential and the provider key never reached the sandbox. **But `served_model` was still null**,
+because nothing on the broker path stamps it: the gateway only ever takes a served model from the
+runner's result event, which is the CLI's own report or the relay's stamp. So the gap was the relay
+bypass and not a trust mode, and the fix repairs both modes — after it, the same claude turn in
+broker mode goes `/v1/llm/chat/completions` through the relay and records
+`anthropic/claude-haiku-4.5`.
+
+### The two rows the full column failed, chased on 2026-10-01/02
+
+The full column (55 pairs, 271/275 scenarios, served model on every row, zero substitutions) failed
+two rows and both reproduced on a retest. Neither is a defect in this backend, and neither is fixed
+here; what follows is what was measured.
+
+**`claude-opus-5`, ARTIFACT and RECYCLE.** `run ended without an assistant message; the model
+returned no output` — kilo's own words for a completion with no content — at 156/180 s and 147 s,
+twice, while first, follow-up and switch passed both times with `served_model=anthropic/claude-opus-5`.
+The two failing scenarios are the ones that run AFTER the switch, which is the shape the repo already
+records for this exact id: once a session holds a turn by another model, Anthropic answers further
+opus-5 requests with an empty stream and `finish_reason content_filter`, and the aggregators forward
+that answer unchanged (fdba6ed, measured 2026-09-12 against Anthropic directly; goose keeps the id
+off its list for it).
+
+Chased today at four levels, and NOT reproduced at any of them:
+- the CLI alone, real workspace and config, artifact prompt: tool call then `DONE`, exit 0, two
+  provider calls;
+- the wire, kilo's captured 14,689-character system prompt and all 22 tools: `finish_reason
+  tool_calls`, 21,392 input tokens;
+- the wire, a tool round trip with the assistant's reasoning signature carried back and stripped:
+  both arms answered;
+- the product, on the live instance, first → switch → artifact in the matrix's own order, with the
+  switch on `gpt-5.4-mini` and again on `gpt-6-astra` (what the column used): all three turns
+  completed both times, the artifact turn writing the file and replying `DONE`.
+
+So the provider was healthy for this shape on 2026-10-02 and the failure is not deterministic. What
+the column's two runs and the repo's September measurement share is the model and the post-switch
+position; what my reproduction could not match is the column's full four-turn history (first,
+follow-up, switch away, switch back) and its moment in time. Recorded as a provider-side limitation,
+with the id left in the catalog: removing it on evidence I could not reproduce would be a guess in
+the other direction. If a later column fails it again, goose's precedent (`_NOT_OFFERED`) is the
+remedy, and that is the maintainer's call rather than mine.
+
+**What IS fixed:** the relay now reads Vercel's hyphenated spelling of a refusal. `_FINISH_RE`
+admitted `[a-z_]` only, so `content-filter` never matched on that channel, `last_finish` stayed
+empty, and the check that turns a declined request into a stated reason never ran — the person got
+whatever the CLI made of an empty answer, which on kilo is the sentence above. Picked up from the
+agent-zero branch (07c650f), where the same empty-stream class was measured on
+`anthropic/claude-opus-5` and `anthropic/claude-fable-5.1`. If the column's failure is that refusal,
+the turn now says `the provider declined the request (finish_reason content_filter)` instead of
+kilo's private sentence.
+
+**`hunyuan-4-preview`.** ARTIFACT failed at 1073 s on the first run; on the retest the FIRST turn
+failed at 478 s with the tail stuck at `Working…` and no turn record at all. The provider is not the
+cause: `tencent/hy4-preview` (the id Vercel's own map serves for this canonical name) answered kilo's
+real request shape — the same 14,689-character system prompt and 22 tools — in 7.7 s for 14,436
+input tokens and $0.012, `finish_reason stop`, the exact text asked for.
+
+What was captured while the pair hung is a LIFECYCLE failure, and it is not this backend's: the
+session read `status=running` with `running_response_id: None`, no CLI process existed in the
+container at all, the relay's traceback was a `ConnectionResetError` writing a chunk back to a client
+that had gone, and it was still `running` at 993 s — past the runner's `MAX_TURN_SECONDS=900`. A
+cancel cleared it. Two mechanisms fit and neither was reproducible on demand: a descendant that
+escaped the process group still holding the CLI's stdout pipe, so the runner's reader loop never sees
+EOF and the record never leaves `running` (the trap `_kill_proc_tree` and `_sweep_turn_processes`
+were written for, and kilo's `background_process` is a tool that daemonises by design); or the
+gateway's owner task renewing the session heartbeat while polling a turn that can no longer finish,
+which keeps `_reconcile_session` from ever treating it as stale.
+
+One concrete misalignment, verified on the instance: the runner's ceiling is `MAX_TURN_SECONDS`
+(set to 900 there) while the gateway's backstop is `HARNESS_MAX_TURN_S`, which is unset and defaults
+to 21600. An operator who lowers the runner's cap still waits six hours for the gateway to settle a
+turn the runner has already given up on. Reported, not changed here: both are shared surfaces.
+
+### Tool enforcement, measured against `bash` (2026-09-28)
+
+`disabled_tool_unused` in the shared custom-harness dimension disables the fixed id `WebSearch`,
+which matches nothing on kilo (nor on qwen, gemini, cline, aider, kimi), so that claim passes
+VACUOUSLY here. Measured directly instead, on a live instance, gpt-5.4-mini on vercel, with an
+oracle no answer can fake: the file the command would write must contain a stamp that exists only
+in the turn's shell environment (a harness `env` variable, never in the prompt).
+
+| arm | bash | prompt | shell ran? | evidence |
+|---|---|---|---|---|
+| control | allowed | run the command | **yes** | `bash` called, proof.txt = the stamp |
+| control | allowed | use `background_process` | **yes** | `background_process` (monitor) called, proof.txt = the stamp |
+| deny | disabled | run the command | no | no tool calls, answer `NO-SHELL`, no file |
+| deny | disabled | use `background_process` | no | no tool calls, answer `NO-SHELL`, no file |
+| deny | disabled | use a subagent | no | no tool calls, answer `NO-SHELL`, no file |
+| deny | disabled | "you MUST call `task`" | no | `task` called, subagent answered `NO-SHELL`, no file |
+
+So the deny is inherited by a subagent (the permission map is kilo's own config, which the child
+session reads too), and `background_process` really is a second door to the same shell — it ran the
+command in the control arm — which is why the runner denies it together with `bash`. With both off
+the model is offered: agent_manager_models, apply_patch, board_post, board_read, glob, grep,
+kilo_local_recall, link_pr, read, skill, task, todowrite, webfetch, write.
+
+**Why the oracle is the stamp and not the file.** In one deny arm the model routed around the
+missing shell by having a subagent create `proof.txt` with `apply_patch` — the file existed and was
+EMPTY. A file-existence oracle would have recorded that as a shell escape and overturned the
+enforcement claim wrongly; the stamp says plainly that no shell ran. Disabling `bash` withholds
+execution, not file writing: `write` and `apply_patch` are separate switches, and a harness that
+wants neither must disable `edit` as well.

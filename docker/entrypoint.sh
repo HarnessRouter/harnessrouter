@@ -204,7 +204,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,minimax,aider,openhands,systemone,cheetahclaws}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,aider,openhands,systemone,cheetahclaws}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -218,6 +218,7 @@ backend_bin() {
     pi)     echo "$TOOLS/bin/pi" ;;
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
     opencode) echo "$TOOLS/bin/opencode" ;;
+    kilo)   echo "$TOOLS/kilo/kilo" ;;
     qwen)   echo "$TOOLS/bin/qwen" ;;
     gemini) echo "$TOOLS/bin/gemini" ;;
     cline)  echo "$TOOLS/bin/cline" ;;
@@ -422,6 +423,17 @@ KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
 # keys agents.default / skills.external, the two instruction files, the rm shim's trash) was
 # measured on THIS version.
 MINIMAX_PIN="${HR_MINIMAX_VERSION:-0.5.4}"; MINIMAX_PIN="${MINIMAX_PIN#v}"
+# Kilo CLI (Kilo-Org/kilocode, MIT), an opencode fork, pinned to 7.8.1. The release archive from
+# GitHub, not npm's launcher package and not the vendor's install script: the archive is one
+# directory (the `kilo` binary beside bwrap, the sandbox helpers and the tree-sitter grammars it
+# loads from its own directory), 65 MB down and 228 MB unpacked — under the 300 MB line, so it is in
+# the default HR_BACKENDS. Upstream publishes kilo-cli-SHA256SUMS beside the assets; the digests are
+# pinned HERE for kimi's reason (a checksum from the same origin adds nothing against that origin).
+# The values below were read from the 7.8.1 assets and agree with both upstream's SHA256SUMS and
+# GitHub's own asset digests. Everything runner/server.py's kilo code relies on (the run --format
+# json events, KILO_CONFIG, enabled_providers, the env switches, the session table, the edit
+# permission key) was measured on THIS version.
+KILO_PIN="${HR_KILO_VERSION:-7.8.1}"; KILO_PIN="${KILO_PIN#v}"
 # OpenHands V1, MIT (OpenHands/agent-sdk), pinned to 1.49.2 — the AGENT SERVER, not the CLI.
 #
 # PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
@@ -609,6 +621,45 @@ install_minimax() {
   rm -rf "$mm_tmp"
 }
 
+install_kilo() {
+  case "$(uname -m)" in
+    x86_64)        kl_arch="x64";   kl_sha="6d48503b000d3d904d15950b63e254653c450800647344ac0f3de4e8a7f98835" ;;
+    aarch64|arm64) kl_arch="arm64"; kl_sha="516f81a81d3605cecae61dddf4da548da403b9f8993a06bb799d12b6fc6e7ac4" ;;
+    *) echo "unsupported architecture $(uname -m) for kilo"; return 1 ;;
+  esac
+  if [ "$KILO_PIN" != "7.8.1" ]; then
+    # kimi's contract: an operator who overrides the version supplies the digest, or is TOLD the
+    # archive is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_KILO_SHA256:-}" ]; then
+      kl_sha="$HR_KILO_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_KILO_VERSION=$KILO_PIN overrides the pinned 7.8.1, and no"
+      echo "[harnessrouter]       HR_KILO_SHA256 was given — this kilo archive is UNVERIFIED."
+      kl_sha=""
+    fi
+  fi
+  kl_url="https://github.com/Kilo-Org/kilocode/releases/download/v${KILO_PIN}/kilo-linux-${kl_arch}.tar.gz"
+  kl_tmp="$(mktemp -d)"
+  curl -fsSL "$kl_url" -o "$kl_tmp/kilo.tar.gz" || { rm -rf "$kl_tmp"; return 1; }
+  if [ -n "$kl_sha" ]; then
+    kl_have="$(sha256sum "$kl_tmp/kilo.tar.gz" | awk '{print $1}')"
+    if [ "$kl_sha" != "$kl_have" ]; then
+      echo "kilo $KILO_PIN: archive digest mismatch for $kl_arch (want $kl_sha, have $kl_have)"
+      rm -rf "$kl_tmp"; return 1
+    fi
+  fi
+  mkdir "$kl_tmp/x" && tar -xzf "$kl_tmp/kilo.tar.gz" -C "$kl_tmp/x" || { rm -rf "$kl_tmp"; return 1; }
+  [ -f "$kl_tmp/x/kilo" ] || { echo "release archive contained no kilo binary"; rm -rf "$kl_tmp"; return 1; }
+  # The whole directory, replaced as a unit: the binary finds its helpers beside itself.
+  rm -rf "$TOOLS/kilo" && mv "$kl_tmp/x" "$TOOLS/kilo" && chmod 755 "$TOOLS/kilo/kilo" \
+    || { rm -rf "$kl_tmp"; return 1; }
+  # On PATH as `kilo` through a wrapper rather than a symlink, so the binary's own path (and with it
+  # the helpers beside it) is the real directory whatever the runtime makes of a link.
+  mkdir -p "$TOOLS/bin" && printf '#!/bin/sh\nexec "%s/kilo/kilo" "$@"\n' "$TOOLS" > "$TOOLS/bin/kilo" \
+    && chmod 755 "$TOOLS/bin/kilo" || { rm -rf "$kl_tmp"; return 1; }
+  rm -rf "$kl_tmp"
+}
+
 install_goose() {
   case "$(uname -m)" in
     x86_64)        gs_arch="x86_64";  gs_sha="6389eea4440178de006fa148d466ac411021315ff7f72b1014beae2d445851e2" ;;
@@ -709,6 +760,12 @@ install_backends() {
   if wanted opencode && [ ! -x "$(backend_bin opencode)" ]; then
     echo "[harnessrouter] installing opencode (MIT)…"
     try_install "opencode" install_opencode || true
+  fi
+
+  # `kilo --version` prints the bare version, so a volume holding another one is replaced in place.
+  if wanted kilo && [ "$("$(backend_bin kilo)" --version 2>/dev/null | head -n 1)" != "$KILO_PIN" ]; then
+    echo "[harnessrouter] installing Kilo CLI $KILO_PIN (MIT, version-pinned)…"
+    try_install "Kilo CLI" install_kilo || true
   fi
 
   if wanted qwen && [ ! -x "$(backend_bin qwen)" ]; then

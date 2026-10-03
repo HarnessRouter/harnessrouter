@@ -344,6 +344,7 @@ def _openhands_session_present(cwd: str, cmd: list[str], session_id: str) -> boo
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
+    "kilo": _argv_session_present,        # _build_kilo asks kilo.db before it passes --session
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
     # minimax: _build_minimax asks the CLI's own sqlite store and passes --session only when the
@@ -536,6 +537,15 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # this keeps a workspace that already carries one from dragging it through
                       # every later checkpoint. Nothing reads it once snapshots are off.
                       "./.harness/home/.local/share/opencode/snapshot",
+                      # Kilo CLI is opencode's fork and keeps the same tree under kilo/: snapshots
+                      # are off in its config for the same reason, and its log directory is the one
+                      # place the CLI writes what it was handed (request metadata, the relay URL).
+                      "./.harness/home/.local/share/kilo/snapshot",
+                      "./.harness/home/.local/share/kilo/log",
+                      # Kilo's credential store. The runner never writes it (the key is an env var
+                      # named in kilo.json, and only the relay's placeholder at that), but a
+                      # `kilo auth login` inside a task would, and it must not travel.
+                      "./.harness/home/.local/share/kilo/auth.json",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -584,6 +594,7 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
+KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
@@ -1038,7 +1049,9 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # config.yaml, so a tree another backend wrote is not swept in (kimi's reason).
         rootrels = [".harness/home/.minimax/skills"]
         entryroot = ".harness/home/.minimax/skills"
-    elif backend == "opencode":
+    elif backend in ("opencode", "kilo"):
+        # Kilo CLI is opencode's fork and keeps the same `skills.paths` key (core/src/v1/config/
+        # skills.ts at 7.8.1), so it takes the same directory.
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
         # one directory and name it in opencode.json. This is the only backend where the loader
@@ -1392,8 +1405,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # walking up from the cwd, plus ~/.claude/CLAUDE.md; no source hit for AGENTS.md in
         # 3.5.88), so it takes the CLAUDE.md branch below, and an AGENTS.md in the workspace is
         # never loaded whether or not a CLAUDE.md is there.
+        # kilo reads AGENTS.md first (session/instruction.ts: ["AGENTS.md", "CLAUDE.md",
+        # "CONTEXT.md"], first match wins) — verified on 7.8.1: the request's system prompt carried
+        # "Instructions from: <ws>/AGENTS.md" and the file's body.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi", "aider", "openhands")
+                                   "goose", "kimi", "aider", "openhands", "kilo")
         else "CLAUDE.md")
 
 
@@ -5581,6 +5597,7 @@ def _opencode_eof(state: dict, rc: int) -> list[dict]:
     A non-zero exit with no error event and no text is the case that produced
     "exit_code=1, no diagnostic output" on a live turn: say so explicitly rather than leaving the
     trace blank."""
+    cli = state.get("_cli_name") or "opencode"
     usage = state.get("_oc_usage") or {}
     final = state.get("final", "")
     err = state.get("_oc_error", "")
@@ -5592,7 +5609,7 @@ def _opencode_eof(state: dict, rc: int) -> list[dict]:
                  "result": final, "usage": usage}]
     tools = state.get("_oc_tool_errors") or []
     why = ("; ".join(t for t in tools if t)[:500]
-           or f"opencode exited {rc} without reporting an error")
+           or f"{cli} exited {rc} without reporting an error")
     return [{"type": "result", "subtype": "error", "is_error": True,
              "result": final or why, "usage": usage}]
 
@@ -5912,7 +5929,7 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
             msg = str(data.get("message") or err.get("message") or err.get("name") or "")
         elif err:
             msg = str(err)
-        state["_oc_error"] = msg or "opencode error"
+        state["_oc_error"] = msg or f"{state.get('_cli_name') or 'opencode'} error"
         return pre
     return pre
 
@@ -5920,6 +5937,217 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
 # opencode's stream has no terminal event, so the normalizer carries an `eof` the run loop calls
 # when the process exits. See _run_turn_bg.
 _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
+
+
+# ── Kilo CLI (Kilo-Org/kilocode, MIT), pinned 7.8.1 ────────────────────────────────────────────
+# An opencode fork ("Kilo CLI is a fork of OpenCode", its README): `kilo run --format json` is
+# opencode's emitter, the config is opencode's schema read from KILO_CONFIG, and the provider block,
+# the MCP map and `skills.paths` are the same shapes. So this backend reuses opencode's package
+# choice, MCP translation and normaliser, and differs where Kilo does — every difference below was
+# measured on the pinned binary against a logging stub (no provider, no key, no cost):
+#   - it phones home unless told not to: us.i.posthog.com (telemetry), models.dev (catalog) and
+#     api.kilo.ai (Kilo's own gateway and notifications). The env switches below and
+#     `enabled_providers` in the config take all three to zero; each was checked by A/B through a
+#     proxy that logged every CONNECT.
+#   - it adds scheduling tools that resume the session LATER (schedule_wakeup, cron_*, goal), a
+#     contract a one-process-per-turn backend cannot keep, so they are always denied;
+#   - `write` and `apply_patch` are gated by the `edit` permission key (permission.disabled maps
+#     all three onto it), so only `edit` withholds them — a `write` rule is a silent no-op;
+#   - an unknown `--session` fails the run with nothing on stdout, so the store is asked first.
+
+KILO_PROVIDERS = OPENCODE_PROVIDERS
+_KILO_KEY_ENV = "HR_KILO_KEY"
+
+# Permission keys that match a tool Kilo 7.8.1 offers the model (the request's `tools`, captured at
+# a stub for gpt-5.4 and claude-sonnet-4.6), plus the keys its permission schema names. A deny on
+# one of these removes the tool from the request — measured, not assumed. `write`/`apply_patch` are
+# deliberately absent: they are edit's (see above), and accepting them would disable nothing.
+_KILO_PERMS = {"bash", "read", "edit", "glob", "grep", "list", "task", "webfetch", "websearch",
+               "todowrite", "question", "skill", "lsp", "background_process", "kilo_local_recall",
+               "board_post", "board_read", "link_pr", "agent_manager", "agent_manager_models",
+               "notebook_read", "notebook_edit", "notebook_execute"}
+
+# Tools whose whole promise is a LATER turn the harness starts on its own ("the harness resumes this
+# session with the prompt you give it", "the goal loop continues automatically after this turn").
+# Here every turn is one process the gateway starts; nothing ever resumes the session unasked, so
+# the model would tell the person it will come back and it never would. Always denied.
+_KILO_ALWAYS_DENY = ("schedule_wakeup", "cancel_wakeup", "cron_create", "cron_delete", "cron_list",
+                     "goal")
+
+# The environment that keeps a turn inside the sandbox's own business. Each one names a request the
+# binary otherwise makes (or a place it otherwise reads) on every turn.
+_KILO_ENV = {
+    "KILO_TELEMETRY_LEVEL": "off",          # PostHog; anything but "all" disables (kilo-telemetry)
+    "KILO_DISABLE_MODELS_FETCH": "1",       # models.dev catalog download
+    "KILO_DISABLE_AUTOUPDATE": "1",         # a pinned backend never replaces itself
+    "KILO_DISABLE_SESSION_INGEST": "1",     # session upload to Kilo's cloud (needs a Kilo login anyway)
+    "KILO_NO_DAEMON": "1",                  # never attach a turn to a daemon an earlier task started
+    "KILO_DISABLE_CLAUDE_CODE": "1",        # ~/.claude and .claude/skills: another backend's trees
+}
+
+
+def _kilo_npm(auth: Auth, model: str, pr: str) -> str:
+    """Which ai-sdk package serves this turn — opencode's choice with ONE clause dropped.
+
+    opencode sends a claude id on an AGGREGATOR (`tokenrouter`, which is how vercel, llmtr,
+    tokenrouter and the hosted door are all wired) through `@ai-sdk/anthropic`, and an
+    Anthropic-shape turn cannot ride the loopback relay: the relay authenticates a route by the
+    placeholder BEARER it handed out, while a Messages client sends `x-api-key`. The turn then runs
+    with no relay in front of it, and the consequence is measured: on 2026-09-27/28, in one session
+    on integration:vercel, `gpt-5.4-mini` recorded `served_model='openai/gpt-5.4-mini'` and
+    `claude-haiku-4.5` recorded `served_model=None` — so rule 2 of docs/harness-verification.md
+    could not be evaluated for the claude row at all, and a green row proved nothing about which
+    model ran.
+
+    An aggregator serves a claude id over chat/completions perfectly well: cline and qwen reach
+    every claude id that way, and minimax measured `anthropic/claude-haiku-4.5` on this same
+    provider and model id through the relay on 2026-09-28. So the package choice, not the protocol,
+    was the reason the observability surface was dark, and on THIS backend the choice is ours.
+
+    A DIRECT Anthropic connection keeps Messages: `api.anthropic.com` speaks nothing else, and the
+    relay would have to speak x-api-key upstream to front it. That is the general fix, it belongs
+    in the relay rather than in one backend, and it would repair opencode, pi, dsh and omp at the
+    same time — see the PR body."""
+    if auth.api_format == "anthropic" or pr == "anthropic":
+        return "@ai-sdk/anthropic"     # a direct Anthropic endpoint; no relay (see above)
+    if auth.api_format == "openai":
+        return "@ai-sdk/openai-compatible"
+    if pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        return "@ai-sdk/openai"          # /v1/responses
+    return "@ai-sdk/openai-compatible"   # /v1/chat/completions
+
+
+def _kilo_denies(tools_disabled: list[str] | None) -> dict:
+    """Harness tool ids -> {<key>: "deny"}, plus the always-denied scheduling tools. Catalog labels
+    arrive "bash (Bash)"-style; the id is kept. Unknown names are dropped rather than written: the
+    schema accepts any key, so a wrong one would be stored, reported as off, and match nothing."""
+    out: dict = {t: "deny" for t in _KILO_ALWAYS_DENY}
+    for raw in tools_disabled or []:
+        name = (raw or "").split(" (")[0].strip().lower()
+        if name in ("write", "apply_patch"):
+            name = "edit"     # the one key that withholds them
+        if name in _KILO_PERMS:
+            out[name] = "deny"
+    if out.get("bash") == "deny":
+        # background_process runs shell commands too (`start`/`monitor` take a `command`), so with
+        # only bash withheld the shell is still one tool away. Measured 2026-09-27: bash denied, the
+        # model's bash call refused as "unavailable tool", background_process still offered.
+        out["background_process"] = "deny"
+    return out
+
+
+def _kilo_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
+                 skills_dir: str | None, tools_disabled: list[str] | None = None,
+                 pr: str = "") -> str:
+    """Write <cwd>/.harness/kilo.json and return the provider-qualified model id for --model."""
+    if not auth.base_url:
+        raise HTTPException(400, "kilo needs a base_url (none configured)")
+    base = (auth.base_url or "").rstrip("/")
+    if not auth.api_format and not base.endswith("/v1"):
+        base += "/v1"   # every ai-sdk package appends its own resource; see _opencode_config
+    cfg: dict = {
+        "$schema": "https://app.kilo.ai/config.json",
+        "provider": {
+            "hr": {
+                "npm": _kilo_npm(auth, model, pr),
+                "options": {"baseURL": base, "apiKey": "{env:%s}" % _KILO_KEY_ENV},
+                "models": {model: {}},
+            }
+        },
+        # Only our provider is loaded. Without this Kilo also initialises its own gateway provider
+        # and calls api.kilo.ai on every turn, logged in or not (measured: two CONNECTs a turn,
+        # zero with this key).
+        "enabled_providers": ["hr"],
+        "snapshot": False,   # opencode's undo history, the 699 MB half of #193; see _opencode_config
+        "permission": _kilo_denies(tools_disabled),
+    }
+    mcp = _opencode_mcp(mcp_servers)
+    if mcp:
+        cfg["mcp"] = mcp
+    if skills_dir:
+        cfg["skills"] = {"paths": [skills_dir]}
+    hdir = pathlib.Path(cwd, ".harness")
+    hdir.mkdir(exist_ok=True)
+    (hdir / "kilo.json").write_text(json.dumps(cfg, indent=2))
+    return f"hr/{model}"
+
+
+def _kilo_has_session(env: dict, session_id: str) -> bool:
+    """Is this Kilo session in this workspace's database? Asked of the store, not searched for
+    (checklist #10): kilo.db is SQLite with `session(id TEXT PRIMARY KEY, ...)` at 7.8.1, and
+    `--session <id>` looks the id up in exactly that table. Read-only; sqlite reads the WAL itself,
+    so the previous turn's not-yet-checkpointed write is visible."""
+    home = env.get("HOME") or ""
+    if not home or not session_id:
+        return False
+    db_path = pathlib.Path(home) / ".local" / "share" / "kilo" / "kilo.db"
+    if not db_path.exists():
+        return False
+    db = None
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+        return db.execute("SELECT 1 FROM session WHERE id = ? LIMIT 1", (session_id,)).fetchone() is not None
+    except Exception:  # noqa: BLE001 — no table yet, mid-write, unreadable: "not there"
+        return False
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _build_kilo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in KILO_PROVIDERS:
+        raise HTTPException(400, f"unknown kilo provider '{pr}' (one of {sorted(KILO_PROVIDERS)})")
+    if auth.base_url and auth.api_key and _kilo_npm(auth, model, pr) != "@ai-sdk/anthropic":
+        # opencode's rule, for opencode's reasons: every OpenAI-shape turn rides the loopback
+        # relay (shape repairs, Gemini signatures, served model and usage read off the bytes), and
+        # the real key stays in this process. A Messages-shape turn keeps its direct base — which,
+        # after _kilo_npm, is a DIRECT Anthropic connection and nothing else.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    if auth.api_key:
+        env[_KILO_KEY_ENV] = auth.api_key
+    qualified = _kilo_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr)
+    env["KILO_CONFIG"] = os.path.join(cwd, ".harness", "kilo.json")
+    env.update(_KILO_ENV)
+    cmd = ["kilo", "run", "--format", "json", "--model", qualified,
+           "--auto",       # nobody is attached to answer a permission ask; the sandbox is the boundary
+           "--pure",       # no external plugins: project config is a file the task itself can write
+           "--thinking"]   # reasoning events are emitted only with this flag (run.ts)
+    if resume_session_id and _kilo_has_session(env, resume_session_id):
+        cmd += ["--session", resume_session_id]
+    elif resume_session_id:
+        # An unknown id is "Error: Session not found" on stderr, exit 1, and nothing on stdout, and
+        # every later turn would pass the same dead id. Start fresh in the same workspace;
+        # _resume_lost reads the missing --session and the reply says the history is gone.
+        print(f"[resume] kilo: session {resume_session_id} not in this workspace — starting fresh",
+              flush=True)
+    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    return cmd
+
+
+def _kilo_to_claude(obj: dict, state: dict) -> list[dict]:
+    """opencode's normaliser under Kilo's name. The 7.8.1 emitter differs from opencode's in two
+    ways the shared code already handles: an error event's `error` may be a bare STRING ("run
+    ended without an assistant message; the model returned no output", an auto-rejected
+    permission), and the process exits 1 on any error. A provider failure arrives as a structural
+    error event (APIError with data.message; measured with a 401 and a 503), never as assistant
+    text, so there is no prose prefix to strip."""
+    state.setdefault("_cli_name", "kilo")
+    return _opencode_to_claude(obj, state)
+
+
+def _kilo_eof(state: dict, rc: int) -> list[dict]:
+    state.setdefault("_cli_name", "kilo")
+    return _opencode_eof(state, rc)
+
+
+_kilo_to_claude.eof = _kilo_eof   # type: ignore[attr-defined]
 
 
 def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
@@ -7227,6 +7455,11 @@ BACKENDS = {
             "normalize": _dsh_to_claude},
     "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
                  "normalize": _opencode_to_claude},
+    # Kilo CLI is an opencode fork whose `run --format json` emitter is opencode's, unchanged at
+    # 7.8.1 (the same six event types and framing), so it shares the normaliser; only the name in
+    # its fallback messages differs.
+    "kilo": {"providers": sorted(KILO_PROVIDERS), "default_model": KILO_DEFAULT_MODEL,
+             "normalize": _kilo_to_claude},
     # qwen-code emits claude's stream-json natively (verified against the shipped 0.22.1:
     # system/init with session_id, assistant/message, result/subtype/usage in claude's field
     # names) — so its normalizer IS the claude passthrough.
@@ -8732,6 +8965,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_opencode(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                               skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+    elif backend == "kilo":
+        model = model or KILO_DEFAULT_MODEL
+        skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+        cmd = _build_kilo(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          skills_dir=skills_dir, tools_disabled=req.tools_disabled)
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins
