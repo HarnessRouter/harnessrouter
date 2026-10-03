@@ -187,6 +187,11 @@ try {
         rec.substituted = withModel.length
           ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && x !== m)).map((t) => String(t.served_model)))]
           : (rec.served.length && !rec.served.some((sm) => sm.split(',').includes(m)) ? rec.served : []);
+        // No turn of this pair asked for the pair's own model: the picker's choice did not reach the
+        // request (a wrong option clicked, a composer that reset it), so every check keyed on
+        // `t.model === m` above would pass over nothing. A finding of its own (render.py), never a clean row.
+        if (withModel.length && !turnsList.some((t) => t && t.model === m))
+          rec.wrong_model = [...new Set(turnsList.map((t) => t && t.model).filter(Boolean).map(String))];
         if (process.env.EXPECT_CONNECTION) rec.foreign = rec.connections.filter((c) => c !== process.env.EXPECT_CONNECTION);
         // A turn on this pair's model with NO served model is a turn rule 2 could not judge, and a
         // finding of its own: the direct Anthropic route on Claude Code reported none for months

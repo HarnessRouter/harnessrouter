@@ -71,6 +71,9 @@ for prov, rows in sorted(by.items()):
             findings.append(f"{r['harness']} x {r['model']}: served as {', '.join(others)} (the CLI reports the model it ran)")
             notes.insert(0, f"served as {', '.join(others)} (finding below)")
         # A turn that names no served model is a turn rule 2 could not judge: a finding, not a pass.
+        if r.get('wrong_model'):
+            findings.append(f"{r['harness']} x {r['model']}: no turn asked for this model (the turns ran {', '.join(r['wrong_model'])}), so the row measured something else")
+            notes.insert(0, "no turn ran this model (finding below)")
         if r.get('unlabelled'):
             findings.append(f"{r['harness']} x {r['model']}: {r['unlabelled']} turn(s) report no served model, so rule 2 could not judge them")
             notes.insert(0, f"{r['unlabelled']} turn(s) unlabelled (finding below)")
@@ -84,7 +87,7 @@ for prov, rows in sorted(by.items()):
             share = tk.get('cache_read', 0) / max(tk.get('input', 0) + tk.get('cache_read', 0), 1)
             notes.append(f"cache {round(share * 100)}% of input")
         out.append(f"| {r['harness']} | {r['model']} | {mark(r.get('first'))} | {mark(r.get('followup'))} | {mark(sw)}{(' ('+sw['to']+')') if sw.get('to') else ''} | {mark(r.get('artifact'))} | {mark(r.get('recycle'))} | {served} | {' ; '.join(notes).replace('|', '/')} |")
-    clean = [r for r in rows if not r.get('foreign') and not r.get('unlabelled')
+    clean = [r for r in rows if not r.get('foreign') and not r.get('unlabelled') and not r.get('wrong_model')
              and all(alias_of(r['model'], x) for x in (r.get('substituted') or []))]
     ok = sum(1 for r in clean for sc in ('first','followup','switch','artifact','recycle') if (r.get(sc) or {}).get('ok') is True)
     tot = sum(1 for r in clean for sc in ('first','followup','switch','artifact','recycle') if (r.get(sc) or {}).get('ok') is not None)

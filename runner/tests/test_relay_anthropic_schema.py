@@ -66,6 +66,22 @@ def test_a_required_key_every_branch_shares_survives_the_flattening():
     assert _anthropic_tool_schema(schema)["required"] == ["id"]
 
 
+def test_what_every_call_needs_stays_required_whatever_the_branches_say():
+    """The root's own list applies to every shape, every allOf branch applies at once, and of
+    alternatives only what all of them demand. A flattening that kept the alternatives' common keys
+    alone dropped `path` from a write tool whose content could come two ways."""
+    flat = _anthropic_tool_schema({"type": "object", "required": ["path"],
+                                   "anyOf": [{"required": ["content"]}, {"required": ["patch"]}]})
+    assert flat["required"] == ["path"]
+    flat = _anthropic_tool_schema({"allOf": [{"required": ["a"]}, {"required": ["b"]}]})
+    assert flat["required"] == ["a", "b"]
+    flat = _anthropic_tool_schema({"required": ["id"], "allOf": [{"required": ["a"]}],
+                                   "oneOf": [{"required": ["x", "k"]}, {"required": ["y", "k"]}]})
+    assert flat["required"] == ["id", "a", "k"]
+    flat = _anthropic_tool_schema({"anyOf": [{"required": ["x"]}, {"properties": {"y": {}}}]})
+    assert "required" not in flat
+
+
 def test_a_nested_combinator_is_left_alone_because_anthropic_accepts_it():
     from server import _anthropic_tool_schema
     schema = {"type": "object", "properties": {"n": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}}

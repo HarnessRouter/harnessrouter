@@ -157,4 +157,5 @@ results.summary = `${passed} of ${ran} families passed in one conversation (${re
 fs.writeFileSync(RESULTS, JSON.stringify(results, null, 1));
 log('TOUR_DONE', results.summary);
 await browser.close();
-process.exit(passed === ran ? 0 : 1);
+// a tour in which no family ran proved nothing: every id skipped as "not offered" is a failure to measure
+process.exit(ran > 0 && passed === ran ? 0 : 1);

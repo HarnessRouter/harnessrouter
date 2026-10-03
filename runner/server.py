@@ -3605,9 +3605,11 @@ def _anthropic_tool_schema(node):
 
       properties  the union of the root's and every branch's, root first (a branch that redeclares a
                   property does not override the root's description of it)
-      required    only what EVERY branch requires, because a key one branch alone demands is not
-                  required of the call the model actually makes. For grok's `use_tool` that is the
-                  empty set, so `required` goes: two of its three forms do not take `tool_name`.
+      required    what every call needs whichever shape it takes: the root's own list, every
+                  allOf branch's (all of those apply), and of oneOf/anyOf only what EVERY branch
+                  requires, because a key one alternative alone demands is not required of the call
+                  the model actually makes. For grok's `use_tool` that is the empty set, so
+                  `required` goes: two of its three forms do not take `tool_name`.
       the rest    every other root key except the combinators and the `not` that rode with them
 
     The exclusivity then lives where the model reads it anyway: `use_tool`'s own description says
@@ -3628,11 +3630,16 @@ def _anthropic_tool_schema(node):
             props.setdefault(name, spec)
     if props:
         out["properties"] = props
-    reqs = [set(b["required"]) for b in branches if isinstance(b.get("required"), list)]
-    required = list(node.get("required") or [])
-    if reqs:
-        common = set.intersection(*reqs) if len(reqs) == len(branches) else set()
-        required = [r for r in required if r in common] or sorted(common)
+    def _req(b):
+        return [r for r in b["required"] if isinstance(r, str)] if isinstance(b.get("required"), list) else []
+    required = _req(node)
+    for b in node.get("allOf") or []:
+        if isinstance(b, dict):
+            required += [r for r in _req(b) if r not in required]
+    for k in ("oneOf", "anyOf"):
+        alts = [set(_req(b)) for b in (node.get(k) or []) if isinstance(b, dict)]
+        if alts:
+            required += [r for r in sorted(set.intersection(*alts)) if r not in required]
     if required:
         out["required"] = required
     else:
@@ -4038,6 +4045,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 headers["content-length"] = str(len(body))
         resp = None
         tried_slim = False
+        dropped_once = False
         for attempt in (0, 1, 2):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
@@ -4158,13 +4166,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # closed connection without response`, two inside the family tour's failing window.
                 # A refusal the person can read beats a socket that simply stops.
                 reason = f"{type(e).__name__}: {e}"[:300]
-                if attempt < 2 and isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError)):
+                if not dropped_once and attempt < 2 and isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError)):
+                    dropped_once = True
                     # A connection dropped before any byte of the answer is the one transport failure
                     # worth one more go: it costs nothing upstream (nothing was generated) and an
                     # aggregator sheds load this way. A timeout is NOT retried — the provider may be
                     # generating, and a second request would be a second bill.
                     print(f"[relay] upstream dropped the connection for {tail} model={_body_model}; "
-                          f"sending again ({attempt + 1}/2)", flush=True)
+                          "sending again, once", flush=True)
                     continue
                 print(f"[relay] upstream did not answer {tail} model={_body_model}: {reason}", flush=True)
                 payload = json.dumps({"error": {
@@ -4183,11 +4192,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     pass          # the client hung up first; nothing left to tell
                 return
         ctype = resp.headers.get("content-type") or ""
-        self.send_response(resp.status)
-        self.send_header("content-type", ctype)
         # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass
         sigs = flags.setdefault("google_sigs", {}) if google else None
         if "text/event-stream" in ctype:
+            self.send_response(resp.status)
+            self.send_header("content-type", ctype)
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             pending = b""
@@ -4200,13 +4209,32 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 except (http.client.HTTPException, TimeoutError, OSError) as e:
                     # The answer began and then stopped: the provider went silent past the socket's
                     # timeout, or dropped the connection mid-stream. The status line is long gone, so
-                    # the stream is ENDED here rather than left open — the client reads a truncated
-                    # SSE stream and fails its own turn with its own words, which is what it does
-                    # with any short stream. Before this, the exception escaped _forward and the
-                    # socket was dropped with the chunked body unterminated.
-                    print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: "
-                          f"{type(e).__name__}: {e}"[:300], flush=True)
-                    break
+                    # the reason travels as the stream's own error event (the shape of the API being
+                    # spoken) and the chunked body is then left UNTERMINATED with the connection
+                    # closed. Ending it with the zero chunk would hand the client a well-formed,
+                    # complete answer that merely lacks its last events — measured at a stub: one
+                    # event, a stall, and the client read 200 with nothing wrong.
+                    why = f"{type(e).__name__}: {e}"[:300]
+                    print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: {why}",
+                          flush=True)
+                    msg = f"the provider stopped answering mid-stream: {why}"
+                    if "/messages" in tail:
+                        ev = "event: error\ndata: " + json.dumps(
+                            {"type": "error", "error": {"type": "api_error", "message": msg}}) + "\n\n"
+                    else:
+                        ev = "data: " + json.dumps({"error": {
+                            "message": msg, "type": "upstream_unavailable",
+                            "code": "upstream_unavailable"}}) + "\n\n"
+                    call_usage.update(_usage_in_sse_line(pending.strip()))
+                    _usage_add(flags, call_usage)
+                    try:
+                        raw = ev.encode()
+                        self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
+                        self.wfile.flush()
+                    except OSError:
+                        pass
+                    self.close_connection = True
+                    return
                 if not chunk:
                     break
                 if not flags.get("served_model"):
@@ -4242,11 +4270,26 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             try:
                 data = resp.read()
             except (http.client.HTTPException, TimeoutError, OSError) as e:
-                # Same as the streaming case: the body stopped arriving. The status is already sent,
-                # so the client gets a short body and says so itself.
-                print(f"[relay] upstream stopped mid-body on {tail} model={_body_model}: "
-                      f"{type(e).__name__}: {e}"[:300], flush=True)
-                data = b""
+                # The body stopped arriving. Nothing has been sent to the client yet (the status
+                # line is only written below), so this is answered as the provider failure it is
+                # rather than as the provider's own 200 with an empty body.
+                why = f"{type(e).__name__}: {e}"[:300]
+                print(f"[relay] upstream stopped mid-body on {tail} model={_body_model}: {why}",
+                      flush=True)
+                payload = json.dumps({"error": {
+                    "message": f"the provider stopped answering mid-body: {why}",
+                    "type": "upstream_unavailable", "code": "upstream_unavailable"}}).encode()
+                try:
+                    self.send_response(504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    pass
+                return
+            self.send_response(resp.status)
+            self.send_header("content-type", ctype)
             if not flags.get("served_model"):
                 sm = _served_model_in(data[:65536])
                 if sm:
@@ -4399,14 +4442,24 @@ def _adapt_custom_auth(auth):
 
 
 # How long the relay waits for the provider on ONE upstream call, and how long a stalled READ of an
-# answer already begun may block. It must stay BELOW the shortest turn cap anything upstream of it
-# applies, or a provider that accepts a request and then goes silent is indistinguishable from a
-# working turn: the harness's own cap fires first, the turn is cancelled with no served model, no
-# tool call and no reason, and the person is told nothing. That is exactly what the family tour hit
-# on 2026-09-29 (seven of fourteen families "not settled in 600s" on a support-matrix instance whose
-# relay sat in urlopen(timeout=600)). A provider that has said nothing for this long has failed;
-# saying so in seconds is worth more than waiting ten minutes to say nothing.
-HR_RELAY_UPSTREAM_TIMEOUT_S = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S", "180"))
+# answer already begun may block (it is the socket's timeout: connect, the wait for the status line,
+# and every later read). It must stay BELOW the turn cap above it, or a provider that accepts a
+# request and then goes silent is indistinguishable from a working turn: the cap fires first and the
+# turn is cancelled with no served model, no tool call and no reason. The default is the 600 s this
+# relay has always waited, far under MAX_TURN_SECONDS: a reasoning model answering a non-streaming
+# call can be silent for minutes and that is an answer on its way, not a failure. An instance whose
+# own cap is shorter sets this lower: the support-matrix suite caps a turn at 600 s, so the instance
+# it measures runs with HR_RELAY_UPSTREAM_TIMEOUT_S=180 (seven of fourteen tour families were "not
+# settled in 600s" on 2026-09-29 with the two equal). A value that is not a positive number is ignored.
+def _relay_upstream_timeout() -> float:
+    try:
+        v = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S") or 600)
+    except ValueError:
+        return 600.0
+    return v if v > 0 else 600.0
+
+
+HR_RELAY_UPSTREAM_TIMEOUT_S = _relay_upstream_timeout()
 
 
 def _relay_base_with_version(base_url: str) -> str:
