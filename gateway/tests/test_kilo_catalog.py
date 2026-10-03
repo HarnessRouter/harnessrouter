@@ -35,7 +35,10 @@ def test_kilo_is_wired_where_opencode_is():
     assert "kilo" in gw._CUSTOM_FORMAT_BACKENDS["openai"] and "kilo" in gw._CUSTOM_FORMAT_BACKENDS["anthropic"]
 
 
-def test_catalog_is_opencodes_and_defaults_like_it():
+def test_catalog_is_opencodes_less_what_kilo_s_own_column_failed_and_defaults_like_it():
     assert gw._MODEL_CATALOG["kilo"]["default"] == "gpt-5.4"
-    assert gw._MODEL_CATALOG["kilo"]["models"] == gw._MODEL_CATALOG["opencode"]["models"]
+    gone = gw._NOT_OFFERED["kilo"]
+    assert gone == {"llama-3.3-70b"}      # failed twice on kilo's full-catalog column (2026-10-03)
+    assert gw._MODEL_CATALOG["kilo"]["models"] == [m for m in gw._MODEL_CATALOG["opencode"]["models"]
+                                                   if m not in gone]
     assert gw._backend_of_builtin("kilo") == "kilo"

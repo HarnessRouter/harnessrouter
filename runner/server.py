@@ -3257,6 +3257,105 @@ def _stringify_tool_content(body: bytes) -> bytes:
     return body
 
 
+_IMAGE_PLACEHOLDER = ("[an image was returned here; the model serving this turn takes no image in a "
+                      "tool result, so it is not shown]")
+
+
+def _tool_images_as_text(body: bytes) -> bytes:
+    """Tool-role messages whose content carries an image part, with the image replaced by a sentence
+    and the content flattened to a string, in one chat-completions body.
+
+    A model that sees images reads one through a tool (Grok Build's read_file on a PNG: the deck's
+    own screenshot, on the family tour's first turn), and the client then replays that tool result
+    in every later request of the conversation. The next model need not take it: measured on
+    hr-test 2026-10-03, one conversation, seven of fourteen families — an aggregator's Anthropic
+    translation refuses the part ("tool_result.content.1: Input tag 'image_url' … does not match"),
+    Moonshot refuses the shape ("did not match any variant of untagged enum
+    ChatCompletionRequestToolMessageContent"), and OpenRouter has "No endpoints found that support
+    image input" for llama, hunyuan and nemotron. So one screenshot ended the conversation for every
+    model after the one that took it. Applied only after a provider refuses, for that model on that
+    route: a model that takes the image keeps it."""
+    try:
+        obj = json.loads(body)
+        changed = False
+        for m in obj.get("messages") or []:
+            if not (isinstance(m, dict) and m.get("role") == "tool" and isinstance(m.get("content"), list)):
+                continue
+            parts = [p for p in m["content"] if isinstance(p, dict)]
+            if not any(p.get("type") not in ("text", None) for p in parts):
+                continue
+            m["content"] = "\n".join((p.get("text") or "") if p.get("type") in ("text", None)
+                                     else _IMAGE_PLACEHOLDER for p in parts)
+            changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+_EMPTY_CALL_ID = re.compile(rb'"(?:tool_call_)?id"\s*:\s*""')
+
+
+def _repair_tool_call_ids(body: bytes, dedupe: bool = False) -> bytes:
+    """A chat-completions body in which every tool call has an id of its own and every tool message
+    names the call it answers.
+
+    Two shapes a conversation inherits from a model that wrote them and a later, stricter provider
+    refuses — both measured on the family tour, hr-test 2026-10-03, and both end the conversation
+    for every such provider from then on:
+      an EMPTY id. One family's stream carried tool calls with `"id": ""`; the client stored and
+        replayed them, and Mistral and StepFun answered `tool messages must include a non-empty
+        string tool_call_id` (grok, two of fourteen families).
+      a DUPLICATE id inside one assistant message (parallel calls a provider numbered alike):
+        Mistral, `Duplicate tool call id in assistant message` (kilo, one of fourteen).
+    An empty id is never valid, so it is filled whenever one is present. Duplicates are renamed only
+    when `dedupe` is set (after a provider says so): tool messages are matched to calls in order, the
+    order every client writes them in."""
+    try:
+        obj = json.loads(body)
+        msgs = obj.get("messages")
+        if not isinstance(msgs, list):
+            return body
+        changed = False
+        owed: list[tuple[str, str]] = []     # (the id as the client wrote it, the id it has now), in call order
+        for mi, m in enumerate(msgs):
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") == "assistant" and isinstance(m.get("tool_calls"), list):
+                owed, seen = [], set()
+                for ci, c in enumerate(m["tool_calls"]):
+                    if not isinstance(c, dict):
+                        continue
+                    old = c.get("id") if isinstance(c.get("id"), str) else ""
+                    new = old
+                    if not old or (dedupe and old in seen):
+                        new = f"call_hr_{mi}_{ci}"
+                        c["id"] = new
+                        changed = True
+                    seen.add(new)
+                    owed.append((old, new))
+            elif m.get("role") == "tool":
+                tid = m.get("tool_call_id") if isinstance(m.get("tool_call_id"), str) else ""
+                hit = next((i for i, (old, _) in enumerate(owed) if old == tid), None)
+                if hit is not None:
+                    _, new = owed.pop(hit)
+                    if new != tid:
+                        m["tool_call_id"] = new
+                        changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+def _image_in_tool_result_refused(code: int, data: bytes) -> bool:
+    """Whether a provider's refusal is about an image it was handed (see _tool_images_as_text)."""
+    low = data.lower()
+    return code in (400, 404, 415, 422) and (b"image" in low or b"toolmessagecontent" in low)
+
+
 def _stringify_assistant_content(body: bytes) -> bytes:
     """Assistant-role message content: array-of-parts -> plain string, in one chat-completions body.
 
@@ -4034,6 +4133,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
                 body = _stringify_tool_content(body)
+            if flags.get(f"tool_images_as_text:{_body_model}"):
+                body = _tool_images_as_text(body)
+            if flags.get("dedupe_tool_call_ids") or _EMPTY_CALL_ID.search(body):
+                body = _repair_tool_call_ids(body, dedupe=bool(flags.get("dedupe_tool_call_ids")))
             if flags.get("stringify_assistant_content"):
                 body = _stringify_assistant_content(body)
             if flags.get("drop_stream_options"):
@@ -4095,6 +4198,26 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     flags["stringify_tool_content"] = True
                     body = stringified
                     headers["content-length"] = str(len(body))
+                    continue
+                if (attempt < 2 and e.code in (400, 422) and b"uplicate tool call id" in data
+                        and body is not None and not flags.get("dedupe_tool_call_ids")):
+                    unique = _repair_tool_call_ids(body, dedupe=True)
+                    if unique != body:
+                        flags["dedupe_tool_call_ids"] = True
+                        body = unique
+                        headers["content-length"] = str(len(body))
+                        print(f"[relay] provider refused a duplicate tool call id for model={_body_model}; "
+                              f"sent again with ids of their own", flush=True)
+                        continue
+                imageless = _tool_images_as_text(body) if body is not None else None
+                if (attempt < 2 and _image_in_tool_result_refused(e.code, data)
+                        and imageless is not None and imageless != body):
+                    # this model takes no image in a tool result; remember it for this model only
+                    flags[f"tool_images_as_text:{_body_model}"] = True
+                    body = imageless
+                    headers["content-length"] = str(len(body))
+                    print(f"[relay] provider refused an image in a tool result for model={_body_model}; "
+                          f"sent again with the image named in words", flush=True)
                     continue
                 assistant = _stringify_assistant_content(body) if body is not None else None
                 if (attempt < 2 and e.code == 400

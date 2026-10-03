@@ -6842,6 +6842,20 @@ _MODEL_CATALOG["systemone"] = {"default": "jev-latest",
 _NOT_OFFERED: dict[str, frozenset[str]] = {
     "qwen": frozenset({"llama-4-maverick"}), "goose": frozenset({"llama-3.3-70b"}),
     "hermes": frozenset({"llama-3.3-70b"}), "pi": frozenset({"llama-3.3-70b"}),
+    # The four bases of 0.29.0, full-catalog columns on hr-test 2026-10-03 (rc.3, retested on rc.4;
+    # docs/support-matrix-notes.md). Each id failed twice the same way:
+    #   kilo        llama-3.3-70b on OpenRouter: a runaway of Webfetch calls on its first turn, then
+    #               the write call printed as text instead of made (no file).
+    #   minimax     gpt-5.6-terra answers DONE without writing the file; gemini-3.5-flash-lite's
+    #               artifact turn ends "Conversation history could not be safely updated".
+    #   grok        deepseek-v4-pro's artifact turn ends "empty response from model
+    #               (reasoning_only)": reasoning and no answer.
+    #   agentzero   claude-fable-5 and claude-fable-5-1 decline the FIRST turn (finish_reason
+    #               content_filter) with Agent Zero's system prompt; the other three bases run both.
+    "kilo": frozenset({"llama-3.3-70b"}),
+    "minimax": frozenset({"gpt-5.6-terra", "gemini-3.5-flash-lite"}),
+    "grok": frozenset({"deepseek-v4-pro"}),
+    "agentzero": frozenset({"claude-fable-5", "claude-fable-5-1"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
