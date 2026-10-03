@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import http.server
 import datetime
 import json
@@ -340,6 +341,22 @@ def _openhands_session_present(cwd: str, cmd: list[str], session_id: str) -> boo
     return any((d / "base_state.json").is_file() for d in home.iterdir() if d.is_dir())
 
 
+def _agentzero_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask Agent Zero's own store: the context the driver resumes is usr/chats/<id>/chat.json under
+    the workspace's base, and it is loaded with Agent Zero's own deserialiser. A file that is there
+    but holds no agent history is a conversation that is not there — the driver would build a
+    fresh context over it. The id is the driver's constant, so it cannot be read off argv, and the
+    driver itself creates a context for an id it does not find, silently."""
+    chat = (pathlib.Path(cwd) / ".harness" / "agentzero" / "base" / "usr" / "chats"
+            / (session_id or "harness") / "chat.json")
+    try:
+        doc = json.loads(chat.read_text())
+    except (OSError, ValueError):
+        return False
+    agents = doc.get("agents") if isinstance(doc, dict) else None
+    return bool(agents) and bool((agents[0] or {}).get("history"))
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
@@ -348,6 +365,7 @@ _SESSION_PRESENT = {
     "aider": _aider_session_present,
     "openhands": _openhands_session_present,
     "cheetahclaws": _cheetahclaws_session_present,
+    "agentzero": _agentzero_session_present,
 }
 
 
@@ -526,6 +544,12 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
                       "./.harness/home/.dsh/cordis.yml",
+                      # Agent Zero keeps its dotenv and its secrets store in usr/ (helpers/dotenv.py,
+                      # helpers/secrets.py). The driver writes neither — the key rides the turn's
+                      # environment, and only the relay's placeholder at that — but its settings
+                      # save path writes API_KEY_* into usr/.env, and a task can reach it.
+                      "./.harness/agentzero/base/usr/.env",
+                      "./.harness/agentzero/base/usr/secrets.env",
                       # opencode's undo/revert history: a git repo of the workspace that grew to
                       # 699 MB / 71k files in twenty turns (#193). _opencode_config turns it off;
                       # this keeps a workspace that already carries one from dragging it through
@@ -571,6 +595,7 @@ KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
 AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
+AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -669,8 +694,13 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
         ".harness/goose/config/secrets.yaml",
         ".cheetahclaws/tasks.json",
+        ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
+        # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
+        # prompt (ctx_window) on every save, so committing it would put a new copy of the system
+        # prompt into .git/objects each turn. It travels in the tar like the CLI home does.
+        ".harness/agentzero/",
         "",
     ]))
     if not (p / ".git").exists():
@@ -1012,6 +1042,13 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # adapts to us instead of the other way round.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    elif backend == "agentzero":
+        # usr/skills/<name>/SKILL.md under the workspace's Agent Zero base — the user skills root its
+        # own loader scans (helpers/skills.get_skill_roots: files.get_abs_path("usr/skills")), and
+        # the driver makes that base's usr/ this directory. Under .harness/, so excluded from
+        # produced files and carried in the checkpoint.
+        rootrels = [".harness/agentzero/base/usr/skills"]
+        entryroot = ".harness/agentzero/base/usr/skills"
     else:
         # dsh has no skill loader; the AGENTS.md block below is the only door.
         # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
@@ -1352,7 +1389,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # 3.5.88), so it takes the CLAUDE.md branch below, and an AGENTS.md in the workspace is
         # never loaded whether or not a CLAUDE.md is there.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi", "aider", "openhands")
+                                   "goose", "kimi", "aider", "openhands", "agentzero")
         else "CLAUDE.md")
 
 
@@ -3521,7 +3558,15 @@ def _served_model_in(data: bytes) -> str:
     return m.group(1).decode("utf-8", "replace") if m else ""
 
 
-_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
+# The hyphen is not cosmetic: Vercel's AI Gateway reports a declined request as "content-filter"
+# while OpenAI's own spelling is "content_filter" (measured 2026-10-01 against ai-gateway.vercel.sh
+# on anthropic/claude-fable-5.1 and anthropic/claude-opus-5 — two SSE events, no content, no
+# reasoning, finish_reason "content-filter"). A pattern that admitted only the underscore matched
+# nothing on that channel, so the one check that turns a provider's refusal into a stated reason was
+# never evaluated there — the person got whatever the CLI made of an empty answer instead
+# (agentzero: "Agent stopped after 5 consecutive unusable model responses", its own loop guard).
+# _finish_reason_in normalises both spellings to the underscore one, so callers compare one form.
+_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_-]{1,40})"')
 
 
 def _usage_fields(u) -> dict:
@@ -3620,7 +3665,7 @@ def _model_metadata_with_context_length(data: bytes) -> bytes:
 def _finish_reason_in(data: bytes) -> str:
     """The last finish_reason an OpenAI-shaped answer names in these bytes ("" when none)."""
     hits = _FINISH_RE.findall(data)
-    return hits[-1].decode() if hits else ""
+    return hits[-1].decode().replace("-", "_") if hits else ""
 
 
 def _relay_last_finish(env: dict) -> str:
@@ -3631,7 +3676,10 @@ def _relay_last_finish(env: dict) -> str:
         if isinstance(v, str) and v.startswith("hr-relay-"):
             route = _HERMES_RELAY["routes"].get(v)
             if route:
-                return str((route[2] or {}).get("last_finish") or "")
+                # normalised the way _finish_reason_in normalises, so a caller compares one
+                # spelling whoever wrote the flag (Vercel says "content-filter", OpenAI
+                # "content_filter")
+                return str((route[2] or {}).get("last_finish") or "").replace("-", "_")
     return ""
 
 
@@ -3785,7 +3833,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
+                resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
                 if attempt > 0 and tried_slim:
                     # the blind no-stream_options retry is part of what made this route work
                     flags["drop_stream_options"] = True
@@ -3878,6 +3926,40 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+                # THE PROVIDER DID NOT ANSWER: the connection was refused, dropped mid-request, or
+                # went silent past HR_RELAY_UPSTREAM_TIMEOUT_S. Only HTTPError was caught here, so
+                # such a failure escaped _forward, ThreadingHTTPServer printed a traceback and closed
+                # the socket WITH NO RESPONSE AT ALL — the CLI was left holding a dead connection and
+                # the turn hung until something above killed it. Measured on a support-matrix
+                # instance on 2026-09-29: ten of these, `http.client.RemoteDisconnected: Remote end
+                # closed connection without response`, two inside the family tour's failing window.
+                # A refusal the person can read beats a socket that simply stops.
+                reason = f"{type(e).__name__}: {e}"[:300]
+                if attempt < 2 and isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError)):
+                    # A connection dropped before any byte of the answer is the one transport failure
+                    # worth one more go: it costs nothing upstream (nothing was generated) and an
+                    # aggregator sheds load this way. A timeout is NOT retried — the provider may be
+                    # generating, and a second request would be a second bill.
+                    print(f"[relay] upstream dropped the connection for {tail} model={_body_model}; "
+                          f"sending again ({attempt + 1}/2)", flush=True)
+                    continue
+                print(f"[relay] upstream did not answer {tail} model={_body_model}: {reason}", flush=True)
+                payload = json.dumps({"error": {
+                    "message": f"the provider did not answer: {reason}",
+                    "type": "upstream_unavailable",
+                    "code": "upstream_unavailable"}}).encode()
+                # 504 for a silence we timed out on, 502 for a connection that failed or was dropped.
+                status = 504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502
+                try:
+                    self.send_response(status)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    pass          # the client hung up first; nothing left to tell
+                return
         ctype = resp.headers.get("content-type") or ""
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
@@ -3891,7 +3973,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
             while True:
-                chunk = resp.read(4096)
+                try:
+                    chunk = resp.read(4096)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    # The answer began and then stopped: the provider went silent past the socket's
+                    # timeout, or dropped the connection mid-stream. The status line is long gone, so
+                    # the stream is ENDED here rather than left open — the client reads a truncated
+                    # SSE stream and fails its own turn with its own words, which is what it does
+                    # with any short stream. Before this, the exception escaped _forward and the
+                    # socket was dropped with the chunked body unterminated.
+                    print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: "
+                          f"{type(e).__name__}: {e}"[:300], flush=True)
+                    break
                 if not chunk:
                     break
                 if not flags.get("served_model"):
@@ -3924,7 +4017,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _usage_add(flags, call_usage)
             self.wfile.write(b"0\r\n\r\n")
         else:
-            data = resp.read()
+            try:
+                data = resp.read()
+            except (http.client.HTTPException, TimeoutError, OSError) as e:
+                # Same as the streaming case: the body stopped arriving. The status is already sent,
+                # so the client gets a short body and says so itself.
+                print(f"[relay] upstream stopped mid-body on {tail} model={_body_model}: "
+                      f"{type(e).__name__}: {e}"[:300], flush=True)
+                data = b""
             if not flags.get("served_model"):
                 sm = _served_model_in(data[:65536])
                 if sm:
@@ -4074,6 +4174,17 @@ def _adapt_custom_auth(auth):
         return auth
     base, tok = _bedrock_anthropic_route(f"https://{host}", auth.api_key)
     return auth.model_copy(update={"base_url": base, "api_key": tok})
+
+
+# How long the relay waits for the provider on ONE upstream call, and how long a stalled READ of an
+# answer already begun may block. It must stay BELOW the shortest turn cap anything upstream of it
+# applies, or a provider that accepts a request and then goes silent is indistinguishable from a
+# working turn: the harness's own cap fires first, the turn is cancelled with no served model, no
+# tool call and no reason, and the person is told nothing. That is exactly what the family tour hit
+# on 2026-09-29 (seven of fourteen families "not settled in 600s" on a support-matrix instance whose
+# relay sat in urlopen(timeout=600)). A provider that has said nothing for this long has failed;
+# saying so in seconds is worth more than waiting ten minutes to say nothing.
+HR_RELAY_UPSTREAM_TIMEOUT_S = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S", "180"))
 
 
 def _relay_base_with_version(base_url: str) -> str:
@@ -6626,6 +6737,150 @@ def _openhands_eof(state: dict, rc: int) -> list[dict]:
 _openhands_to_claude.eof = _openhands_eof   # type: ignore[attr-defined]
 
 
+# ── agentzero: Agent Zero (agent0ai/agent-zero, MIT), driven in process ────────────────────────────
+# The turn process is runner/agentzero_driver.py under Agent Zero's own venv: it builds an
+# AgentContext, sends the message, and re-emits what Agent Zero's extension hooks observe as NDJSON
+# in the dsh_driver shape. The framework has no CLI and no headless mode (it is a web UI shipped as a
+# Docker image), so driving the framework's own loop in process is the one-process-per-turn form it
+# can take; see the driver's docstring for every door it goes through.
+AGENTZERO_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+AGENTZERO_PYTHON = os.environ.get("HR_AGENTZERO_PYTHON", "/data/agent-tools/agentzero-venv/bin/python")
+AGENTZERO_SRC = os.environ.get("HR_AGENTZERO_SRC", "/data/agent-tools/agentzero-src")
+AGENTZERO_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agentzero_driver.py")
+# The conversation's context id: constant, because the store is in the workspace (the driver's
+# SESSION_ID; a follow-up after a recycle finds it by the same name).
+_AGENTZERO_SESSION = "harness"
+
+
+def _build_agentzero(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                     tools_disabled: list[str] | None = None,
+                     max_turns: int | None = None) -> list[str]:
+    """Agent Zero v2.13, one turn: the job rides argv as JSON, the driver emits NDJSON.
+
+    The model is Agent Zero's provider `other` ("Other OpenAI compatible": litellm's openai
+    provider with an api_base) pointed at the loopback relay, so the id reaches the provider as
+    written — Agent Zero sends `other` models as `openai/<id>` to litellm, which strips its own
+    prefix and nothing else. The key is the relay's placeholder, in OTHER_API_KEY: the variable
+    Agent Zero's models.get_api_key reads for provider `other`, and the ENVIRONMENT, which is where
+    _relay_served_model and _relay_usage find the turn's route (the openhands lesson: a token that
+    lived only in argv left every turn with no served model and no usage)."""
+    pr = provider or "openai-api"
+    if pr not in AGENTZERO_PROVIDERS:
+        raise HTTPException(400,
+                            f"unknown agentzero provider '{pr}' (one of {sorted(AGENTZERO_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "agentzero needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env["OTHER_API_KEY"] = auth.api_key or ""
+    job = {"cwd": cwd, "a0_src": AGENTZERO_SRC, "model": model, "prompt": prompt,
+           "base_url": auth.base_url, "api_key": auth.api_key,
+           "tools_disabled": list(tools_disabled or []),
+           # Agent Zero's own MCP client dials these (stdio, sse, streamable-http); a parameter
+           # accepted and then dropped is the defect aider's bridge taught this repo.
+           "mcp_servers": [s for s in (mcp_servers or [])
+                           if isinstance(s, dict) and (s.get("url") or s.get("command"))],
+           # Agent Zero's loop has no step budget of its own; the driver counts model calls.
+           "max_turns": max_turns,
+           "agent_doc_name": "AGENTS.md"}
+    return [AGENTZERO_PYTHON, AGENTZERO_DRIVER, json.dumps(job)]
+
+
+# What the console calls Agent Zero's tools on a card, and the shape of the input it shows: the
+# catalog lists them by Agent Zero's own names (the ids a disable carries), and the card reads
+# better with the verb every other base uses. MCP tools (`server.tool`) keep their own names.
+_AGENTZERO_CARD_NAMES = {"code_execution_tool": "Shell", "input": "Shell Input",
+                         "text_editor": "Edit", "call_subordinate": "Subagent",
+                         "skills_tool": "Skill", "parallel": "Parallel", "wait": "Wait",
+                         "goal": "Goal"}
+
+
+def _agentzero_card_input(name: str, args: dict) -> dict:
+    """A shell call's command under `command`, the key every other base's shell card carries (the
+    console previews it); Agent Zero names it `code`, and `keyboard` for the input tool."""
+    out = dict(args or {})
+    if name == "code_execution_tool" and "code" in out:
+        out["command"] = out.pop("code")
+    elif name == "input" and "keyboard" in out:
+        out["command"] = out.pop("keyboard")
+    return out
+
+
+def _agentzero_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map one driver line to canonical claude events. The driver has already decided what is the
+    answer (the response tool's text), what is a tool call (Agent Zero's tool_execute_before/after
+    hooks) and whether the turn failed (the loop raised, or never produced an answer); this maps
+    one shape to another and judges nothing.
+
+    Agent Zero reports a provider failure STRUCTURALLY, never as prose: the exception leaves the
+    loop, its critical-exception handler writes an `error` log item and the task raises. Measured on
+    v2.13 with a wrong key (401) and a dead base url (connection refused): no response-tool text at
+    all, `task.result()` raises HandledException. So there is no error prefix to anchor a regex on,
+    and the answer that merely mentions an error is an ordinary answer (see the tests)."""
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if m == "init":
+        # _run_turn_bg records the conversation id ONLY from a system/init event, and that recorded
+        # id is what makes the next turn a follow-up rather than a new thread.
+        return [{"type": "system", "subtype": "init",
+                 "session_id": str(p.get("session_id") or _AGENTZERO_SESSION),
+                 "model": state.get("model")}]
+    if m == "thinking":
+        txt = str(p.get("text") or "")
+        if not txt.strip():
+            return []
+        return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": txt}]}}]
+    if m == "tool_call":
+        raw = str(p.get("name") or "tool")
+        tid = str(p.get("id") or "a0")
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": _AGENTZERO_CARD_NAMES.get(raw, raw),
+             "input": _agentzero_card_input(raw, p.get("input") if isinstance(p.get("input"), dict) else {})}]}}]
+    if m == "tool_result":
+        out = p.get("output")
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(p.get("id") or "a0"),
+             "is_error": bool(p.get("is_error")),
+             "content": out if isinstance(out, str) else json.dumps(out, default=str)}]}}]
+    if m == "mcp_unavailable":
+        return [{"type": "system", "subtype": "mcp_unavailable", "servers": p.get("servers") or []}]
+    if m == "warning":
+        state.setdefault("_a0_warnings", []).append(str(p.get("text") or ""))
+        return []
+    if m == "result":
+        ok = bool(p.get("ok"))
+        final = str(p.get("final") or "")
+        if ok:
+            state["final"] = final
+            # The answer is one text block, emitted here rather than streamed: Agent Zero's answer
+            # is the response tool's argument, which exists only once the model's JSON is complete.
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": final}]}},
+                    {"type": "result", "subtype": "success", "is_error": False, "result": final,
+                     "usage": {}}]
+        state["_a0_error"] = str(p.get("error") or "")
+        # usage is {} on purpose: the relay stamps it (_relay_usage), as for every backend whose
+        # own record carries none — Agent Zero's LLMResult usage never leaves the process.
+        return [{"type": "result", "subtype": "error", "is_error": True,
+                 "result": state["_a0_error"] or "the turn failed", "usage": {}}]
+    return []
+
+
+def _agentzero_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result event, so this fires only when the process died before
+    reaching it — a crash, a kill, an import failure. The reason then comes from stderr, which
+    _failure_reason reads; a placeholder here would shadow it."""
+    if rc == 0 and state.get("final"):
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": state.get("_a0_error") or "", "usage": {}}]
+
+
+_agentzero_to_claude.eof = _agentzero_eof   # type: ignore[attr-defined]
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -6674,6 +6929,10 @@ BACKENDS = {
     "cheetahclaws": {"providers": sorted(CHEETAHCLAWS_PROVIDERS),
                      "default_model": CHEETAHCLAWS_DEFAULT_MODEL,
                      "normalize": _cheetahclaws_to_claude},
+    # Agent Zero, in process through runner/agentzero_driver.py (its own NDJSON, like openhands').
+    "agentzero": {"providers": sorted(AGENTZERO_PROVIDERS),
+                  "default_model": AGENTZERO_DEFAULT_MODEL,
+                  "normalize": _agentzero_to_claude},
     # The System One driver emits claude's stream-json itself (system/init, assistant tool_use and
     # thinking blocks, user tool_result, result with usage and a `reason`), so its normaliser is the
     # passthrough, as qwen's is.
@@ -6919,6 +7178,17 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         tail = "\n".join(errbuf[-30:]).strip()
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
         refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        if not refusal and _relay_last_finish(env) == "content_filter":
+            # THE PROVIDER DECLINED, and the CLI's own account of a failure it could not see is not
+            # the reason. A refused request comes back as an answer with no content and no
+            # reasoning, which each harness narrates in its own internal words: agentzero counts
+            # five of them and stops with "Agent stopped after 5 consecutive unusable model
+            # responses to prevent further API charges" — its loop guard, correct in itself and
+            # about a counter nobody outside it can see. The relay watched the same exchange and
+            # knows what the provider said. The successful-looking case is rewritten above; this is
+            # the same statement for a turn that did fail, in the slot _failure_reason already
+            # keeps for a provider's refusal.
+            refusal = "the provider declined the request (finish_reason content_filter)"
         rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
@@ -8089,6 +8359,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     elif backend == "openhands":
         model = model or OPENHANDS_DEFAULT_MODEL
         cmd = _build_openhands(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id,
+                               mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "agentzero":
+        model = model or AGENTZERO_DEFAULT_MODEL
+        cmd = _build_agentzero(req.provider, auth, model, req.prompt, cwd, env,
                                resume_session_id=req.resume_session_id,
                                mcp_servers=req.mcp_servers,
                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
