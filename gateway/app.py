@@ -6818,8 +6818,8 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # (_opencode_npm), through the same relay, so it is offered opencode's set — Responses-API-only ids
 # included, since @ai-sdk/openai is how both reach them. Measured on kilo so far: gpt-5.4-mini and
 # claude-haiku-4.5, one local E2E on Vercel (docs/support-matrix-notes.md, "The kilo backend"); every
-# other id is offered so the matrix can measure it here, and no column has run yet. claude ids ride
-# Anthropic Messages off the relay, as on opencode, so their turns carry no served model. The wire itself was checked at a stub: kilo 7.8.1 sends the
+# other id is offered so the matrix can measure it here, and no column has run yet. claude ids on an
+# aggregator ride chat/completions (_kilo_npm) and a direct Anthropic connection rides Messages, both through the relay. The wire itself was checked at a stub: kilo 7.8.1 sends the
 # id it is given verbatim (gpt-5.4, claude-sonnet-4.6, gemini-3.8-flash, deepseek-v4-flash), so any
 # substitution would be the provider's, and the relay's served model shows it.
 _MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}

@@ -27,7 +27,7 @@ def test_a_custom_endpoint_is_the_users_exact_url(tmp_path):
     assert p["options"]["baseURL"] == "https://relay.example/api/coding/v3"
 
 
-def test_an_openai_shape_turn_rides_the_loopback_relay_and_a_messages_turn_does_not(tmp_path):
+def test_every_keyed_turn_rides_the_loopback_relay_whatever_its_shape(tmp_path):
     # 2026-09-06: with a Google key opencode reached Google directly, so nothing replayed Gemini 3's
     # thought signatures and every artifact turn failed; through the relay pi, dsh and qwen passed.
     env = {}
@@ -41,5 +41,7 @@ def test_an_openai_shape_turn_rides_the_loopback_relay_and_a_messages_turn_does_
     server._build_opencode("anthropic", server.Auth(provider="anthropic", base_url="https://api.anthropic.com", api_key="real"),
                            "claude-opus-5", "hi", str(tmp_path), env2)
     p2 = json.load(open(tmp_path / ".harness" / "opencode.json"))["provider"]["hr"]
-    assert p2["npm"] == "@ai-sdk/anthropic" and p2["options"]["baseURL"] == "https://api.anthropic.com/v1"
-    assert env2[server._OPENCODE_KEY_ENV] == "real"
+    # ...and since the relay reads x-api-key, a Messages turn rides it as well: the CLI (and the
+    # agent's shell with it) holds a placeholder, never the connection's key
+    assert p2["npm"] == "@ai-sdk/anthropic" and p2["options"]["baseURL"].startswith("http://127.0.0.1:")
+    assert p2["options"]["baseURL"].endswith("/v1") and env2[server._OPENCODE_KEY_ENV].startswith("hr-relay-")

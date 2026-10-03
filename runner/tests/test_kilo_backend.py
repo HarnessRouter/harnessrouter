@@ -192,12 +192,16 @@ def test_only_a_direct_anthropic_connection_keeps_messages():
     assert _kilo_npm(Auth(api_format="openai"), "claude-haiku-4.5", "tokenrouter") == "@ai-sdk/openai-compatible"
 
 
-def test_a_messages_shape_turn_keeps_its_direct_base():
+def test_a_messages_shape_turn_rides_the_relay_too_and_the_cli_never_holds_the_key():
+    """A direct Anthropic connection used to keep its own base, which put the real key in the CLI's
+    environment where the agent's shell can read it. The relay reads x-api-key and sends Anthropic
+    the key that way, so this turn gets a placeholder like every other."""
     auth = Auth(provider="anthropic", api_key="sk-ant", base_url="https://api.anthropic.com")
     _, cfg, env, _ = _build(auth=auth, provider="anthropic")
     assert cfg["provider"]["hr"]["npm"] == "@ai-sdk/anthropic"
-    assert cfg["provider"]["hr"]["options"]["baseURL"] == "https://api.anthropic.com/v1"
-    assert env["HR_KILO_KEY"] == "sk-ant"
+    assert cfg["provider"]["hr"]["options"]["baseURL"].startswith("http://127.0.0.1:")
+    assert cfg["provider"]["hr"]["options"]["baseURL"].endswith("/v1")
+    assert env["HR_KILO_KEY"].startswith("hr-relay-") and "sk-ant" not in json.dumps(env)
 
 
 def test_config_and_env_switch_off_every_phone_home_measured():

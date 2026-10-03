@@ -6201,15 +6201,19 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
-    if auth.base_url and auth.api_key and _opencode_npm(auth, model, pr) != "@ai-sdk/anthropic":
+    if auth.base_url and auth.api_key:
+        # EVERY keyed turn rides the relay, the Messages shape included. It was left off the relay
+        # when the relay read only a bearer; it reads x-api-key now and sends Anthropic's own API
+        # the key that way (goose's Messages path, #352), so a direct Anthropic connection no longer
+        # hands the CLI — and with it the agent's shell — the real key, and its turns record the
+        # served model and usage like every other.
         # Every OpenAI-shape opencode turn rides the loopback relay, as pi's and qwen's do, not only
         # a custom endpoint: request shapes ai-sdk emits but strict endpoints refuse are repaired in
         # flight (Azure's gpt-5.x deployments 400 on max_tokens, captured live 2026-08-27), Gemini
         # 3's thought signatures are replayed (2026-09-06: with a Google key opencode reached Google
         # directly, and every artifact turn on a Gemini 3.x id failed while pi, dsh and qwen passed
         # through the relay), and the real key stays in this process; opencode's env gets a
-        # per-turn placeholder. A Messages-shape turn keeps its direct base: the relay speaks
-        # bearer auth, and Anthropic takes the key in x-api-key.
+        # per-turn placeholder.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
@@ -6424,10 +6428,9 @@ def _kilo_npm(auth: Auth, model: str, pr: str) -> str:
     provider and model id through the relay on 2026-09-28. So the package choice, not the protocol,
     was the reason the observability surface was dark, and on THIS backend the choice is ours.
 
-    A DIRECT Anthropic connection keeps Messages: `api.anthropic.com` speaks nothing else, and the
-    relay would have to speak x-api-key upstream to front it. That is the general fix, it belongs
-    in the relay rather than in one backend, and it would repair opencode, pi, dsh and omp at the
-    same time — see the PR body."""
+    A DIRECT Anthropic connection keeps Messages: `api.anthropic.com` speaks nothing else. Since
+    0.29.0 it rides the relay as well (the relay reads x-api-key and sends Anthropic the key that
+    way), so its turns record the served model too and the CLI holds a placeholder."""
     if auth.api_format == "anthropic" or pr == "anthropic":
         return "@ai-sdk/anthropic"     # a direct Anthropic endpoint; no relay (see above)
     if auth.api_format == "openai":
@@ -6523,11 +6526,15 @@ def _build_kilo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     pr = provider or "openai-api"
     if pr not in KILO_PROVIDERS:
         raise HTTPException(400, f"unknown kilo provider '{pr}' (one of {sorted(KILO_PROVIDERS)})")
-    if auth.base_url and auth.api_key and _kilo_npm(auth, model, pr) != "@ai-sdk/anthropic":
+    if auth.base_url and auth.api_key:
+        # EVERY keyed turn rides the relay, the Messages shape included. It was left off the relay
+        # when the relay read only a bearer; it reads x-api-key now and sends Anthropic's own API
+        # the key that way (goose's Messages path, #352), so a direct Anthropic connection no longer
+        # hands the CLI — and with it the agent's shell — the real key, and its turns record the
+        # served model and usage like every other.
         # opencode's rule, for opencode's reasons: every OpenAI-shape turn rides the loopback
         # relay (shape repairs, Gemini signatures, served model and usage read off the bytes), and
-        # the real key stays in this process. A Messages-shape turn keeps its direct base — which,
-        # after _kilo_npm, is a DIRECT Anthropic connection and nothing else.
+        # the real key stays in this process.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
