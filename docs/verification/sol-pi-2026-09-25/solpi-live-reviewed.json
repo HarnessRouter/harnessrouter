@@ -1,0 +1,74 @@
+{
+  "banban|sol-pi|deepseek-v4.1-flash": {
+    "provider": "banban",
+    "harness": "sol-pi",
+    "model": "deepseek-v4.1-flash",
+    "at": "2026-09-25T08:56:24.512Z",
+    "first": {
+      "ok": true,
+      "status": "done",
+      "pill": "done",
+      "s": 27.28,
+      "tail": "Reply with exactly: M1-deepseek-v4.1-flash SOL-PI M1-deepseek-v4.1-flash",
+      "turn_files": [],
+      "why": ""
+    },
+    "sid": "hsessf92f256143414a2aa484e3c9a599c0d1",
+    "followup": {
+      "ok": true,
+      "status": "done",
+      "pill": "done",
+      "s": 14.32,
+      "tail": "Reply with exactly: M2-deepseek-v4.1-flash SOL-PI M2-deepseek-v4.1-flash",
+      "turn_files": [],
+      "why": ""
+    },
+    "switch": {
+      "to": null,
+      "ok": null,
+      "why": "only one model"
+    },
+    "artifact": {
+      "ok": true,
+      "status": "completed",
+      "pill": "done",
+      "s": 23.83,
+      "tail": "Create a file named hello-sol-pi.txt containing exactly the word HELLO, then reply DONE. SOL-PI Used 4 tools DONEDONE txt hello-sol-pi.txt TXT \u00b7 output Preview",
+      "turn_files": [
+        "hello-sol-pi.txt"
+      ],
+      "why": "",
+      "files": [
+        "hello-sol-pi.txt"
+      ],
+      "record_files": [
+        "hello-sol-pi.txt"
+      ],
+      "cards_agree": true
+    },
+    "recycle": {
+      "ok": true,
+      "status": "done",
+      "pill": "done",
+      "s": 19.1,
+      "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. SOL-PI M1-deepseek-v4.1-flash",
+      "turn_files": [],
+      "why": "",
+      "recycled": {
+        "code": 200,
+        "body": "{\"session_id\":\"hsessf92f256143414a2aa484e3c9a599c0d1\",\"checkpoint_sha\":\"2765eba2e131e420c4f4c44ab25d818cfe4812fcefbc190f840840573df2d924\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+      }
+    },
+    "connection": "integration:sol-pi-banban-acceptance",
+    "connections": [
+      "integration:sol-pi-banban-acceptance"
+    ],
+    "served": [
+      "deepseek-v4.1-flash"
+    ],
+    "substituted": [],
+    "foreign": [],
+    "deleted": 200,
+    "note": "Expected connection corrected to full integration: stamp; raw run retained. Single authorized model."
+  }
+}

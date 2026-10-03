@@ -1,0 +1,3 @@
+# Runtime scripts and digest inputs must have identical bytes on Windows and Linux.
+docker/*.sh text eol=lf
+docker/pi-lab/* text eol=lf

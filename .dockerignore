@@ -13,7 +13,10 @@ data/
 *.key
 
 node_modules/
+**/node_modules/
 .next/
+**/.next/
+**/.next-*/
 dist/
 __pycache__/
 *.pyc

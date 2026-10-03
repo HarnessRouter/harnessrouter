@@ -1,0 +1,67 @@
+[
+  {
+    "id": "resp_1e718d424c7b4dd29160190fdf729cb2",
+    "model": "deepseek-v4.1-flash",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 8066,
+      "output_tokens": 240,
+      "total_tokens": 8306,
+      "cache_read_tokens": 7296
+    }
+  },
+  {
+    "id": "resp_1a0fa661527349b485e960a44ad1859c",
+    "model": "deepseek-v4.1-flash",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 579,
+      "output_tokens": 193,
+      "total_tokens": 772,
+      "cache_read_tokens": 10112
+    }
+  },
+  {
+    "id": "resp_d61b2bccdc524abca461caa8c16e9f2c",
+    "model": "deepseek-v4.1-flash",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 9249,
+      "output_tokens": 140,
+      "total_tokens": 9389,
+      "cache_read_tokens": 3968
+    }
+  },
+  {
+    "id": "resp_12b04c9a49264110aaa1790053b5b141",
+    "model": "deepseek-v4.1-flash",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 2464,
+      "output_tokens": 12,
+      "total_tokens": 2476
+    }
+  },
+  {
+    "id": "resp_903a01767245453983df8e6f0207409c",
+    "model": "deepseek-v4.1-flash",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 63,
+      "output_tokens": 12,
+      "total_tokens": 75,
+      "cache_read_tokens": 2432
+    }
+  },
+  {
+    "id": "resp_9ab938211d2343b4878a3ec154d99868",
+    "model": "deepseek-v4.1-flash",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 152,
+      "output_tokens": 32,
+      "total_tokens": 184,
+      "cache_read_tokens": 2688
+    }
+  }
+]

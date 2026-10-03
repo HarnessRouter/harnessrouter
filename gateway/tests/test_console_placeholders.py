@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as gw  # noqa: E402
 
 HARNESS_TS = Path(__file__).resolve().parents[2] / "ui" / "src" / "lib" / "harness.ts"
-ENTRY = re.compile(r"\n  \{ id: '([a-z0-9-]+)', name: '[^']*', version: '[^']*', backend: '([a-z]+)'(.*?)\n    tools: \[", re.S)
+ENTRY = re.compile(r"\n  \{ id: '([a-z0-9-]+)', name: '[^']*', version: '[^']*', backend: '([a-z-]+)'(.*?)\n    tools: \[", re.S)
 
 
 def _entries() -> list[tuple[str, str, list[str], str]]:

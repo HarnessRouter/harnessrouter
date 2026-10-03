@@ -1,0 +1,73 @@
+{
+ "banban|sol-pi|deepseek-v4.1-flash": {
+  "provider": "banban",
+  "harness": "sol-pi",
+  "model": "deepseek-v4.1-flash",
+  "at": "2026-09-25T09:19:29.151Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.56,
+   "tail": "Reply with exactly: M1-deepseek-v4.1-flash SOL-PI M1-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessc2f71801ec3b49a683054fbad27583f4",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.57,
+   "tail": "Reply with exactly: M2-deepseek-v4.1-flash SOL-PI M2-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": null,
+   "ok": null,
+   "why": "only one model"
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.61,
+   "tail": "Create a file named hello-sol-pi.txt containing exactly the word HELLO, then reply DONE. SOL-PI Used 3 tools DONE txt hello-sol-pi.txt TXT · output Preview",
+   "turn_files": [
+    "hello-sol-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-sol-pi.txt"
+   ],
+   "record_files": [
+    "hello-sol-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.57,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. SOL-PI Thought process M1-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc2f71801ec3b49a683054fbad27583f4\",\"checkpoint_sha\":\"d7998ab5f53ca8c1a2db3ea1a5038ac44db46bf3cb5ce4498309b5c79664e3f9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:sol-pi-banban-acceptance",
+  "connections": [
+   "integration:sol-pi-banban-acceptance"
+  ],
+  "served": [
+   "deepseek-v4.1-flash"
+  ],
+  "substituted": [],
+  "foreign": [],
+  "deleted": 200
+ }
+}

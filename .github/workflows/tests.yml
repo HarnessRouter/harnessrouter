@@ -77,6 +77,32 @@ jobs:
       - run: pip install -e protocol/conformance pytest build "setuptools>=68" wheel
       - run: python -m pytest protocol/conformance/tests -q
 
+  pi-lab-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docker/pi-lab/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r runner/requirements.txt
+      - run: python scripts/pi-lab/check-lock.py
+      # /tmp is traversable by nobody; RUNNER_TEMP is under /home/runner.
+      - run: bash docker/pi-lab/install.sh "/tmp/pi-lab"
+      - name: Runtime is executable but not writable by an isolated user
+        run: |
+          sudo -u nobody env PATH="$PATH" "/tmp/pi-lab/bin/pi" --version
+          sudo -u nobody test ! -w "/tmp/pi-lab"
+      - name: Real CLI against a local scripted provider (no API spend)
+        run: |
+          export HR_PI_LAB_BIN="/tmp/pi-lab/bin/pi"
+          export HR_PI_LAB_SOL_PI_ENTRY="/tmp/pi-lab/lib/node_modules/sol-pi/src/sol-pi/index.ts"
+          python scripts/pi-lab/smoke.py
+
   console:
     runs-on: ubuntu-latest
     defaults:

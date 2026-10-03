@@ -204,7 +204,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,pi-lab,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -216,6 +216,7 @@ backend_bin() {
     codex)  echo "$TOOLS/bin/codex" ;;
     hermes) echo "$TOOLS/venv/bin/hermes" ;;
     pi)     echo "$TOOLS/bin/pi" ;;
+    pi-lab) echo "$TOOLS/pi-lab-runtime/bin/pi" ;;
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
     opencode) echo "$TOOLS/bin/opencode" ;;
     qwen)   echo "$TOOLS/bin/qwen" ;;
@@ -710,6 +711,12 @@ install_backends() {
     fi
   fi
 
+  # Pi Lab has its own pinned Pi runtime; installing it never upgrades ordinary Pi.
+  LAB_TOOLS="$TOOLS/pi-lab-runtime"
+  if wanted pi-lab; then
+    try_install "Pi Lab (MIT, integrity-locked)" bash /app/pi-lab/install.sh "$LAB_TOOLS" || true
+  fi
+
   if wanted omp && [ ! -x "$(backend_bin omp)" ]; then
     echo "[harnessrouter] installing Oh My Pi (MIT)…"
     try_install "Oh My Pi" install_omp || true
@@ -899,6 +906,10 @@ cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null |
 trap cleanup TERM INT EXIT
 
 avail=""; missing=""
+export HR_PI_LAB_BIN="$TOOLS/pi-lab-runtime/bin/pi"
+export HR_PI_LAB_SOL_PI_ENTRY="$TOOLS/pi-lab-runtime/lib/node_modules/sol-pi/src/sol-pi/index.ts"
+export HR_PI_LAB_MCP_EXT="$TOOLS/pi-lab-runtime/lib/node_modules/pi-mcp-adapter"
+
 # Derived from HR_BACKENDS, not a second hardcoded list. The literal list here missed opencode and
 # reported "backends available: none" on an instance that had it installed and working.
 for b in ${HR_BACKENDS//,/ }; do

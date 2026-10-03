@@ -167,6 +167,7 @@ RUN chmod +x /tmp/install-kits.sh \
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/
 COPY docker/entrypoint.sh /app/entrypoint.sh
+COPY docker/pi-lab /app/pi-lab
 RUN chmod +x /app/entrypoint.sh
 
 # Next.js standalone output: server + only the modules it actually needs.
