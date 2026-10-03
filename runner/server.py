@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import http.server
 import datetime
 import json
@@ -3439,6 +3440,102 @@ def _with_gemini_schemas(body: bytes) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+# ── Tool declarations through Anthropic's validator ──────────────────────────────────────────────
+# Anthropic's Messages API refuses a tool whose input_schema has a combinator at the TOP level:
+# `tools.14.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top
+# level` (measured 2026-09-28 on claude-haiku-4.5 and claude-sonnet-4.6 through Vercel's gateway,
+# which translates an OpenAI tool into Anthropic's shape). A nested combinator is fine; only the
+# root is refused.
+#
+# Grok Build's `use_tool` declares exactly that: a root `oneOf` over its three call forms (inline
+# arguments, an arguments file, a document), each branch a `required` set plus a `not` forbidding the
+# other forms' keys. So EVERY claude id the grok base offers failed its first turn — the request was
+# refused before inference, on all five scenarios. The sanitiser below is the Anthropic counterpart
+# of _gemini_schema: one provider's validator, repaired in flight for every client, rather than a
+# catalog pruned of ten models the harness can otherwise drive.
+_ANTHROPIC_COMBINATORS = ("oneOf", "anyOf", "allOf")
+
+
+def _anthropic_tool_schema(node):
+    """One tool's parameter schema as Anthropic's input_schema validator accepts it: no combinator at
+    the root. The branches' own constraints cannot survive flattening — a root schema can express
+    "these properties" but not "exactly one of these shapes" — so what is kept is everything a
+    caller needs to build a valid call, and what is dropped is the exclusivity:
+
+      properties  the union of the root's and every branch's, root first (a branch that redeclares a
+                  property does not override the root's description of it)
+      required    only what EVERY branch requires, because a key one branch alone demands is not
+                  required of the call the model actually makes. For grok's `use_tool` that is the
+                  empty set, so `required` goes: two of its three forms do not take `tool_name`.
+      the rest    every other root key except the combinators and the `not` that rode with them
+
+    The exclusivity then lives where the model reads it anyway: `use_tool`'s own description says
+    "Supply exactly one form", and the tool itself validates its arguments (measured: a call missing
+    a required field comes back as a tool_result error, not a crash). Nested combinators are
+    untouched — Anthropic accepts those, and a property's own anyOf is how a nullable field is
+    spelled."""
+    if not isinstance(node, dict):
+        return node
+    branches = [b for k in _ANTHROPIC_COMBINATORS for b in (node.get(k) or [])
+                if isinstance(b, dict)]
+    if not branches:
+        return node
+    out = {k: v for k, v in node.items() if k not in _ANTHROPIC_COMBINATORS and k != "not"}
+    props = dict(out.get("properties") or {})
+    for b in branches:
+        for name, spec in (b.get("properties") or {}).items():
+            props.setdefault(name, spec)
+    if props:
+        out["properties"] = props
+    reqs = [set(b["required"]) for b in branches if isinstance(b.get("required"), list)]
+    required = list(node.get("required") or [])
+    if reqs:
+        common = set.intersection(*reqs) if len(reqs) == len(branches) else set()
+        required = [r for r in required if r in common] or sorted(common)
+    if required:
+        out["required"] = required
+    else:
+        out.pop("required", None)
+    out.setdefault("type", "object")
+    return out
+
+
+def _with_anthropic_schemas(body: bytes) -> bytes:
+    """The request with every tool's parameter schema flattened for Anthropic's validator. Both wire
+    shapes are handled, because both reach Anthropic: an OpenAI chat/completions body, whose
+    `tools[].function.parameters` an aggregator translates into `input_schema`, and an Anthropic
+    Messages body, which carries `tools[].input_schema` itself. A body without tools is untouched,
+    and a body no tool of which has a root combinator comes back byte-identical."""
+    if b'"tools"' not in body or not any(c.encode() in body for c in _ANTHROPIC_COMBINATORS):
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        holder, key = (fn, "parameters") if fn is not None else (tool, "input_schema")
+        schema = holder.get(key)
+        if not isinstance(schema, dict):
+            continue
+        flat = _anthropic_tool_schema(schema)
+        if flat is not schema and flat != schema:
+            holder[key] = flat
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _anthropic_family(model: str) -> bool:
+    """Whether this model id is served by Anthropic's own API, whoever fronts it. The vendor prefix
+    an aggregator adds (anthropic/claude-haiku-4.5) and the bare id both count; `claude` is the one
+    token every id in the family carries, as `gemini` is for Google's."""
+    return "claude" in (model or "").lower()
+
 def _google_signatures_in(doc: dict) -> list[tuple[str, str]]:
     """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
     found: list[tuple[str, str]] = []
@@ -3521,7 +3618,15 @@ def _served_model_in(data: bytes) -> str:
     return m.group(1).decode("utf-8", "replace") if m else ""
 
 
-_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
+# The hyphen is not cosmetic: Vercel's AI Gateway reports a declined request as "content-filter"
+# while OpenAI's own spelling is "content_filter" (measured 2026-10-01 against ai-gateway.vercel.sh
+# on anthropic/claude-fable-5.1 and anthropic/claude-opus-5 — two SSE events, no content, no
+# reasoning, finish_reason "content-filter"). A pattern that admitted only the underscore matched
+# nothing on that channel, so the one check that turns a provider's refusal into a stated reason was
+# never evaluated there — the person got whatever the CLI made of an empty answer instead
+# (agentzero: "Agent stopped after 5 consecutive unusable model responses", its own loop guard).
+# _finish_reason_in normalises both spellings to the underscore one, so callers compare one form.
+_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_-]{1,40})"')
 
 
 def _usage_fields(u) -> dict:
@@ -3620,7 +3725,7 @@ def _model_metadata_with_context_length(data: bytes) -> bytes:
 def _finish_reason_in(data: bytes) -> str:
     """The last finish_reason an OpenAI-shaped answer names in these bytes ("" when none)."""
     hits = _FINISH_RE.findall(data)
-    return hits[-1].decode() if hits else ""
+    return hits[-1].decode().replace("-", "_") if hits else ""
 
 
 def _relay_last_finish(env: dict) -> str:
@@ -3631,7 +3736,10 @@ def _relay_last_finish(env: dict) -> str:
         if isinstance(v, str) and v.startswith("hr-relay-"):
             route = _HERMES_RELAY["routes"].get(v)
             if route:
-                return str((route[2] or {}).get("last_finish") or "")
+                # normalised the way _finish_reason_in normalises, so a caller compares one
+                # spelling whoever wrote the flag (Vercel says "content-filter", OpenAI
+                # "content_filter")
+                return str((route[2] or {}).get("last_finish") or "").replace("-", "_")
     return ""
 
 
@@ -3779,13 +3887,21 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             # validator as sent; the broker does the same normalisation for brokered traffic
             body = _with_gemini_schemas(body)
             headers["content-length"] = str(len(body))
+        if (_anthropic_family(_body_model) or flags.get("anthropic_schemas")) and body is not None:
+            # Anthropic refuses a tool whose input_schema has a combinator at its root, on its own
+            # API and through every aggregator that translates into it, so this needs no channel test
+            # and no per-route flag: the shape is invalid for the family wherever it is served.
+            fixed = _with_anthropic_schemas(body)
+            if fixed != body:
+                body = fixed
+                headers["content-length"] = str(len(body))
         resp = None
         tried_slim = False
         for attempt in (0, 1, 2):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
+                resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
                 if attempt > 0 and tried_slim:
                     # the blind no-stream_options retry is part of what made this route work
                     flags["drop_stream_options"] = True
@@ -3835,6 +3951,19 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     print(f"[relay] provider refused reasoning_effort's thinking shape for model={_body_model}; "
                           f"sent again without it", flush=True)
                     continue
+                flat = _with_anthropic_schemas(body) if body is not None else None
+                if (attempt < 2 and e.code == 400 and b"input_schema" in data
+                        and any(c.encode() in data for c in _ANTHROPIC_COMBINATORS)
+                        and flat is not None and flat != body):
+                    # The provider named the fix itself ("input_schema does not support oneOf, allOf,
+                    # or anyOf at the top level"), so a channel this relay does not recognise as
+                    # Anthropic — or a model id that does not carry the family's name — is repaired on
+                    # the complaint and remembered, the max_completion_tokens pattern. This bounds the
+                    # shape to ONE extra request even where the proactive pass above does not fire.
+                    flags["anthropic_schemas"] = True
+                    body = flat
+                    headers["content-length"] = str(len(body))
+                    continue
                 if e.code in (400, 422):
                     # The provider's own words, kept here for every provider: a harness shows a
                     # refusal as "400 (no body)" (Gemini CLI) or cuts it to a few dozen characters
@@ -3878,6 +4007,40 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+                # THE PROVIDER DID NOT ANSWER: the connection was refused, dropped mid-request, or
+                # went silent past HR_RELAY_UPSTREAM_TIMEOUT_S. Only HTTPError was caught here, so
+                # such a failure escaped _forward, ThreadingHTTPServer printed a traceback and closed
+                # the socket WITH NO RESPONSE AT ALL — the CLI was left holding a dead connection and
+                # the turn hung until something above killed it. Measured on a support-matrix
+                # instance on 2026-09-29: ten of these, `http.client.RemoteDisconnected: Remote end
+                # closed connection without response`, two inside the family tour's failing window.
+                # A refusal the person can read beats a socket that simply stops.
+                reason = f"{type(e).__name__}: {e}"[:300]
+                if attempt < 2 and isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError)):
+                    # A connection dropped before any byte of the answer is the one transport failure
+                    # worth one more go: it costs nothing upstream (nothing was generated) and an
+                    # aggregator sheds load this way. A timeout is NOT retried — the provider may be
+                    # generating, and a second request would be a second bill.
+                    print(f"[relay] upstream dropped the connection for {tail} model={_body_model}; "
+                          f"sending again ({attempt + 1}/2)", flush=True)
+                    continue
+                print(f"[relay] upstream did not answer {tail} model={_body_model}: {reason}", flush=True)
+                payload = json.dumps({"error": {
+                    "message": f"the provider did not answer: {reason}",
+                    "type": "upstream_unavailable",
+                    "code": "upstream_unavailable"}}).encode()
+                # 504 for a silence we timed out on, 502 for a connection that failed or was dropped.
+                status = 504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502
+                try:
+                    self.send_response(status)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    pass          # the client hung up first; nothing left to tell
+                return
         ctype = resp.headers.get("content-type") or ""
         self.send_response(resp.status)
         self.send_header("content-type", ctype)
@@ -3891,7 +4054,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
             while True:
-                chunk = resp.read(4096)
+                try:
+                    chunk = resp.read(4096)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    # The answer began and then stopped: the provider went silent past the socket's
+                    # timeout, or dropped the connection mid-stream. The status line is long gone, so
+                    # the stream is ENDED here rather than left open — the client reads a truncated
+                    # SSE stream and fails its own turn with its own words, which is what it does
+                    # with any short stream. Before this, the exception escaped _forward and the
+                    # socket was dropped with the chunked body unterminated.
+                    print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: "
+                          f"{type(e).__name__}: {e}"[:300], flush=True)
+                    break
                 if not chunk:
                     break
                 if not flags.get("served_model"):
@@ -3924,7 +4098,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _usage_add(flags, call_usage)
             self.wfile.write(b"0\r\n\r\n")
         else:
-            data = resp.read()
+            try:
+                data = resp.read()
+            except (http.client.HTTPException, TimeoutError, OSError) as e:
+                # Same as the streaming case: the body stopped arriving. The status is already sent,
+                # so the client gets a short body and says so itself.
+                print(f"[relay] upstream stopped mid-body on {tail} model={_body_model}: "
+                      f"{type(e).__name__}: {e}"[:300], flush=True)
+                data = b""
             if not flags.get("served_model"):
                 sm = _served_model_in(data[:65536])
                 if sm:
@@ -4074,6 +4255,17 @@ def _adapt_custom_auth(auth):
         return auth
     base, tok = _bedrock_anthropic_route(f"https://{host}", auth.api_key)
     return auth.model_copy(update={"base_url": base, "api_key": tok})
+
+
+# How long the relay waits for the provider on ONE upstream call, and how long a stalled READ of an
+# answer already begun may block. It must stay BELOW the shortest turn cap anything upstream of it
+# applies, or a provider that accepts a request and then goes silent is indistinguishable from a
+# working turn: the harness's own cap fires first, the turn is cancelled with no served model, no
+# tool call and no reason, and the person is told nothing. That is exactly what the family tour hit
+# on 2026-09-29 (seven of fourteen families "not settled in 600s" on a support-matrix instance whose
+# relay sat in urlopen(timeout=600)). A provider that has said nothing for this long has failed;
+# saying so in seconds is worth more than waiting ten minutes to say nothing.
+HR_RELAY_UPSTREAM_TIMEOUT_S = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S", "180"))
 
 
 def _relay_base_with_version(base_url: str) -> str:
@@ -6919,6 +7111,17 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         tail = "\n".join(errbuf[-30:]).strip()
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
         refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        if not refusal and _relay_last_finish(env) == "content_filter":
+            # THE PROVIDER DECLINED, and the CLI's own account of a failure it could not see is not
+            # the reason. A refused request comes back as an answer with no content and no
+            # reasoning, which each harness narrates in its own internal words: agentzero counts
+            # five of them and stops with "Agent stopped after 5 consecutive unusable model
+            # responses to prevent further API charges" — its loop guard, correct in itself and
+            # about a counter nobody outside it can see. The relay watched the same exchange and
+            # knows what the provider said. The successful-looking case is rewritten above; this is
+            # the same statement for a turn that did fail, in the slot _failure_reason already
+            # keeps for a provider's refusal.
+            refusal = "the provider declined the request (finish_reason content_filter)"
         rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
