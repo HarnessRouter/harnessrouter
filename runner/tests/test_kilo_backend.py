@@ -356,3 +356,24 @@ def test_relay_answers_502_when_the_upstream_cannot_be_reached():
     except urllib.error.HTTPError as e:
         assert e.code == 502
         assert b"the provider did not answer" in e.read()
+
+
+def test_the_per_turn_config_files_that_carry_mcp_credentials_never_travel():
+    """kilo.json holds each MCP server's Authorization header. It is rewritten every turn, so it is
+    out of the checkpoint tarball and out of the workspace repo, as are opencode's config, Claude
+    Code's --mcp-config file and the bridge launchers, which had the same hole."""
+    import subprocess, tempfile, pathlib
+    for path in ("./.harness/kilo.json", "./.harness/opencode.json", "./.harness/mcp.json",
+                 "./.harness/mcp-bridge"):
+        assert path in server.CHECKPOINT_EXCLUDE, path
+    ws = tempfile.mkdtemp()
+    server._git_ensure(ws)
+    hd = pathlib.Path(ws, ".harness"); (hd / "mcp-bridge").mkdir(parents=True)
+    for rel in ("kilo.json", "opencode.json", "mcp.json", "mcp-bridge/x.sh"):
+        (hd / rel).write_text("Authorization: Bearer secret")
+    out = subprocess.run(["git", "-C", ws, "status", "--porcelain", "-uall"], capture_output=True, text=True).stdout
+    assert ".harness/" not in out, out
+    # ...and a session that tracked one before the rule lets go of it on the next turn
+    subprocess.run(["git", "-C", ws, "add", "-f", ".harness/kilo.json"], check=True)
+    server._git_ensure(ws)
+    assert subprocess.run(["git", "-C", ws, "ls-files", "--", ".harness"], capture_output=True, text=True).stdout == ""

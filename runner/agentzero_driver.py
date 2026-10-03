@@ -157,8 +157,9 @@ def mcp_config(servers: list[dict] | None, tools_disabled: list[str] | None = No
         if url:
             entry["url"] = url
             transport = str(sv.get("transport") or "").lower()
-            if transport in ("sse", "streamable-http", "http"):
-                entry["type"] = "streamable-http" if transport == "http" else transport
+            # An undeclared transport is streamable HTTP, this repo's rule; Agent Zero's own
+            # default for a url entry is SSE.
+            entry["type"] = "sse" if transport == "sse" else "streamable-http"
             hdrs = sv.get("headers")
             if isinstance(hdrs, dict) and hdrs:
                 entry["headers"] = {str(k): str(v) for k, v in hdrs.items()}
@@ -367,7 +368,7 @@ def _set_env(job: dict, src: pathlib.Path) -> None:
     # litellm fetches its model price map from raw.githubusercontent.com on import unless told to
     # use the copy it ships (measured through a logging proxy: the only non-provider host a turn hit).
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    os.environ["OTHER_API_KEY"] = job.get("api_key") or ""
+    os.environ["OTHER_API_KEY"] = job.get("api_key") or os.environ.get("OTHER_API_KEY") or ""
     os.environ["PAGER"] = "cat"
     os.environ["PATH"] = ipython_on_path(pathlib.Path(job["cwd"]) / ".harness" / "agentzero") \
         + os.pathsep + os.environ.get("PATH", "")
@@ -603,7 +604,9 @@ def keep_children_in_group() -> None:
 
 
 def main(argv: list[str]) -> int:
-    job = json.loads(argv[1])
+    # The job rides the environment (see _build_agentzero: argv is world-readable in the container)
+    # and is taken OUT of it here, so the agent's own shell does not inherit it.
+    job = json.loads(argv[1]) if len(argv) > 1 else json.loads(os.environ.pop("HR_AGENTZERO_JOB"))
     src = pathlib.Path(job["a0_src"])
     cwd = pathlib.Path(job["cwd"])
     home = cwd / ".harness" / "agentzero"
@@ -641,24 +644,24 @@ def main(argv: list[str]) -> int:
     sys.modules.setdefault("sentence_transformers", stub)
     # `--dockerized=true`: Agent Zero's development mode forwards file and shell work over RFC to a
     # container; "dockerized" is its name for "do it here". runtime.initialize parses sys.argv.
-    sys.argv = [argv[0], "--dockerized=true"]
-    sys.path.insert(0, str(base))
-    os.chdir(str(base))
-    from helpers import dotenv, files, runtime
-    runtime.initialize()
-    dotenv.load_dotenv()
-    files.normalize_a0_path = lambda p: p   # see the module docstring
-    # THE TURN'S WORKING DIRECTORY IS THE WORKSPACE, not the base the framework was imported from.
-    # Agent Zero resolves its OWN paths against its base dir (helpers/files.get_abs_path), so the
-    # import above is unaffected — but a tool that takes a path from the model resolves it against
-    # the process cwd: text_editor writes with a bare `open(path)` (plugins/_text_editor/helpers/
-    # file_ops.write_file). With the cwd left at the base, a model that asked for
-    # "hello-agentzero.txt" had its file written to .harness/agentzero/base/ — inside the prefix
-    # /produced excludes, so the turn produced a file the user never saw. MEASURED on the support
-    # matrix (2026-09-28): every artifact failure said "Edited a file" and delivered nothing, and it
-    # was the models that pass a RELATIVE path that failed, which is why it read as intermittent.
-    os.chdir(str(cwd))
     try:
+        sys.argv = [argv[0], "--dockerized=true"]
+        sys.path.insert(0, str(base))
+        os.chdir(str(base))
+        from helpers import dotenv, files, runtime
+        runtime.initialize()
+        dotenv.load_dotenv()
+        files.normalize_a0_path = lambda p: p   # see the module docstring
+        # THE TURN'S WORKING DIRECTORY IS THE WORKSPACE, not the base the framework was imported from.
+        # Agent Zero resolves its OWN paths against its base dir (helpers/files.get_abs_path), so the
+        # import above is unaffected — but a tool that takes a path from the model resolves it against
+        # the process cwd: text_editor writes with a bare `open(path)` (plugins/_text_editor/helpers/
+        # file_ops.write_file). With the cwd left at the base, a model that asked for
+        # "hello-agentzero.txt" had its file written to .harness/agentzero/base/ — inside the prefix
+        # /produced excludes, so the turn produced a file the user never saw. MEASURED on the support
+        # matrix (2026-09-28): every artifact failure said "Edited a file" and delivered nothing, and it
+        # was the models that pass a RELATIVE path that failed, which is why it read as intermittent.
+        os.chdir(str(cwd))
         return asyncio.run(_run(job))
     except Exception as e:  # noqa: BLE001 — an import or setup failure is still a turn result
         _emit("result", {"ok": False, "final": "", "error": f"{type(e).__name__}: {e}"[:2000],

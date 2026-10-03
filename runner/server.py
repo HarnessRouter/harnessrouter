@@ -552,6 +552,17 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
                       "./.harness/home/.dsh/cordis.yml",
+                      # The per-turn config files the runner writes OUTSIDE the CLI home, each of
+                      # which can carry an MCP server's Authorization header or a stdio server's
+                      # env: opencode's and Kilo's config (their `mcp` map), Claude Code's
+                      # --mcp-config file, and the bridge launchers (`export HR_MCP_HEADERS=…`).
+                      # Every one is rewritten at the start of every turn, so none needs to travel,
+                      # and a credential in a checkpoint outlives the server's removal from the
+                      # harness. kilo.json arrived without this; the other three predate it.
+                      "./.harness/opencode.json",
+                      "./.harness/kilo.json",
+                      "./.harness/mcp.json",
+                      "./.harness/mcp-bridge",
                       # Agent Zero keeps its dotenv and its secrets store in usr/ (helpers/dotenv.py,
                       # helpers/secrets.py). The driver writes neither — the key rides the turn's
                       # environment, and only the relay's placeholder at that — but its settings
@@ -726,6 +737,11 @@ def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> s
                           env={**os.environ, **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
 
 
+# Config the runner rewrites every turn and that can carry MCP credentials (see CHECKPOINT_EXCLUDE).
+_PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mcp.json",
+                    ".harness/mcp-bridge/")
+
+
 def _git_ensure(ws: str) -> None:
     """Make /workspace a git repo with a secret-safe .gitignore (so .git, which travels in the
     checkpoint tarball, never carries credentials).
@@ -748,6 +764,7 @@ def _git_ensure(ws: str) -> None:
         ".harness/goose/config/secrets.yaml",
         ".cheetahclaws/tasks.json",
         ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
+        *_PER_TURN_CONFIG,
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
         # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
@@ -765,6 +782,9 @@ def _git_ensure(ws: str) -> None:
         # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
         # hydrated from before this rule would keep growing exactly as before. Drop the CLI
         # home from the index (not from disk); from then on the ignore rule holds.
+        # The same for the per-turn config files: a session checkpointed before they were ignored
+        # tracks them, and an ignore rule alone would keep committing each turn's credentials.
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_PER_TURN_CONFIG)
         tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
         if tracked:
             _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
@@ -5193,9 +5213,12 @@ def _grok_has_session(home: pathlib.Path, session_id: str) -> bool:
 
 
 def _toml_str(s) -> str:
-    """A TOML basic string. JSON's string escapes are a subset of TOML's (with ensure_ascii every
-    non-ASCII character becomes a \\uXXXX escape, which TOML accepts), so json.dumps is exact."""
-    return json.dumps(str(s))
+    """A TOML basic string. JSON's string escapes are a subset of TOML's for everything json.dumps
+    escapes without ensure_ascii (quotes, backslash, the control characters); with it a character
+    outside the BMP became a surrogate PAIR of \\uXXXX escapes, which TOML refuses ("not a Unicode
+    scalar value"), so one emoji in an MCP argument left the whole config unparseable. Characters
+    go through as themselves; DEL, which JSON leaves alone and TOML forbids, is escaped."""
+    return json.dumps(str(s), ensure_ascii=False).replace("\x7f", "\\u007F")
 
 
 def _grok_config(home: pathlib.Path, model: str, base_url: str,
@@ -7934,7 +7957,9 @@ def _build_agentzero(provider: str, auth: Auth, model: str, prompt: str, cwd: st
                      resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                      tools_disabled: list[str] | None = None,
                      max_turns: int | None = None) -> list[str]:
-    """Agent Zero v2.13, one turn: the job rides argv as JSON, the driver emits NDJSON.
+    """Agent Zero v2.13, one turn: the job rides the environment as JSON (HR_AGENTZERO_JOB), the
+    driver emits NDJSON. Not argv: /proc/<pid>/cmdline is readable by every session's uid in the
+    container, and the job names the relay route and each MCP server's credentials.
 
     The model is Agent Zero's provider `other` ("Other OpenAI compatible": litellm's openai
     provider with an api_base) pointed at the loopback relay, so the id reaches the provider as
@@ -7954,16 +7979,21 @@ def _build_agentzero(provider: str, auth: Auth, model: str, prompt: str, cwd: st
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     env["OTHER_API_KEY"] = auth.api_key or ""
     job = {"cwd": cwd, "a0_src": AGENTZERO_SRC, "model": model, "prompt": prompt,
-           "base_url": auth.base_url, "api_key": auth.api_key,
+           "base_url": auth.base_url,
            "tools_disabled": list(tools_disabled or []),
            # Agent Zero's own MCP client dials these (stdio, sse, streamable-http); a parameter
            # accepted and then dropped is the defect aider's bridge taught this repo.
-           "mcp_servers": [s for s in (mcp_servers or [])
+           # Headers through the one helper every writer shares: a server's `auth` IS its
+           # Authorization header, and a writer that copied `headers` alone sent the plugs server
+           # (browser, GitHub: `auth` and no headers) nothing at all.
+           "mcp_servers": [{**{k: v for k, v in s.items() if k != "auth"}, "headers": _mcp_headers(s)}
+                           for s in (mcp_servers or [])
                            if isinstance(s, dict) and (s.get("url") or s.get("command"))],
            # Agent Zero's loop has no step budget of its own; the driver counts model calls.
            "max_turns": max_turns,
            "agent_doc_name": "AGENTS.md"}
-    return [AGENTZERO_PYTHON, AGENTZERO_DRIVER, json.dumps(job)]
+    env["HR_AGENTZERO_JOB"] = json.dumps(job)
+    return [AGENTZERO_PYTHON, AGENTZERO_DRIVER]
 
 
 # What the console calls Agent Zero's tools on a card, and the shape of the input it shows: the

@@ -344,9 +344,12 @@ def test_the_relay_token_rides_the_environment_and_the_key_never_does():
     cmd = _build_agentzero("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"),
                            "openai/gpt-5.4", "hi", d, env, tools_disabled=["text_editor"],
                            max_turns=7)
-    job = json.loads(cmd[-1])
-    assert env["OTHER_API_KEY"].startswith("hr-relay-") and env["OTHER_API_KEY"] == job["api_key"]
+    job = json.loads(env["HR_AGENTZERO_JOB"])
+    assert env["OTHER_API_KEY"].startswith("hr-relay-") and "api_key" not in job
     assert "sk-real" not in json.dumps(cmd) and "sk-real" not in json.dumps(env)
+    # argv is readable by every uid in the container: it names the interpreter and the driver, and
+    # neither the relay route's token nor anything else of the job
+    assert len(cmd) == 2 and env["OTHER_API_KEY"] not in json.dumps(cmd)
     assert job["model"] == "openai/gpt-5.4" and job["base_url"].startswith("http://127.0.0.1:")
     assert job["tools_disabled"] == ["text_editor"] and job["max_turns"] == 7
 
@@ -388,3 +391,23 @@ def test_the_base_is_not_committed_to_the_workspace_repo(tmp_path):
     from server import _git_ensure
     _git_ensure(str(tmp_path))
     assert ".harness/agentzero/" in (tmp_path / ".gitignore").read_text().splitlines()
+
+
+def test_a_servers_auth_reaches_agent_zero_as_its_authorization_header_and_never_argv():
+    """The plugs server (browser, GitHub) carries `auth` and no headers. A writer that copied
+    `headers` alone handed Agent Zero a url with no credential, and the base had no browser."""
+    import agentzero_driver as drv
+    d = tempfile.mkdtemp(); env: dict = {}
+    cmd = _build_agentzero("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"),
+                           "gpt-5.4", "hi", d, env,
+                           mcp_servers=[{"name": "plugs", "url": "https://gw.example/mcp",
+                                         "transport": "http", "auth": "tok-123"},
+                                        {"name": "bare", "url": "https://x.example/mcp"}])
+    assert "tok-123" not in json.dumps(cmd)
+    job = json.loads(env["HR_AGENTZERO_JOB"])
+    cfg = json.loads(drv.mcp_config(job["mcp_servers"]))
+    servers = cfg.get("mcpServers", cfg)
+    assert servers["plugs"]["headers"] == {"Authorization": "Bearer tok-123"}
+    assert servers["plugs"]["type"] == "streamable-http"
+    # an undeclared transport is streamable HTTP here, whatever Agent Zero's own default is
+    assert servers["bare"]["type"] == "streamable-http"

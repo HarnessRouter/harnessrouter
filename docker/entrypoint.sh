@@ -759,11 +759,17 @@ install_kilo() {
       rm -rf "$kl_tmp"; return 1
     fi
   fi
-  mkdir "$kl_tmp/x" && tar -xzf "$kl_tmp/kilo.tar.gz" -C "$kl_tmp/x" || { rm -rf "$kl_tmp"; return 1; }
-  [ -f "$kl_tmp/x/kilo" ] || { echo "release archive contained no kilo binary"; rm -rf "$kl_tmp"; return 1; }
+  # Unpacked BESIDE its destination, on the tools volume, so the swap below is a rename and not a
+  # 228 MB copy across filesystems that a full disk or a kill could leave half done with the old
+  # install already gone. Root's tar keeps the archive's owners and modes; a session uid must be
+  # able to read the helpers, so neither is trusted.
+  kl_stage="$(mktemp -d -p "$TOOLS" .kilo-stage.XXXXXX)" || { rm -rf "$kl_tmp"; return 1; }
+  tar -xzf "$kl_tmp/kilo.tar.gz" --no-same-owner -C "$kl_stage" || { rm -rf "$kl_tmp" "$kl_stage"; return 1; }
+  rm -rf "$kl_tmp"; kl_tmp="$kl_stage"
+  [ -f "$kl_stage/kilo" ] || { echo "release archive contained no kilo binary"; rm -rf "$kl_stage"; return 1; }
+  chmod -R a+rX "$kl_stage" && chmod 755 "$kl_stage" "$kl_stage/kilo" || { rm -rf "$kl_stage"; return 1; }
   # The whole directory, replaced as a unit: the binary finds its helpers beside itself.
-  rm -rf "$TOOLS/kilo" && mv "$kl_tmp/x" "$TOOLS/kilo" && chmod 755 "$TOOLS/kilo/kilo" \
-    || { rm -rf "$kl_tmp"; return 1; }
+  rm -rf "$TOOLS/kilo" && mv "$kl_stage" "$TOOLS/kilo" || { rm -rf "$kl_stage"; return 1; }
   # On PATH as `kilo` through a wrapper rather than a symlink, so the binary's own path (and with it
   # the helpers beside it) is the real directory whatever the runtime makes of a link.
   mkdir -p "$TOOLS/bin" && printf '#!/bin/sh\nexec "%s/kilo/kilo" "$@"\n' "$TOOLS" > "$TOOLS/bin/kilo" \

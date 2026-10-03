@@ -427,3 +427,12 @@ def test_withholding_the_shell_withholds_every_other_command_surface():
     cmd, _, _ = _argv(tools_disabled=["grep"])
     withheld = cmd[cmd.index("--disallowed-tools") + 1].split(",")
     assert "grep" in withheld and "monitor" not in withheld and "Agent" not in withheld
+
+
+def test_the_config_stays_valid_toml_with_characters_outside_the_bmp():
+    """json.dumps with ensure_ascii writes an emoji as a surrogate pair of \\u escapes, which TOML
+    refuses; one such character in an MCP argument left the whole config unparseable."""
+    import tomllib
+    from server import _toml_str
+    for text in ("plain", "x\U0001F600y", 'quote " and \\ slash', "tab\there", "del\x7f", "中文"):
+        assert tomllib.loads("v = " + _toml_str(text))["v"] == text
