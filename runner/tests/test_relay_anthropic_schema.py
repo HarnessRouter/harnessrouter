@@ -130,3 +130,38 @@ def test_the_repair_is_idempotent_so_the_relays_retry_terminates():
     assert once != body
     assert _with_anthropic_schemas(once) == once
 
+
+
+def test_the_relay_flattens_a_root_combinator_for_every_model_not_only_claude():
+    """OpenAI refuses the same shape Anthropic does. Measured 2026-10-03: grok on gpt-6.1-sol through
+    an aggregator that passes the schema on, `Invalid schema for function 'use_tool': schema must
+    have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/… at the top level`, on every turn."""
+    import http.client, http.server, threading
+    import server as rs
+    seen = {}
+
+    class Up(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen["body"] = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            out = b'{"id":"c","model":"gpt-6.1-sol","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}'
+            self.send_response(200); self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(out))); self.end_headers(); self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    up = http.server.HTTPServer(("127.0.0.1", 0), Up)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    relay_base, tok = rs._hermes_relay_route(f"http://127.0.0.1:{up.server_port}/v1", "sk-real")
+    conn = http.client.HTTPConnection(relay_base.removeprefix("http://").removesuffix("/v1"), timeout=10)
+    try:
+        conn.request("POST", "/v1/chat/completions", body=json.dumps({
+            "model": "openai/gpt-6.1-sol", "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "use_tool", "parameters": USE_TOOL_SCHEMA}}]}),
+            headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
+        assert conn.getresponse().status == 200
+    finally:
+        conn.close(); up.shutdown(); rs._HERMES_RELAY["routes"].pop(tok, None)
+    sent = seen["body"]["tools"][0]["function"]["parameters"]
+    assert not _has_root_combinator(sent) and sent["type"] == "object"
+    assert set(sent["properties"]) == {"tool_name", "tool_input", "tool_input_file", "file"}

@@ -4055,10 +4055,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             # validator as sent; the broker does the same normalisation for brokered traffic
             body = _with_gemini_schemas(body)
             headers["content-length"] = str(len(body))
-        if (_anthropic_family(_body_model) or flags.get("anthropic_schemas")) and body is not None:
-            # Anthropic refuses a tool whose input_schema has a combinator at its root, on its own
-            # API and through every aggregator that translates into it, so this needs no channel test
-            # and no per-route flag: the shape is invalid for the family wherever it is served.
+        if body is not None:
+            # A tool whose parameter schema has a combinator at its root is refused by Anthropic
+            # ("input_schema does not support oneOf, allOf, or anyOf at the top level") AND by
+            # OpenAI ("schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/… at the
+            # top level": grok's `use_tool` on gpt-6.1-sol through TokenRouter, hr-test 2026-10-03,
+            # where every turn of that pair died before inference), on their own APIs and through
+            # the aggregators that pass the schema on. No provider needs one there, so the shape is
+            # flattened for every model: a test by family repaired one vendor and left the other.
             fixed = _with_anthropic_schemas(body)
             if fixed != body:
                 body = fixed

@@ -597,8 +597,17 @@ install_agentzero() {
   rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"
   "${HR_AGENTZERO_BASE_PYTHON:-python3}" -m venv "$TOOLS/agentzero-venv" \
     || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
+  # The measured tree, not whatever the index resolves today: upstream floors a third of its
+  # requirements and pins no transitive dependency. The constraints describe 2.13 and nothing else,
+  # so an overridden version resolves freely (and says so).
+  az_constraints=()
+  if [ "$AGENTZERO_PIN" = "2.13" ] && [ -f /app/runner/agentzero-constraints.txt ]; then
+    az_constraints=(-c /app/runner/agentzero-constraints.txt)
+  else
+    echo "[harnessrouter]       Agent Zero's dependencies resolve unconstrained (no measured set for $AGENTZERO_PIN)."
+  fi
   "$TOOLS/agentzero-venv/bin/pip" install -q --no-cache-dir --disable-pip-version-check \
-      -r "$az_tmp/requirements.harness.txt" \
+      -r "$az_tmp/requirements.harness.txt" "${az_constraints[@]}" \
     || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
   mv "$az_tmp/x" "$TOOLS/agentzero-src" && rm -rf "$az_tmp"
   # Turns run as the session's uid, which cannot write here: compile now, or every turn pays for it.
