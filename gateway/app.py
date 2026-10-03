@@ -1180,6 +1180,18 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "kimi"): "tokenrouter",
     ("custom", "kimi"): "openai-api",
     ("google", "kimi"): "openai-api",
+    # minimax (MiniMax Code) is one more OpenAI chat/completions client of the loopback relay: the
+    # runner writes the relay as a `custom_provider` of api `openai-completions` in the CLI's config,
+    # so it reaches every provider the way kimi does and these rows are kimi's, with the backend
+    # renamed. Measured through a local runner on vercel and google (2026-09-26/27); the others ride the
+    # same relay path unmeasured until the matrix runs them.
+    ("anthropic", "minimax"): "anthropic",     ("openai", "minimax"): "openai",
+    ("azure-foundry", "minimax"): "azure",
+    ("openrouter", "minimax"): "openai-api",
+    ("tokenrouter", "minimax"): "tokenrouter", ("vercel", "minimax"): "tokenrouter",
+    ("llmtr", "minimax"): "tokenrouter",
+    ("custom", "minimax"): "openai-api",
+    ("google", "minimax"): "openai-api",
     # openhands reaches every provider the same way: the driver points the agent-server's LLM at
     # the loopback relay, so whatever the relay fronts is what the agent talks to.
     ("anthropic", "openhands"): "anthropic",   ("openai", "openhands"): "openai",
@@ -1261,6 +1273,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
     ("harnessrouter", "kimi"): "tokenrouter",
+    ("harnessrouter", "minimax"): "tokenrouter",
     ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "openhands"): "tokenrouter",
     ("harnessrouter", "cheetahclaws"): "tokenrouter",
@@ -4963,7 +4976,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands", "cheetahclaws"},
+               "openhands", "minimax", "cheetahclaws"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
@@ -6545,6 +6558,34 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # minimax (MiniMax Code): the same relay reach as kimi — OpenAI chat/completions through the
+    # loopback relay, the id sent to the provider verbatim (captured at a stub: the config's model key
+    # arrives as `model` unchanged, vendor prefix and all) — so the list is kimi's, the gpt-6 line
+    # included, plus MiniMax's own model, which is the default. MiniMax Code is its vendor's CLI but
+    # not tied to its models: any OpenAI-compatible endpoint drives it (BYOK, `custom_provider` in
+    # its config). The picker's order is _MODEL_ORDER's, as everywhere.
+    #
+    # MEASURED through a local runner on 2026-09-26/27 (MiniMax Code 0.5.4): minimax-m3 and
+    # gpt-5.4-mini on Vercel, gemini-3.5-flash-lite on Google, each served as itself per the relay
+    # (docs/support-matrix-notes.md).
+    # Every other id is OFFERED SO THE MATRIX CAN MEASURE IT HERE (the pi precedent): it rides the
+    # same relay path kimi's column measured, but no minimax column has run yet.
+    # minimax-m3 is not on TokenRouter (_TOKENROUTER_NO_CHANNEL); Vercel and OpenRouter serve it.
+    "minimax": {"default": "minimax-m3",
+                "models": [
+                    "minimax-m3",
+                    "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                    "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                    "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
+                    "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                    "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
+                    "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                    "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
+                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                    "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
+                    "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
+                    "nemotron-3.5-lightning", "nemotron-3-super"]},
     # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
     # loopback relay), so the list is theirs. Measured 2026-09-18/19: the Vercel column ran 49 of
     # these ids (239 of 245 scenarios) and the Google column ran the eight gemini ids, so the list
@@ -6744,8 +6785,11 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # aider and openhands speak chat/completions through litellm (aider under its openai provider, the
 # id sent `openai/<id>`; openhands under litellm's proxy provider, the id sent as it is), so a
 # Responses-API-only id would be a picker row that fails on send.
+# minimax: the runner defines its endpoint with api `openai-completions` (MiniMax Code also has an
+# openai-responses api, but it is not the one the runner sets), the kimi case exactly.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
+                      "cheetahclaws")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -15264,6 +15308,29 @@ _BASE_CATALOG: dict[str, dict] = {
         # through the product). It matches by exact tool NAME and a name it does not know
         # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
         # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
+        "tool_enforcement": "hard",
+    },
+    "minimax": {
+        "label": "MiniMax Code", "backend": "minimax", "status": "ready",
+        "system_prompt": ("You are MiniMax Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The built-in tools the runner can WITHHOLD, by the names MiniMax Code 0.5.4 sends its
+        # provider (the request's `tools`, captured at a local stub) — runner/server.py's
+        # _MINIMAX_TOOLS, pinned equal by test_catalog_minimax_tools.py. The eight file/shell/web
+        # tools are the config's `agents.default.tools` allowlist; `task` is the delegation feature
+        # (its subagents carry their own tools, so the runner also turns it off whenever anything
+        # else is withheld). NOT listed: web_search and website_deploy, MiniMax's own hosted services
+        # that need a MiniMax account and are never enabled here; skill, update_goal and get_goal,
+        # which have no switch. MCP tools reach the model as mcp__<server>__<tool> and have no
+        # per-tool switch in 0.5.4 either, so they are per-harness rather than catalog entries.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"), ("edit", "Edit"),
+                  ("grep", "Grep"), ("glob", "Glob"), ("todowrite", "Todo"),
+                  ("web_fetch", "Web Fetch"), ("task", "Subagent")],
+        # "hard": a tool left out of the allowlist is ABSENT from the request, so the model cannot
+        # call it — measured at a stub with bash withheld (the `tools` array lost bash and its
+        # task_* companions) and through a local runner (see the PR). Enforcement by omission, as for
+        # openhands, with openhands' honest limit: a shell is also a file writer.
         "tool_enforcement": "hard",
     },
     "openhands": {

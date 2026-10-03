@@ -1931,3 +1931,174 @@ before. The hosted platform then took OpenRouter as the route for this model, so
 same twelve bases as this one; its comment keeps the TokenRouter and direct-OpenAI refusal for
 organizations that bring such a key, the rule the self-hosted catalog states.
 
+## The minimax backend: MiniMax Code 0.5.4 — behaviour measured, columns NOT yet run (2026-09-26/27)
+
+No `minimax` column exists in `docs/support-matrix.md`: a column needs a deployed instance running
+one provider at a time. What was measured, on the 0.5.4 release archive (`mcode --version` = 0.5.4):
+
+- **Through a local runner** (this branch, macOS arm64, real providers): minimax-m3 and gpt-5.4-mini
+  on Vercel, gemini-3.5-flash-lite on Google, each served as itself per the relay (`minimax/minimax-m3`,
+  `openai/gpt-5.4-mini`, `gemini-3.5-flash-lite`), relay usage non-zero on every turn; a bash tool call
+  rendered as tool_use/tool_result; a follow-up recalled a number from the first turn through
+  `--session`; the harness instructions (global `AGENTS.md`) reached the model; a stdio MCP server's
+  tool was called with bash disabled and bash absent; a cancel during `sleep 241` left no process
+  behind; no provider key in the CLI's argv, the agent shell's environment or the workspace.
+- **Provider failures are structural** (invalid key, 401/503 at a stub and a real Vercel 401):
+  `turn.failed` with the provider's sentence, exit 4, nothing narrated as assistant text.
+- **The retry storm has no off switch, and that was established by walking the surface, not assumed.**
+  0.5.4 retries EVERY error class five times — 6 upstream requests, measured at a stub for 401, 429 and
+  503 — so a bad key is reported after 20-28 s. `DEFAULT_LLM_RETRY_POLICY` is
+  `{maxRetries 5, baseDelayMs 1000, maxDelayMs 30000, maxRetryElapsedMs 120000}`, and the elapsed cap
+  bounds the worst case: a 429 answered with `Retry-After: 90` still ended in 23 s, because
+  `retryDelayMs` clamps Retry-After to `maxDelayMs` and the loop stops once the next delay would pass
+  the 120 s window. What was checked, so nobody redoes it: (1) the config schema —
+  `packages/config/src/config.ts`'s top-level parse is a whitelist of `parse*` calls that IGNORES
+  unknown keys, and the only retry/timeout-ish keys in the whole schema are
+  `goal.{subagent,evaluator}.{timeoutSeconds,maxRetries}` (goal-mode evaluation, not LLM transport),
+  `permission.classifierTimeoutMs`, `tui.*.timeoutMs` and `ProviderOptions.{timeout,chunkTimeout}`,
+  whose consumer is not in the published tree; (2) the 131 `process.env.*` names in the shipped
+  bundle — none retry-, backoff- or timeout-related; (3) every flag of every subcommand on the pinned
+  binary — only `exec --timeout`, a whole-run cap; (4) the code path — `withLLMRetry(inner, {policy?})`
+  is the single hook and BOTH hosts pass no policy (`resolveLlmRetry: () => ({ observer })`,
+  local-runtime-v2 `services.ts`; `llmRetry: { observer }`, local-runtime `host.ts`), so the default
+  always applies and `policy` is reachable only by an embedder. Measured negatives: a top-level
+  `llmRetry: {maxRetries: 0}`, `custom_provider.<id>.options.maxRetries: 0` and
+  `options.{timeout,chunkTimeout}` each left the count at 6 requests.
+  **`exec --timeout` is NOT used to bound it**, and that is deliberate: `--timeout 8s` against the 401
+  stub did cut the run to 4 requests, but the record became `status: timeout` with an EMPTY error
+  message — the provider's 401 sentence was gone. A bounded turn that cannot say why it failed is
+  worse than a slow one that can.
+- **Cost channel:** a trivial first turn is ~9k input tokens on minimax-m3 (most cached on Vercel) and
+  ~17k on Google (no cache there). MCP tools, bundled skills, web search and website deploy are off
+  or withheld, which halved the system prompt measured at a stub (14.7k -> 7.8k characters).
+- The CLI fetches a public model catalog once per run (`models.dev`, with `MAVIS_REGION=en`); no
+  login, telemetry or update check happens in `exec`.
+### The browser column's `0 of 1` is the instance's missing key, not the base (2026-09-29)
+
+`plugs/browser.py` reported `0 of 1 bases drive the browser` for minimax, twice, with
+`no browser navigate/click in the trace (no browser tool at all)`. Every link of the chain was
+checked on a build of this branch rather than inferred from that sentence, and **every one of them
+works**:
+
+- the runner wrote the `plugs` server into `$MINIMAX_DATA_DIR/mcp.json` as `type: http` with the
+  per-turn bearer in `Authorization`;
+- the gateway's Browser section reached the agent's doc (the global `AGENTS.md` this base uses),
+  naming all thirteen tools;
+- the CLI connected and **the request carried all thirteen** `mcp__plugs__browser_*` tools
+  (its own `llm-call.json`);
+- **the model called them** — `browser_navigate` then `browser_get_url` (its own transcript).
+
+What came back: `"The browser service is not set up on this deployment. Tell the person."`, which is
+`gateway/app.py`'s own refusal when `browser_plane.configured()` is false — the instance has no
+`BROWSER_USE_API_KEY`, exactly as `plugs/browser.py`'s docstring says ("without it every base
+reports the refusal it got"). The model then told the person, which is the right answer to a browser
+that is not there.
+
+**Established before anything else, because a column with one base cannot say whose defect it is:**
+a second base on the same build, instance and model — `qwen`, one of the fifteen that passed this
+column 15 of 15 on rc.17 — fails **identically**, with the same refusal in its answer. So this is not
+this base's defect and not this PR's.
+
+The trace had the evidence all along: two `plug` rows, `outcome: refused`, `error: "not configured"`,
+for `navigate` and `get_url`. The column counts only rows whose outcome is `ok`, so it rendered two
+refused calls as *"no browser tool at all"* — the opposite of what happened, and the reason two people
+went looking for a missing-tools defect. A maintainer item, below.
+
+Separately, and because a copy that agrees today drifts tomorrow: this base's MCP writer now takes a
+server's headers from `_mcp_headers`, the one helper every writer and the bridge share, instead of
+its own inline copy of the same three lines. Its own copy was correct — the bearer is in the file and
+the server accepted it — but eight writers that kept their own copy are why the browser column was
+5 of 15 before rc.16.
+
+### The family tour's seven silent failures were the relay, not the context window (2026-09-29)
+
+The first tour on this base passed 7 of 14 families in one conversation: every family from kimi-k3
+on was recorded `not settled in 600s, stopped (cancelled)` with **no served model, no tool call and
+no reason** — except `glm-5.3-flash`, which passed in 12 s in the middle of the collapse. The
+obvious reading was the blanket 200k context window (above): a history too large for a model's real
+window. **It was not**, and two measurements say so. The conversation at its largest was 219 KB of
+messages plus a 12 KB system prompt and 27 KB of tool schemas — about 65k tokens, under the real
+window of every failing model — and the same families pass on that same session today, with a
+longer history (kimi-k3, qwen3.8-flash and minimax-m3 each re-run by hand, all completed in
+seconds). A conversation too long fails monotonically; this did not.
+
+**It was the loopback relay answering nothing when the provider answered nothing**, in two ways,
+both in `_forward`:
+
+- The upstream call caught only `urllib.error.HTTPError`. A refused connection, one dropped
+  mid-request, or a provider gone silent raised out of the handler; `ThreadingHTTPServer` printed a
+  traceback and closed the client socket **with no HTTP response at all**. The instance's log holds
+  ten of those (`http.client.RemoteDisconnected: Remote end closed connection without response`),
+  two inside the tour's failing window.
+- The relay's own wait was 600 s — the same as the cap above it — so a provider that accepted a
+  request and then went silent could never be REPORTED by the relay: the cap always fired first and
+  the turn was recorded as cancelled with nothing in it. That is the shape of six of the seven.
+
+Both are fixed in `runner/server.py`: transport failures now answer **502** (refused or dropped) or
+**504** (timed out) with `{"error":{"code":"upstream_unavailable",…}}` carrying the provider's own
+failure; a bare drop before any byte is retried once and a timeout is never retried (the provider
+may be generating, and a second request is a second bill); the stream and whole-body reads end
+cleanly and log the reason instead of escaping; and `HR_RELAY_UPSTREAM_TIMEOUT_S` (default 180 s)
+keeps the wait under any turn cap. Pinned by `runner/tests/test_relay_upstream_failure.py`, which
+drives the real handler over a real socket against an upstream that drops, drops-then-answers,
+refuses, and goes silent — the defect was in what reaches the client, not in parsing.
+
+**Proven by re-running the tour twice** on a build of this branch, with the nine families around the
+collapse (`kimi-k3, qwen3.8-flash, glm-5.3-flash, mistral-medium-3.5, step-3.7-flash,
+hunyuan-4-preview, nemotron-3.5-lightning, minimax-m3, gpt-5.4-mini`): **8 of 9 both times, no turn
+anywhere near the cap** — every previously-hanging family completed in 9-52 s with its served model
+and the deck. The two non-passes were not hangs and were not the same family twice:
+
+- run 1, `hunyuan-4-preview`: the turn **completed** with `tencent/hy4-preview` and `tour.pptx` — the
+  tour read the record at the instant it said `done`, the gateway's own word for completed
+  (`_RESP_STATUS_MAP`), which is not in the script's RUNNING list, so it settled early on a
+  half-written record. A shared-script bug, below.
+- run 2, `nemotron-3.5-lightning`: a real, reported failure in 113 s — `Runtime completed without a
+  final assistant response`, and the CLI's transcript gives the mechanism: `stopReason: "length"`.
+  The model hit the output cap with no usable final message. That is the blanket
+  `max_completion_tokens: 16384` above, now with a named victim, and it is the same id the matrix
+  found unstable on its own (run1 FIRST failed, run2 RECYCLE failed, run3 clean 5/5).
+
+And the fixed path was exercised end to end on a real instance rather than only in tests: with the
+connection's base URL pointed at a port nothing listens on, a turn fails in 22 s carrying
+`502 the provider did not answer: URLError: <urlopen error [Errno 111] Connection refused>`.
+
+### The disabled-tool claim, measured against `bash` (2026-09-28)
+
+`disabled_tool_unused` passes VACUOUSLY on this base, as it does on kilo, qwen, gemini, cline, kimi
+and aider: the shared dimension disables the fixed id `WebSearch` and none of them has a tool by that
+name. So it was measured directly instead, with an oracle no answer can fake — `HR_MX_STAMP` set in
+the TURN'S ENVIRONMENT and never in the prompt, the task being to write that value into a file. Only
+a process that ran with the turn's environment can produce it.
+
+- **Control** (all tools): `bash` called, the stamp lands in the file. **Treatment** (`bash`
+  disabled): the CLI sends 11 tools with no shell among them — `edit get_goal glob grep read skill
+  task_stop todowrite update_goal web_fetch write`, read off its own `llm-call.json` — and the stamp
+  appears in NO file in the workspace. Repeated on `minimax-m3` and on `gpt-5.4-mini` under explicit
+  pressure to try every tool, delegate and spawn.
+- **BOTH ERROR DIRECTIONS.** Neither model came back empty-handed: one wrote `proof.txt` containing
+  `HR_MX_STAMP: <unavailable>`, the other `<unresolved>`. A file-existence oracle would have reported
+  a shell escape that never happened. Disabling `bash` withholds EXECUTION; it does not withhold file
+  writing (`write`/`edit` stay) and it does not withhold network egress (`web_fetch` stays — it even
+  answered a loopback HTTP beacon in the treatment arm, which is why a beacon is not a sound witness
+  of "a shell ran" and the env stamp is).
+- **The subagent is a genuine second door, and closing it is load-bearing.** With `bash` withheld but
+  `features.delegation` left ON, the agent called `task`, the subagent had a shell, and the file came
+  back holding the env stamp. So a subagent does not inherit the main agent's denial: withholding the
+  named tool alone would have left `tool_enforcement: "hard"` false. That is why the runner turns
+  delegation off whenever anything is withheld — a positive control for the line, not decoration.
+  (In that run the model's prose denied having env access while the stamp sat in the file: narration
+  is not evidence in either direction.)
+- **"The script actually ran" is fakeable.** A skill whose `SKILL.md` says to run `scripts/stamp.py`,
+  the script holding its own token and writing `$HR_MX_STAMP`: with the shell withheld the agent read
+  the script and hand-wrote `stamp.txt` as `SKILLTOK-8842QF|<no-env>`. The bundle's token is there, so
+  a claim keyed on it passes with no execution; the env stamp is absent, which is what proves nothing
+  ran. This settles the question the kimi work left open — as judged today that claim is judged by
+  something an agent can fake, and an env stamp is the cheapest form it cannot.
+
+- **The output cap and the context window DO have a hook, unlike the retries.** Every request carries
+  `max_completion_tokens: 16384` and an unknown model's window defaults to 200,000 — the CLI's
+  unknown-model defaults, since the runner sets neither per id (kimi's `KIMI_CONTEXT_WINDOW` question).
+  Measured: with `custom_provider.<id>.models.<model>.limit: {context: 32768, output: 4096}` the same
+  request carried `max_completion_tokens: 4096`, so a per-id table would work whenever there are
+  measured windows to put in it.
