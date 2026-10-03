@@ -355,4 +355,4 @@ def test_relay_answers_502_when_the_upstream_cannot_be_reached():
         raise AssertionError("expected an HTTP error")
     except urllib.error.HTTPError as e:
         assert e.code == 502
-        assert b"upstream unreachable" in e.read()
+        assert b"the provider did not answer" in e.read()
