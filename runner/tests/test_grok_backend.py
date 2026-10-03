@@ -436,3 +436,48 @@ def test_the_config_stays_valid_toml_with_characters_outside_the_bmp():
     from server import _toml_str
     for text in ("plain", "x\U0001F600y", 'quote " and \\ slash', "tab\there", "del\x7f", "中文"):
         assert tomllib.loads("v = " + _toml_str(text))["v"] == text
+
+
+def test_a_null_token_count_in_usage_reaches_grok_as_zero():
+    """kimi-k3 through TokenRouter ends its stream with `"audio_tokens":null`; grok parses counts as
+    u32 and failed every turn on it after the answer had arrived. Only counts inside usage change."""
+    from server import _usage_without_nulls
+    line = (b'data: {"id":"c","choices":[],"service_tier":null,"usage":{"prompt_tokens":93,'
+            b'"completion_tokens":98,"prompt_tokens_details":{"audio_tokens":null,"cached_tokens":0}}}')
+    out = _usage_without_nulls(line)
+    assert b'"audio_tokens":0' in out and b'"service_tier":null' in out and out.count(b"null") == 1
+    for same in (b'data: {"choices":[{"delta":{"content":"null"},"finish_reason":null}],"usage":null}',
+                 b'data: [DONE]', b''):
+        assert _usage_without_nulls(same) == same
+
+
+def test_the_relay_rewrites_the_count_in_a_live_stream_and_passes_the_rest_through():
+    import http.client, http.server, threading
+    import server as rs
+    events = (b'data: {"choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}],"usage":null}\n\n'
+              b'data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,'
+              b'"prompt_tokens_details":{"audio_tokens":null,"cached_tokens":0}}}\n\n'
+              b'data: [DONE]\n\n')
+
+    class Up(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["content-length"]))
+            self.send_response(200); self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(events))); self.end_headers()
+            self.wfile.write(events)
+
+        def log_message(self, *a):
+            pass
+
+    up = http.server.HTTPServer(("127.0.0.1", 0), Up)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    base, tok = rs._hermes_relay_route(f"http://127.0.0.1:{up.server_port}/v1", "sk-real", usage_no_nulls=True)
+    conn = http.client.HTTPConnection(base.removeprefix("http://").removesuffix("/v1"), timeout=10)
+    try:
+        conn.request("POST", "/v1/chat/completions",
+                     body=json.dumps({"model": "moonshotai/kimi-k3", "messages": [], "stream": True}),
+                     headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
+        got = conn.getresponse().read()
+    finally:
+        conn.close(); up.shutdown(); rs._HERMES_RELAY["routes"].pop(tok, None)
+    assert got == events.replace(b'"audio_tokens":null', b'"audio_tokens":0')

@@ -4278,17 +4278,28 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # usage (and Google's tool-call signatures) live on whole SSE lines, so the
                 # stream is line-buffered as it passes; the bytes still go through untouched
                 pending += chunk
+                # a route that rewrites usage forwards whole lines (as rewritten) instead of the
+                # raw read, so a rewrite never straddles two reads
+                out_lines = [] if flags.get("usage_no_nulls") else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
+                    if out_lines is not None:
+                        out_lines.append(_usage_without_nulls(line) + b"\n")
                     line = line.strip()
                     call_usage.update(_usage_in_sse_line(line))
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
-                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
-                self.wfile.flush()
+                if out_lines is not None:
+                    chunk = b"".join(out_lines)
+                if chunk:
+                    self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                    self.wfile.flush()
             call_usage.update(_usage_in_sse_line(pending.strip()))
             _usage_add(flags, call_usage)
+            if flags.get("usage_no_nulls") and pending:
+                tail_bytes = _usage_without_nulls(pending)      # a last line with no newline after it
+                self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
         else:
             try:
@@ -4328,6 +4339,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     pass
             if body is None and "/models" in tail.split("?", 1)[0]:
                 data = _model_metadata_with_context_length(data)
+            if flags.get("usage_no_nulls"):
+                data = _usage_without_nulls(data)
             if sigs is not None and b"thought_signature" in data:
                 try:
                     doc = json.loads(data)
@@ -4486,6 +4499,23 @@ def _relay_upstream_timeout() -> float:
 HR_RELAY_UPSTREAM_TIMEOUT_S = _relay_upstream_timeout()
 
 
+_USAGE_NULL_COUNT = re.compile(rb'("[a-z_]*_tokens"\s*:\s*)null')
+
+
+def _usage_without_nulls(line: bytes) -> bytes:
+    """One answer line (an SSE event or a whole body) with every null token count inside its usage
+    written as 0. Moonshot's kimi-k3 through TokenRouter ends a stream with
+    `"prompt_tokens_details":{"audio_tokens":null,"cached_tokens":0}`; Grok Build 1.0.41 parses the
+    counts as u32 and failed the whole turn on it AFTER the answer had arrived ("serialization
+    error: invalid type: null, expected u32", hr-test 2026-10-03, every kimi-k3 turn). A count that
+    is absent and a count of none are the same number. `"usage":null` itself is left alone (clients
+    read it as "not yet"), as is everything before the usage key."""
+    i = line.find(b'"usage"')
+    if i < 0 or b"null" not in line[i:]:
+        return line
+    return line[:i] + _USAGE_NULL_COUNT.sub(rb"\g<1>0", line[i:])
+
+
 def _relay_base_with_version(base_url: str) -> str:
     """A relay base ends with /v1 unless it is an AWS host or already names an API version."""
     base = (base_url or "").rstrip("/")
@@ -4513,7 +4543,8 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 
 
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
-                        stream_usage: bool = False, gemini_schemas: bool = False) -> tuple[str, str]:
+                        stream_usage: bool = False, gemini_schemas: bool = False,
+                        usage_no_nulls: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -4521,7 +4552,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     relay grows by itself when a provider names an unknown field). `stream_usage` asks the provider
     for a streamed call's usage when the client does not (_request_stream_usage). `gemini_schemas`
     normalises a gemini model's tool declarations on this route whatever the channel (see
-    _build_grok for the one client that needs it)."""
+    _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
+    answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -4537,7 +4569,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key,
                                         {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                                          "stream_usage": bool(stream_usage),
-                                         "gemini_schemas": bool(gemini_schemas)})
+                                         "gemini_schemas": bool(gemini_schemas),
+                                         "usage_no_nulls": bool(usage_no_nulls)})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -5354,7 +5387,8 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     # schema specified other fields alongside any_of" (gemini-3.5-flash-lite, measured 2026-09-27),
     # so a gemini turn died at its first tool call. The relay's Gemini normaliser (a type list
     # becomes one type plus nullable) is applied on this route for gemini ids on every channel.
-    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, gemini_schemas=True)
+    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, gemini_schemas=True,
+                                                usage_no_nulls=True)
     ws = pathlib.Path(cwd)
     home = _grok_home(ws)
     _grok_config(home, model, relay_base, mcp_servers)
