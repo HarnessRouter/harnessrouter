@@ -204,7 +204,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,aider,openhands,systemone,cheetahclaws}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,systemone,cheetahclaws}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -226,6 +226,7 @@ backend_bin() {
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
     minimax) echo "$TOOLS/bin/mcode" ;;
+    grok)   echo "$TOOLS/bin/grok" ;;
     aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
@@ -434,6 +435,25 @@ MINIMAX_PIN="${HR_MINIMAX_VERSION:-0.5.4}"; MINIMAX_PIN="${MINIMAX_PIN#v}"
 # json events, KILO_CONFIG, enabled_providers, the env switches, the session table, the edit
 # permission key) was measured on THIS version.
 KILO_PIN="${HR_KILO_VERSION:-7.8.1}"; KILO_PIN="${KILO_PIN#v}"
+# Grok Build, Apache-2.0 (xai-org/grok-build), pinned to 1.0.41.
+#
+# The GitHub repository is source only — no tags, no releases — so the artifact is the one xAI's own
+# installer (https://x.ai/cli/install.sh) downloads: a single static binary per platform at
+# https://x.ai/cli/grok-<version>-linux-<arch>, a Cloudflare front for the public bucket
+# storage.googleapis.com/grok-build-public-artifacts/cli, which is the fallback here as it is there.
+# NOT the install script: it resolves "latest" from a channel pointer, installs a self-updating
+# launcher layout under ~/.grok, and verifies nothing but that the binary runs.
+#
+# UPSTREAM PUBLISHES NO CHECKSUMS (no .sha256 beside the assets; the installer checks none), so the
+# digests below were computed here from the 1.0.41 assets (2026-09-26) — the goose contract: a
+# moved pointer or a re-uploaded asset fails closed. The bucket's own md5 headers agreed with the
+# downloaded bytes. ~166 MB on x86_64, one file, well under the 300 MB default-set bar.
+#
+# Everything runner/server.py's grok code relies on (the stream-json shape, errors[] on a failed
+# result, the side calls and the switches that stop them, -r's remote restore and the registry
+# switch that stops it, the shell's internal tool id) was measured on THIS version. The binary
+# updates itself only through its managed install; the runner also sets GROK_DISABLE_AUTOUPDATER=1.
+GROK_PIN="${HR_GROK_VERSION:-1.0.41}"; GROK_PIN="${GROK_PIN#v}"
 # OpenHands V1, MIT (OpenHands/agent-sdk), pinned to 1.49.2 — the AGENT SERVER, not the CLI.
 #
 # PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
@@ -659,6 +679,40 @@ install_kilo() {
     && chmod 755 "$TOOLS/bin/kilo" || { rm -rf "$kl_tmp"; return 1; }
   rm -rf "$kl_tmp"
 }
+
+install_grok() {
+  case "$(uname -m)" in
+    x86_64)        gk_arch="x86_64";  gk_sha="9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407" ;;
+    aarch64|arm64) gk_arch="aarch64"; gk_sha="7c0b8c973af6a78e2037f19ed93033471b8c5e722f9ff04b86b092e066e60d74" ;;
+    *) echo "unsupported architecture $(uname -m) for grok"; return 1 ;;
+  esac
+  if [ "$GROK_PIN" != "1.0.41" ]; then
+    # The goose/kimi contract: an override brings the digest for the version it chose, or is TOLD
+    # the binary is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_GROK_SHA256:-}" ]; then
+      gk_sha="$HR_GROK_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_GROK_VERSION=$GROK_PIN overrides the pinned 1.0.41, and no"
+      echo "[harnessrouter]       HR_GROK_SHA256 was given — this grok binary is UNVERIFIED."
+      gk_sha=""
+    fi
+  fi
+  gk_tmp="$(mktemp -d)"
+  curl -fsSL "https://x.ai/cli/grok-${GROK_PIN}-linux-${gk_arch}" -o "$gk_tmp/grok" \
+    || curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_PIN}-linux-${gk_arch}" -o "$gk_tmp/grok" \
+    || { rm -rf "$gk_tmp"; return 1; }
+  if [ -n "$gk_sha" ]; then
+    gk_have="$(sha256sum "$gk_tmp/grok" | awk '{print $1}')"
+    if [ "$gk_sha" != "$gk_have" ]; then
+      echo "grok $GROK_PIN: binary digest mismatch for $gk_arch (want $gk_sha, have $gk_have)"
+      rm -rf "$gk_tmp"; return 1
+    fi
+  fi
+  mkdir -p "$TOOLS/bin" && install -m 755 "$gk_tmp/grok" "$TOOLS/bin/grok" \
+    || { rm -rf "$gk_tmp"; return 1; }
+  rm -rf "$gk_tmp"
+}
+
 
 install_goose() {
   case "$(uname -m)" in
@@ -904,6 +958,13 @@ install_backends() {
   if wanted minimax && [ "$("$(backend_bin minimax)" --version 2>/dev/null | head -n 1)" != "$MINIMAX_PIN" ]; then
     echo "[harnessrouter] installing MiniMax Code $MINIMAX_PIN (MIT, version-pinned)…"
     try_install "MiniMax Code" install_minimax || true
+  fi
+
+  # `grok --version` prints "grok 1.0.41 (4220f3b224a6)"; comparing the version word both installs a
+  # missing binary and replaces one a pin bump left behind on the volume.
+  if wanted grok && [ "$("$(backend_bin grok)" --version 2>/dev/null | head -n 1 | awk '{print $2}')" != "$GROK_PIN" ]; then
+    echo "[harnessrouter] installing Grok Build $GROK_PIN (Apache-2.0, version- and digest-pinned)…"
+    try_install "Grok Build" install_grok || true
   fi
 
   # The largest install of the set: ~735 MB and about ninety seconds on a fresh volume
