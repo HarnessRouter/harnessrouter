@@ -1230,6 +1230,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "cheetahclaws"): "openai-api",
     ("tokenrouter", "cheetahclaws"): "tokenrouter", ("vercel", "cheetahclaws"): "tokenrouter",
     ("custom", "cheetahclaws"): "openai-api",
+    # agentzero (Agent Zero) reaches every provider the openhands way: its model is Agent Zero's
+    # provider `other` (litellm's openai provider with an api_base) pointed at the loopback relay.
+    ("anthropic", "agentzero"): "anthropic",   ("openai", "agentzero"): "openai",
+    ("azure-foundry", "agentzero"): "azure",
+    ("openrouter", "agentzero"): "openai-api",
+    ("tokenrouter", "agentzero"): "tokenrouter", ("vercel", "agentzero"): "tokenrouter",
+    ("llmtr", "agentzero"): "tokenrouter",
+    ("custom", "agentzero"): "openai-api",
+    ("google", "agentzero"): "openai-api",
     ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
     ("azure-foundry", "qwen"): "azure",
     ("openrouter", "qwen"): "openai-api",
@@ -1298,6 +1307,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "openhands"): "tokenrouter",
     ("harnessrouter", "cheetahclaws"): "tokenrouter",
+    ("harnessrouter", "agentzero"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
     # The hosted service serves the open-weight System One models (laya, openthai-systemone,
@@ -4997,7 +5007,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
-               "aider", "openhands", "minimax", "cheetahclaws", "grok"},
+               "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero"},
     # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -6676,6 +6686,16 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
                          "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
                          "nemotron-3-super"]},
+    # agentzero (Agent Zero v2.13): the same relay reach as openhands (chat/completions through the
+    # loopback relay), so the list is openhands'. OFFERED SO THE MATRIX CAN MEASURE IT HERE, not
+    # measured: no column has run on this base. What HAS run, through a local runner on 2026-09-27:
+    # gemini-3.1-flash-lite on Vercel, five turns, each served as itself per the relay. The id
+    # reaches the provider EXACTLY as the connection names it, and that was measured rather than
+    # assumed, because openhands lost a prefix here (#296): at a loopback recorder,
+    # openai/gpt-6-sol, gpt-5.4, google/gemini-3.1-flash-lite and anthropic/claude-sonnet-4.6 each
+    # arrived as `model` unchanged (Agent Zero's provider `other` hands litellm `openai/<id>`, and
+    # litellm 1.88.1 takes off that one prefix and nothing else).
+    "agentzero": {"default": "gpt-5.4", "models": []},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -6803,6 +6823,7 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # id it is given verbatim (gpt-5.4, claude-sonnet-4.6, gemini-3.8-flash, deepseek-v4-flash), so any
 # substitution would be the provider's, and the relay's served model shows it.
 _MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -6841,8 +6862,10 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
 # grok: the runner's one custom model is `api_backend = "chat_completions"` (Grok Build can speak the
 # Responses and Messages APIs too, but that is not the model the runner defines).
+# agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
-                      "cheetahclaws", "grok")
+                      "cheetahclaws", "grok",
+                      "agentzero")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -15507,6 +15530,32 @@ _BASE_CATALOG: dict[str, dict] = {
         # (Bash and Write disabled: absent from the provider's `tools`). An MCP tool is withheld the
         # same way, by its bare or server.tool name. The honest limit every shell-bearing base has:
         # disabling Write alone does not stop a file being written through Bash.
+        "tool_enforcement": "hard",
+    },
+    "agentzero": {
+        "label": "Agent Zero", "backend": "agentzero", "status": "ready",
+        # NOT delivered as a system prompt: Agent Zero composes its own from its prompt files, so
+        # these instructions reach the model through the workspace's AGENTS.md, which the driver
+        # has Agent Zero's _promptinclude plugin inline into its system prompt.
+        "system_prompt": ("You are Agent Zero, an autonomous agent. You work on a real git "
+                          "workspace with a terminal and file tools, running commands and editing "
+                          "files to complete the task end to end."),
+        # Agent Zero's own tool names, the ids its tool policy and the runner's card mapping use
+        # (runner/agentzero_driver.py TOOLS). Not offered, because they cannot run in this sandbox
+        # and the driver withholds them on every turn: search_engine (needs the SearXNG only its
+        # image runs), document_query and the memory tools (FAISS and local embeddings are not
+        # installed), browser, scheduler, notify_user, a2a_chat and the A0-connector remote tools.
+        # `input` is not listed on its own: it types into the terminal, so it goes with
+        # code_execution_tool and is withheld with it.
+        "tools": [("code_execution_tool", "Shell"), ("text_editor", "Edit"),
+                  ("call_subordinate", "Subagent"), ("skills_tool", "Skill"),
+                  ("parallel", "Parallel"), ("wait", "Wait"), ("goal", "Goal")],
+        # "hard", and measured: Agent Zero's own _tool_access policy strips a blocked tool from the
+        # prompt AND refuses its execution (the tool_execute_before gate, which parallel calls go
+        # through too). With code_execution_tool withheld, "run uname -a with your terminal tool"
+        # produced no shell call: the prompt no longer named the tool, the model guessed `terminal`
+        # and got "not found" (v2.13, 2026-09-27). MCP tools are withheld by the server's own
+        # `disabled_tools`, hidden and refused at call time.
         "tool_enforcement": "hard",
     },
     "systemone": {

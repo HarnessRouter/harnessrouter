@@ -204,7 +204,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,systemone,cheetahclaws}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -231,6 +231,7 @@ backend_bin() {
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
     cheetahclaws) echo "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready" ;;
+    agentzero) echo "$TOOLS/agentzero-venv/bin/agentzero-ready" ;;
   esac
 }
 
@@ -535,6 +536,96 @@ have = systemone_harness.__version__
 if have != sys.argv[1]:
     print(f"systemone-harness {have} installed, {sys.argv[1]} pinned", file=sys.stderr); sys.exit(1)
 ' "$SYSTEMONE_PIN" || { rm -rf "$TOOLS/systemone-venv"; return 1; }
+}
+
+# Agent Zero, MIT (agent0ai/agent-zero), pinned to v2.13 — a FRAMEWORK, not a CLI.
+#
+# Agent Zero ships as a Docker image with a web UI; it has no CLI and no headless mode, and upstream
+# publishes no package on PyPI and no release assets (v2.13's release has none). So the install is
+# the tagged SOURCE archive, verified against a digest pinned HERE (the goose pattern: upstream
+# publishes no checksums, so they were computed from the v2.13 archive — it is byte-identical
+# whether fetched from github.com/.../archive or codeload, and its tree is identical to the tag's
+# git checkout, e3051fb). runner/agentzero_driver.py imports the framework from that tree and runs
+# one message per turn in process; see its docstring.
+#
+# THE DEPENDENCIES ARE UPSTREAM'S OWN requirements.txt, with its exact pins, MINUS the packages that
+# serve only what this base switches off (the driver's DISABLED_PLUGINS and ALWAYS_BLOCKED): local
+# embeddings and speech (sentence-transformers, kokoro and openai-whisper, which bring torch — GBs),
+# document parsing (unstructured, liteparse, faiss, pdf and OCR tooling), the browser (patchright),
+# search (duckduckgo), the integrations (email, exchange, boto3, docker, tunnels) and Windows' pty.
+# Nothing is added but ipython, which the terminal's python runtime calls by name.
+# models.py imports sentence_transformers at the top; the driver stubs that one module (and the
+# check below does the same), because the only thing that would call it is the memory plugin.
+#
+# Own venv on the data volume like openhands and aider. Measured on Linux arm64 (python:3.12-slim):
+# 83 s, venv 569 MB + source 69 MB — over the 300 MB bar, and in the DEFAULT set all the same, the
+# decision aider and openhands already carry: the console offers every base the gateway's catalogue
+# lists, so a base left out of the default install is a base whose first task fails. An operator who
+# does not want the 638 MB leaves it out of HR_BACKENDS, the switch every backend has.
+AGENTZERO_PIN="${HR_AGENTZERO_VERSION:-2.13}"; AGENTZERO_PIN="${AGENTZERO_PIN#v}"
+AGENTZERO_EXCLUDE='^(kokoro|openai-whisper|sentence-transformers|unstructured|unstructured-client|langchain-unstructured|faiss-cpu|liteparse|newspaper3k|patchright|docker|duckduckgo-search|pyreqwest-impersonate|exchangelib|imapclient|boto3|flaredantic|pypdf|pymupdf|pytesseract|pdf2image|soundfile|pywinpty)([=<>~!; []|$)'
+install_agentzero() {
+  az_sha="ac9e1b319cb75ae52c4309123d893e1925ad83464cf1c0d5ad9e1db0e2f25e9e"
+  if [ "$AGENTZERO_PIN" != "2.13" ]; then
+    # The goose contract: an operator who overrides the version supplies the digest for it, or is
+    # TOLD the archive is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_AGENTZERO_SHA256:-}" ]; then
+      az_sha="$HR_AGENTZERO_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_AGENTZERO_VERSION=$AGENTZERO_PIN overrides the pinned 2.13, and no"
+      echo "[harnessrouter]       HR_AGENTZERO_SHA256 was given — this Agent Zero archive is UNVERIFIED."
+      az_sha=""
+    fi
+  fi
+  az_tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/agent0ai/agent-zero/archive/refs/tags/v${AGENTZERO_PIN}.tar.gz" \
+      -o "$az_tmp/a0.tar.gz" || { rm -rf "$az_tmp"; return 1; }
+  if [ -n "$az_sha" ]; then
+    az_have="$(sha256sum "$az_tmp/a0.tar.gz" | awk '{print $1}')"
+    if [ "$az_sha" != "$az_have" ]; then
+      echo "Agent Zero $AGENTZERO_PIN: archive digest mismatch (want $az_sha, have $az_have)"
+      rm -rf "$az_tmp"; return 1
+    fi
+  fi
+  mkdir "$az_tmp/x" && tar -xzf "$az_tmp/a0.tar.gz" -C "$az_tmp/x" --strip-components=1 \
+    || { rm -rf "$az_tmp"; return 1; }
+  [ -f "$az_tmp/x/agent.py" ] && [ -f "$az_tmp/x/requirements.txt" ] \
+    || { echo "the Agent Zero archive holds no agent.py/requirements.txt"; rm -rf "$az_tmp"; return 1; }
+  grep -vE '^[[:space:]]*(#|$)' "$az_tmp/x/requirements.txt" | sed 's/[[:space:]]*#.*$//' \
+    | grep -viE "$AGENTZERO_EXCLUDE" > "$az_tmp/requirements.harness.txt"
+  echo "ipython==${HR_AGENTZERO_IPYTHON_VERSION:-9.17.1}" >> "$az_tmp/requirements.harness.txt"
+  rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"
+  "${HR_AGENTZERO_BASE_PYTHON:-python3}" -m venv "$TOOLS/agentzero-venv" \
+    || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
+  "$TOOLS/agentzero-venv/bin/pip" install -q --no-cache-dir --disable-pip-version-check \
+      -r "$az_tmp/requirements.harness.txt" \
+    || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
+  mv "$az_tmp/x" "$TOOLS/agentzero-src" && rm -rf "$az_tmp"
+  # Turns run as the session's uid, which cannot write here: compile now, or every turn pays for it.
+  "$TOOLS/agentzero-venv/bin/python" -m compileall -q "$TOOLS/agentzero-src" >/dev/null 2>&1 || true
+  chmod -R a+rX "$TOOLS/agentzero-src" "$TOOLS/agentzero-venv"
+  # Prove the framework imports from the tree the way the driver imports it — the core, the
+  # terminal tool the base's work goes through, the MCP client — before declaring the install good.
+  # An excluded package that a kept module still needed fails HERE, not on a live turn.
+  ( cd "$TOOLS/agentzero-src" && "$TOOLS/agentzero-venv/bin/python" -c '
+import sys, types
+st = types.ModuleType("sentence_transformers"); st.SentenceTransformer = object
+sys.modules["sentence_transformers"] = st
+sys.path.insert(0, ".")
+sys.argv = [sys.argv[0], "--dockerized=true"]
+import agent, initialize  # noqa: F401 - the loop and its config
+import helpers.mcp_handler, helpers.persist_chat, helpers.tool_policy  # noqa: F401
+import plugins._code_execution.tools.code_execution_tool  # noqa: F401 - paramiko, the pty
+import plugins._text_editor.tools.text_editor  # noqa: F401
+import IPython  # noqa: F401 - the python runtime
+' ) || { rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"; return 1; }
+  # A check that left state behind in the shared tree (a usr/ from an import) would become every
+  # workspace's; the driver gives each workspace its own usr/.
+  rm -rf "$TOOLS/agentzero-src/usr" "$TOOLS/agentzero-src/tmp"
+  # Written LAST, the aider pattern: the marker is what the boot compares against the pin, so a
+  # half-built install is rebuilt rather than trusted.
+  printf '#!/bin/sh\necho %s\n' "$AGENTZERO_PIN" > "$TOOLS/agentzero-venv/bin/agentzero-ready" \
+    && chmod 755 "$TOOLS/agentzero-venv/bin/agentzero-ready"
 }
 
 install_openhands() {
@@ -947,6 +1038,10 @@ install_backends() {
     try_install "CheetahClaws" install_cheetahclaws || true
   fi
   [ -x "$TOOLS/cheetahclaws-venv/bin/python" ] && export HR_CHEETAHCLAWS_PYTHON="$TOOLS/cheetahclaws-venv/bin/python"
+  if wanted agentzero && [ "$("$TOOLS/agentzero-venv/bin/agentzero-ready" 2>/dev/null)" != "$AGENTZERO_PIN" ]; then
+    echo "[harnessrouter] installing Agent Zero $AGENTZERO_PIN (MIT) — ~640 MB, this takes a minute or two…"
+    try_install "Agent Zero" install_agentzero || true
+  fi
 
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
