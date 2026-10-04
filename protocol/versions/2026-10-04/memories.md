@@ -145,7 +145,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
   "object": "memory.record",
   "memory_id": "hmem_7c1e4b9a2d3f4e5a8b6c7d8e9f0a1b2c",
   "type": "fact",
-  "content": "Acme renews in March and wants the annual discount kept.",
+  "content": [ { "type": "text", "text": "Acme renews in March and wants the annual discount kept." } ],
   "attributes": { "account": "acme" },
   "version": 2,
   "status": "active",
@@ -163,7 +163,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
 | Field | Meaning |
 |---|---|
 | `type` | What kind of record ([§4.1](#41-types)) |
-| `content` | Text, or a file reference `{ "file": { "id", "name", "bytes", "media_type", "version" } }` |
+| `content` | What the record says: an ordered list of parts, text and files ([§4.3](#43-content)) |
 | `attributes` | Structured fields. Free-form for core types; the type's schema for extension types ([§8](#8-types)) |
 | `version`, `status`, `supersedes` | A change appends a version and closes the one before it ([§5.3](#53-nothing-is-overwritten)). `status` is `active`, `superseded` or `forgotten` |
 | `time` | When it was true in the world (`valid_*`) and when the memory held it (`written_at`, `invalidated_at`). A provider without validity leaves `valid_*` null |
@@ -196,6 +196,51 @@ memory, or with the same provider.
   else.
 - Writing a reference does not require `read` on its target. A record promoted from a private
   memory into a shared one keeps its source, and only those who may read the source can follow it.
+
+### 4.3 Content
+
+A record's `content` is an ordered list of **parts**. Two kinds of part are defined:
+
+```json
+"content": [
+  { "type": "text", "text": "The new logo, final on 1 October." },
+  { "type": "file",
+    "file": { "id": "file_9a2c…", "name": "logo.png", "media_type": "image/png", "bytes": 48213 },
+    "text": "A blue circle with a white letter A.", "text_source": "stated" }
+]
+```
+
+| Part | Carries |
+|---|---|
+| `text` | `text`: words |
+| `file` | `file`: a reference to bytes, with their `media_type`; and optionally `text`, the words that stand for the file |
+
+- **A modality is a media type, not a kind of part.** An image, a recording, a video and a PDF are
+  all `file` parts and differ in `media_type` alone, so a modality this chapter has never heard of
+  needs no change to it. A part of any other kind has an `x.`-prefixed `type`; a server MUST carry
+  it unchanged and MUST NOT refuse a read because of it.
+- **A file may carry the words that stand for it**: a description of an image, a transcript of a
+  recording. That text is what recall by words finds ([§6.2](#62-the-request)) and what a reader
+  that takes only text is given. `text_source` says whether the writer `stated` it or the provider
+  `derived` it.
+- **A record holds a reference to a file, never its bytes.** The bytes are sent first as
+  [Files](files.md) says (`POST /v1/files`), and the part names the file by `id`. The server
+  completes `name`, `media_type` and `bytes` from its own file store; a client's values for them
+  are not read. The bytes of a part are read at their own address by whoever may read the record:
+
+  ```http
+  GET /v1/memories/{id}/records/{rid}/content/{index}
+  ```
+
+- **A string is shorthand** for one text part on a write. What is read back is always the list,
+  so a client handles one shape.
+- **A part may name who said it**: `role` is `user`, `assistant`, `system` or `tool`. A turn of a
+  conversation is observed ([§5.1](#51-two-ways-to-write)) as it happened, each part under its
+  role, files included, with no shape of its own.
+- **A provider keeps what it says it keeps.** Its capability document lists the media types it
+  keeps in `content.media` ([§10.2](#102-the-capability-document)). A write that carries a file of
+  a media type the provider does not keep is refused with `memory_unsupported`; it is never stored
+  without the file.
 
 ## 5. Operations
 
@@ -366,16 +411,15 @@ out the condition that confines it, so the confinement cannot be in the statemen
 
 ## 7. Files
 
-A record's `content` may be a file. The server returns a reference with an opaque `version`; a
-revision with new bytes is a new version of the record, and the earlier bytes remain readable
-through `history` and `as_of` for as long as the provider keeps history.
+A file enters a memory as a part of a record's content ([§4.3](#43-content)): uploaded as
+[Files](files.md) says, named in the part by its id, and read back at the part's own address. A
+revision whose content names other files is a new version of the record; the earlier version keeps
+naming the files it had, for as long as the provider keeps history and the server keeps the files.
 
-```http
-GET /v1/memories/{id}/records/{rid}/content[?version=…]
-```
-
-Upload follows [Files](files.md): the bytes are sent with `POST /v1/files` and the
-record names the file's id.
+`content.bytes` in the provider's capability document says where the bytes live: `kept` when the
+provider stores them itself, `referenced` when it keeps the reference and the bytes stay with the
+server's file store, living as long as that file does. `content.describes` lists the media types
+the provider writes a part's `text` for when the writer gave none.
 
 ## 8. Types
 
@@ -531,7 +575,8 @@ GET /v1/memories/providers
   "revise": "native", "forget": "native", "erase": { "unreachable": "reported" },
   "prime": true, "consolidate": "runs",
   "queries": { "named": true, "free": { "languages": ["cypher"], "write": false } },
-  "types": true, "files": true
+  "types": true,
+  "content": { "media": ["text/*", "image/*"], "bytes": "referenced", "describes": ["image/*"] }
 } ] }
 ```
 
@@ -562,7 +607,7 @@ the differences are said, and three rules keep it honest:
 ```
 
 A server that reports `memories: true` implements [§2](#2-the-memory-object) to [§6.3](#63-the-response)
-and [§9](#9-attaching-memories-to-a-harness). Named and free queries, types, files, snapshots, consolidation runs and erase are
+and [§9](#9-attaching-memories-to-a-harness). Named and free queries, types, the media a record's content may carry, snapshots, consolidation runs and erase are
 reported per provider ([§10.2](#102-the-capability-document)). A server that does not implement the
 chapter reports `false` or omits it and answers its endpoints with `404`.
 

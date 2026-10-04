@@ -2048,7 +2048,8 @@ def me02(ctx):
     _memories_supported(ctx)
     rec = _memory_fact(ctx)
     ctx.validate(rec, "MemoryRecord")
-    assert rec.get("content") == "Quillon Freight renews its contract every March.", f"the record does not say what was stated: {rec.get('content')!r}"
+    assert rec.get("content") == [{"type": "text", "text": "Quillon Freight renews its contract every March."}], (
+        f"a string written as content must read back as one text part, in a list; got {rec.get('content')!r}")
     assert rec.get("trust") == "untrusted", "a record read back must be marked untrusted"
     assert rec.get("memory_id") == ctx.state["memory_child"]["id"], "the record must name the memory it is in"
     assert (rec.get("written_by") or {}).get("id") != "someone-else", (
@@ -2169,6 +2170,62 @@ def me07(ctx):
     assert (e.json or {}).get("erased") == [rid], f"erase must name what it erased; got {(e.json or {}).get('erased')}"
     assert ctx.client.get(base).status == 404, "an erased record must not read back"
     return f"forgotten, then erased with unreachable={len((e.json or {}).get('unreachable') or [])}"
+
+
+@check("ME-09", "Content is an ordered list of text and file parts, and a provider keeps what it says it keeps", "full",
+       f"{SPEC}/memories.md#43-content")
+def me09(ctx):
+    prov = _memories_supported(ctx)
+    child = _memory_child(ctx)
+    base = f"/v1/memories/{child['id']}/records"
+    two = ctx.client.post(base, body={"type": "note", "content": [{"type": "text", "text": "First line."},
+                                                                 {"type": "text", "text": "Second line."}]})
+    assert two.status == 200, f"a list of text parts was refused: HTTP {two.status} {two.text[:160]}"
+    parts = (two.json or {}).get("content")
+    assert isinstance(parts, list) and parts and all(p.get("type") == "text" for p in parts), (
+        f"content must read back as a list of parts; got {parts!r}")
+    said = " ".join(str(p.get("text")) for p in parts)
+    assert "First line." in said and said.index("First line.") < said.index("Second line."), (
+        f"the parts' words must survive in order; got {said!r}")
+    for bad, why in (([{"type": "image", "url": "x"}], "a part that is neither text, file nor x.-prefixed"),
+                     ([{"type": "text"}], "a text part with no text"),
+                     ([{"type": "file", "file": {}}], "a file part that names no file"),
+                     ([{"type": "text", "text": "x", "role": "narrator"}], "a role that is not one of the four")):
+        r = ctx.client.post(base, body={"content": bad})
+        assert r.status == 422, f"{why} must be refused with 422; got HTTP {r.status}"
+    # a file part: uploaded as Files says, named by id, completed by the server, kept or refused as declared
+    media = ((prov.get("content") or {}).get("media")) or ["text/*"]
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    boundary = "uhpconformance" + uuid.uuid4().hex
+    form = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nuser_data\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"dot.png\"\r\n"
+            f"Content-Type: image/png\r\n\r\n").encode() + png + f"\r\n--{boundary}--\r\n".encode()
+    up = ctx.client.post("/v1/files", raw=form, content_type=f"multipart/form-data; boundary={boundary}")
+    if up.status != 200:
+        return f"text parts in order; file parts not exercised (POST /v1/files answered HTTP {up.status})"
+    fid = (up.json or {}).get("id")
+    r = ctx.client.post(base, body={"type": "note", "content": [
+        {"type": "text", "text": "A dot."},
+        {"type": "file", "file": {"id": fid, "name": "forged.bin", "media_type": "application/x-forged", "bytes": 1},
+         "text": "A single black dot on white."}]})
+    import fnmatch
+    keeps = any(fnmatch.fnmatch("image/png", pat) for pat in media)
+    if not keeps:
+        assert r.status == 422 and ((r.json or {}).get("error") or {}).get("code") == "memory_unsupported", (
+            f"this provider declares content.media={media}; a png must be refused with memory_unsupported, not stored "
+            f"without its file. Got HTTP {r.status}: {r.text[:160]}")
+        return f"text parts in order; image/png refused as declared (content.media={media})"
+    assert r.status == 200, f"this provider declares it keeps image/png, and refused it: HTTP {r.status} {r.text[:160]}"
+    rec = r.json or {}
+    ctx.validate(rec, "MemoryRecord")
+    fp = next((p for p in rec.get("content") or [] if p.get("type") == "file"), None)
+    assert fp and (fp.get("file") or {}).get("media_type") == "image/png" and (fp["file"].get("name") == "dot.png"), (
+        f"the server completes a file part from its own file store, not from the caller: {fp!r}")
+    assert fp.get("text") == "A single black dot on white.", "the words that stand for a file must be kept with it"
+    idx = (rec.get("content") or []).index(fp)
+    b = ctx.client.get(f"{base}/{rec['id']}/content/{idx}")
+    assert b.status == 200 and b.body == png, f"the part's bytes must read back at its own address; got HTTP {b.status}"
+    return "text parts in order; a png kept with its description and read back byte for byte"
 
 
 @check("ME-08", "A memory moves with its subtree, and deleting it takes the subtree", "full",
