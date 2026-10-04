@@ -539,11 +539,11 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
    query to what the caller may read by a means the statement cannot undo.
 9. References cross the tree freely and resolve with the reader's privileges.
 10. On the hosted service, a memory is a Space: the same vertex, tree and grants, with no migration.
+11. Isolation is "enforced by the server": a container per memory and a condition the server adds
+    to every operation are both conformant ([§3.3](#33-enforcement)).
 
-**Proposed, not yet confirmed**
+**Accepted for now, to revisit**
 
-- Isolation is "enforced by the server", with `container` and `enforced_filter` both acceptable
-  ([§3.3](#33-enforcement)), in place of "always a container".
 - History is append-and-close for content and structure alike; file bytes are kept by content
   address, a snapshot is a named instant, and no git repository is involved ([§5.3](#53-nothing-is-overwritten)).
 
