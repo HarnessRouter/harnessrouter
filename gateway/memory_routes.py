@@ -41,7 +41,10 @@ async def _who(request: Request) -> tuple[str, str, str, list[str]]:
     org = p.get("org", "")
     if not org:
         raise _uhp_error(401, "invalid_credential", "Missing or invalid API key.")
-    return org, str(p.get("member") or ""), str(p.get("workspace") or ""), principals_of(p)
+    # The workspace a memory belongs to is named the way a plug's is (the console's header, else the
+    # instance's default workspace), so a memory finds the provider its own workspace connected.
+    ws = str(request.headers.get("x-harness-workspace") or p.get("workspace") or "default")
+    return org, str(p.get("member") or ""), ws, principals_of(p)
 
 
 async def _json(request: Request) -> dict:
