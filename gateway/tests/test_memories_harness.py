@@ -158,3 +158,13 @@ def test_a_finished_turn_is_observed_into_the_default_memory(client, world):
     assert len(eps) == 1 and eps[0]["content"] == {"user": "Can I get a refund after 40 days?",
                                                     "assistant": "No: refunds are allowed within 30 days."}
     assert eps[0]["written_by"] == {"kind": "harness", "id": hid} and eps[0]["attributes"]["session_id"] == "sess_x"
+
+
+def test_the_observed_answer_includes_the_message_still_open_when_the_turn_returns():
+    tr = gw._RespTranslator.__new__(gw._RespTranslator)
+    tr.output = [{"type": "reasoning", "summary": [{"type": "summary_text", "text": "thinking"}]},
+                 {"type": "message", "content": [{"type": "output_text", "text": "First part."}]}]
+    tr.cur = {"kind": "message", "id": "m", "oi": 2, "text": "Last part."}
+    assert gw._translator_answer(tr) == "First part.\nLast part."
+    tr.cur = {"kind": "reasoning", "id": "r", "oi": 3, "text": "not an answer"}
+    assert gw._translator_answer(tr) == "First part."
