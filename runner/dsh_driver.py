@@ -18,6 +18,7 @@ credential never enters the dsh process env, its session log, or anything it cou
 """
 from __future__ import annotations
 
+import http.client
 import http.server
 import json
 import re
@@ -25,9 +26,24 @@ import os
 import pathlib
 import sys
 import threading
+import time
 import urllib.request
 
 UPSTREAM_BASE = ""   # set in main() from HR_DSH_BASE_URL, then scrubbed from the env
+
+
+def _upstream_wait() -> float:
+    """How long this relay waits on the provider: for the answer to begin, and in a stream for the
+    next EVENT. The runner's own figure (HR_RELAY_UPSTREAM_TIMEOUT_S, handed over by _build_dsh),
+    600 s when it is absent or not a positive number."""
+    try:
+        v = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S") or 600)
+    except ValueError:
+        return 600.0
+    return v if v > 0 else 600.0
+
+
+UPSTREAM_WAIT_S = _upstream_wait()
 UPSTREAM_KEY = ""
 
 
@@ -302,7 +318,7 @@ class _Relay(http.server.BaseHTTPRequestHandler):
             req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
                                          data=body, method="POST", headers=headers)
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
+                resp = urllib.request.urlopen(req, timeout=UPSTREAM_WAIT_S)
                 break
             except urllib.error.HTTPError as e:
                 data = e.read()
@@ -345,19 +361,50 @@ class _Relay(http.server.BaseHTTPRequestHandler):
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             buf = b""
+            # The same two rules as the runner's relay (server.py, _forward), for the same reason.
+            # read1 forwards what has arrived: `read(4096)` waits for 4096 bytes or the end of the
+            # stream, so a short event sat here until the block filled. And an EVENT is the measure
+            # of a live provider, not bytes: an aggregator trickles comment lines while its own
+            # upstream says nothing, which keeps the socket from ever timing out, and the turn hung
+            # until its cap with nothing delivered.
+            last_event = time.monotonic()
+            stopped = ""
             while True:
-                chunk = resp.read(4096)
+                try:
+                    chunk = resp.read1(65536)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    stopped = f"{type(e).__name__}: {e}"[:300]
+                    break
                 if not chunk:
                     break
                 buf += chunk
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
+                    if line.strip() and not line.lstrip().startswith(b":"):
+                        last_event = time.monotonic()
                     if google:
                         for cid, sig in _google_signatures_in_line(line.strip()):
                             _google_sigs[cid] = sig
                     out = (_rewrite_sse_line(line.rstrip(b"\r")) if rewrite else line.rstrip(b"\r")) + b"\n"
                     self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
                 self.wfile.flush()
+                if time.monotonic() - last_event > UPSTREAM_WAIT_S:
+                    stopped = f"no data for {UPSTREAM_WAIT_S:g} s, only keep-alive lines"
+                    break
+            if stopped:
+                # Said in the stream, and the body left unterminated with the connection closed: a
+                # zero chunk here would hand the runtime a complete answer missing its last events.
+                print(f"[dsh relay] upstream stopped mid-answer on {tail}: {stopped}", flush=True)
+                ev = ("data: " + json.dumps({"error": {
+                    "message": f"the provider stopped answering mid-stream: {stopped}",
+                    "type": "upstream_unavailable", "code": "upstream_unavailable"}}) + "\n\n").encode()
+                try:
+                    self.wfile.write(f"{len(ev):x}\r\n".encode() + ev + b"\r\n")
+                    self.wfile.flush()
+                except OSError:
+                    pass
+                self.close_connection = True
+                return
             if buf:
                 out = _rewrite_sse_line(buf) if rewrite else buf
                 self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
