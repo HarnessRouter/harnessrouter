@@ -7,6 +7,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 import memory_plane as mp
 
@@ -185,8 +186,24 @@ async def observe(mid: str, request: Request) -> dict:
     eps = (await _json(request)).get("episodes")
     if not isinstance(eps, list) or not eps or not all(isinstance(e, dict) and e.get("content") for e in eps):
         raise _uhp_error(422, "memory_invalid", "`episodes` is a non-empty list, each with content.", "episodes")
-    made = await mp.provider_of(m).observe(mid, eps, mp.writer_of(member))
-    return {"object": "list", "data": await _records_out(org, mid, made, pr)}
+    made = await (await mp.provider_of(m)).observe(mid, eps, mp.writer_of(member))
+    body = {"object": "list", "data": await _records_out(org, mid, made.get("records") or [], pr)}
+    if made.get("job"):
+        # the provider derives after it answers: what it wrote is read from the job once it settles
+        return JSONResponse({**body, "job": {"object": "memory.job", **made["job"]}}, status_code=202)
+    return body
+
+
+@router.get("/v1/memories/{mid}/jobs/{job_id}")
+@guarded
+async def job(mid: str, job_id: str, request: Request) -> dict:
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "read")
+    j = await (await mp.provider_of(m)).job(mid, job_id)
+    if not j:
+        raise _uhp_error(404, "memory_not_found", "No such job on this memory.", "job_id")
+    return {"object": "memory.job", "id": j["id"], "status": j["status"], "error": j.get("error") or "",
+            "data": await _records_out(org, mid, j.get("records") or [], pr)}
 
 
 @router.post("/v1/memories/{mid}/records")
@@ -194,7 +211,7 @@ async def observe(mid: str, request: Request) -> dict:
 async def remember(mid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
-    rec = await mp.provider_of(m).remember(mid, mp._record_in(await _json(request)), mp.writer_of(member))
+    rec = await (await mp.provider_of(m)).remember(mid, mp._record_in(await _json(request)), mp.writer_of(member))
     return await mp.present(org, mid, rec, pr)
 
 
@@ -207,7 +224,7 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
     patch = {k: b[k] for k in ("content", "attributes", "references", "time") if k in b}
     if not patch:
         raise _uhp_error(422, "memory_invalid", "A revision changes content, attributes, references or time.")
-    return await mp.present(org, mid, await mp.provider_of(m).revise(mid, rid, patch, mp.writer_of(member)), pr)
+    return await mp.present(org, mid, await (await mp.provider_of(m)).revise(mid, rid, patch, mp.writer_of(member)), pr)
 
 
 @router.delete("/v1/memories/{mid}/records/{rid}")
@@ -215,7 +232,7 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
 async def forget(mid: str, rid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
-    return await mp.present(org, mid, await mp.provider_of(m).forget(mid, rid, mp.writer_of(member)), pr)
+    return await mp.present(org, mid, await (await mp.provider_of(m)).forget(mid, rid, mp.writer_of(member)), pr)
 
 
 @router.post("/v1/memories/{mid}/erase")
@@ -226,7 +243,7 @@ async def erase(mid: str, request: Request) -> dict:
     ids = (await _json(request)).get("record_ids")
     if not isinstance(ids, list) or not ids:
         raise _uhp_error(422, "memory_invalid", "`record_ids` names what to erase.", "record_ids")
-    res = await mp.provider_of(m).erase(mid, [str(i) for i in ids])
+    res = await (await mp.provider_of(m)).erase(mid, [str(i) for i in ids])
     return {"object": "memory.erasure", "erased": res.get("erased") or [], "unreachable": res.get("unreachable") or []}
 
 
@@ -241,7 +258,7 @@ async def recall(mid: str, request: Request) -> dict:
         raise _uhp_error(422, "memory_invalid", "Give a query, text or filters.")
     req = {k: b.get(k) for k in ("query", "text", "filters", "types", "as_of", "include", "depth")}
     req["limit"] = max(1, min(int(b.get("limit") or 8), 100))
-    prov = mp.provider_of(m)
+    prov = await mp.provider_of(m)
     signals = (prov.capabilities().get("recall") or {}).get("signals") or []
     asked = [s for s in ("query", "text", "filters") if req.get(s)]
     res = await prov.recall(mid, req)
@@ -257,7 +274,7 @@ async def list_records(mid: str, request: Request, type: str = "", as_of: str = 
                        limit: int = 50, cursor: str = "") -> dict:
     org, _, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "read")
-    res = await mp.provider_of(m).list(mid, {"types": [type] if type else None, "as_of": as_of or None,
+    res = await (await mp.provider_of(m)).list(mid, {"types": [type] if type else None, "as_of": as_of or None,
                                              "include": include, "limit": max(1, min(limit, 200)), "cursor": cursor})
     return {"object": "list", "data": await _records_out(org, mid, res.get("records") or [], pr),
             "next": res.get("next"), **await mp.neighbours(org, m, pr)}
@@ -268,7 +285,7 @@ async def list_records(mid: str, request: Request, type: str = "", as_of: str = 
 async def get_record(mid: str, rid: str, request: Request, as_of: str = "") -> dict:
     org, _, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "read")
-    rec = await mp.provider_of(m).get(mid, rid, as_of or None)
+    rec = await (await mp.provider_of(m)).get(mid, rid, as_of or None)
     if not rec:
         raise _uhp_error(404, "memory_record_not_found", "No such record in this memory.", "record_id")
     return await mp.present(org, mid, rec, pr)
@@ -279,7 +296,7 @@ async def get_record(mid: str, rid: str, request: Request, as_of: str = "") -> d
 async def history(mid: str, rid: str, request: Request) -> dict:
     org, _, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "read")
-    return {"object": "list", "data": await _records_out(org, mid, await mp.provider_of(m).history(mid, rid), pr)}
+    return {"object": "list", "data": await _records_out(org, mid, await (await mp.provider_of(m)).history(mid, rid), pr)}
 
 
 # ── queries ───────────────────────────────────────────────────────────────────────────────────
@@ -288,7 +305,7 @@ async def history(mid: str, rid: str, request: Request) -> dict:
 async def list_queries(mid: str, request: Request) -> dict:
     org, _, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "read")
-    return {"object": "list", "data": await mp.provider_of(m).queries(mid)}
+    return {"object": "list", "data": await (await mp.provider_of(m)).queries(mid)}
 
 
 @router.put("/v1/memories/{mid}/queries/{name}")
@@ -302,7 +319,7 @@ async def define_query(mid: str, name: str, request: Request) -> dict:
     q = {"name": name, "description": str(b.get("description") or ""), "params": b.get("params") or {"type": "object"},
          "requires": b.get("requires", "read"), "language": str(b.get("language") or ""), "body": str(b["body"]),
          "defined_by": mp.writer_of(member)}
-    return await mp.provider_of(m).define_query(mid, q)
+    return await (await mp.provider_of(m)).define_query(mid, q)
 
 
 @router.post("/v1/memories/{mid}/queries/{name}")
@@ -310,7 +327,7 @@ async def define_query(mid: str, name: str, request: Request) -> dict:
 async def run_query(mid: str, name: str, request: Request) -> dict:
     org, _, _, pr = await _who(request)
     m, privs = await mp.need(org, mid, pr, "read")
-    prov = mp.provider_of(m)
+    prov = await mp.provider_of(m)
     q = next((x for x in await prov.queries(mid) if x["name"] == name), None)
     if not q:
         raise _uhp_error(404, "memory_not_found", "No such query on this memory.", "name")
@@ -325,7 +342,7 @@ async def free_query(mid: str, request: Request) -> dict:
     org, _, _, pr = await _who(request)
     m, privs = await mp.need(org, mid, pr, "read")
     b = await _json(request)
-    prov = mp.provider_of(m)
+    prov = await mp.provider_of(m)
     free = (prov.capabilities().get("queries") or {}).get("free") or {}
     if not free:
         raise _uhp_error(422, "memory_unsupported", "This memory's provider does not run a query written by the caller.")
@@ -346,7 +363,7 @@ async def free_query(mid: str, request: Request) -> dict:
 async def operate(mid: str, rid: str, name: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, privs = await mp.need(org, mid, pr, "read")
-    prov = mp.provider_of(m)
+    prov = await mp.provider_of(m)
     needs = await prov.operation_requires(mid, rid, name)
     if needs not in privs:
         raise _uhp_error(403, "memory_forbidden", f"This operation needs `{needs}` on the memory.")
@@ -392,7 +409,7 @@ async def consolidate(mid: str, request: Request) -> dict:
         b = await request.json()
     except ValueError:
         b = {}
-    return await mp.provider_of(m).consolidate(mid, (b or {}).get("budget"), "request")
+    return await (await mp.provider_of(m)).consolidate(mid, (b or {}).get("budget"), "request")
 
 
 @router.get("/v1/memories/{mid}/consolidations")
@@ -400,7 +417,7 @@ async def consolidate(mid: str, request: Request) -> dict:
 async def consolidations(mid: str, request: Request) -> dict:
     org, _, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "read")
-    return {"object": "list", "data": await mp.provider_of(m).consolidations(mid)}
+    return {"object": "list", "data": await (await mp.provider_of(m)).consolidations(mid)}
 
 
 @router.get("/v1/memories/{mid}/consolidations/{run}")
@@ -408,7 +425,7 @@ async def consolidations(mid: str, request: Request) -> dict:
 async def consolidation(mid: str, run: str, request: Request) -> dict:
     org, _, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "read")
-    r = await mp.provider_of(m).consolidation(mid, run)
+    r = await (await mp.provider_of(m)).consolidation(mid, run)
     if not r:
         raise _uhp_error(404, "memory_not_found", "No such consolidation run.", "run")
     return r
@@ -421,7 +438,7 @@ async def consolidation_changes(mid: str, run: str, request: Request) -> dict:
     m, _ = await mp.need(org, mid, pr, "read")
     seen: dict = {}
     return {"object": "list", "data": [{"change": c["change"], "record": await mp.present(org, mid, c["record"], pr, seen)}
-                                       for c in await mp.provider_of(m).consolidation_changes(mid, run)]}
+                                       for c in await (await mp.provider_of(m)).consolidation_changes(mid, run)]}
 
 
 @router.post("/v1/memories/{mid}/consolidations/{run}/revert")
@@ -429,4 +446,4 @@ async def consolidation_changes(mid: str, run: str, request: Request) -> dict:
 async def revert(mid: str, run: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "delete")
-    return await mp.provider_of(m).revert_consolidation(mid, run, mp.writer_of(member))
+    return await (await mp.provider_of(m)).revert_consolidation(mid, run, mp.writer_of(member))

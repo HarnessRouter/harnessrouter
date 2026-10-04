@@ -117,7 +117,7 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
 
         if name == "memory_list":
             m, privs = await mp.need(org, mid, pr, "read")
-            prov = mp.provider_of(m)
+            prov = await mp.provider_of(m)
             return _text({"memory": mp._brief(await mp.out(org, m, pr, privs)), **await mp.neighbours(org, m, pr),
                           "queries": [{k: q.get(k) for k in ("name", "description", "params")} for q in await prov.queries(mid)]}), False
         if name == "memory_recall":
@@ -126,7 +126,7 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
                 return "Give a query, text or filters.", True
             req = {k: args.get(k) for k in ("query", "text", "filters", "types")}
             req["limit"] = max(1, min(int(args.get("limit") or 8), 50))
-            res = await mp.provider_of(m).recall(mid, req)
+            res = await (await mp.provider_of(m)).recall(mid, req)
             seen: dict = {}
             return _text({"results": [{"record": _slim(await mp.present(org, mid, x["record"], pr, seen)),
                                        "score": x.get("score"), "why": x.get("why")} for x in res.get("results") or []],
@@ -134,7 +134,7 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
                           "abstain": bool(res.get("abstain"))}), False
         if name == "memory_get":
             m, _ = await mp.need(org, mid, pr, "read")
-            prov = mp.provider_of(m)
+            prov = await mp.provider_of(m)
             rec = await prov.get(mid, str(args.get("record") or ""))
             if not rec:
                 return "No such record in this memory.", True
@@ -144,7 +144,7 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
             return _text(out), False
         if name == "memory_remember":
             m, _ = await mp.need(org, mid, pr, "write")
-            rec = await mp.provider_of(m).remember(mid, mp._record_in({**args, "type": args.get("type") or "fact"}), writer)
+            rec = await (await mp.provider_of(m)).remember(mid, mp._record_in({**args, "type": args.get("type") or "fact"}), writer)
             return _text({"remembered": _slim(await mp.present(org, mid, rec, pr))}), False
         if name == "memory_revise":
             m, _ = await mp.need(org, mid, pr, "write")
@@ -152,15 +152,15 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
             if not patch or not str(args.get("reason") or "").strip():
                 return "Give the new content or attributes, and the reason.", True
             patch.setdefault("attributes", {})["revision_reason"] = str(args["reason"])[:500]
-            rec = await mp.provider_of(m).revise(mid, str(args.get("record") or ""), patch, writer)
+            rec = await (await mp.provider_of(m)).revise(mid, str(args.get("record") or ""), patch, writer)
             return _text({"revised": _slim(await mp.present(org, mid, rec, pr))}), False
         if name == "memory_forget":
             m, _ = await mp.need(org, mid, pr, "write")
-            rec = await mp.provider_of(m).forget(mid, str(args.get("record") or ""), writer)
+            rec = await (await mp.provider_of(m)).forget(mid, str(args.get("record") or ""), writer)
             return _text({"forgotten": {"id": rec["id"], "status": rec["status"]}}), False
         if name == "memory_run_query":
             m, privs = await mp.need(org, mid, pr, "read")
-            prov = mp.provider_of(m)
+            prov = await mp.provider_of(m)
             q = next((x for x in await prov.queries(mid) if x["name"] == args.get("name")), None)
             if not q:
                 return "No such query on this memory.", True
@@ -170,14 +170,14 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
             return _text({"results": [_slim(await mp.present(org, mid, x["record"], pr)) for x in res.get("results") or []]}), False
         if name == "memory_query":
             m, _ = await mp.need(org, mid, pr, "read")
-            res = await mp.provider_of(m).free_query(mid, str(args.get("language") or (_free_languages() or [""])[0]),
+            res = await (await mp.provider_of(m)).free_query(mid, str(args.get("language") or (_free_languages() or [""])[0]),
                                                      str(args.get("statement") or ""), args.get("params") or {}, False)
             if "results" in res:
                 return _text({"results": [_slim(await mp.present(org, mid, x["record"], pr)) for x in res["results"]]}), False
             return _text({"rows": res.get("rows") or []}), False
         if name == "memory_operate":
             m, privs = await mp.need(org, mid, pr, "read")
-            prov = mp.provider_of(m)
+            prov = await mp.provider_of(m)
             needs = await prov.operation_requires(mid, str(args.get("record") or ""), str(args.get("operation") or ""))
             if needs not in privs or (needs == "write" and not _can_write(entries)):
                 return f"That operation needs `{needs}` on the memory.", True
@@ -204,7 +204,7 @@ async def doc_section(org: str, hid: str, entries: list[dict]) -> tuple[str, dic
         head += ", where you write by default)" if e.get("default") else ")"
         lines.append(head + (f": {o['description']}" if o["description"] else ""))
         try:
-            p = await mp.provider_of(m).prime(str(m["id"]))
+            p = await (await mp.provider_of(m)).prime(str(m["id"]))
         except mp.MemoryError:
             p = {"text": "", "tokens": 0}
         if p.get("text"):

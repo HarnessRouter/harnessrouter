@@ -54,6 +54,7 @@ import sql_plane             # the read-only SQL data plane (gate, row cap, intr
 import memory_routes        # the Harness Memories sub-protocol (tree, access, provider seam)
 import memory_plane
 import memory_tools
+import memory_mem0
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 
 POOL_ENDPOINT = os.environ.get("POOL_MGMT_ENDPOINT", "").rstrip("/")
@@ -14303,6 +14304,10 @@ _PLUG_FORMS: dict[str, dict] = {
     # "delegated" (each person signs in with Microsoft once; the record then holds one refresh
     # token per person under rt-<member slug>) or "application" (client credentials).
     "microsoft365": {"secrets": ["client_secret"], "config": ["tenant_id", "client_id", "mode"], "source": "local"},
+    # A memory provider: the workspace's own account at a memory service, connected the way every
+    # plug is (its key in the secret store, never on the record). It offers an agent no tools of
+    # its own: memories kept there are attached to a harness through /v1/harnesses/{id}/memories.
+    "mem0": {"secrets": ["api_key"], "config": [], "source": "local", "kind": "memory"},
 }
 
 
@@ -14383,13 +14388,14 @@ def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, sta
 
 
 @app.get("/v1/plugs")
-async def list_plugs(request: Request) -> dict:
+async def list_plugs(request: Request, kind: str = "") -> dict:
     """The plugin catalog for the caller's workspace: every type this instance serves, with its
-    state here (connected, disabled, needs_auth, missing)."""
+    state here (connected, disabled, needs_auth, missing). `kind=memory` lists the memory
+    providers instead, which are connected here and attached as memories, not as tools."""
     org, _ = await _pub_org_member(request)
     workspace = _plug_workspace(request)
     out = []
-    for t in _PLUG_FORMS:
+    for t in [t for t, f in _PLUG_FORMS.items() if str(f.get("kind") or "") == kind]:
         status, rec = await _plug_lookup(org, workspace, t)
         out.append(_plug_public(org, workspace, t, rec, status))
     return {"workspace": workspace, "plugs": out}
@@ -14439,6 +14445,12 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
     attention = ""
     if plug_type == plugs_plane.MICROSOFT365 and body.enabled and not missing:
         status, attention, config = await _m365_connect(org, config, refs, body.secrets or {})
+    if form.get("kind") == "memory" and body.enabled and not missing and (body.secrets or {}).get("api_key"):
+        # The credential is tried at the provider before the record says connected: a key that is
+        # refused there would otherwise be found out by the first agent that tried to remember.
+        attention = await _MEMORY_CHECKS[plug_type](str(body.secrets["api_key"]).strip())
+        if attention:
+            status = "needs_auth"
     version = int((prev or {}).get("version") or 0) + 1
     now = int(time.time() * 1000)
     await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plug_type),
@@ -16242,6 +16254,20 @@ async def _skill_bundle_files(sk: dict) -> list:
 # The tree, the grants and the provider seam are memory_plane's; the routes are memory_routes'.
 # Bound here because the routes need this process's principal resolver and error envelope.
 memory_routes.install(app, _principal, uhp_error, BACKING.graph)
+memory_plane.PROVIDERS["mem0"] = memory_mem0.Mem0()
+_MEMORY_CHECKS = {"mem0": memory_mem0.check}
+
+
+async def _memory_credentials(org: str, workspace: str, provider: str) -> dict | None:
+    """A memory provider's credential for one workspace, from the plug registry: the workspace's
+    own account, resolved at the moment of the call and never handed to an agent."""
+    status, rec = await _plug_lookup(org, workspace, provider)
+    if status != "connected" or not rec:
+        return None
+    return await _plug_fields(rec)
+
+
+memory_plane.CREDENTIALS = _memory_credentials
 
 # A harness reaches its memories through one more server this gateway hosts, like its plugs: the
 # entry's record names the memories and how the agent was attached to each; the agent acts as the
@@ -16389,7 +16415,7 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
         if not mid or not (str(rec.get("user_text") or "").strip() or answer.strip()):
             return
         m, _ = await memory_plane.need(org, mid, [f"harness:{hid}"], "write")
-        await memory_plane.provider_of(m).observe(mid, [{
+        await (await memory_plane.provider_of(m)).observe(mid, [{
             "content": {"user": str(rec.get("user_text") or ""), "assistant": answer},
             "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
             memory_plane.writer_of("", harness=hid))
