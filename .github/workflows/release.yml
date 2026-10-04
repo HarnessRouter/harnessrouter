@@ -273,6 +273,25 @@ jobs:
           if gh release view "v$V" --repo "$REPO" >/dev/null 2>&1; then
             echo "release v$V already exists"; exit 0
           fi
+          # WHICH RELEASE THE REPOSITORY CALLS "LATEST" is decided here, not left to GitHub, which
+          # gives the badge to the newest Release that is not marked a pre-release. A candidate
+          # (0.30.0-rc.3, built from a feature branch to be measured on a test instance) is not
+          # marked anything unless this step marks it, so twice in one day the repository's Latest
+          # release, its /releases/latest link and its sidebar pointed at an unreleased branch's
+          # candidate: 0.29.0-rc.5 on 2026-10-03, then 0.30.0-rc.3 hours after 0.29.0 itself was
+          # published. A version with a pre-release part (anything after a hyphen, the semver rule)
+          # is a pre-release and never Latest. A numbered version is Latest exactly when this run
+          # also moves the image's :latest tag: always on a tag push, and on a dispatch unless
+          # `latest` was unticked, which is how a fix for an older line is published without
+          # displacing the newest one.
+          latest=true
+          if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "${{ inputs.latest }}" != true ]; then
+            latest=false
+          fi
+          case "$V" in
+            *-*) flags=(--prerelease --latest=false) ;;
+            *)   flags=(--latest="$latest") ;;
+          esac
           # --generate-notes works out the previous tag itself; passing --notes-start-tag from a
           # `gh release list` subshell added a second thing that needed the repo and could fail.
-          gh release create "v$V" --repo "$REPO" --title "v$V" --generate-notes --target "$GITHUB_SHA"
+          gh release create "v$V" --repo "$REPO" --title "v$V" --generate-notes --target "$GITHUB_SHA" "${flags[@]}"
