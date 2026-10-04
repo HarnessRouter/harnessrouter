@@ -7807,9 +7807,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001
             pass
     if status == "completed" and harness_id and "memories" in rec:
-        _answer = "".join(str(c.get("text") or "") for o in translator._response_obj("completed").get("output") or []
-                          if isinstance(o, dict) for c in (o.get("content") or []) if isinstance(c, dict))
-        await _memories_observe(org, harness_id, sid, hv, rec, _answer)
+        await _memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator))
     return status, produced, rec
 
 
@@ -16130,6 +16128,18 @@ async def memories_mcp(request: Request):
     return _jsonrpc_result(rid, _tool_text(text, is_error))
 
 
+def _translator_answer(tr) -> str:
+    """What the agent answered this turn: every closed message item, and the one still open. The
+    turn's last message is closed by `complete()`, which runs after the turn function returns, so
+    reading the closed items alone gave an observed turn with a question and no answer (hr-test,
+    0.30.0-rc.2: mem0's event log showed each turn's user message and nothing else)."""
+    parts = [str(c.get("text") or "") for o in tr.output if isinstance(o, dict) and o.get("type") == "message"
+             for c in (o.get("content") or []) if isinstance(c, dict)]
+    if tr.cur and tr.cur.get("kind") == "message":
+        parts.append(str(tr.cur.get("text") or ""))
+    return "\n".join(p for p in parts if p.strip())
+
+
 async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str) -> None:
     """After a completed turn: what was asked and what was answered, sent as one episode to the
     memory the harness writes by default. No model runs here; what the provider derives from it,
@@ -16145,6 +16155,7 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             "content": {"user": str(rec.get("user_text") or ""), "assistant": answer},
             "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
             memory_plane.writer_of("", harness=hid))
+        print(f"[memories] {sid}: the turn was observed into {mid}", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[memories] observe after a turn of {sid} was not taken: {type(e).__name__}: {e}"[:300], flush=True)
 
