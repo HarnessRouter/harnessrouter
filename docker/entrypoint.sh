@@ -204,7 +204,7 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -218,16 +218,20 @@ backend_bin() {
     pi)     echo "$TOOLS/bin/pi" ;;
     dsh)    echo "$TOOLS/dsh-venv/bin/dsh-ready" ;;
     opencode) echo "$TOOLS/bin/opencode" ;;
+    kilo)   echo "$TOOLS/kilo/kilo" ;;
     qwen)   echo "$TOOLS/bin/qwen" ;;
     gemini) echo "$TOOLS/bin/gemini" ;;
     cline)  echo "$TOOLS/bin/cline" ;;
     omp)    echo "$TOOLS/bin/omp" ;;
     goose)  echo "$TOOLS/bin/goose" ;;
     kimi)   echo "$TOOLS/bin/kimi" ;;
+    minimax) echo "$TOOLS/bin/mcode" ;;
+    grok)   echo "$TOOLS/bin/grok" ;;
     aider)  echo "$TOOLS/aider-venv/bin/aider" ;;
     openhands) echo "$TOOLS/openhands-venv/bin/python" ;;
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
     cheetahclaws) echo "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready" ;;
+    agentzero) echo "$TOOLS/agentzero-venv/bin/agentzero-ready" ;;
   esac
 }
 
@@ -400,6 +404,57 @@ if not hasattr(s, "_autosave_sid"):
 # from KIMI_MODEL_* alone, -r refusing an unknown session, agent files matching tool NAMES,
 # $KIMI_CODE_HOME/mcp.json, the exit-1 failure line) was measured on THIS version.
 KIMI_PIN="${HR_KIMI_VERSION:-2.0.0}"; KIMI_PIN="${KIMI_PIN#v}"
+# MiniMax Code, MIT (MiniMax-AI/minimax-code; its sandbox-runtime part Apache-2.0), pinned to 0.5.4.
+#
+# The GitHub release archive, an npm package tarball (@minimax-ai/code, bin `mcode`) built from the
+# tagged public source, installed with npm the way upstream's release notes say. Not the vendor's
+# install script (it installs a launcher and a Node runtime of its own and follows the npm channel)
+# and not the registry name: an asset under a tag can be pinned by digest. One archive for every
+# platform, so one digest. Upstream publishes it three times (a .sha256 beside the asset, the release
+# notes, GitHub's asset digest) and all three agree with the value below, which was computed from the
+# downloaded archive (2026-09-26). It is pinned HERE for kimi's reason: a checksum served from the
+# artifact's own origin adds nothing against a compromised origin.
+#
+# The digest covers the package. Its three dependencies (better-sqlite3 12.11.1, @vscode/ripgrep
+# 1.18.0, @larksuiteoapi/node-sdk 1.73.3) are exact versions resolved from npm at install time; their
+# own dependencies float within npm ranges, as for every npm-installed backend here. About 105 MB
+# installed, so it is in the default set. Requires Node >= 22.19 (the image's nodesource 22.x).
+#
+# Everything runner/server.py's minimax code relies on (the exec stream-json schema, the
+# custom_provider selector, --session refusing an unknown id, the sqlite session store, the config
+# keys agents.default / skills.external, the two instruction files, the rm shim's trash) was
+# measured on THIS version.
+MINIMAX_PIN="${HR_MINIMAX_VERSION:-0.5.4}"; MINIMAX_PIN="${MINIMAX_PIN#v}"
+# Kilo CLI (Kilo-Org/kilocode, MIT), an opencode fork, pinned to 7.8.1. The release archive from
+# GitHub, not npm's launcher package and not the vendor's install script: the archive is one
+# directory (the `kilo` binary beside bwrap, the sandbox helpers and the tree-sitter grammars it
+# loads from its own directory), 65 MB down and 228 MB unpacked — under the 300 MB line, so it is in
+# the default HR_BACKENDS. Upstream publishes kilo-cli-SHA256SUMS beside the assets; the digests are
+# pinned HERE for kimi's reason (a checksum from the same origin adds nothing against that origin).
+# The values below were read from the 7.8.1 assets and agree with both upstream's SHA256SUMS and
+# GitHub's own asset digests. Everything runner/server.py's kilo code relies on (the run --format
+# json events, KILO_CONFIG, enabled_providers, the env switches, the session table, the edit
+# permission key) was measured on THIS version.
+KILO_PIN="${HR_KILO_VERSION:-7.8.1}"; KILO_PIN="${KILO_PIN#v}"
+# Grok Build, Apache-2.0 (xai-org/grok-build), pinned to 1.0.41.
+#
+# The GitHub repository is source only — no tags, no releases — so the artifact is the one xAI's own
+# installer (https://x.ai/cli/install.sh) downloads: a single static binary per platform at
+# https://x.ai/cli/grok-<version>-linux-<arch>, a Cloudflare front for the public bucket
+# storage.googleapis.com/grok-build-public-artifacts/cli, which is the fallback here as it is there.
+# NOT the install script: it resolves "latest" from a channel pointer, installs a self-updating
+# launcher layout under ~/.grok, and verifies nothing but that the binary runs.
+#
+# UPSTREAM PUBLISHES NO CHECKSUMS (no .sha256 beside the assets; the installer checks none), so the
+# digests below were computed here from the 1.0.41 assets (2026-09-26) — the goose contract: a
+# moved pointer or a re-uploaded asset fails closed. The bucket's own md5 headers agreed with the
+# downloaded bytes. ~166 MB on x86_64, one file, well under the 300 MB default-set bar.
+#
+# Everything runner/server.py's grok code relies on (the stream-json shape, errors[] on a failed
+# result, the side calls and the switches that stop them, -r's remote restore and the registry
+# switch that stops it, the shell's internal tool id) was measured on THIS version. The binary
+# updates itself only through its managed install; the runner also sets GROK_DISABLE_AUTOUPDATER=1.
+GROK_PIN="${HR_GROK_VERSION:-1.0.41}"; GROK_PIN="${GROK_PIN#v}"
 # OpenHands V1, MIT (OpenHands/agent-sdk), pinned to 1.49.2 — the AGENT SERVER, not the CLI.
 #
 # PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project is no longer
@@ -483,6 +538,105 @@ if have != sys.argv[1]:
 ' "$SYSTEMONE_PIN" || { rm -rf "$TOOLS/systemone-venv"; return 1; }
 }
 
+# Agent Zero, MIT (agent0ai/agent-zero), pinned to v2.13 — a FRAMEWORK, not a CLI.
+#
+# Agent Zero ships as a Docker image with a web UI; it has no CLI and no headless mode, and upstream
+# publishes no package on PyPI and no release assets (v2.13's release has none). So the install is
+# the tagged SOURCE archive, verified against a digest pinned HERE (the goose pattern: upstream
+# publishes no checksums, so they were computed from the v2.13 archive — it is byte-identical
+# whether fetched from github.com/.../archive or codeload, and its tree is identical to the tag's
+# git checkout, e3051fb). runner/agentzero_driver.py imports the framework from that tree and runs
+# one message per turn in process; see its docstring.
+#
+# THE DEPENDENCIES ARE UPSTREAM'S OWN requirements.txt, with its exact pins, MINUS the packages that
+# serve only what this base switches off (the driver's DISABLED_PLUGINS and ALWAYS_BLOCKED): local
+# embeddings and speech (sentence-transformers, kokoro and openai-whisper, which bring torch — GBs),
+# document parsing (unstructured, liteparse, faiss, pdf and OCR tooling), the browser (patchright),
+# search (duckduckgo), the integrations (email, exchange, boto3, docker, tunnels) and Windows' pty.
+# Nothing is added but ipython, which the terminal's python runtime calls by name.
+# models.py imports sentence_transformers at the top; the driver stubs that one module (and the
+# check below does the same), because the only thing that would call it is the memory plugin.
+#
+# Own venv on the data volume like openhands and aider. Measured on Linux arm64 (python:3.12-slim):
+# 83 s, venv 569 MB + source 69 MB — over the 300 MB bar, and in the DEFAULT set all the same, the
+# decision aider and openhands already carry: the console offers every base the gateway's catalogue
+# lists, so a base left out of the default install is a base whose first task fails. An operator who
+# does not want the 638 MB leaves it out of HR_BACKENDS, the switch every backend has.
+AGENTZERO_PIN="${HR_AGENTZERO_VERSION:-2.13}"; AGENTZERO_PIN="${AGENTZERO_PIN#v}"
+AGENTZERO_EXCLUDE='^(kokoro|openai-whisper|sentence-transformers|unstructured|unstructured-client|langchain-unstructured|faiss-cpu|liteparse|newspaper3k|patchright|docker|duckduckgo-search|pyreqwest-impersonate|exchangelib|imapclient|boto3|flaredantic|pypdf|pymupdf|pytesseract|pdf2image|soundfile|pywinpty)([=<>~!; []|$)'
+install_agentzero() {
+  az_sha="ac9e1b319cb75ae52c4309123d893e1925ad83464cf1c0d5ad9e1db0e2f25e9e"
+  if [ "$AGENTZERO_PIN" != "2.13" ]; then
+    # The goose contract: an operator who overrides the version supplies the digest for it, or is
+    # TOLD the archive is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_AGENTZERO_SHA256:-}" ]; then
+      az_sha="$HR_AGENTZERO_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_AGENTZERO_VERSION=$AGENTZERO_PIN overrides the pinned 2.13, and no"
+      echo "[harnessrouter]       HR_AGENTZERO_SHA256 was given — this Agent Zero archive is UNVERIFIED."
+      az_sha=""
+    fi
+  fi
+  az_tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/agent0ai/agent-zero/archive/refs/tags/v${AGENTZERO_PIN}.tar.gz" \
+      -o "$az_tmp/a0.tar.gz" || { rm -rf "$az_tmp"; return 1; }
+  if [ -n "$az_sha" ]; then
+    az_have="$(sha256sum "$az_tmp/a0.tar.gz" | awk '{print $1}')"
+    if [ "$az_sha" != "$az_have" ]; then
+      echo "Agent Zero $AGENTZERO_PIN: archive digest mismatch (want $az_sha, have $az_have)"
+      rm -rf "$az_tmp"; return 1
+    fi
+  fi
+  mkdir "$az_tmp/x" && tar -xzf "$az_tmp/a0.tar.gz" -C "$az_tmp/x" --strip-components=1 \
+    || { rm -rf "$az_tmp"; return 1; }
+  [ -f "$az_tmp/x/agent.py" ] && [ -f "$az_tmp/x/requirements.txt" ] \
+    || { echo "the Agent Zero archive holds no agent.py/requirements.txt"; rm -rf "$az_tmp"; return 1; }
+  grep -vE '^[[:space:]]*(#|$)' "$az_tmp/x/requirements.txt" | sed 's/[[:space:]]*#.*$//' \
+    | grep -viE "$AGENTZERO_EXCLUDE" > "$az_tmp/requirements.harness.txt"
+  echo "ipython==${HR_AGENTZERO_IPYTHON_VERSION:-9.17.1}" >> "$az_tmp/requirements.harness.txt"
+  rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"
+  "${HR_AGENTZERO_BASE_PYTHON:-python3}" -m venv "$TOOLS/agentzero-venv" \
+    || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
+  # The measured tree, not whatever the index resolves today: upstream floors a third of its
+  # requirements and pins no transitive dependency. The constraints describe 2.13 and nothing else,
+  # so an overridden version resolves freely (and says so).
+  az_constraints=()
+  if [ "$AGENTZERO_PIN" = "2.13" ] && [ -f /app/runner/agentzero-constraints.txt ]; then
+    az_constraints=(-c /app/runner/agentzero-constraints.txt)
+  else
+    echo "[harnessrouter]       Agent Zero's dependencies resolve unconstrained (no measured set for $AGENTZERO_PIN)."
+  fi
+  "$TOOLS/agentzero-venv/bin/pip" install -q --no-cache-dir --disable-pip-version-check \
+      -r "$az_tmp/requirements.harness.txt" "${az_constraints[@]}" \
+    || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
+  mv "$az_tmp/x" "$TOOLS/agentzero-src" && rm -rf "$az_tmp"
+  # Turns run as the session's uid, which cannot write here: compile now, or every turn pays for it.
+  "$TOOLS/agentzero-venv/bin/python" -m compileall -q "$TOOLS/agentzero-src" >/dev/null 2>&1 || true
+  chmod -R a+rX "$TOOLS/agentzero-src" "$TOOLS/agentzero-venv"
+  # Prove the framework imports from the tree the way the driver imports it — the core, the
+  # terminal tool the base's work goes through, the MCP client — before declaring the install good.
+  # An excluded package that a kept module still needed fails HERE, not on a live turn.
+  ( cd "$TOOLS/agentzero-src" && "$TOOLS/agentzero-venv/bin/python" -c '
+import sys, types
+st = types.ModuleType("sentence_transformers"); st.SentenceTransformer = object
+sys.modules["sentence_transformers"] = st
+sys.path.insert(0, ".")
+sys.argv = [sys.argv[0], "--dockerized=true"]
+import agent, initialize  # noqa: F401 - the loop and its config
+import helpers.mcp_handler, helpers.persist_chat, helpers.tool_policy  # noqa: F401
+import plugins._code_execution.tools.code_execution_tool  # noqa: F401 - paramiko, the pty
+import plugins._text_editor.tools.text_editor  # noqa: F401
+import IPython  # noqa: F401 - the python runtime
+' ) || { rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"; return 1; }
+  # A check that left state behind in the shared tree (a usr/ from an import) would become every
+  # workspace's; the driver gives each workspace its own usr/.
+  rm -rf "$TOOLS/agentzero-src/usr" "$TOOLS/agentzero-src/tmp"
+  # Written LAST, the aider pattern: the marker is what the boot compares against the pin, so a
+  # half-built install is rebuilt rather than trusted.
+  printf '#!/bin/sh\necho %s\n' "$AGENTZERO_PIN" > "$TOOLS/agentzero-venv/bin/agentzero-ready" \
+    && chmod 755 "$TOOLS/agentzero-venv/bin/agentzero-ready"
+}
+
 install_openhands() {
   oh_py="${HR_OPENHANDS_BASE_PYTHON:-python3}"
   "$oh_py" -m venv "$TOOLS/openhands-venv" || return 1
@@ -551,6 +705,118 @@ install_kimi() {
   mkdir -p "$TOOLS/bin" && install -m 755 "$km_bin" "$TOOLS/bin/kimi" \
     || { rm -rf "$km_tmp"; return 1; }
   rm -rf "$km_tmp"
+}
+
+
+install_minimax() {
+  mm_sha="b83a27e2f8373c755f26a1dc02cf8ba1c1f1a1a9d889d752ff5527fb5af2f1c0"
+  if [ "$MINIMAX_PIN" != "0.5.4" ]; then
+    # kimi's contract: an operator who overrides the version supplies the digest, or is TOLD the
+    # archive is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_MINIMAX_SHA256:-}" ]; then
+      mm_sha="$HR_MINIMAX_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_MINIMAX_VERSION=$MINIMAX_PIN overrides the pinned 0.5.4, and no"
+      echo "[harnessrouter]       HR_MINIMAX_SHA256 was given — this MiniMax Code archive is UNVERIFIED."
+      mm_sha=""
+    fi
+  fi
+  mm_tmp="$(mktemp -d)"
+  mm_tgz="$mm_tmp/minimax-code-${MINIMAX_PIN}.tar.gz"
+  curl -fsSL --proto '=https' \
+    "https://github.com/MiniMax-AI/minimax-code/releases/download/v${MINIMAX_PIN}/minimax-code-${MINIMAX_PIN}.tar.gz" \
+    -o "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
+  if [ -n "$mm_sha" ]; then
+    mm_have="$(sha256sum "$mm_tgz" | awk '{print $1}')"
+    if [ "$mm_sha" != "$mm_have" ]; then
+      echo "minimax $MINIMAX_PIN: archive digest mismatch (want $mm_sha, have $mm_have)"
+      rm -rf "$mm_tmp"; return 1
+    fi
+  fi
+  # Upstream's install form: optional deps included, install scripts allowed for better-sqlite3 (its
+  # prebuilt native binding; the CLI's session store is sqlite). An npm that predates allow-scripts
+  # warns about the flag and runs scripts anyway.
+  npm install -g --prefix "$TOOLS" --no-audit --no-fund --include=optional \
+    --allow-scripts=better-sqlite3 "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
+  rm -rf "$mm_tmp"
+}
+
+install_kilo() {
+  case "$(uname -m)" in
+    x86_64)        kl_arch="x64";   kl_sha="6d48503b000d3d904d15950b63e254653c450800647344ac0f3de4e8a7f98835" ;;
+    aarch64|arm64) kl_arch="arm64"; kl_sha="516f81a81d3605cecae61dddf4da548da403b9f8993a06bb799d12b6fc6e7ac4" ;;
+    *) echo "unsupported architecture $(uname -m) for kilo"; return 1 ;;
+  esac
+  if [ "$KILO_PIN" != "7.8.1" ]; then
+    # kimi's contract: an operator who overrides the version supplies the digest, or is TOLD the
+    # archive is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_KILO_SHA256:-}" ]; then
+      kl_sha="$HR_KILO_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_KILO_VERSION=$KILO_PIN overrides the pinned 7.8.1, and no"
+      echo "[harnessrouter]       HR_KILO_SHA256 was given — this kilo archive is UNVERIFIED."
+      kl_sha=""
+    fi
+  fi
+  kl_url="https://github.com/Kilo-Org/kilocode/releases/download/v${KILO_PIN}/kilo-linux-${kl_arch}.tar.gz"
+  kl_tmp="$(mktemp -d)"
+  curl -fsSL "$kl_url" -o "$kl_tmp/kilo.tar.gz" || { rm -rf "$kl_tmp"; return 1; }
+  if [ -n "$kl_sha" ]; then
+    kl_have="$(sha256sum "$kl_tmp/kilo.tar.gz" | awk '{print $1}')"
+    if [ "$kl_sha" != "$kl_have" ]; then
+      echo "kilo $KILO_PIN: archive digest mismatch for $kl_arch (want $kl_sha, have $kl_have)"
+      rm -rf "$kl_tmp"; return 1
+    fi
+  fi
+  # Unpacked BESIDE its destination, on the tools volume, so the swap below is a rename and not a
+  # 228 MB copy across filesystems that a full disk or a kill could leave half done with the old
+  # install already gone. Root's tar keeps the archive's owners and modes; a session uid must be
+  # able to read the helpers, so neither is trusted.
+  kl_stage="$(mktemp -d -p "$TOOLS" .kilo-stage.XXXXXX)" || { rm -rf "$kl_tmp"; return 1; }
+  tar -xzf "$kl_tmp/kilo.tar.gz" --no-same-owner -C "$kl_stage" || { rm -rf "$kl_tmp" "$kl_stage"; return 1; }
+  rm -rf "$kl_tmp"; kl_tmp="$kl_stage"
+  [ -f "$kl_stage/kilo" ] || { echo "release archive contained no kilo binary"; rm -rf "$kl_stage"; return 1; }
+  chmod -R a+rX "$kl_stage" && chmod 755 "$kl_stage" "$kl_stage/kilo" || { rm -rf "$kl_stage"; return 1; }
+  # The whole directory, replaced as a unit: the binary finds its helpers beside itself.
+  rm -rf "$TOOLS/kilo" && mv "$kl_stage" "$TOOLS/kilo" || { rm -rf "$kl_stage"; return 1; }
+  # On PATH as `kilo` through a wrapper rather than a symlink, so the binary's own path (and with it
+  # the helpers beside it) is the real directory whatever the runtime makes of a link.
+  mkdir -p "$TOOLS/bin" && printf '#!/bin/sh\nexec "%s/kilo/kilo" "$@"\n' "$TOOLS" > "$TOOLS/bin/kilo" \
+    && chmod 755 "$TOOLS/bin/kilo" || { rm -rf "$kl_tmp"; return 1; }
+  rm -rf "$kl_tmp"
+}
+
+install_grok() {
+  case "$(uname -m)" in
+    x86_64)        gk_arch="x86_64";  gk_sha="9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407" ;;
+    aarch64|arm64) gk_arch="aarch64"; gk_sha="7c0b8c973af6a78e2037f19ed93033471b8c5e722f9ff04b86b092e066e60d74" ;;
+    *) echo "unsupported architecture $(uname -m) for grok"; return 1 ;;
+  esac
+  if [ "$GROK_PIN" != "1.0.41" ]; then
+    # The goose/kimi contract: an override brings the digest for the version it chose, or is TOLD
+    # the binary is unverified. ${VAR:-} because this script runs under `set -euo pipefail`.
+    if [ -n "${HR_GROK_SHA256:-}" ]; then
+      gk_sha="$HR_GROK_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_GROK_VERSION=$GROK_PIN overrides the pinned 1.0.41, and no"
+      echo "[harnessrouter]       HR_GROK_SHA256 was given — this grok binary is UNVERIFIED."
+      gk_sha=""
+    fi
+  fi
+  gk_tmp="$(mktemp -d)"
+  curl -fsSL "https://x.ai/cli/grok-${GROK_PIN}-linux-${gk_arch}" -o "$gk_tmp/grok" \
+    || curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_PIN}-linux-${gk_arch}" -o "$gk_tmp/grok" \
+    || { rm -rf "$gk_tmp"; return 1; }
+  if [ -n "$gk_sha" ]; then
+    gk_have="$(sha256sum "$gk_tmp/grok" | awk '{print $1}')"
+    if [ "$gk_sha" != "$gk_have" ]; then
+      echo "grok $GROK_PIN: binary digest mismatch for $gk_arch (want $gk_sha, have $gk_have)"
+      rm -rf "$gk_tmp"; return 1
+    fi
+  fi
+  mkdir -p "$TOOLS/bin" && install -m 755 "$gk_tmp/grok" "$TOOLS/bin/grok" \
+    || { rm -rf "$gk_tmp"; return 1; }
+  rm -rf "$gk_tmp"
 }
 
 
@@ -654,6 +920,12 @@ install_backends() {
   if wanted opencode && [ ! -x "$(backend_bin opencode)" ]; then
     echo "[harnessrouter] installing opencode (MIT)…"
     try_install "opencode" install_opencode || true
+  fi
+
+  # `kilo --version` prints the bare version, so a volume holding another one is replaced in place.
+  if wanted kilo && [ "$("$(backend_bin kilo)" --version 2>/dev/null | head -n 1)" != "$KILO_PIN" ]; then
+    echo "[harnessrouter] installing Kilo CLI $KILO_PIN (MIT, version-pinned)…"
+    try_install "Kilo CLI" install_kilo || true
   fi
 
   if wanted qwen && [ ! -x "$(backend_bin qwen)" ]; then
@@ -781,10 +1053,28 @@ install_backends() {
     try_install "CheetahClaws" install_cheetahclaws || true
   fi
   [ -x "$TOOLS/cheetahclaws-venv/bin/python" ] && export HR_CHEETAHCLAWS_PYTHON="$TOOLS/cheetahclaws-venv/bin/python"
+  if wanted agentzero && [ "$("$TOOLS/agentzero-venv/bin/agentzero-ready" 2>/dev/null)" != "$AGENTZERO_PIN" ]; then
+    echo "[harnessrouter] installing Agent Zero $AGENTZERO_PIN (MIT) — ~640 MB, this takes a minute or two…"
+    try_install "Agent Zero" install_agentzero || true
+  fi
 
   if wanted kimi && [ "$("$(backend_bin kimi)" --version 2>/dev/null | head -n 1)" != "$KIMI_PIN" ]; then
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT, version-pinned)…"
     try_install "Kimi Code CLI" install_kimi || true
+  fi
+
+  # `mcode --version` prints the bare version ("0.5.4"), so a volume holding another one is moved
+  # to the pin in place.
+  if wanted minimax && [ "$("$(backend_bin minimax)" --version 2>/dev/null | head -n 1)" != "$MINIMAX_PIN" ]; then
+    echo "[harnessrouter] installing MiniMax Code $MINIMAX_PIN (MIT, version-pinned)…"
+    try_install "MiniMax Code" install_minimax || true
+  fi
+
+  # `grok --version` prints "grok 1.0.41 (4220f3b224a6)"; comparing the version word both installs a
+  # missing binary and replaces one a pin bump left behind on the volume.
+  if wanted grok && [ "$("$(backend_bin grok)" --version 2>/dev/null | head -n 1 | awk '{print $2}')" != "$GROK_PIN" ]; then
+    echo "[harnessrouter] installing Grok Build $GROK_PIN (Apache-2.0, version- and digest-pinned)…"
+    try_install "Grok Build" install_grok || true
   fi
 
   # The largest install of the set: ~735 MB and about ninety seconds on a fresh volume

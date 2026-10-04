@@ -112,7 +112,29 @@ if (!SID) {
   if (!ok) { fs.writeFileSync(RESULTS, JSON.stringify(results, null, 1)); log('TOUR_ABORTED the first turn did not produce the deck'); await browser.close(); process.exit(2); }
 } else { results.session = sid; }
 
+// What this harness's composer will actually offer, from the per-harness view the composer itself
+// renders. /v1/bases is the wrong source: it answers "a configured integration could serve this id"
+// without applying the effective model map, so on a vercel-only instance it reported
+// llama-4-maverick available while the picker had no such option (2026-09-29) and a tour pointed at
+// it waited ten seconds for an option that could never appear. A family this instance does not offer
+// is recorded as "not offered" BEFORE the picker is opened, rather than by timing out inside it.
+const offered = await (async () => {
+  try {
+    const r = await page.evaluate(async (h) => {
+      const res = await fetch(`/api/harness/v1/harnesses/${encodeURIComponent(h)}/models`);
+      return res.ok ? await res.json() : null;
+    }, HARNESS);
+    const ids = ((r && (r.models || r.items)) || []).filter((m) => m && m.available !== false)
+      .map((m) => String(m.id || m));
+    return ids.length ? new Set(ids) : null;   // null = could not read it; fall back to the picker
+  } catch { return null; }
+})();
+
 for (const model of FAMILIES) {
+  if (offered && !offered.has(model)) {
+    results.turns.push({ family: model, model, status: 'not offered', ok: false, seconds: 0 });
+    log('SKIP', model, 'not offered by this harness'); continue;
+  }
   const picked = await chooseModel(model);
   if (!picked) { results.turns.push({ family: model, model, status: 'not offered', ok: false, seconds: 0 }); log('SKIP', model, 'not available on this instance'); continue; }
   // Every edit carries a stamp no earlier turn could have made, so "already done, no change
@@ -135,4 +157,5 @@ results.summary = `${passed} of ${ran} families passed in one conversation (${re
 fs.writeFileSync(RESULTS, JSON.stringify(results, null, 1));
 log('TOUR_DONE', results.summary);
 await browser.close();
-process.exit(passed === ran ? 0 : 1);
+// a tour in which no family ran proved nothing: every id skipped as "not offered" is a failure to measure
+process.exit(ran > 0 && passed === ran ? 0 : 1);

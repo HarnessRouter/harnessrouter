@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import http.server
 import datetime
 import json
@@ -340,14 +341,39 @@ def _openhands_session_present(cwd: str, cmd: list[str], session_id: str) -> boo
     return any((d / "base_state.json").is_file() for d in home.iterdir() if d.is_dir())
 
 
+def _agentzero_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask Agent Zero's own store: the context the driver resumes is usr/chats/<id>/chat.json under
+    the workspace's base, and it is loaded with Agent Zero's own deserialiser. A file that is there
+    but holds no agent history is a conversation that is not there — the driver would build a
+    fresh context over it. The id is the driver's constant, so it cannot be read off argv, and the
+    driver itself creates a context for an id it does not find, silently."""
+    chat = (pathlib.Path(cwd) / ".harness" / "agentzero" / "base" / "usr" / "chats"
+            / (session_id or "harness") / "chat.json")
+    try:
+        doc = json.loads(chat.read_text())
+    except (OSError, ValueError):
+        return False
+    agents = doc.get("agents") if isinstance(doc, dict) else None
+    return bool(agents) and bool((agents[0] or {}).get("history"))
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
+    "kilo": _argv_session_present,        # _build_kilo asks kilo.db before it passes --session
     "goose": _goose_session_present,
     "kimi": _argv_session_present,
+    # minimax: _build_minimax asks the CLI's own sqlite store and passes --session only when the
+    # conversation is there, so the id in argv IS that lookup's conclusion (an unknown id would be
+    # a hard exit 4 on this CLI, never a silent new conversation).
+    "minimax": _argv_session_present,
+    # grok: _build_grok passes -r only when _grok_has_session found the id in the store, and a fresh
+    # -s uuid otherwise, so the id in argv IS the builder's lookup.
+    "grok": _argv_session_present,
     "aider": _aider_session_present,
     "openhands": _openhands_session_present,
     "cheetahclaws": _cheetahclaws_session_present,
+    "agentzero": _agentzero_session_present,
 }
 
 
@@ -526,11 +552,37 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
                       # it lives only in the driver process (see dsh_driver.py's relay).
                       "./.harness/home/.dsh/cordis.yml",
+                      # The per-turn config files the runner writes OUTSIDE the CLI home, each of
+                      # which can carry an MCP server's Authorization header or a stdio server's
+                      # env: opencode's and Kilo's config (their `mcp` map), Claude Code's
+                      # --mcp-config file, and the bridge launchers (`export HR_MCP_HEADERS=…`).
+                      # Every one is rewritten at the start of every turn, so none needs to travel,
+                      # and a credential in a checkpoint outlives the server's removal from the
+                      # harness. kilo.json arrived without this; the other three predate it.
+                      "./.harness/opencode.json",
+                      "./.harness/kilo.json",
+                      "./.harness/mcp.json",
+                      "./.harness/mcp-bridge",
+                      # Agent Zero keeps its dotenv and its secrets store in usr/ (helpers/dotenv.py,
+                      # helpers/secrets.py). The driver writes neither — the key rides the turn's
+                      # environment, and only the relay's placeholder at that — but its settings
+                      # save path writes API_KEY_* into usr/.env, and a task can reach it.
+                      "./.harness/agentzero/base/usr/.env",
+                      "./.harness/agentzero/base/usr/secrets.env",
                       # opencode's undo/revert history: a git repo of the workspace that grew to
                       # 699 MB / 71k files in twenty turns (#193). _opencode_config turns it off;
                       # this keeps a workspace that already carries one from dragging it through
                       # every later checkpoint. Nothing reads it once snapshots are off.
                       "./.harness/home/.local/share/opencode/snapshot",
+                      # Kilo CLI is opencode's fork and keeps the same tree under kilo/: snapshots
+                      # are off in its config for the same reason, and its log directory is the one
+                      # place the CLI writes what it was handed (request metadata, the relay URL).
+                      "./.harness/home/.local/share/kilo/snapshot",
+                      "./.harness/home/.local/share/kilo/log",
+                      # Kilo's credential store. The runner never writes it (the key is an env var
+                      # named in kilo.json, and only the relay's placeholder at that), but a
+                      # `kilo auth login` inside a task would, and it must not travel.
+                      "./.harness/home/.local/share/kilo/auth.json",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -551,7 +603,39 @@ CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.jso
                       # never at rest: the CLI is handed the relay's placeholder in its env.
                       "./.cheetahclaws/tasks.json",
                       "./.harness/home/.cheetahclaws/mcp.json",
-                      "./.harness/home/.cheetahclaws/logs"]
+                      "./.harness/home/.cheetahclaws/logs",
+                      # MiniMax Code: v2/sqlite + v2/sessions are what a --session resume reads and
+                      # they travel. config.yaml holds the relay's per-turn placeholder as a literal
+                      # apiKey (the CLI reads no env reference) and mcp.json can carry MCP auth
+                      # headers; auth/ is its own login store (never used here, a credential if it
+                      # were). Logs, background-command output, caches and the 12 MB of bundled
+                      # skills it re-seeds on every start do not need to travel.
+                      "./.harness/home/.minimax/config.yaml",
+                      "./.harness/home/.minimax/mcp.json",
+                      "./.harness/home/.minimax/auth",
+                      "./.harness/home/.minimax/v2/observability",
+                      "./.harness/home/.minimax/background-tasks",
+                      "./.harness/home/.minimax/cache",
+                      "./.harness/home/.minimax/.builtin-skills",
+                      # ...and its agent bash puts an `rm` shim first on PATH that MOVES a deleted
+                      # file to the XDG trash under $HOME (measured on 0.5.4: shims/rm ->
+                      # bin/mavis-trash -> ~/.local/share/Trash on Linux). HOME is in the checkpoint,
+                      # so without this every file the agent ever deleted would travel with it.
+                      "./.harness/home/.local/share/Trash",
+                      # Grok Build: sessions/ is what a resume reads and it travels. config.toml is
+                      # rewritten every turn and carries each MCP server's Authorization header;
+                      # auth.json is where `grok login` would keep an xAI credential and
+                      # mcp_credentials.json an MCP server's OAuth tokens, both mode 0600 (the runner
+                      # starts neither flow — see _grok_config — but a task could). logs/ can hold
+                      # what the CLI was handed;
+                      # docs/ and bundled/ are re-materialised from the binary on every run.
+                      "./.harness/home/.grok/config.toml",
+                      "./.harness/home/.grok/auth.json",
+                      "./.harness/home/.grok/mcp_credentials.json",
+                      "./.harness/home/.grok/logs",
+                      "./.harness/home/.grok/docs",
+                      "./.harness/home/.grok/bundled",
+                      "./.harness/home/.grok/downloads"]
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
@@ -561,6 +645,7 @@ HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
+KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-5.4")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
@@ -568,9 +653,13 @@ DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
 OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
 GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
+# MiniMax Code runs any OpenAI-compatible model; its vendor's own is the natural default.
+MINIMAX_DEFAULT_MODEL = os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax-m3")
+GROK_DEFAULT_MODEL = os.environ.get("GROK_DEFAULT_MODEL", "grok-4.6")
 AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
+AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -648,6 +737,11 @@ def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> s
                           env={**os.environ, **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
 
 
+# Config the runner rewrites every turn and that can carry MCP credentials (see CHECKPOINT_EXCLUDE).
+_PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mcp.json",
+                    ".harness/mcp-bridge/")
+
+
 def _git_ensure(ws: str) -> None:
     """Make /workspace a git repo with a secret-safe .gitignore (so .git, which travels in the
     checkpoint tarball, never carries credentials).
@@ -669,8 +763,14 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.pi/agent/auth.json", ".harness/home/.pi/agent/models.json",
         ".harness/goose/config/secrets.yaml",
         ".cheetahclaws/tasks.json",
+        ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
+        *_PER_TURN_CONFIG,
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
+        # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
+        # prompt (ctx_window) on every save, so committing it would put a new copy of the system
+        # prompt into .git/objects each turn. It travels in the tar like the CLI home does.
+        ".harness/agentzero/",
         "",
     ]))
     if not (p / ".git").exists():
@@ -682,6 +782,9 @@ def _git_ensure(ws: str) -> None:
         # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
         # hydrated from before this rule would keep growing exactly as before. Drop the CLI
         # home from the index (not from disk); from then on the ignore rule holds.
+        # The same for the per-turn config files: a session checkpointed before they were ignored
+        # tracks them, and an ignore rule alone would keep committing each turn's credentials.
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_PER_TURN_CONFIG)
         tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
         if tracked:
             _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
@@ -1005,13 +1108,36 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # backend wrote — which is a second reason to name the directory explicitly.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
-    elif backend == "opencode":
+    elif backend == "grok":
+        # $GROK_HOME/skills/<name>/SKILL.md, grok's user skill root, with GROK_HOME redirected to
+        # .harness/home/.grok. Verified on 1.0.41: a skill here was listed to the model with its
+        # description. Not the project's .grok/skills: the workspace root is collected.
+        rootrels = [".harness/home/.grok/skills"]
+        entryroot = ".harness/home/.grok/skills"
+    elif backend == "minimax":
+        # $MINIMAX_DATA_DIR/skills/<name>/SKILL.md, the CLI's user-global root (skills/roots.ts,
+        # 0.5.4). Measured at a stub: the skill's description reached the system prompt and its body
+        # did not (loaded on demand through the `skill` tool). External discovery — the workspace's
+        # .minimax/.claude/.agents skills with walk-up, and the home ones — is switched off in
+        # config.yaml, so a tree another backend wrote is not swept in (kimi's reason).
+        rootrels = [".harness/home/.minimax/skills"]
+        entryroot = ".harness/home/.minimax/skills"
+    elif backend in ("opencode", "kilo"):
+        # Kilo CLI is opencode's fork and keeps the same `skills.paths` key (core/src/v1/config/
+        # skills.ts at 7.8.1), so it takes the same directory.
         # opencode's `skills` config key takes ARBITRARY paths ("Additional paths or URLs to
         # discover skills from"), so there is no per-CLI home directory to guess here — we write
         # one directory and name it in opencode.json. This is the only backend where the loader
         # adapts to us instead of the other way round.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    elif backend == "agentzero":
+        # usr/skills/<name>/SKILL.md under the workspace's Agent Zero base — the user skills root its
+        # own loader scans (helpers/skills.get_skill_roots: files.get_abs_path("usr/skills")), and
+        # the driver makes that base's usr/ this directory. Under .harness/, so excluded from
+        # produced files and carried in the checkpoint.
+        rootrels = [".harness/agentzero/base/usr/skills"]
+        entryroot = ".harness/agentzero/base/usr/skills"
     else:
         # dsh has no skill loader; the AGENTS.md block below is the only door.
         # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
@@ -1194,7 +1320,19 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Every one of them launches a stdio server, so the runner hands them the bridge (mcp_bridge.py)
 # as one, and the bridge speaks the remote transport with the reference SDK. The server reaches
 # the agent on every base the same way; nothing is declared unsupported.
-_BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "cheetahclaws": ("http",)}
+#
+# grok is here for a sharper reason: it ADVERTISES SSE and then does not speak it. `type = "sse"`
+# beside the url is the shape its own `grok mcp add --transport sse` writes, and 1.0.41 accepts that
+# and dials the url with its STREAMABLE-HTTP client — the error names the worker
+# (`StreamableHttpClientWorker … HTTP 405 Method Not Allowed, when send initialize request`) and the
+# server's log shows a POST to an endpoint that answers GET. Measured 2026-09-28 against a local SSE
+# server with BOTH the vendor-written config and this runner's, and reproduced by `grok mcp doctor`,
+# so it is the CLI's defect rather than this file's config. Untreated it is silent: the tools never
+# arrive, `search_tool` answers "No MCP tools are available in this session", and the turn runs
+# without them. Its streamable-HTTP client is fine (verified against a local server and the public
+# deepwiki one, tools discovered and called), so only SSE is bridged.
+_BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "grok": ("sse",),
+                       "cheetahclaws": ("http",)}
 _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
 
 
@@ -1338,6 +1476,14 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     if backend == "gemini":
         return pathlib.Path(cwd) / "GEMINI.md"   # gemini-cli's own context.fileName default
+    if backend == "minimax":
+        # MiniMax Code reads TWO instruction files and merges them: the GLOBAL $MINIMAX_DATA_DIR/
+        # AGENTS.md, and ONE project file — the workspace's CLAUDE.md if it has content, else its
+        # AGENTS.md (static-prompt-reader.ts, 0.5.4; both measured reaching the system prompt). A
+        # root AGENTS.md would therefore be silently SHADOWED by any CLAUDE.md in the workspace,
+        # the user's own or one another harness left there. The global file is read whatever the
+        # workspace holds, and it sits under .harness/, so it is never a produced file.
+        return _minimax_home(pathlib.Path(cwd)) / "AGENTS.md"
     return pathlib.Path(cwd) / (
         # goose reads AGENTS.md natively and first: its default context-file list is
         # ["AGENTS.md", ".goosehints"], overridable only via CONTEXT_FILE_NAMES.
@@ -1351,8 +1497,14 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # walking up from the cwd, plus ~/.claude/CLAUDE.md; no source hit for AGENTS.md in
         # 3.5.88), so it takes the CLAUDE.md branch below, and an AGENTS.md in the workspace is
         # never loaded whether or not a CLAUDE.md is there.
+        # kilo reads AGENTS.md first (session/instruction.ts: ["AGENTS.md", "CLAUDE.md",
+        # "CONTEXT.md"], first match wins) — verified on 7.8.1: the request's system prompt carried
+        # "Instructions from: <ws>/AGENTS.md" and the file's body.
+        # grok loads AGENTS.md (and CLAUDE.md, AGENT.md …) at every level from the repo root down to
+        # the cwd, once the folder is trusted; _build_grok sets GROK_FOLDER_TRUST=0. Verified on
+        # 1.0.41: a token written in AGENTS.md was in the model request.
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi", "aider", "openhands")
+                                   "goose", "kimi", "aider", "openhands", "kilo", "grok", "agentzero")
         else "CLAUDE.md")
 
 
@@ -1401,6 +1553,8 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
     body = ((base + "\n\n") if base else "") + block
     try:
+        # minimax's file lives in the CLI's home, which does not exist before its first turn.
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body if body.endswith("\n") else body + "\n")
     except Exception:  # noqa: BLE001
         pass
@@ -3103,6 +3257,105 @@ def _stringify_tool_content(body: bytes) -> bytes:
     return body
 
 
+_IMAGE_PLACEHOLDER = ("[an image was returned here; the model serving this turn takes no image in a "
+                      "tool result, so it is not shown]")
+
+
+def _tool_images_as_text(body: bytes) -> bytes:
+    """Tool-role messages whose content carries an image part, with the image replaced by a sentence
+    and the content flattened to a string, in one chat-completions body.
+
+    A model that sees images reads one through a tool (Grok Build's read_file on a PNG: the deck's
+    own screenshot, on the family tour's first turn), and the client then replays that tool result
+    in every later request of the conversation. The next model need not take it: measured on
+    hr-test 2026-10-03, one conversation, seven of fourteen families — an aggregator's Anthropic
+    translation refuses the part ("tool_result.content.1: Input tag 'image_url' … does not match"),
+    Moonshot refuses the shape ("did not match any variant of untagged enum
+    ChatCompletionRequestToolMessageContent"), and OpenRouter has "No endpoints found that support
+    image input" for llama, hunyuan and nemotron. So one screenshot ended the conversation for every
+    model after the one that took it. Applied only after a provider refuses, for that model on that
+    route: a model that takes the image keeps it."""
+    try:
+        obj = json.loads(body)
+        changed = False
+        for m in obj.get("messages") or []:
+            if not (isinstance(m, dict) and m.get("role") == "tool" and isinstance(m.get("content"), list)):
+                continue
+            parts = [p for p in m["content"] if isinstance(p, dict)]
+            if not any(p.get("type") not in ("text", None) for p in parts):
+                continue
+            m["content"] = "\n".join((p.get("text") or "") if p.get("type") in ("text", None)
+                                     else _IMAGE_PLACEHOLDER for p in parts)
+            changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+_EMPTY_CALL_ID = re.compile(rb'"(?:tool_call_)?id"\s*:\s*""')
+
+
+def _repair_tool_call_ids(body: bytes, dedupe: bool = False) -> bytes:
+    """A chat-completions body in which every tool call has an id of its own and every tool message
+    names the call it answers.
+
+    Two shapes a conversation inherits from a model that wrote them and a later, stricter provider
+    refuses — both measured on the family tour, hr-test 2026-10-03, and both end the conversation
+    for every such provider from then on:
+      an EMPTY id. One family's stream carried tool calls with `"id": ""`; the client stored and
+        replayed them, and Mistral and StepFun answered `tool messages must include a non-empty
+        string tool_call_id` (grok, two of fourteen families).
+      a DUPLICATE id inside one assistant message (parallel calls a provider numbered alike):
+        Mistral, `Duplicate tool call id in assistant message` (kilo, one of fourteen).
+    An empty id is never valid, so it is filled whenever one is present. Duplicates are renamed only
+    when `dedupe` is set (after a provider says so): tool messages are matched to calls in order, the
+    order every client writes them in."""
+    try:
+        obj = json.loads(body)
+        msgs = obj.get("messages")
+        if not isinstance(msgs, list):
+            return body
+        changed = False
+        owed: list[tuple[str, str]] = []     # (the id as the client wrote it, the id it has now), in call order
+        for mi, m in enumerate(msgs):
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") == "assistant" and isinstance(m.get("tool_calls"), list):
+                owed, seen = [], set()
+                for ci, c in enumerate(m["tool_calls"]):
+                    if not isinstance(c, dict):
+                        continue
+                    old = c.get("id") if isinstance(c.get("id"), str) else ""
+                    new = old
+                    if not old or (dedupe and old in seen):
+                        new = f"call_hr_{mi}_{ci}"
+                        c["id"] = new
+                        changed = True
+                    seen.add(new)
+                    owed.append((old, new))
+            elif m.get("role") == "tool":
+                tid = m.get("tool_call_id") if isinstance(m.get("tool_call_id"), str) else ""
+                hit = next((i for i, (old, _) in enumerate(owed) if old == tid), None)
+                if hit is not None:
+                    _, new = owed.pop(hit)
+                    if new != tid:
+                        m["tool_call_id"] = new
+                        changed = True
+        if changed:
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+def _image_in_tool_result_refused(code: int, data: bytes) -> bool:
+    """Whether a provider's refusal is about an image it was handed (see _tool_images_as_text)."""
+    low = data.lower()
+    return code in (400, 404, 415, 422) and (b"image" in low or b"toolmessagecontent" in low)
+
+
 def _stringify_assistant_content(body: bytes) -> bytes:
     """Assistant-role message content: array-of-parts -> plain string, in one chat-completions body.
 
@@ -3398,6 +3651,14 @@ def _gemini_schema(node):
         elif members:
             out = {**members[0], **out}
             out.setdefault("type", members[0].get("type") or "string")
+    if isinstance(out.get("enum"), list) and None in out["enum"]:
+        # A nullable enum spelled the JSON-schema way ({"type": ["string", "null"], "enum": [..., null]},
+        # grok's todo_write status) is refused whole: "Enum values must share one supported primitive
+        # type" (gemini-3.5-flash-lite through Vercel, 2026-09-27). The null member is `nullable`.
+        out["enum"] = [x for x in out["enum"] if x is not None]
+        out["nullable"] = True
+        if not out["enum"]:
+            out.pop("enum")
     if "type" not in out and "anyOf" not in out:
         out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
     if out.get("type") == "array" and "items" not in out:
@@ -3438,6 +3699,109 @@ def _with_gemini_schemas(body: bytes) -> bytes:
         changed = True
     return json.dumps(doc).encode() if changed else body
 
+
+# ── Tool declarations through Anthropic's validator ──────────────────────────────────────────────
+# Anthropic's Messages API refuses a tool whose input_schema has a combinator at the TOP level:
+# `tools.14.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top
+# level` (measured 2026-09-28 on claude-haiku-4.5 and claude-sonnet-4.6 through Vercel's gateway,
+# which translates an OpenAI tool into Anthropic's shape). A nested combinator is fine; only the
+# root is refused.
+#
+# Grok Build's `use_tool` declares exactly that: a root `oneOf` over its three call forms (inline
+# arguments, an arguments file, a document), each branch a `required` set plus a `not` forbidding the
+# other forms' keys. So EVERY claude id the grok base offers failed its first turn — the request was
+# refused before inference, on all five scenarios. The sanitiser below is the Anthropic counterpart
+# of _gemini_schema: one provider's validator, repaired in flight for every client, rather than a
+# catalog pruned of ten models the harness can otherwise drive.
+_ANTHROPIC_COMBINATORS = ("oneOf", "anyOf", "allOf")
+
+
+def _anthropic_tool_schema(node):
+    """One tool's parameter schema as Anthropic's input_schema validator accepts it: no combinator at
+    the root. The branches' own constraints cannot survive flattening — a root schema can express
+    "these properties" but not "exactly one of these shapes" — so what is kept is everything a
+    caller needs to build a valid call, and what is dropped is the exclusivity:
+
+      properties  the union of the root's and every branch's, root first (a branch that redeclares a
+                  property does not override the root's description of it)
+      required    what every call needs whichever shape it takes: the root's own list, every
+                  allOf branch's (all of those apply), and of oneOf/anyOf only what EVERY branch
+                  requires, because a key one alternative alone demands is not required of the call
+                  the model actually makes. For grok's `use_tool` that is the empty set, so
+                  `required` goes: two of its three forms do not take `tool_name`.
+      the rest    every other root key except the combinators and the `not` that rode with them
+
+    The exclusivity then lives where the model reads it anyway: `use_tool`'s own description says
+    "Supply exactly one form", and the tool itself validates its arguments (measured: a call missing
+    a required field comes back as a tool_result error, not a crash). Nested combinators are
+    untouched — Anthropic accepts those, and a property's own anyOf is how a nullable field is
+    spelled."""
+    if not isinstance(node, dict):
+        return node
+    branches = [b for k in _ANTHROPIC_COMBINATORS for b in (node.get(k) or [])
+                if isinstance(b, dict)]
+    if not branches:
+        return node
+    out = {k: v for k, v in node.items() if k not in _ANTHROPIC_COMBINATORS and k != "not"}
+    props = dict(out.get("properties") or {})
+    for b in branches:
+        for name, spec in (b.get("properties") or {}).items():
+            props.setdefault(name, spec)
+    if props:
+        out["properties"] = props
+    def _req(b):
+        return [r for r in b["required"] if isinstance(r, str)] if isinstance(b.get("required"), list) else []
+    required = _req(node)
+    for b in node.get("allOf") or []:
+        if isinstance(b, dict):
+            required += [r for r in _req(b) if r not in required]
+    for k in ("oneOf", "anyOf"):
+        alts = [set(_req(b)) for b in (node.get(k) or []) if isinstance(b, dict)]
+        if alts:
+            required += [r for r in sorted(set.intersection(*alts)) if r not in required]
+    if required:
+        out["required"] = required
+    else:
+        out.pop("required", None)
+    out.setdefault("type", "object")
+    return out
+
+
+def _with_anthropic_schemas(body: bytes) -> bytes:
+    """The request with every tool's parameter schema flattened for Anthropic's validator. Both wire
+    shapes are handled, because both reach Anthropic: an OpenAI chat/completions body, whose
+    `tools[].function.parameters` an aggregator translates into `input_schema`, and an Anthropic
+    Messages body, which carries `tools[].input_schema` itself. A body without tools is untouched,
+    and a body no tool of which has a root combinator comes back byte-identical."""
+    if b'"tools"' not in body or not any(c.encode() in body for c in _ANTHROPIC_COMBINATORS):
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        holder, key = (fn, "parameters") if fn is not None else (tool, "input_schema")
+        schema = holder.get(key)
+        if not isinstance(schema, dict):
+            continue
+        flat = _anthropic_tool_schema(schema)
+        if flat is not schema and flat != schema:
+            holder[key] = flat
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+def _anthropic_family(model: str) -> bool:
+    """Whether this model id is served by Anthropic's own API, whoever fronts it. The vendor prefix
+    an aggregator adds (anthropic/claude-haiku-4.5) and the bare id both count; `claude` is the one
+    token every id in the family carries, as `gemini` is for Google's."""
+    return "claude" in (model or "").lower()
 
 def _google_signatures_in(doc: dict) -> list[tuple[str, str]]:
     """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
@@ -3521,7 +3885,15 @@ def _served_model_in(data: bytes) -> str:
     return m.group(1).decode("utf-8", "replace") if m else ""
 
 
-_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_]{1,40})"')
+# The hyphen is not cosmetic: Vercel's AI Gateway reports a declined request as "content-filter"
+# while OpenAI's own spelling is "content_filter" (measured 2026-10-01 against ai-gateway.vercel.sh
+# on anthropic/claude-fable-5.1 and anthropic/claude-opus-5 — two SSE events, no content, no
+# reasoning, finish_reason "content-filter"). A pattern that admitted only the underscore matched
+# nothing on that channel, so the one check that turns a provider's refusal into a stated reason was
+# never evaluated there — the person got whatever the CLI made of an empty answer instead
+# (agentzero: "Agent stopped after 5 consecutive unusable model responses", its own loop guard).
+# _finish_reason_in normalises both spellings to the underscore one, so callers compare one form.
+_FINISH_RE = re.compile(rb'"finish_reason"\s*:\s*"([a-z_-]{1,40})"')
 
 
 def _usage_fields(u) -> dict:
@@ -3620,7 +3992,7 @@ def _model_metadata_with_context_length(data: bytes) -> bytes:
 def _finish_reason_in(data: bytes) -> str:
     """The last finish_reason an OpenAI-shaped answer names in these bytes ("" when none)."""
     hits = _FINISH_RE.findall(data)
-    return hits[-1].decode() if hits else ""
+    return hits[-1].decode().replace("-", "_") if hits else ""
 
 
 def _relay_last_finish(env: dict) -> str:
@@ -3631,7 +4003,10 @@ def _relay_last_finish(env: dict) -> str:
         if isinstance(v, str) and v.startswith("hr-relay-"):
             route = _HERMES_RELAY["routes"].get(v)
             if route:
-                return str((route[2] or {}).get("last_finish") or "")
+                # normalised the way _finish_reason_in normalises, so a caller compares one
+                # spelling whoever wrote the flag (Vercel says "content-filter", OpenAI
+                # "content_filter")
+                return str((route[2] or {}).get("last_finish") or "").replace("-", "_")
     return ""
 
 
@@ -3758,6 +4133,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
                 body = _stringify_tool_content(body)
+            if flags.get(f"tool_images_as_text:{_body_model}"):
+                body = _tool_images_as_text(body)
+            if flags.get("dedupe_tool_call_ids") or _EMPTY_CALL_ID.search(body):
+                body = _repair_tool_call_ids(body, dedupe=bool(flags.get("dedupe_tool_call_ids")))
             if flags.get("stringify_assistant_content"):
                 body = _stringify_assistant_content(body)
             if flags.get("drop_stream_options"):
@@ -3773,19 +4152,32 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
             headers["content-length"] = str(len(body))
-        if (_gemini_channel(base) and "gemini" in str(_body_model).lower()
+        if ((_gemini_channel(base) or flags.get("gemini_schemas")) and "gemini" in str(_body_model).lower()
                 and body is not None and self.path.endswith("/chat/completions")):
             # TokenRouter's Gemini channels hand a harness's JSON-schema tool declarations to Google's
             # validator as sent; the broker does the same normalisation for brokered traffic
             body = _with_gemini_schemas(body)
             headers["content-length"] = str(len(body))
+        if body is not None:
+            # A tool whose parameter schema has a combinator at its root is refused by Anthropic
+            # ("input_schema does not support oneOf, allOf, or anyOf at the top level") AND by
+            # OpenAI ("schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/… at the
+            # top level": grok's `use_tool` on gpt-6.1-sol through TokenRouter, hr-test 2026-10-03,
+            # where every turn of that pair died before inference), on their own APIs and through
+            # the aggregators that pass the schema on. No provider needs one there, so the shape is
+            # flattened for every model: a test by family repaired one vendor and left the other.
+            fixed = _with_anthropic_schemas(body)
+            if fixed != body:
+                body = fixed
+                headers["content-length"] = str(len(body))
         resp = None
         tried_slim = False
+        dropped_once = False
         for attempt in (0, 1, 2):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
+                resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
                 if attempt > 0 and tried_slim:
                     # the blind no-stream_options retry is part of what made this route work
                     flags["drop_stream_options"] = True
@@ -3806,6 +4198,26 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     flags["stringify_tool_content"] = True
                     body = stringified
                     headers["content-length"] = str(len(body))
+                    continue
+                if (attempt < 2 and e.code in (400, 422) and b"uplicate tool call id" in data
+                        and body is not None and not flags.get("dedupe_tool_call_ids")):
+                    unique = _repair_tool_call_ids(body, dedupe=True)
+                    if unique != body:
+                        flags["dedupe_tool_call_ids"] = True
+                        body = unique
+                        headers["content-length"] = str(len(body))
+                        print(f"[relay] provider refused a duplicate tool call id for model={_body_model}; "
+                              f"sent again with ids of their own", flush=True)
+                        continue
+                imageless = _tool_images_as_text(body) if body is not None else None
+                if (attempt < 2 and _image_in_tool_result_refused(e.code, data)
+                        and imageless is not None and imageless != body):
+                    # this model takes no image in a tool result; remember it for this model only
+                    flags[f"tool_images_as_text:{_body_model}"] = True
+                    body = imageless
+                    headers["content-length"] = str(len(body))
+                    print(f"[relay] provider refused an image in a tool result for model={_body_model}; "
+                          f"sent again with the image named in words", flush=True)
                     continue
                 assistant = _stringify_assistant_content(body) if body is not None else None
                 if (attempt < 2 and e.code == 400
@@ -3834,6 +4246,19 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     headers["content-length"] = str(len(body))
                     print(f"[relay] provider refused reasoning_effort's thinking shape for model={_body_model}; "
                           f"sent again without it", flush=True)
+                    continue
+                flat = _with_anthropic_schemas(body) if body is not None else None
+                if (attempt < 2 and e.code == 400 and b"input_schema" in data
+                        and any(c.encode() in data for c in _ANTHROPIC_COMBINATORS)
+                        and flat is not None and flat != body):
+                    # The provider named the fix itself ("input_schema does not support oneOf, allOf,
+                    # or anyOf at the top level"), so a channel this relay does not recognise as
+                    # Anthropic — or a model id that does not carry the family's name — is repaired on
+                    # the complaint and remembered, the max_completion_tokens pattern. This bounds the
+                    # shape to ONE extra request even where the proactive pass above does not fire.
+                    flags["anthropic_schemas"] = True
+                    body = flat
+                    headers["content-length"] = str(len(body))
                     continue
                 if e.code in (400, 422):
                     # The provider's own words, kept here for every provider: a harness shows a
@@ -3878,12 +4303,47 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+                # THE PROVIDER DID NOT ANSWER: the connection was refused, dropped mid-request, or
+                # went silent past HR_RELAY_UPSTREAM_TIMEOUT_S. Only HTTPError was caught here, so
+                # such a failure escaped _forward, ThreadingHTTPServer printed a traceback and closed
+                # the socket WITH NO RESPONSE AT ALL — the CLI was left holding a dead connection and
+                # the turn hung until something above killed it. Measured on a support-matrix
+                # instance on 2026-09-29: ten of these, `http.client.RemoteDisconnected: Remote end
+                # closed connection without response`, two inside the family tour's failing window.
+                # A refusal the person can read beats a socket that simply stops.
+                reason = f"{type(e).__name__}: {e}"[:300]
+                if not dropped_once and attempt < 2 and isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError)):
+                    dropped_once = True
+                    # A connection dropped before any byte of the answer is the one transport failure
+                    # worth one more go: it costs nothing upstream (nothing was generated) and an
+                    # aggregator sheds load this way. A timeout is NOT retried — the provider may be
+                    # generating, and a second request would be a second bill.
+                    print(f"[relay] upstream dropped the connection for {tail} model={_body_model}; "
+                          "sending again, once", flush=True)
+                    continue
+                print(f"[relay] upstream did not answer {tail} model={_body_model}: {reason}", flush=True)
+                payload = json.dumps({"error": {
+                    "message": f"the provider did not answer: {reason}",
+                    "type": "upstream_unavailable",
+                    "code": "upstream_unavailable"}}).encode()
+                # 504 for a silence we timed out on, 502 for a connection that failed or was dropped.
+                status = 504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502
+                try:
+                    self.send_response(status)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    pass          # the client hung up first; nothing left to tell
+                return
         ctype = resp.headers.get("content-type") or ""
-        self.send_response(resp.status)
-        self.send_header("content-type", ctype)
         # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass
         sigs = flags.setdefault("google_sigs", {}) if google else None
         if "text/event-stream" in ctype:
+            self.send_response(resp.status)
+            self.send_header("content-type", ctype)
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             pending = b""
@@ -3891,7 +4351,37 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
             while True:
-                chunk = resp.read(4096)
+                try:
+                    chunk = resp.read(4096)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    # The answer began and then stopped: the provider went silent past the socket's
+                    # timeout, or dropped the connection mid-stream. The status line is long gone, so
+                    # the reason travels as the stream's own error event (the shape of the API being
+                    # spoken) and the chunked body is then left UNTERMINATED with the connection
+                    # closed. Ending it with the zero chunk would hand the client a well-formed,
+                    # complete answer that merely lacks its last events — measured at a stub: one
+                    # event, a stall, and the client read 200 with nothing wrong.
+                    why = f"{type(e).__name__}: {e}"[:300]
+                    print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: {why}",
+                          flush=True)
+                    msg = f"the provider stopped answering mid-stream: {why}"
+                    if "/messages" in tail:
+                        ev = "event: error\ndata: " + json.dumps(
+                            {"type": "error", "error": {"type": "api_error", "message": msg}}) + "\n\n"
+                    else:
+                        ev = "data: " + json.dumps({"error": {
+                            "message": msg, "type": "upstream_unavailable",
+                            "code": "upstream_unavailable"}}) + "\n\n"
+                    call_usage.update(_usage_in_sse_line(pending.strip()))
+                    _usage_add(flags, call_usage)
+                    try:
+                        raw = ev.encode()
+                        self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
+                        self.wfile.flush()
+                    except OSError:
+                        pass
+                    self.close_connection = True
+                    return
                 if not chunk:
                     break
                 if not flags.get("served_model"):
@@ -3911,20 +4401,53 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # usage (and Google's tool-call signatures) live on whole SSE lines, so the
                 # stream is line-buffered as it passes; the bytes still go through untouched
                 pending += chunk
+                # a route that rewrites usage forwards whole lines (as rewritten) instead of the
+                # raw read, so a rewrite never straddles two reads
+                out_lines = [] if flags.get("usage_no_nulls") else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
+                    if out_lines is not None:
+                        out_lines.append(_usage_without_nulls(line) + b"\n")
                     line = line.strip()
                     call_usage.update(_usage_in_sse_line(line))
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
-                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
-                self.wfile.flush()
+                if out_lines is not None:
+                    chunk = b"".join(out_lines)
+                if chunk:
+                    self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                    self.wfile.flush()
             call_usage.update(_usage_in_sse_line(pending.strip()))
             _usage_add(flags, call_usage)
+            if flags.get("usage_no_nulls") and pending:
+                tail_bytes = _usage_without_nulls(pending)      # a last line with no newline after it
+                self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
         else:
-            data = resp.read()
+            try:
+                data = resp.read()
+            except (http.client.HTTPException, TimeoutError, OSError) as e:
+                # The body stopped arriving. Nothing has been sent to the client yet (the status
+                # line is only written below), so this is answered as the provider failure it is
+                # rather than as the provider's own 200 with an empty body.
+                why = f"{type(e).__name__}: {e}"[:300]
+                print(f"[relay] upstream stopped mid-body on {tail} model={_body_model}: {why}",
+                      flush=True)
+                payload = json.dumps({"error": {
+                    "message": f"the provider stopped answering mid-body: {why}",
+                    "type": "upstream_unavailable", "code": "upstream_unavailable"}}).encode()
+                try:
+                    self.send_response(504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    pass
+                return
+            self.send_response(resp.status)
+            self.send_header("content-type", ctype)
             if not flags.get("served_model"):
                 sm = _served_model_in(data[:65536])
                 if sm:
@@ -3939,6 +4462,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     pass
             if body is None and "/models" in tail.split("?", 1)[0]:
                 data = _model_metadata_with_context_length(data)
+            if flags.get("usage_no_nulls"):
+                data = _usage_without_nulls(data)
             if sigs is not None and b"thought_signature" in data:
                 try:
                     doc = json.loads(data)
@@ -4076,6 +4601,44 @@ def _adapt_custom_auth(auth):
     return auth.model_copy(update={"base_url": base, "api_key": tok})
 
 
+# How long the relay waits for the provider on ONE upstream call, and how long a stalled READ of an
+# answer already begun may block (it is the socket's timeout: connect, the wait for the status line,
+# and every later read). It must stay BELOW the turn cap above it, or a provider that accepts a
+# request and then goes silent is indistinguishable from a working turn: the cap fires first and the
+# turn is cancelled with no served model, no tool call and no reason. The default is the 600 s this
+# relay has always waited, far under MAX_TURN_SECONDS: a reasoning model answering a non-streaming
+# call can be silent for minutes and that is an answer on its way, not a failure. An instance whose
+# own cap is shorter sets this lower: the support-matrix suite caps a turn at 600 s, so the instance
+# it measures runs with HR_RELAY_UPSTREAM_TIMEOUT_S=180 (seven of fourteen tour families were "not
+# settled in 600s" on 2026-09-29 with the two equal). A value that is not a positive number is ignored.
+def _relay_upstream_timeout() -> float:
+    try:
+        v = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S") or 600)
+    except ValueError:
+        return 600.0
+    return v if v > 0 else 600.0
+
+
+HR_RELAY_UPSTREAM_TIMEOUT_S = _relay_upstream_timeout()
+
+
+_USAGE_NULL_COUNT = re.compile(rb'("[a-z_]*_tokens"\s*:\s*)null')
+
+
+def _usage_without_nulls(line: bytes) -> bytes:
+    """One answer line (an SSE event or a whole body) with every null token count inside its usage
+    written as 0. Moonshot's kimi-k3 through TokenRouter ends a stream with
+    `"prompt_tokens_details":{"audio_tokens":null,"cached_tokens":0}`; Grok Build 1.0.41 parses the
+    counts as u32 and failed the whole turn on it AFTER the answer had arrived ("serialization
+    error: invalid type: null, expected u32", hr-test 2026-10-03, every kimi-k3 turn). A count that
+    is absent and a count of none are the same number. `"usage":null` itself is left alone (clients
+    read it as "not yet"), as is everything before the usage key."""
+    i = line.find(b'"usage"')
+    if i < 0 or b"null" not in line[i:]:
+        return line
+    return line[:i] + _USAGE_NULL_COUNT.sub(rb"\g<1>0", line[i:])
+
+
 def _relay_base_with_version(base_url: str) -> str:
     """A relay base ends with /v1 unless it is an AWS host or already names an API version."""
     base = (base_url or "").rstrip("/")
@@ -4103,13 +4666,17 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 
 
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
-                        stream_usage: bool = False) -> tuple[str, str]:
+                        stream_usage: bool = False, gemini_schemas: bool = False,
+                        usage_no_nulls: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
     the harness never asked for; they are removed before the provider sees them (the same list the
     relay grows by itself when a provider names an unknown field). `stream_usage` asks the provider
-    for a streamed call's usage when the client does not (_request_stream_usage)."""
+    for a streamed call's usage when the client does not (_request_stream_usage). `gemini_schemas`
+    normalises a gemini model's tool declarations on this route whatever the channel (see
+    _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
+    answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -4124,7 +4691,9 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         # (its own path is built in _bedrock_anthropic).
         _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key,
                                         {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
-                                         "stream_usage": bool(stream_usage)})
+                                         "stream_usage": bool(stream_usage),
+                                         "gemini_schemas": bool(gemini_schemas),
+                                         "usage_no_nulls": bool(usage_no_nulls)})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -4495,6 +5064,492 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
             cmd += ["--agent-file", str(agent_file)]
     if skills_dir:
         cmd += ["--skills-dir", skills_dir]
+    return cmd
+
+
+# ── minimax (MiniMax Code, `mcode`) ────────────────────────────────────────────────
+MINIMAX_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+
+# The provider id the runner gives the connection inside MiniMax Code's config. The CLI's model
+# selector for a config-defined endpoint is `custom_provider:<id>/<model>`, and that prefix is not
+# decoration: measured on 0.5.4, `<id>/<model>` resolves to the "configured_provider" route and the
+# turn dies with `Model "hr/…" is not available for the "configured_provider" route` before any
+# request (model-availability.ts). Everything after the first "/" is the model id, sent to the
+# provider verbatim — `custom_provider:hr/minimax/minimax-m3` reached a stub as
+# "model":"minimax/minimax-m3".
+_MINIMAX_PROVIDER_ID = "hr"
+
+# The built-in tools this runner can WITHHOLD, by the names the model sees them under. Measured on
+# 0.5.4 from the `tools` array of a live request at a stub: read, write, edit, bash, grep, glob,
+# todowrite, skill, web_fetch, web_search, task, task_append, task_query, task_output, task_stop,
+# website_deploy, update_goal, get_goal (+ mcp__<server>__<tool> per MCP tool).
+#   - the first eight are the config's `agents.default.tools` allowlist ids (AGENT_BUILTIN_TOOL_IDS);
+#     a tool left out of the list is absent from the request — measured with bash;
+#   - `task` (with task_append) is the delegation FEATURE, `features.delegation: false` removes both,
+#     and it is withheld with anything else: a subagent carries its own tool list, the hole kimi's
+#     agent file had to close the same way;
+#   - web_search and website_deploy need a MiniMax account (search and hosting are MiniMax's own
+#     services) and are never enabled, so they are not offered; nor are skill, update_goal and
+#     get_goal, which have no switch. task_query/task_output/task_stop control background shell
+#     commands and go with bash.
+# test_catalog_minimax_tools.py pins _BASE_CATALOG["minimax"]'s ids equal to this tuple.
+_MINIMAX_TOOLS = ("bash", "read", "write", "edit", "grep", "glob", "todowrite", "web_fetch", "task")
+_MINIMAX_BASH_COMPANIONS = ("task_query", "task_output", "task_stop")
+
+
+def _minimax_home(ws: pathlib.Path) -> pathlib.Path:
+    """MINIMAX_DATA_DIR for this workspace: config, the session store (sqlite + transcripts), the
+    global AGENTS.md, skills, mcp.json, logs. Under .harness/home so the sessions travel with the
+    checkpoint (a resume survives a recycled sandbox) and nothing of it is a produced file. It is
+    also the CLI's own default ($HOME/.minimax) under the runner's redirected HOME."""
+    return ws / ".harness" / "home" / ".minimax"
+
+
+def _minimax_has_session(home: pathlib.Path, session_id: str) -> bool:
+    """Is this conversation in the store? ASK THE STORE (checklist #10): MiniMax Code keeps sessions
+    in `v2/sqlite/runtime-state.sqlite`, table `local_runtime_sessions`, keyed by `session_id`
+    (0.5.4). It matters because `mcode exec --session <unknown id>` is a hard failure — exit 4,
+    `Session not found: <id>`, nothing on stdout (measured) — so an id the store does not hold must
+    never be passed. Read-only, and sqlite reads the WAL itself."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return False
+    db = home / "v2" / "sqlite" / "runtime-state.sqlite"
+    if not db.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{urllib.parse.quote(str(db))}?mode=ro", uri=True, timeout=5)
+        try:
+            row = con.execute("SELECT 1 FROM local_runtime_sessions WHERE session_id = ? LIMIT 1",
+                              (sid,)).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _minimax_tool_policy(tools_disabled: list[str] | None) -> dict:
+    """`agents.default` for the config: which built-in tools, features and bundled capabilities the
+    main agent has. Unknown names are ignored — an id outside _MINIMAX_TOOLS would be a toggle that
+    disables nothing, and the catalog test keeps the console from offering one.
+
+    THE ALLOWLIST CANNOT WITHHOLD ALL THREE TASK-CONTROL TOOLS, and that is the CLI's rule, not a
+    choice here: its tolerant parser (parseTolerantAgentCapabilityConfig, the one `agents.default`
+    goes through) does `if (!TASK_CONTROL_IDS.some(id => tools.includes(id))) tools.push(...ids)` —
+    a list naming NONE of task_query/task_output/task_stop gets ALL THREE back, to preserve their
+    old availability "even with tools: [] or delegation disabled". Measured on 0.5.4: a first
+    attempt that simply dropped them with bash saw the CLI send all three to the provider. So one is
+    named deliberately, and the other two are then excluded. task_stop is the one chosen because it
+    is the only one that can neither start nor read anything: task_query lists background tasks and
+    task_output reads their output logs, which on a session whose EARLIER turn had bash would hand a
+    later bash-less turn the output of a command it was not allowed to run. None of the three can
+    execute anything (a background task is created by the bash tool, which is withheld), so this is
+    a smaller surface rather than a repaired hole."""
+    off = {(t or "").split(" (")[0].strip().lower() for t in tools_disabled or []}
+    allowed = [t for t in _MINIMAX_TOOLS if t != "task" and t not in off]
+    allowed += list(_MINIMAX_BASH_COMPANIONS) if "bash" in allowed else ["task_stop"]
+    return {
+        "tools": allowed,
+        # MiniMax's hosted media tools (image/video/speech generation and understanding) and its
+        # bundled skills: the first need a MiniMax account; the second would sit beside the
+        # harness's own skill bundles and cost prompt on every turn (18 skills, 12 MB seeded).
+        "builtinTools": [],
+        "skills": [],
+        "features": {"webSearch": False,
+                     # A subagent brings its own tools back: off whenever anything is withheld.
+                     "delegation": not (off & set(_MINIMAX_TOOLS))},
+    }
+
+
+def _minimax_mcp_config(home: pathlib.Path, mcp_servers: list[dict] | None) -> pathlib.Path:
+    """$MINIMAX_DATA_DIR/mcp.json, the PROFILE file. The project-level `.mcp.json` would have to sit
+    at the workspace root, where it is a produced file handed back to the user on every turn.
+    Written on EVERY turn, empty included, so a server removed from the harness is gone.
+
+    Shapes per the runtime's own parser (0.5.4, service/mcp/runtime/config.ts): `command`/`args`/
+    `env` is stdio; `type` http | streamable-http | sse with `url` and `headers` is remote. The
+    declared transport travels (kimi's rule); a url with no declared transport is streamable HTTP.
+    A bearer the gateway resolved (`auth`) becomes the Authorization header, as for claude."""
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "http",
+                           "url": url}
+            # One place for a server's headers, for every writer and the bridge (_mcp_headers):
+            # this writer had its own copy, which is how eight other writers came to drop `auth`
+            # and lose the browser entirely. A copy that agrees today drifts tomorrow.
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry = {"command": str(argv[0]),
+                     "args": [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        servers[name] = entry
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "mcp.json"
+    path.write_text(json.dumps({"mcpServers": servers}, indent=2))
+    return path
+
+
+def _minimax_config(home: pathlib.Path, base_url: str, api_key: str, model: str,
+                    tools_disabled: list[str] | None) -> pathlib.Path:
+    """$MINIMAX_DATA_DIR/config.yaml, rewritten on every turn.
+
+    MiniMax Code takes a third-party endpoint only as a `custom_provider` entry in this file, and
+    the key only as a literal `options.apiKey`: `provider add --api-key-env` copies the variable's
+    VALUE into the file, and nothing in 0.5.4 reads an environment reference. What lands here is the
+    relay's per-turn placeholder, never the provider key, and the file is kept out of every
+    checkpoint (CHECKPOINT_EXCLUDE). The base URL is the relay's too, and a new runner means a new
+    relay port — safe because a session stores neither: its record holds the workspace and nothing
+    of the provider (measured), so a follow-up after a redeploy reads this turn's file.
+
+    `openai-completions` is the api: the relay carries OpenAI chat/completions, and the id reaches
+    the provider as written. External skill discovery is off (the workspace's .claude/.agents/
+    .minimax skills and the home ones, with walk-up): the harness names its skills itself, in this
+    home's skills/, which is kimi's --skills-dir reason. Telemetry is off in the file as well as by
+    MCODE_DISABLE_TELEMETRY; it defaults off in 0.5.4 anyway."""
+    cfg = {
+        "defaultModel": f"custom_provider:{_MINIMAX_PROVIDER_ID}/{model}",
+        "custom_provider": {_MINIMAX_PROVIDER_ID: {
+            "name": "HarnessRouter", "kind": "custom", "enabled": True,
+            "api": "openai-completions",
+            "options": {"apiKey": api_key, "baseURL": base_url, "authMode": "api-key"},
+            "models": {model: {}},
+        }},
+        "agents": {"default": _minimax_tool_policy(tools_disabled)},
+        "skills": {"external": {"enabled": False}},
+        "telemetry": {"enabled": False, "metrics": False, "diagnostics": False},
+    }
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "config.yaml"
+    # 0600 from the first byte: the CLI itself refuses a group/other-readable main config.
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(yaml.safe_dump(cfg, sort_keys=False))
+    os.chmod(path, 0o600)
+    return path
+
+
+def _build_minimax(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                   resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                   tools_disabled: list[str] | None = None, max_turns: int | None = None) -> list[str]:
+    """MiniMax Code (MiniMax-AI/minimax-code, MIT, the `mcode` CLI, 0.5.4) through `mcode exec`.
+
+    Every turn rides the loopback relay, the kimi rationale unchanged: the real key never enters the
+    sandbox, and the provider's own `model` and usage pass through for the served-model check and
+    billing. The relay token is in the ENVIRONMENT as well as in config.yaml, because
+    _relay_served_model and _relay_usage find the turn's route by the bearer in env (checklist #19).
+
+    One conversation per harness session: the CLI mints the id (`mvs_…`) on the first turn and the
+    stream announces it on every line; the next turn passes it back with --session, but only once
+    the store holds it (_minimax_has_session), because an unknown id is a hard failure here."""
+    pr = provider or "openai-api"
+    if pr not in MINIMAX_PROVIDERS:
+        raise HTTPException(400, f"unknown minimax provider '{pr}' (one of {sorted(MINIMAX_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "minimax needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    ws = pathlib.Path(cwd)
+    home = _minimax_home(ws)
+    # NO --timeout. It is a whole-run cap, and it is the wrong tool for this CLI's retry storm: with
+    # `--timeout 8s` against a stub answering 401 the run did stop early, and the record became
+    # `status: timeout` with an EMPTY error message — the provider's own sentence was lost. The turn's
+    # cap is the runner's (_run_turn_bg's killer), which does not rewrite the reason. 0.5.4 retries
+    # every error class five times with no setting anywhere to change it (the whole configurable
+    # surface was walked: see docs/support-matrix-notes.md), so a refusal takes 20-28 s to arrive.
+    _minimax_config(home, auth.base_url or "", auth.api_key or "", model, tools_disabled)
+    _minimax_mcp_config(home, mcp_servers)
+    env["MINIMAX_DATA_DIR"] = str(home)
+    env["MCODE_PROVIDER_API_KEY"] = auth.api_key or ""   # the relay placeholder, read back by the relay helpers
+    env["MCODE_DISABLE_TELEMETRY"] = "1"
+    # The one request an exec run makes on its own is a public model catalog (no credential). The
+    # release is built for region "cn", which fetches it from agent.minimax.cn; "en" takes it from
+    # models.dev itself (measured with a connect/fetch logger, 0.5.4). Nothing else in exec differs.
+    env["MAVIS_REGION"] = "en"
+    env["NO_COLOR"] = "1"
+    # --permission full: the sandbox is the boundary (claude --dangerously-skip-permissions, kimi
+    # --yolo). The default `smart` also runs an LLM classifier on tool calls — extra provider calls
+    # nobody asked for. stream-json is the versioned JSONL contract (schemaVersion 1).
+    cmd = ["mcode", "exec", "--output-format", "stream-json", "--permission", "full",
+           "--cwd", cwd, "--model", f"custom_provider:{_MINIMAX_PROVIDER_ID}/{model}"]
+    if max_turns:
+        # THE BUDGET: unset means unlimited. Reaching it is structural, status limit_exceeded.
+        cmd += ["--max-steps", str(int(max_turns))]
+    if resume_session_id and _minimax_has_session(home, resume_session_id):
+        cmd += ["--session", resume_session_id]
+    # `--` ends the options: a prompt that starts with "-" is still the prompt.
+    return cmd + ["--", prompt]
+
+
+# ── grok ─────────────────────────────────────────────────────────────────────────────────────────
+# Grok Build (xai-org/grok-build, Apache-2.0), the `grok` binary 1.0.41, one headless `grok -p`
+# process per turn. Everything below was measured against that binary at a logging stub (no xAI
+# account, no login), and the internals it relies on are read from the Apache-2.0 source.
+GROK_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+# The model's window, for grok's auto-compaction. A custom model with none declared is planned
+# against 200k; one value for the catalog is kimi's and codex's approximation, for their reason:
+# being wrong changes WHEN the agent compacts, never whether it answers.
+GROK_CONTEXT_WINDOW = os.environ.get("GROK_CONTEXT_WINDOW", "272000")
+# The one catalog key the runner defines. A fixed NEUTRAL name, never the model id: a key equal to a
+# built-in id (grok-4.6) is an OVERRIDE of that built-in, which keeps every field this file does not
+# set from xAI's own entry (its wire API among them). What the key names — model, base_url — is
+# rewritten on every turn and read from this file on every turn, a resumed session included
+# (measured: turn 2 of one session went to a different model, port and key after a rewrite), so
+# neither a model switch nor a relay port that changed with a redeploy is frozen into the session.
+_GROK_MODEL_KEY = "harness"
+_GROK_KEY_ENV = "HR_GROK_API_KEY"
+_GROK_SESSION_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+# The console's tool ids are the names the model sees (the `tools` of a live 1.0.41 request); the
+# CLI's --disallowed-tools matches its INTERNAL id, which is the same name except for the shell:
+# the model calls `run_terminal_command`, the policy knows it as `run_terminal_cmd`, and the wire
+# name matches nothing (measured: disallowing it left the tool in place). Only the tools that can be
+# withheld ALONE are offered: read_file cannot (search_replace requires a read tool and the session
+# then refuses to start), nor enter_plan_mode (exit_plan_mode requires it), nor the scheduler trio.
+# spawn_subagent is withheld through the CLI's `Agent` entry, which removes the whole subagent family
+# (spawn, its output and kill, and the scheduler that runs them) — measured.
+# gateway/tests/test_catalog_grok_tools.py pins _BASE_CATALOG["grok"]'s ids equal to this mapping's keys.
+_GROK_TOOL_POLICY_IDS = {
+    "run_terminal_command": "run_terminal_cmd", "search_replace": "search_replace",
+    "write": "write", "list_dir": "list_dir", "grep": "grep", "todo_write": "todo_write",
+    "spawn_subagent": "Agent", "monitor": "monitor", "workflow": "workflow",
+    "ask_user_question": "ask_user_question", "search_tool": "search_tool", "use_tool": "use_tool",
+}
+# WITHHOLDING THE SHELL MEANS WITHHOLDING EVERY SURFACE THAT RUNS A COMMAND, and grok has three
+# besides `run_terminal_cmd`. MEASURED 2026-09-28, A/B with a real model on a real turn: with only
+# run_terminal_command disabled, asked to run `echo <token> > shellproof.txt`, the agent called
+# `monitor` with that exact command (the docs call it the streaming counterpart of /loop: it "streams
+# events from a long-running script"), read the output back through
+# get_command_or_subagent_output, and the file was there with the token in it. `tool_enforcement:
+# "hard"` would have been an overstatement — UHP section 4.3 — on the strength of the tool list alone.
+# The subagent family is the same hole one step further out (a subagent carries its own tools, kimi's
+# lesson) and the scheduler runs commands on a timer; the CLI's `Agent` entry withholds all of them at
+# once, measured. So the console's Shell switch withholds monitor and Agent with it.
+_GROK_TOOL_IMPLIES = {"run_terminal_command": ("monitor", "Agent")}
+# Withheld on every turn, whatever the harness says. The media tools call xAI's Imagine models by an
+# xAI id at the turn's endpoint, which no other provider serves; send_feedback reports to xAI.
+_GROK_ALWAYS_WITHHELD = ("image_gen", "image_edit", "image_to_video", "reference_to_video",
+                         "send_feedback")
+
+
+def _grok_home(ws: pathlib.Path) -> pathlib.Path:
+    """GROK_HOME for this workspace: config.toml, sessions, skills and logs all resolve under it. It
+    sits under .harness/home so the sessions travel in the checkpoint and a resume survives a
+    recycled sandbox, and nothing of it is ever a produced file."""
+    return ws / ".harness" / "home" / ".grok"
+
+
+def _grok_has_session(home: pathlib.Path, session_id: str) -> bool:
+    """Is this conversation in grok's store, asked the way the CLI asks it?
+
+    Sessions live at sessions/<url-encoded cwd>/<id>/, and a directory is a resumable session only
+    when it holds summary.json (the CLI's own is_persisted_session_dir predicate). The id is matched
+    under ANY cwd key rather than re-encoding a path this code does not own; the CLI itself falls
+    back to "found locally under a different cwd" the same way.
+
+    This lookup is not only about continuity. `grok -r <id>` for an id the store does not hold
+    tries to restore the conversation FROM xAI's servers and starts an xAI login (a device-code
+    page) to do it — measured on 1.0.41. The runner therefore never passes -r for an id it did not
+    find here, and session_registry off turns the remote restore off besides (measured: the same
+    miss then fails in 0 s, "Session does not exist locally")."""
+    sid = (session_id or "").strip().lower()
+    if not _GROK_SESSION_ID_RE.match(sid):
+        return False
+    return any((home / "sessions").glob(f"*/{sid}/summary.json"))
+
+
+def _toml_str(s) -> str:
+    """A TOML basic string. JSON's string escapes are a subset of TOML's for everything json.dumps
+    escapes without ensure_ascii (quotes, backslash, the control characters); with it a character
+    outside the BMP became a surrogate PAIR of \\uXXXX escapes, which TOML refuses ("not a Unicode
+    scalar value"), so one emoji in an MCP argument left the whole config unparseable. Characters
+    go through as themselves; DEL, which JSON leaves alone and TOML forbids, is escaped."""
+    return json.dumps(str(s), ensure_ascii=False).replace("\x7f", "\\u007F")
+
+
+def _grok_config(home: pathlib.Path, model: str, base_url: str,
+                 mcp_servers: list[dict] | None) -> pathlib.Path:
+    """$GROK_HOME/config.toml, written on EVERY turn (a server removed from the harness is gone from
+    the next turn; a model switch reaches a resumed session). It never holds the key: the model's
+    `env_key` names the variable the relay's placeholder rides in.
+
+    Each switch below is measured on 1.0.41 against a stub, and each one is here for a reason:
+      remote_fetch/managed_config/campaigns off — no fetch of xAI's model catalog, managed policy or
+        remote patches; with them off a run under a sandbox that DENIES all non-loopback network
+        completed normally. telemetry off is the product-analytics master switch.
+      session_summary = the same key — the session title is a side call that otherwise goes to a
+        hard-coded `grok-4.6` AT THIS ENDPOINT: a 404 on any other provider, a second model's bill
+        on xAI's. It is one short call on the first turn of a conversation, metered by the relay.
+      turn_summary/title_refresh/session_recap off — a "dashboard line" call after EVERY turn and a
+        title regeneration on early turns, each a full-history request nobody here reads. Measured:
+        the environment variables of the same names did NOT stop them; these config keys do.
+      max_retries = 2 — see _build_grok's retry note.
+      session_registry off, use_leader off — the two doors to an xAI login (see _grok_has_session).
+      compat.claude / compat.cursor off — grok also loads ~/.claude and ~/.cursor skills, rules,
+        MCP servers and hooks, and under a shared $HOME those are trees another backend wrote.
+
+    AN OAUTH MCP SERVER DOES NOT START A LOGIN HERE, and that is the headless path's own doing rather
+    than a switch: `grok -p` sends `startupHints.nonInteractive`, and in that mode the OAuth probe
+    resolves to "needs interactive login" without building an OAuth client, so nothing reaches the
+    browser flow (which waits 600 s for a callback) and no tool call can escalate into it — the
+    escalation asks the client whether it has an auth manager first. MEASURED against a local stub
+    that answers 401 with a WWW-Authenticate challenge and serves the whole discovery chain: a
+    headless turn made two MCP requests, fetched no discovery document, attempted no browser (a
+    shimmed `open` recorded nothing), reported the server as `pending` in system/init and finished in
+    1 s; the model calling that server's tool through use_tool was refused ("Tool not found"), also
+    in 1 s. The SENSITIVITY PROOF that the rig could have seen it: the same stub under `grok mcp
+    doctor`, which probes interactively, fetched both well-known documents.
+    MCP: a stdio server is command/args/env/cwd; a remote one is url + headers, with `type = "sse"`
+    for an SSE server. In practice one does not reach this function as SSE: grok is in
+    _BRIDGED_TRANSPORTS because its SSE client dials streamable HTTP instead (see there), so the
+    runner has already turned such a server into a stdio launcher for the bridge. The branch stays
+    for a server that arrives untouched, and writes the shape the CLI's own `mcp add --transport sse`
+    writes. A server's `auth` becomes its Authorization header, as on every other base."""
+    lines = [
+        "[features]", "telemetry = false", "remote_fetch = false", "managed_config = false",
+        "campaigns = false", "turn_summary = false", "title_refresh = false", "session_recap = false",
+        "", "[telemetry]", "trace_upload = false", "mixpanel_enabled = false",
+        "", "[cli]", "auto_update = false", "session_registry = false", "use_leader = false",
+        "", "[models]", f"default = {_toml_str(_GROK_MODEL_KEY)}",
+        f"session_summary = {_toml_str(_GROK_MODEL_KEY)}", "max_retries = 2",
+        "", f"[model.{_GROK_MODEL_KEY}]", f"model = {_toml_str(model)}",
+        f"base_url = {_toml_str(base_url)}", f"env_key = {_toml_str(_GROK_KEY_ENV)}",
+        f"name = {_toml_str(model)}", 'api_backend = "chat_completions"',
+        f"context_window = {int(GROK_CONTEXT_WINDOW)}",
+    ]
+    for vendor in ("claude", "cursor"):
+        lines += ["", f"[compat.{vendor}]"] + [f"{cell} = false" for cell in
+                                               ("skills", "rules", "agents", "mcps", "hooks")]
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        block = ["", f"[mcp_servers.{name}]"]
+        if url:
+            block.append(f"url = {_toml_str(url)}")
+            if str(sv.get("transport") or "").lower() == "sse":
+                block.append('type = "sse"')
+            hdrs: dict[str, str] = {}
+            auth = sv.get("auth")
+            if auth:
+                hdrs["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+            if isinstance(sv.get("headers"), dict):
+                hdrs.update({str(k): str(v) for k, v in sv["headers"].items() if k and v is not None})
+            if hdrs:
+                block.append("headers = { " + ", ".join(f"{_toml_str(k)} = {_toml_str(v)}"
+                                                         for k, v in hdrs.items()) + " }")
+        elif sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            args = [str(x) for x in argv[1:]] + [str(x) for x in (sv.get("args") or [])]
+            block.append(f"command = {_toml_str(argv[0])}")
+            block.append("args = [" + ", ".join(_toml_str(a) for a in args) + "]")
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                block.append("env = { " + ", ".join(f"{_toml_str(k)} = {_toml_str(v)}"
+                                                     for k, v in envv.items()) + " }")
+            if sv.get("cwd"):
+                block.append(f"cwd = {_toml_str(sv['cwd'])}")
+        else:
+            continue
+        lines += block
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "config.toml"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                tools_disabled: list[str] | None = None, max_turns: int | None = None,
+                partial: bool = False) -> list[str]:
+    """Grok Build (1.0.41), headless: `grok -p … --output-format streaming-messages-json`, which is
+    Claude Code's stream-json (system/init with session_id, assistant/user messages, a terminal
+    result), so the normaliser is the claude passthrough plus two repairs (see _grok_to_claude).
+
+    EVERY TURN RIDES THE LOOPBACK RELAY, for the qwen/kimi reasons and one of grok's own: its only
+    usage report excludes side calls (the session title), so the relay's count of every call the
+    provider answered is the bill. The placeholder rides HR_GROK_API_KEY, which the config's
+    env_key names — the environment, where _relay_served_model and _relay_usage look for it. The
+    model is a custom chat/completions entry; grok sends the configured id verbatim (no client-side
+    rewriting, captured at the stub).
+
+    No xAI login, ever: a key-only run needs none, and the two paths that would start one are shut
+    (see _grok_has_session). stdin is not read in headless mode, so nothing can wait on it.
+
+    Retries: the defaults stack a sampler retry loop under a turn-level transient retry (3 more
+    attempts, backoff up to 35 s); a provider answering 500 every time took 29 requests and more
+    than nine minutes to fail. max_retries = 2 plus GROK_TURN_TRANSIENT_RETRY=0: 3 requests, 3 s,
+    and the provider's own sentence as the reason. A 401 or an unreachable endpoint fails in 1 s."""
+    pr = provider or "openai-api"
+    if pr not in GROK_PROVIDERS:
+        raise HTTPException(400, f"unknown grok provider '{pr}' (one of {sorted(GROK_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "grok needs a base_url (none configured)")
+    if not auth.api_key:
+        raise HTTPException(400, "grok needs an API key")
+    # gemini_schemas: grok declares nullable parameters as a JSON-schema type LIST (run_terminal_command's
+    # `timeout` is {"type": ["integer", "null"], "format": "uint64", "minimum": 0, …}). Through
+    # Vercel a gemini model took the first request of a turn and refused the next one, the one
+    # carrying the tool result: "`run_terminal_command` functionDeclaration `parameters.timeout`
+    # schema specified other fields alongside any_of" (gemini-3.5-flash-lite, measured 2026-09-27),
+    # so a gemini turn died at its first tool call. The relay's Gemini normaliser (a type list
+    # becomes one type plus nullable) is applied on this route for gemini ids on every channel.
+    relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, gemini_schemas=True,
+                                                usage_no_nulls=True)
+    ws = pathlib.Path(cwd)
+    home = _grok_home(ws)
+    _grok_config(home, model, relay_base, mcp_servers)
+    env["GROK_HOME"] = str(home)
+    env[_GROK_KEY_ENV] = relay_tok
+    # The global fallbacks grok would read for an xAI model: never the turn's credential.
+    for k in ("XAI_API_KEY", "GROK_CODE_XAI_API_KEY", "GROK_MODELS_BASE_URL", "GROK_DEPLOYMENT_KEY"):
+        env.pop(k, None)
+    env["GROK_DISABLE_AUTOUPDATER"] = "1"
+    env["GROK_TELEMETRY_ENABLED"] = "0"
+    env["GROK_SESSION_REGISTRY"] = "0"
+    env["GROK_TURN_TRANSIENT_RETRY"] = "0"
+    # Cross-session memory is grok's own store outside the conversation; the harness's memory is the
+    # session. Folder trust gates the workspace's AGENTS.md and skills behind an interactive grant a
+    # headless run cannot give (docs: "Headless startup with these sources requires --trust"); the
+    # sandbox is the trust boundary, the codex/qwen --yolo reasoning.
+    env["GROK_MEMORY"] = "0"
+    env["GROK_FOLDER_TRUST"] = "0"
+    env["NO_COLOR"] = "1"
+    sid = (resume_session_id or "").strip().lower()
+    resumed = bool(sid) and _grok_has_session(home, sid)
+    # `--single=<prompt>` so a prompt that begins with a dash is the prompt, not a flag (measured).
+    cmd = ["grok", f"--single={prompt}", "-m", _GROK_MODEL_KEY,
+           "--output-format", "streaming-messages-json", "--always-approve"]
+    # The runner owns the conversation id: -s names a NEW session (a uuid the store must not hold),
+    # -r continues one the store holds. The init event reports it, and the gateway sends it back.
+    cmd += ["-r", sid] if resumed else ["-s", str(uuid.uuid4())]
+    withheld = [_GROK_TOOL_POLICY_IDS[t] for t in (tools_disabled or []) if t in _GROK_TOOL_POLICY_IDS]
+    for t in (tools_disabled or []):
+        for implied in _GROK_TOOL_IMPLIES.get(t, ()):
+            if implied not in withheld:
+                withheld.append(implied)
+    cmd += ["--disallowed-tools", ",".join(list(_GROK_ALWAYS_WITHHELD) + withheld)]
+    if max_turns:
+        # Unset is unbounded; reaching it ends the run as `error_max_turns`, which reads as failed.
+        cmd += ["--max-turns", str(int(max_turns))]
+    if partial:
+        cmd.append("--include-partial-messages")
     return cmd
 
 
@@ -5119,6 +6174,7 @@ def _opencode_eof(state: dict, rc: int) -> list[dict]:
     A non-zero exit with no error event and no text is the case that produced
     "exit_code=1, no diagnostic output" on a live turn: say so explicitly rather than leaving the
     trace blank."""
+    cli = state.get("_cli_name") or "opencode"
     usage = state.get("_oc_usage") or {}
     final = state.get("final", "")
     err = state.get("_oc_error", "")
@@ -5130,7 +6186,7 @@ def _opencode_eof(state: dict, rc: int) -> list[dict]:
                  "result": final, "usage": usage}]
     tools = state.get("_oc_tool_errors") or []
     why = ("; ".join(t for t in tools if t)[:500]
-           or f"opencode exited {rc} without reporting an error")
+           or f"{cli} exited {rc} without reporting an error")
     return [{"type": "result", "subtype": "error", "is_error": True,
              "result": final or why, "usage": usage}]
 
@@ -5302,15 +6358,19 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
-    if auth.base_url and auth.api_key and _opencode_npm(auth, model, pr) != "@ai-sdk/anthropic":
+    if auth.base_url and auth.api_key:
+        # EVERY keyed turn rides the relay, the Messages shape included. It was left off the relay
+        # when the relay read only a bearer; it reads x-api-key now and sends Anthropic's own API
+        # the key that way (goose's Messages path, #352), so a direct Anthropic connection no longer
+        # hands the CLI — and with it the agent's shell — the real key, and its turns record the
+        # served model and usage like every other.
         # Every OpenAI-shape opencode turn rides the loopback relay, as pi's and qwen's do, not only
         # a custom endpoint: request shapes ai-sdk emits but strict endpoints refuse are repaired in
         # flight (Azure's gpt-5.x deployments 400 on max_tokens, captured live 2026-08-27), Gemini
         # 3's thought signatures are replayed (2026-09-06: with a Google key opencode reached Google
         # directly, and every artifact turn on a Gemini 3.x id failed while pi, dsh and qwen passed
         # through the relay), and the real key stays in this process; opencode's env gets a
-        # per-turn placeholder. A Messages-shape turn keeps its direct base: the relay speaks
-        # bearer auth, and Anthropic takes the key in x-api-key.
+        # per-turn placeholder.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
@@ -5450,7 +6510,7 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
             msg = str(data.get("message") or err.get("message") or err.get("name") or "")
         elif err:
             msg = str(err)
-        state["_oc_error"] = msg or "opencode error"
+        state["_oc_error"] = msg or f"{state.get('_cli_name') or 'opencode'} error"
         return pre
     return pre
 
@@ -5458,6 +6518,220 @@ def _opencode_to_claude(obj: dict, state: dict) -> list[dict]:
 # opencode's stream has no terminal event, so the normalizer carries an `eof` the run loop calls
 # when the process exits. See _run_turn_bg.
 _opencode_to_claude.eof = _opencode_eof   # type: ignore[attr-defined]
+
+
+# ── Kilo CLI (Kilo-Org/kilocode, MIT), pinned 7.8.1 ────────────────────────────────────────────
+# An opencode fork ("Kilo CLI is a fork of OpenCode", its README): `kilo run --format json` is
+# opencode's emitter, the config is opencode's schema read from KILO_CONFIG, and the provider block,
+# the MCP map and `skills.paths` are the same shapes. So this backend reuses opencode's package
+# choice, MCP translation and normaliser, and differs where Kilo does — every difference below was
+# measured on the pinned binary against a logging stub (no provider, no key, no cost):
+#   - it phones home unless told not to: us.i.posthog.com (telemetry), models.dev (catalog) and
+#     api.kilo.ai (Kilo's own gateway and notifications). The env switches below and
+#     `enabled_providers` in the config take all three to zero; each was checked by A/B through a
+#     proxy that logged every CONNECT.
+#   - it adds scheduling tools that resume the session LATER (schedule_wakeup, cron_*, goal), a
+#     contract a one-process-per-turn backend cannot keep, so they are always denied;
+#   - `write` and `apply_patch` are gated by the `edit` permission key (permission.disabled maps
+#     all three onto it), so only `edit` withholds them — a `write` rule is a silent no-op;
+#   - an unknown `--session` fails the run with nothing on stdout, so the store is asked first.
+
+KILO_PROVIDERS = OPENCODE_PROVIDERS
+_KILO_KEY_ENV = "HR_KILO_KEY"
+
+# Permission keys that match a tool Kilo 7.8.1 offers the model (the request's `tools`, captured at
+# a stub for gpt-5.4 and claude-sonnet-4.6), plus the keys its permission schema names. A deny on
+# one of these removes the tool from the request — measured, not assumed. `write`/`apply_patch` are
+# deliberately absent: they are edit's (see above), and accepting them would disable nothing.
+_KILO_PERMS = {"bash", "read", "edit", "glob", "grep", "list", "task", "webfetch", "websearch",
+               "todowrite", "question", "skill", "lsp", "background_process", "kilo_local_recall",
+               "board_post", "board_read", "link_pr", "agent_manager", "agent_manager_models",
+               "notebook_read", "notebook_edit", "notebook_execute"}
+
+# Tools whose whole promise is a LATER turn the harness starts on its own ("the harness resumes this
+# session with the prompt you give it", "the goal loop continues automatically after this turn").
+# Here every turn is one process the gateway starts; nothing ever resumes the session unasked, so
+# the model would tell the person it will come back and it never would. Always denied.
+_KILO_ALWAYS_DENY = ("schedule_wakeup", "cancel_wakeup", "cron_create", "cron_delete", "cron_list",
+                     "goal")
+
+# The environment that keeps a turn inside the sandbox's own business. Each one names a request the
+# binary otherwise makes (or a place it otherwise reads) on every turn.
+_KILO_ENV = {
+    "KILO_TELEMETRY_LEVEL": "off",          # PostHog; anything but "all" disables (kilo-telemetry)
+    "KILO_DISABLE_MODELS_FETCH": "1",       # models.dev catalog download
+    "KILO_DISABLE_AUTOUPDATE": "1",         # a pinned backend never replaces itself
+    "KILO_DISABLE_SESSION_INGEST": "1",     # session upload to Kilo's cloud (needs a Kilo login anyway)
+    "KILO_NO_DAEMON": "1",                  # never attach a turn to a daemon an earlier task started
+    "KILO_DISABLE_CLAUDE_CODE": "1",        # ~/.claude and .claude/skills: another backend's trees
+}
+
+
+def _kilo_npm(auth: Auth, model: str, pr: str) -> str:
+    """Which ai-sdk package serves this turn — opencode's choice with ONE clause dropped.
+
+    opencode sends a claude id on an AGGREGATOR (`tokenrouter`, which is how vercel, llmtr,
+    tokenrouter and the hosted door are all wired) through `@ai-sdk/anthropic`, and an
+    Anthropic-shape turn cannot ride the loopback relay: the relay authenticates a route by the
+    placeholder BEARER it handed out, while a Messages client sends `x-api-key`. The turn then runs
+    with no relay in front of it, and the consequence is measured: on 2026-09-27/28, in one session
+    on integration:vercel, `gpt-5.4-mini` recorded `served_model='openai/gpt-5.4-mini'` and
+    `claude-haiku-4.5` recorded `served_model=None` — so rule 2 of docs/harness-verification.md
+    could not be evaluated for the claude row at all, and a green row proved nothing about which
+    model ran.
+
+    An aggregator serves a claude id over chat/completions perfectly well: cline and qwen reach
+    every claude id that way, and minimax measured `anthropic/claude-haiku-4.5` on this same
+    provider and model id through the relay on 2026-09-28. So the package choice, not the protocol,
+    was the reason the observability surface was dark, and on THIS backend the choice is ours.
+
+    A DIRECT Anthropic connection keeps Messages: `api.anthropic.com` speaks nothing else. Since
+    0.29.0 it rides the relay as well (the relay reads x-api-key and sends Anthropic the key that
+    way), so its turns record the served model too and the CLI holds a placeholder."""
+    if auth.api_format == "anthropic" or pr == "anthropic":
+        return "@ai-sdk/anthropic"     # a direct Anthropic endpoint; no relay (see above)
+    if auth.api_format == "openai":
+        return "@ai-sdk/openai-compatible"
+    if pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        return "@ai-sdk/openai"          # /v1/responses
+    return "@ai-sdk/openai-compatible"   # /v1/chat/completions
+
+
+def _kilo_denies(tools_disabled: list[str] | None) -> dict:
+    """Harness tool ids -> {<key>: "deny"}, plus the always-denied scheduling tools. Catalog labels
+    arrive "bash (Bash)"-style; the id is kept. Unknown names are dropped rather than written: the
+    schema accepts any key, so a wrong one would be stored, reported as off, and match nothing."""
+    out: dict = {t: "deny" for t in _KILO_ALWAYS_DENY}
+    for raw in tools_disabled or []:
+        name = (raw or "").split(" (")[0].strip().lower()
+        if name in ("write", "apply_patch"):
+            name = "edit"     # the one key that withholds them
+        if name in _KILO_PERMS:
+            out[name] = "deny"
+    if out.get("bash") == "deny":
+        # background_process runs shell commands too (`start`/`monitor` take a `command`), so with
+        # only bash withheld the shell is still one tool away. Measured 2026-09-27: bash denied, the
+        # model's bash call refused as "unavailable tool", background_process still offered.
+        out["background_process"] = "deny"
+    return out
+
+
+def _kilo_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
+                 skills_dir: str | None, tools_disabled: list[str] | None = None,
+                 pr: str = "") -> str:
+    """Write <cwd>/.harness/kilo.json and return the provider-qualified model id for --model."""
+    if not auth.base_url:
+        raise HTTPException(400, "kilo needs a base_url (none configured)")
+    base = (auth.base_url or "").rstrip("/")
+    if not auth.api_format and not base.endswith("/v1"):
+        base += "/v1"   # every ai-sdk package appends its own resource; see _opencode_config
+    cfg: dict = {
+        "$schema": "https://app.kilo.ai/config.json",
+        "provider": {
+            "hr": {
+                "npm": _kilo_npm(auth, model, pr),
+                "options": {"baseURL": base, "apiKey": "{env:%s}" % _KILO_KEY_ENV},
+                "models": {model: {}},
+            }
+        },
+        # Only our provider is loaded. Without this Kilo also initialises its own gateway provider
+        # and calls api.kilo.ai on every turn, logged in or not (measured: two CONNECTs a turn,
+        # zero with this key).
+        "enabled_providers": ["hr"],
+        "snapshot": False,   # opencode's undo history, the 699 MB half of #193; see _opencode_config
+        "permission": _kilo_denies(tools_disabled),
+    }
+    mcp = _opencode_mcp(mcp_servers)
+    if mcp:
+        cfg["mcp"] = mcp
+    if skills_dir:
+        cfg["skills"] = {"paths": [skills_dir]}
+    hdir = pathlib.Path(cwd, ".harness")
+    hdir.mkdir(exist_ok=True)
+    (hdir / "kilo.json").write_text(json.dumps(cfg, indent=2))
+    return f"hr/{model}"
+
+
+def _kilo_has_session(env: dict, session_id: str) -> bool:
+    """Is this Kilo session in this workspace's database? Asked of the store, not searched for
+    (checklist #10): kilo.db is SQLite with `session(id TEXT PRIMARY KEY, ...)` at 7.8.1, and
+    `--session <id>` looks the id up in exactly that table. Read-only; sqlite reads the WAL itself,
+    so the previous turn's not-yet-checkpointed write is visible."""
+    home = env.get("HOME") or ""
+    if not home or not session_id:
+        return False
+    db_path = pathlib.Path(home) / ".local" / "share" / "kilo" / "kilo.db"
+    if not db_path.exists():
+        return False
+    db = None
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+        return db.execute("SELECT 1 FROM session WHERE id = ? LIMIT 1", (session_id,)).fetchone() is not None
+    except Exception:  # noqa: BLE001 — no table yet, mid-write, unreadable: "not there"
+        return False
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _build_kilo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in KILO_PROVIDERS:
+        raise HTTPException(400, f"unknown kilo provider '{pr}' (one of {sorted(KILO_PROVIDERS)})")
+    if auth.base_url and auth.api_key:
+        # EVERY keyed turn rides the relay, the Messages shape included. It was left off the relay
+        # when the relay read only a bearer; it reads x-api-key now and sends Anthropic's own API
+        # the key that way (goose's Messages path, #352), so a direct Anthropic connection no longer
+        # hands the CLI — and with it the agent's shell — the real key, and its turns record the
+        # served model and usage like every other.
+        # opencode's rule, for opencode's reasons: every OpenAI-shape turn rides the loopback
+        # relay (shape repairs, Gemini signatures, served model and usage read off the bytes), and
+        # the real key stays in this process.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    if auth.api_key:
+        env[_KILO_KEY_ENV] = auth.api_key
+    qualified = _kilo_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr)
+    env["KILO_CONFIG"] = os.path.join(cwd, ".harness", "kilo.json")
+    env.update(_KILO_ENV)
+    cmd = ["kilo", "run", "--format", "json", "--model", qualified,
+           "--auto",       # nobody is attached to answer a permission ask; the sandbox is the boundary
+           "--pure",       # no external plugins: project config is a file the task itself can write
+           "--thinking"]   # reasoning events are emitted only with this flag (run.ts)
+    if resume_session_id and _kilo_has_session(env, resume_session_id):
+        cmd += ["--session", resume_session_id]
+    elif resume_session_id:
+        # An unknown id is "Error: Session not found" on stderr, exit 1, and nothing on stdout, and
+        # every later turn would pass the same dead id. Start fresh in the same workspace;
+        # _resume_lost reads the missing --session and the reply says the history is gone.
+        print(f"[resume] kilo: session {resume_session_id} not in this workspace — starting fresh",
+              flush=True)
+    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    return cmd
+
+
+def _kilo_to_claude(obj: dict, state: dict) -> list[dict]:
+    """opencode's normaliser under Kilo's name. The 7.8.1 emitter differs from opencode's in two
+    ways the shared code already handles: an error event's `error` may be a bare STRING ("run
+    ended without an assistant message; the model returned no output", an auto-rejected
+    permission), and the process exits 1 on any error. A provider failure arrives as a structural
+    error event (APIError with data.message; measured with a 401 and a 503), never as assistant
+    text, so there is no prose prefix to strip."""
+    state.setdefault("_cli_name", "kilo")
+    return _opencode_to_claude(obj, state)
+
+
+def _kilo_eof(state: dict, rc: int) -> list[dict]:
+    state.setdefault("_cli_name", "kilo")
+    return _opencode_eof(state, rc)
+
+
+_kilo_to_claude.eof = _kilo_eof   # type: ignore[attr-defined]
 
 
 def _gemini_to_claude(obj: dict, state: dict) -> list[dict]:
@@ -6545,6 +7819,132 @@ def _kimi_mcp_unavailable(state: dict) -> list[dict]:
 _kimi_to_claude.eof = _kimi_eof   # type: ignore[attr-defined]
 
 
+def _minimax_text(v) -> str:
+    """A tool output's text: MiniMax Code's tool results are `{content: [{type: text, text}], details}`
+    (pi's shape); anything else is kept as JSON rather than dropped."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict) and isinstance(v.get("content"), list):
+        parts = [str(p.get("text") or "") for p in v["content"]
+                 if isinstance(p, dict) and p.get("type") == "text"]
+        if parts:
+            return "".join(parts)
+    if v is None:
+        return ""
+    return json.dumps(v, default=str)
+
+
+def _minimax_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `mcode exec --output-format stream-json` line to zero+ canonical claude events.
+
+    The stream is MiniMax Code's versioned exec contract (schemaVersion 1, packages/tui/src/headless/
+    events.ts in 0.5.4), confirmed line by line against a stub:
+
+        exec.started / session.started | session.resumed / turn.started      every line: sessionId
+        item.started | item.updated | item.completed  item.type agent_message | reasoning | tool_call
+        turn.completed {model, usage, usageSource}  |  turn.failed {status, error{category,message}}
+        exec.completed {result: {status, output, error, …}}                   always the last line
+
+    Only COMPLETED items are rendered: a tool call's completed item carries its input, its output
+    and its status together (1 start, 2 finished, 3 failed, 4 preparing, 5 prepared).
+
+    A PROVIDER FAILURE IS STRUCTURAL here (checklist #8, measured with a 401 and a 503 at a stub):
+    turn.failed carries `BYOK provider … upstream error: 401 …`, exit 4, and no agent_message at all
+    — nothing is narrated as assistant text, so no prefix regex is needed, and one would only ever
+    turn an answer that mentions an error into a failure.
+
+    The result carries NO model and NO usage on purpose. The CLI's `model` is the id it was asked
+    for, not what the provider served, and a result with a model is never checked against the relay
+    (_run_turn_bg only fills an empty one): rule 2 would compare the request with itself. Both come
+    from the relay, which reads the provider's own bytes."""
+    t = obj.get("type")
+    out: list[dict] = []
+    sid = obj.get("sessionId")
+    if sid and not state.get("_mm_init"):
+        # _run_turn_bg records the conversation id only from a system/init event; without it every
+        # follow-up would silently start a new conversation (the recycle lesson).
+        state["_mm_init"] = True
+        out.append({"type": "system", "subtype": "init", "session_id": str(sid),
+                    "model": state.get("model")})
+    if t == "item.completed":
+        item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
+        it = item.get("type")
+        if it == "agent_message":
+            txt = item.get("content")
+            if isinstance(txt, str) and txt.strip():
+                state["final"] = txt
+                out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}})
+        elif it == "reasoning":
+            txt = item.get("content")
+            if isinstance(txt, str) and txt.strip():
+                out.append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": txt}]}})
+        elif it == "tool_call":
+            call = item.get("toolCall") if isinstance(item.get("toolCall"), dict) else {}
+            tuid = str(call.get("id") or item.get("id") or "tool")
+            seen = state.setdefault("_mm_tools", set())
+            if tuid in seen:
+                return out
+            seen.add(tuid)
+            args = call.get("input")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {"arguments": args}
+            if not isinstance(args, dict):
+                args = {}
+            failed = call.get("status") == 3 or bool(call.get("error"))
+            body = _minimax_text(call.get("error") if failed and call.get("error") else call.get("output"))
+            out.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tuid, "name": str(call.get("name") or "tool"), "input": args}]}})
+            out.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tuid, "is_error": failed, "content": body}]}})
+        return out
+    if t == "turn.failed":
+        err = obj.get("error") if isinstance(obj.get("error"), dict) else {}
+        state["_mm_error"] = str(err.get("message") or "")
+        return out
+    if t == "exec.completed":
+        res = obj.get("result") if isinstance(obj.get("result"), dict) else {}
+        status = res.get("status")
+        state["_mm_done"] = True
+        if status == "succeeded":
+            answer = res.get("output")
+            if not isinstance(answer, str):
+                answer = state.get("final") or ("" if answer is None else json.dumps(answer, default=str))
+            state["final"] = answer or state.get("final", "")
+            out.append({"type": "result", "subtype": "success", "is_error": False,
+                        "result": state["final"], "usage": {}})
+            return out
+        err = res.get("error") if isinstance(res.get("error"), dict) else {}
+        msg = str(err.get("message") or state.get("_mm_error") or "")
+        if status == "limit_exceeded":
+            out.append({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                        "result": msg or "the run reached its step limit (--max-steps)", "usage": {}})
+        else:
+            if not msg and status == "timeout":
+                msg = "the run timed out"
+            out.append({"type": "result", "subtype": "error", "is_error": True, "result": msg,
+                        "usage": {}})
+        return out
+    return out
+
+
+def _minimax_eof(state: dict, rc: int) -> list[dict]:
+    """The process ended without an exec.completed line: a failure before the stream began
+    (`Session not found: <id>`, an invalid config, a crash) prints one line on stderr and exits
+    non-zero. The result is left EMPTY so the run loop fills it from that line — a placeholder here
+    would shadow the real reason, as in _kimi_eof."""
+    if rc == 0 and state.get("final"):
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state["final"], "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": state.get("_mm_error", ""), "usage": {}}]
+
+
+_minimax_to_claude.eof = _minimax_eof   # type: ignore[attr-defined]
+
+
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
 # in turn(): claude/codex run through _run_turn_bg over stdout JSONL; hermes has its own driver
 # (_run_hermes_bg — DB-polling, no stdout events), so it carries no normalizer.
@@ -6626,6 +8026,237 @@ def _openhands_eof(state: dict, rc: int) -> list[dict]:
 _openhands_to_claude.eof = _openhands_eof   # type: ignore[attr-defined]
 
 
+def _grok_tool_output(content):
+    """What a tool card shows for a grok tool result. The CLI serialises two envelopes into the
+    tool_result's content string (measured on 1.0.41): the shell's record — {"type": "Bash",
+    "output": [bytes…], "output_for_prompt": "exit: 0\\n<what it printed>", "exit_code", "command", …}
+    — and ACP content blocks, [{"type": "content", "content": {"type": "text", "text": …}}], which is
+    how a refused or failed call comes back. The reader wants the text the model was given, as on
+    every other base's card; anything else is shown as it came."""
+    if not isinstance(content, str):
+        return content
+    try:
+        doc = json.loads(content)
+    except ValueError:
+        return content
+    if isinstance(doc, dict) and isinstance(doc.get("output_for_prompt"), str):
+        return doc["output_for_prompt"]
+    if isinstance(doc, list) and doc and all(isinstance(b, dict) for b in doc):
+        texts = []
+        for b in doc:
+            inner = b.get("content") if isinstance(b.get("content"), dict) else b
+            if isinstance(inner.get("text"), str):
+                texts.append(inner["text"])
+        if texts:
+            return "\n".join(texts)
+    return content
+
+
+def _grok_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `grok --output-format streaming-messages-json` line to canonical claude events.
+
+    The stream IS Claude Code's stream-json (measured on 1.0.41): system/init with the session id,
+    assistant messages holding text/thinking/tool_use, user messages holding tool_result, and one
+    terminal result — so every line goes through the claude passthrough, with two repairs to the
+    result:
+
+      A failure carries its reason in `errors[]` and no `result` at all. A provider failure is
+      STRUCTURED, never narrated as assistant text: 401, 500 after retries and an unreachable
+      endpoint each ended `subtype: error_during_execution, is_error: true, errors: ["Internal
+      error: …Unauthorized (401) from …: Incorrect API key …"]` and exit 1 (all measured at a stub).
+      So no error prefix has to be recognised in an answer — an answer that merely talks about an
+      error is an answer — and the reason is lifted into `result`, where the run loop reads it.
+
+      `usage` is dropped so the relay's count stamps the row. grok's own figure excludes side calls
+      (the session title on a conversation's first turn: "Compaction and other side-model calls are
+      excluded"), and the relay saw every call the provider answered. `model` is absent on the
+      result and the init's `model` is the runner's catalog KEY, so the served model is the relay's
+      too."""
+    t = obj.get("type")
+    if t == "system" and obj.get("subtype") == "init":
+        # The init names the runner's catalog key ("harness"), not a model: say what was asked for.
+        obj = {**obj, "model": state.get("model") or obj.get("model")}
+    elif t == "user":
+        content = (obj.get("message") or {}).get("content")
+        if isinstance(content, list):
+            fixed = [{**c, "content": _grok_tool_output(c.get("content"))}
+                     if isinstance(c, dict) and c.get("type") == "tool_result" else c for c in content]
+            obj = {**obj, "message": {**(obj.get("message") or {}), "content": fixed}}
+    elif t == "result":
+        obj = {k: v for k, v in obj.items() if k not in ("usage", "modelUsage", "total_cost_usd")}
+        if obj.get("is_error") and not str(obj.get("result") or "").strip():
+            errs = [str(e) for e in (obj.get("errors") or []) if str(e).strip()]
+            reason = "; ".join(errs) or f"grok run ended {obj.get('subtype') or 'in error'}"
+            obj["result"] = reason[:2000]
+        obj["usage"] = {}
+    return _claude_passthrough(obj, state)
+
+
+def _grok_eof(state: dict, rc: int) -> list[dict]:
+    """The process ended without a result line: a crash or a kill. A failure that happens before the
+    session exists still writes its result (a refused --disallowed-tools set did, measured), so this
+    is the rarer path. The result is left EMPTY so the run loop fills it from the captured stderr
+    (`Error: …`), which _failure_reason prefers to a sentence of ours."""
+    if rc == 0:
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": {}}]
+
+
+_grok_to_claude.eof = _grok_eof   # type: ignore[attr-defined]
+
+
+# ── agentzero: Agent Zero (agent0ai/agent-zero, MIT), driven in process ────────────────────────────
+# The turn process is runner/agentzero_driver.py under Agent Zero's own venv: it builds an
+# AgentContext, sends the message, and re-emits what Agent Zero's extension hooks observe as NDJSON
+# in the dsh_driver shape. The framework has no CLI and no headless mode (it is a web UI shipped as a
+# Docker image), so driving the framework's own loop in process is the one-process-per-turn form it
+# can take; see the driver's docstring for every door it goes through.
+AGENTZERO_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+AGENTZERO_PYTHON = os.environ.get("HR_AGENTZERO_PYTHON", "/data/agent-tools/agentzero-venv/bin/python")
+AGENTZERO_SRC = os.environ.get("HR_AGENTZERO_SRC", "/data/agent-tools/agentzero-src")
+AGENTZERO_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agentzero_driver.py")
+# The conversation's context id: constant, because the store is in the workspace (the driver's
+# SESSION_ID; a follow-up after a recycle finds it by the same name).
+_AGENTZERO_SESSION = "harness"
+
+
+def _build_agentzero(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                     tools_disabled: list[str] | None = None,
+                     max_turns: int | None = None) -> list[str]:
+    """Agent Zero v2.13, one turn: the job rides the environment as JSON (HR_AGENTZERO_JOB), the
+    driver emits NDJSON. Not argv: /proc/<pid>/cmdline is readable by every session's uid in the
+    container, and the job names the relay route and each MCP server's credentials.
+
+    The model is Agent Zero's provider `other` ("Other OpenAI compatible": litellm's openai
+    provider with an api_base) pointed at the loopback relay, so the id reaches the provider as
+    written — Agent Zero sends `other` models as `openai/<id>` to litellm, which strips its own
+    prefix and nothing else. The key is the relay's placeholder, in OTHER_API_KEY: the variable
+    Agent Zero's models.get_api_key reads for provider `other`, and the ENVIRONMENT, which is where
+    _relay_served_model and _relay_usage find the turn's route (the openhands lesson: a token that
+    lived only in argv left every turn with no served model and no usage)."""
+    pr = provider or "openai-api"
+    if pr not in AGENTZERO_PROVIDERS:
+        raise HTTPException(400,
+                            f"unknown agentzero provider '{pr}' (one of {sorted(AGENTZERO_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, "agentzero needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env["OTHER_API_KEY"] = auth.api_key or ""
+    job = {"cwd": cwd, "a0_src": AGENTZERO_SRC, "model": model, "prompt": prompt,
+           "base_url": auth.base_url,
+           "tools_disabled": list(tools_disabled or []),
+           # Agent Zero's own MCP client dials these (stdio, sse, streamable-http); a parameter
+           # accepted and then dropped is the defect aider's bridge taught this repo.
+           # Headers through the one helper every writer shares: a server's `auth` IS its
+           # Authorization header, and a writer that copied `headers` alone sent the plugs server
+           # (browser, GitHub: `auth` and no headers) nothing at all.
+           "mcp_servers": [{**{k: v for k, v in s.items() if k != "auth"}, "headers": _mcp_headers(s)}
+                           for s in (mcp_servers or [])
+                           if isinstance(s, dict) and (s.get("url") or s.get("command"))],
+           # Agent Zero's loop has no step budget of its own; the driver counts model calls.
+           "max_turns": max_turns,
+           "agent_doc_name": "AGENTS.md"}
+    env["HR_AGENTZERO_JOB"] = json.dumps(job)
+    return [AGENTZERO_PYTHON, AGENTZERO_DRIVER]
+
+
+# What the console calls Agent Zero's tools on a card, and the shape of the input it shows: the
+# catalog lists them by Agent Zero's own names (the ids a disable carries), and the card reads
+# better with the verb every other base uses. MCP tools (`server.tool`) keep their own names.
+_AGENTZERO_CARD_NAMES = {"code_execution_tool": "Shell", "input": "Shell Input",
+                         "text_editor": "Edit", "call_subordinate": "Subagent",
+                         "skills_tool": "Skill", "parallel": "Parallel", "wait": "Wait",
+                         "goal": "Goal"}
+
+
+def _agentzero_card_input(name: str, args: dict) -> dict:
+    """A shell call's command under `command`, the key every other base's shell card carries (the
+    console previews it); Agent Zero names it `code`, and `keyboard` for the input tool."""
+    out = dict(args or {})
+    if name == "code_execution_tool" and "code" in out:
+        out["command"] = out.pop("code")
+    elif name == "input" and "keyboard" in out:
+        out["command"] = out.pop("keyboard")
+    return out
+
+
+def _agentzero_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map one driver line to canonical claude events. The driver has already decided what is the
+    answer (the response tool's text), what is a tool call (Agent Zero's tool_execute_before/after
+    hooks) and whether the turn failed (the loop raised, or never produced an answer); this maps
+    one shape to another and judges nothing.
+
+    Agent Zero reports a provider failure STRUCTURALLY, never as prose: the exception leaves the
+    loop, its critical-exception handler writes an `error` log item and the task raises. Measured on
+    v2.13 with a wrong key (401) and a dead base url (connection refused): no response-tool text at
+    all, `task.result()` raises HandledException. So there is no error prefix to anchor a regex on,
+    and the answer that merely mentions an error is an ordinary answer (see the tests)."""
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if m == "init":
+        # _run_turn_bg records the conversation id ONLY from a system/init event, and that recorded
+        # id is what makes the next turn a follow-up rather than a new thread.
+        return [{"type": "system", "subtype": "init",
+                 "session_id": str(p.get("session_id") or _AGENTZERO_SESSION),
+                 "model": state.get("model")}]
+    if m == "thinking":
+        txt = str(p.get("text") or "")
+        if not txt.strip():
+            return []
+        return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": txt}]}}]
+    if m == "tool_call":
+        raw = str(p.get("name") or "tool")
+        tid = str(p.get("id") or "a0")
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": _AGENTZERO_CARD_NAMES.get(raw, raw),
+             "input": _agentzero_card_input(raw, p.get("input") if isinstance(p.get("input"), dict) else {})}]}}]
+    if m == "tool_result":
+        out = p.get("output")
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(p.get("id") or "a0"),
+             "is_error": bool(p.get("is_error")),
+             "content": out if isinstance(out, str) else json.dumps(out, default=str)}]}}]
+    if m == "mcp_unavailable":
+        return [{"type": "system", "subtype": "mcp_unavailable", "servers": p.get("servers") or []}]
+    if m == "warning":
+        state.setdefault("_a0_warnings", []).append(str(p.get("text") or ""))
+        return []
+    if m == "result":
+        ok = bool(p.get("ok"))
+        final = str(p.get("final") or "")
+        if ok:
+            state["final"] = final
+            # The answer is one text block, emitted here rather than streamed: Agent Zero's answer
+            # is the response tool's argument, which exists only once the model's JSON is complete.
+            return [{"type": "assistant", "message": {"content": [{"type": "text", "text": final}]}},
+                    {"type": "result", "subtype": "success", "is_error": False, "result": final,
+                     "usage": {}}]
+        state["_a0_error"] = str(p.get("error") or "")
+        # usage is {} on purpose: the relay stamps it (_relay_usage), as for every backend whose
+        # own record carries none — Agent Zero's LLMResult usage never leaves the process.
+        return [{"type": "result", "subtype": "error", "is_error": True,
+                 "result": state["_a0_error"] or "the turn failed", "usage": {}}]
+    return []
+
+
+def _agentzero_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result event, so this fires only when the process died before
+    reaching it — a crash, a kill, an import failure. The reason then comes from stderr, which
+    _failure_reason reads; a placeholder here would shadow it."""
+    if rc == 0 and state.get("final"):
+        return [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": {}}]
+    return [{"type": "result", "subtype": "error", "is_error": True,
+             "result": state.get("_a0_error") or "", "usage": {}}]
+
+
+_agentzero_to_claude.eof = _agentzero_eof   # type: ignore[attr-defined]
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -6639,6 +8270,11 @@ BACKENDS = {
             "normalize": _dsh_to_claude},
     "opencode": {"providers": sorted(OPENCODE_PROVIDERS), "default_model": OPENCODE_DEFAULT_MODEL,
                  "normalize": _opencode_to_claude},
+    # Kilo CLI is an opencode fork whose `run --format json` emitter is opencode's, unchanged at
+    # 7.8.1 (the same six event types and framing), so it shares the normaliser; only the name in
+    # its fallback messages differs.
+    "kilo": {"providers": sorted(KILO_PROVIDERS), "default_model": KILO_DEFAULT_MODEL,
+             "normalize": _kilo_to_claude},
     # qwen-code emits claude's stream-json natively (verified against the shipped 0.22.1:
     # system/init with session_id, assistant/message, result/subtype/usage in claude's field
     # names) — so its normalizer IS the claude passthrough.
@@ -6664,8 +8300,17 @@ BACKENDS = {
     # normaliser and an eof rather than the passthrough qwen's claude-shaped stream can use.
     "kimi": {"providers": sorted(KIMI_PROVIDERS), "default_model": KIMI_DEFAULT_MODEL,
              "normalize": _kimi_to_claude},
+    # MiniMax Code's exec stream is its own versioned schema (schemaVersion 1) — see
+    # _minimax_to_claude — with a terminal exec.completed line, so the eof only covers a run that
+    # died before the stream began.
+    "minimax": {"providers": sorted(MINIMAX_PROVIDERS), "default_model": MINIMAX_DEFAULT_MODEL,
+                "normalize": _minimax_to_claude},
     "aider": {"providers": sorted(AIDER_PROVIDERS), "default_model": AIDER_DEFAULT_MODEL,
               "normalize": _aider_to_claude},
+    # Grok Build's streaming-messages-json is Claude Code's stream-json; the normaliser is the
+    # passthrough with its result repaired (the reason lifted out of errors[], usage left to the relay).
+    "grok": {"providers": sorted(GROK_PROVIDERS), "default_model": GROK_DEFAULT_MODEL,
+             "normalize": _grok_to_claude},
     "openhands": {"providers": sorted(OPENHANDS_PROVIDERS),
                   "default_model": OPENHANDS_DEFAULT_MODEL,
                   "normalize": _openhands_to_claude},
@@ -6674,6 +8319,10 @@ BACKENDS = {
     "cheetahclaws": {"providers": sorted(CHEETAHCLAWS_PROVIDERS),
                      "default_model": CHEETAHCLAWS_DEFAULT_MODEL,
                      "normalize": _cheetahclaws_to_claude},
+    # Agent Zero, in process through runner/agentzero_driver.py (its own NDJSON, like openhands').
+    "agentzero": {"providers": sorted(AGENTZERO_PROVIDERS),
+                  "default_model": AGENTZERO_DEFAULT_MODEL,
+                  "normalize": _agentzero_to_claude},
     # The System One driver emits claude's stream-json itself (system/init, assistant tool_use and
     # thinking blocks, user tool_result, result with usage and a `reason`), so its normaliser is the
     # passthrough, as qwen's is.
@@ -6778,7 +8427,26 @@ def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
     """SIGKILL the CLI's whole process GROUP (Popen uses start_new_session). Killing only
     the CLI leaves its shell children (e.g. a `sleep`) holding the inherited stdout pipe,
     which keeps the reader loop blocked until the child exits — a cancel/timeout then
-    appears to hang for the child's full duration. Then the stragglers by marker."""
+    appears to hang for the child's full duration. Then the stragglers by marker.
+
+    The CLI's DESCENDANTS go first, found by parent pid while the CLI is still alive to be their
+    parent. A child that started its own session is outside the group: Grok Build runs every shell
+    command that way (measured on 1.0.41: `sh -c 'sleep 90 && …'` in its own pgid, and after a
+    cancel the sleep was still running with the turn marked cancelled; SIGTERM to grok leaves it too),
+    and so does Muse Code. The marker sweep does not catch it on a default Docker host either: a
+    session process runs as its own uid, and reading another uid's /proc/<pid>/environ needs
+    CAP_SYS_PTRACE, which Docker does not grant. /proc/<pid>/stat is world-readable, so the tree is.
+    The group is STOPPED first, so the CLI cannot start another command between the listing and the
+    kill; a stopped process still takes SIGKILL."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGSTOP)
+    except Exception:  # noqa: BLE001
+        pass
+    for pid in _descendant_pids(proc.pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001
@@ -6791,6 +8459,35 @@ def _kill_proc_tree(proc: subprocess.Popen, turn_id: str = "") -> None:
             _sweep_turn_processes(turn_id)
         except Exception:  # noqa: BLE001
             pass
+
+
+def _descendant_pids(root: int) -> list[int]:
+    """Every live descendant of `root`, from /proc/<pid>/stat's parent pid (field 4, after the
+    parenthesised command name, which may itself contain spaces or parentheses). [] where there is
+    no /proc."""
+    children: dict[int, list[int]] = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            stat = pathlib.Path("/proc", entry, "stat").read_text()
+            ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(int(entry))
+    out: list[int] = []
+    todo = list(children.get(root, []))
+    while todo:
+        pid = todo.pop()
+        if pid in out or pid == root:
+            continue
+        out.append(pid)
+        todo.extend(children.get(pid, []))
+    return out
 
 
 def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
@@ -6919,6 +8616,17 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         tail = "\n".join(errbuf[-30:]).strip()
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
         refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        if not refusal and _relay_last_finish(env) == "content_filter":
+            # THE PROVIDER DECLINED, and the CLI's own account of a failure it could not see is not
+            # the reason. A refused request comes back as an answer with no content and no
+            # reasoning, which each harness narrates in its own internal words: agentzero counts
+            # five of them and stops with "Agent stopped after 5 consecutive unusable model
+            # responses to prevent further API charges" — its loop guard, correct in itself and
+            # about a counter nobody outside it can see. The relay watched the same exchange and
+            # knows what the provider said. The successful-looking case is rewritten above; this is
+            # the same statement for a turn that did fail, in the slot _failure_reason already
+            # keeps for a provider's refusal.
+            refusal = "the provider declined the request (finish_reason content_filter)"
         rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
@@ -8056,6 +9764,21 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
                           max_turns=req.max_turns)
+    elif backend == "minimax":
+        model = model or MINIMAX_DEFAULT_MODEL
+        # Skills are already on disk in the home _write_skills chose, which the CLI discovers itself;
+        # the agent doc is its global AGENTS.md (see _agent_doc_path).
+        cmd = _build_minimax(req.provider, auth, model, req.prompt, cwd, env,
+                             resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                             tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "grok":
+        model = model or GROK_DEFAULT_MODEL
+        # Skills are already on disk under $GROK_HOME/skills (_write_skills), where grok's loader
+        # looks; nothing names them here.
+        cmd = _build_grok(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                          partial=bool(req.partial_messages))
     elif backend == "aider":
         model = model or AIDER_DEFAULT_MODEL
         # aider has no skill loader and no instruction-file convention: the driver puts the agent
@@ -8092,6 +9815,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                resume_session_id=req.resume_session_id,
                                mcp_servers=req.mcp_servers,
                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "agentzero":
+        model = model or AGENTZERO_DEFAULT_MODEL
+        cmd = _build_agentzero(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id,
+                               mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "systemone":
         model = model or SYSTEMONE_DEFAULT_MODEL
         cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
@@ -8121,6 +9850,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_opencode(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                               skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+    elif backend == "kilo":
+        model = model or KILO_DEFAULT_MODEL
+        skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+        cmd = _build_kilo(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          skills_dir=skills_dir, tools_disabled=req.tools_disabled)
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins

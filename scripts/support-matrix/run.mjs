@@ -87,6 +87,17 @@ try {
     const backend = h === 'claude-code' ? 'claude' : h;
     const served = await page.evaluate(async (b) => { const r = await fetch('/api/harness/v1/models'); const j = await r.json(); return ((((j || {}).backends || {})[b] || {}).models || []).length; }, backend).catch(() => 0);
     const readMenu = () => page.evaluate(() => [...document.querySelectorAll('.wbx-model-opt')].map((o) => ({ id: o.querySelector('span')?.textContent.trim(), ok: !o.disabled })));
+    // The option is matched ANCHORED, the way family-tour.mjs does it. `hasText: id` is a substring
+    // and `.first()` takes the earliest hit, so an id contained in an earlier, longer one was never
+    // reachable: on grok's catalog (2026-09-29) `claude-opus-5` clicked `claude-opus-5.5` and
+    // `claude-fable-5` clicked `claude-fable-5-1`. The pair then ran the OTHER model, and because
+    // rec.substituted filters on `t.model === m` every turn was filtered out and the row reported no
+    // substitution at all — the one finding this suite exists to catch, rendered clean.
+    const pickModel = async (id) => {
+      await page.click('.ar2-chip'); await sleep(500);
+      const opt = page.locator('.wbx-model-opt', { hasText: new RegExp('^' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)') }).first();
+      await opt.click(); await sleep(300);
+    };
     await page.click('.ar2-chip'); await sleep(600);
     let models = await readMenu();
     for (let i = 0; i < 40 && models.length < served; i++) { await page.keyboard.press('Escape'); await sleep(1500); await page.click('.ar2-chip'); await sleep(400); models = await readMenu(); }
@@ -107,7 +118,7 @@ try {
       try {
         await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await sleep(3000);
         for (let i = 0; i < 10 && !(await page.locator('.wbx-conv-main.is-hero').count()); i++) { await page.click('button:has-text("New task")').catch(() => {}); await sleep(800); }
-        await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: m }).first().click(); await sleep(300);
+        await pickModel(m);
         rec.first = expectWord(await turn(`Reply with exactly: M1-${m}`), `M1-${m}`); rec.sid = new URL(page.url()).searchParams.get('sid') || '';
         log(`FIRST ${k} ${rec.first.ok ? 'ok' : 'FAIL'} ${rec.first.s}s ${rec.first.why}`);
         if (rec.first.ok) {
@@ -119,10 +130,10 @@ try {
           // line), so a switch away and back can only fail by design: that row is n/a, not a measurement
           const conflicts = (a, c) => a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex';
           const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || null;
-          if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: other }).first().click(); await sleep(300); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
+          if (other) { await pickModel(other); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };
           log(`SWITCH ${k} -> ${other} ${rec.switch.ok ? 'ok' : rec.switch.ok === null ? 'n/a' : 'FAIL'} ${rec.switch.s || ''}s ${rec.switch.why || ''}`);
-          if (other) { await page.click('.ar2-chip'); await sleep(500); await page.locator('.wbx-model-opt', { hasText: m }).first().click(); await sleep(300); }
+          if (other) { await pickModel(m); }
           const a = await turn(`Create a file named hello-${h}.txt containing exactly the word HELLO, then reply DONE.`, { expectFiles: true });
           // the file cards render from the settled read, a moment after the answer
           let fl = await files(); for (let i = 0; i < 10 && fl.length < (a.turn_files || []).length; i++) { await sleep(1500); fl = await files(); }
@@ -176,6 +187,11 @@ try {
         rec.substituted = withModel.length
           ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && x !== m)).map((t) => String(t.served_model)))]
           : (rec.served.length && !rec.served.some((sm) => sm.split(',').includes(m)) ? rec.served : []);
+        // No turn of this pair asked for the pair's own model: the picker's choice did not reach the
+        // request (a wrong option clicked, a composer that reset it), so every check keyed on
+        // `t.model === m` above would pass over nothing. A finding of its own (render.py), never a clean row.
+        if (withModel.length && !turnsList.some((t) => t && t.model === m))
+          rec.wrong_model = [...new Set(turnsList.map((t) => t && t.model).filter(Boolean).map(String))];
         if (process.env.EXPECT_CONNECTION) rec.foreign = rec.connections.filter((c) => c !== process.env.EXPECT_CONNECTION);
         // A turn on this pair's model with NO served model is a turn rule 2 could not judge, and a
         // finding of its own: the direct Anthropic route on Claude Code reported none for months

@@ -44,6 +44,16 @@ run, by you, under their own licenses:
                               console's CheetahClaws mark, ui/public/logos/cheetahclaws.png, is the
                               head of that project's logo (docs/media/logos/logo-5.png in its
                               repository), cropped to a square, under the same license.
+  Kilo CLI (kilo)             MIT, "Copyright (c) 2026 Kilo Code, Copyright (c) 2025 opencode"
+                              (Kilo-Org/kilocode; the release archive from its GitHub releases)
+  MiniMax Code (minimax)      MIT, "Copyright (c) 2026 MiniMax Code" (MiniMax-AI/minimax-code; the
+                              release tarball from its GitHub releases)
+  Grok Build (grok)           Apache-2.0 source, "Copyright 2023-2026 SpaceXAI" (xai-org/grok-build).
+                              The binary is the one xAI's own installer downloads from xAI's release
+                              bucket; xAI publishes no separate terms or checksums for it.
+  Agent Zero (agentzero)      MIT, "Copyright (c) 2025 Agent Zero, s.r.o" (agent0ai/agent-zero; the
+                              tagged source archive, with its Python dependencies from PyPI under
+                              their own licenses)
 
 Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
 public image; hermes-agent's publisher declared no license before 0.19.0. Installing the

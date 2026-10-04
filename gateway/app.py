@@ -1164,6 +1164,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "opencode"): "openai-api",
     ("tokenrouter", "opencode"): "tokenrouter", ("vercel", "opencode"): "tokenrouter",
     ("llmtr", "opencode"): "tokenrouter",
+    # kilo (Kilo CLI) is an opencode fork with opencode's provider layer, built by the runner the
+    # same way (_build_kilo), so its rows are opencode's, row for row.
+    ("anthropic", "kilo"): "anthropic",        ("openai", "kilo"): "openai",
+    ("azure-foundry", "kilo"): "azure",
+    ("openrouter", "kilo"): "openai-api",
+    ("tokenrouter", "kilo"): "tokenrouter",    ("vercel", "kilo"): "tokenrouter",
+    ("llmtr", "kilo"): "tokenrouter",
+    ("custom", "kilo"): "tokenrouter",         ("google", "kilo"): "openai-api",
+    ("harnessrouter", "kilo"): "tokenrouter",
     # kimi reaches every provider the same way qwen does — one OpenAI-compatible surface through
     # the loopback relay — so these rows are qwen's, verbatim, with the backend renamed.
     ("anthropic", "aider"): "anthropic",       ("openai", "aider"): "openai",
@@ -1180,6 +1189,29 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "kimi"): "tokenrouter",
     ("custom", "kimi"): "openai-api",
     ("google", "kimi"): "openai-api",
+    # minimax (MiniMax Code) is one more OpenAI chat/completions client of the loopback relay: the
+    # runner writes the relay as a `custom_provider` of api `openai-completions` in the CLI's config,
+    # so it reaches every provider the way kimi does and these rows are kimi's, with the backend
+    # renamed. Measured through a local runner on vercel and google (2026-09-26/27); the others ride the
+    # same relay path unmeasured until the matrix runs them.
+    ("anthropic", "minimax"): "anthropic",     ("openai", "minimax"): "openai",
+    ("azure-foundry", "minimax"): "azure",
+    ("openrouter", "minimax"): "openai-api",
+    ("tokenrouter", "minimax"): "tokenrouter", ("vercel", "minimax"): "tokenrouter",
+    ("llmtr", "minimax"): "tokenrouter",
+    ("custom", "minimax"): "openai-api",
+    ("google", "minimax"): "openai-api",
+    # grok (Grok Build) reaches every provider the same way: the runner defines one custom
+    # chat/completions model in its config.toml pointed at the loopback relay, so these rows are
+    # kimi's. xAI's own models ride the aggregators (Vercel serves them as spacexai/grok-*); there is
+    # no first-party xAI integration, and the CLI's xAI login is never used.
+    ("anthropic", "grok"): "anthropic",        ("openai", "grok"): "openai",
+    ("azure-foundry", "grok"): "azure",
+    ("openrouter", "grok"): "openai-api",
+    ("tokenrouter", "grok"): "tokenrouter",    ("vercel", "grok"): "tokenrouter",
+    ("llmtr", "grok"): "tokenrouter",
+    ("custom", "grok"): "openai-api",
+    ("google", "grok"): "openai-api",
     # openhands reaches every provider the same way: the driver points the agent-server's LLM at
     # the loopback relay, so whatever the relay fronts is what the agent talks to.
     ("anthropic", "openhands"): "anthropic",   ("openai", "openhands"): "openai",
@@ -1198,6 +1230,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "cheetahclaws"): "openai-api",
     ("tokenrouter", "cheetahclaws"): "tokenrouter", ("vercel", "cheetahclaws"): "tokenrouter",
     ("custom", "cheetahclaws"): "openai-api",
+    # agentzero (Agent Zero) reaches every provider the openhands way: its model is Agent Zero's
+    # provider `other` (litellm's openai provider with an api_base) pointed at the loopback relay.
+    ("anthropic", "agentzero"): "anthropic",   ("openai", "agentzero"): "openai",
+    ("azure-foundry", "agentzero"): "azure",
+    ("openrouter", "agentzero"): "openai-api",
+    ("tokenrouter", "agentzero"): "tokenrouter", ("vercel", "agentzero"): "tokenrouter",
+    ("llmtr", "agentzero"): "tokenrouter",
+    ("custom", "agentzero"): "openai-api",
+    ("google", "agentzero"): "openai-api",
     ("anthropic", "qwen"): "anthropic",        ("openai", "qwen"): "openai",
     ("azure-foundry", "qwen"): "azure",
     ("openrouter", "qwen"): "openai-api",
@@ -1261,9 +1302,12 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
     ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
     ("harnessrouter", "kimi"): "tokenrouter",
+    ("harnessrouter", "minimax"): "tokenrouter",
+    ("harnessrouter", "grok"): "tokenrouter",
     ("harnessrouter", "aider"): "tokenrouter",
     ("harnessrouter", "openhands"): "tokenrouter",
     ("harnessrouter", "cheetahclaws"): "tokenrouter",
+    ("harnessrouter", "agentzero"): "tokenrouter",
     ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
     ("harnessrouter", "goose"): "tokenrouter",
     # The hosted service serves the open-weight System One models (laya, openthai-systemone,
@@ -4962,9 +5006,10 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic endpoint cannot cache at all, which cost a benchmark 6 to 8 times the Claude Code
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
-    "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands", "cheetahclaws"},
-    "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
+    "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
+               "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero"},
+    # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
+    "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
@@ -6545,6 +6590,54 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # minimax (MiniMax Code): the same relay reach as kimi — OpenAI chat/completions through the
+    # loopback relay, the id sent to the provider verbatim (captured at a stub: the config's model key
+    # arrives as `model` unchanged, vendor prefix and all) — so the list is kimi's, the gpt-6 line
+    # included, plus MiniMax's own model, which is the default. MiniMax Code is its vendor's CLI but
+    # not tied to its models: any OpenAI-compatible endpoint drives it (BYOK, `custom_provider` in
+    # its config). The picker's order is _MODEL_ORDER's, as everywhere.
+    #
+    # MEASURED through a local runner on 2026-09-26/27 (MiniMax Code 0.5.4): minimax-m3 and
+    # gpt-5.4-mini on Vercel, gemini-3.5-flash-lite on Google, each served as itself per the relay
+    # (docs/support-matrix-notes.md).
+    # Every other id is OFFERED SO THE MATRIX CAN MEASURE IT HERE (the pi precedent): it rides the
+    # same relay path kimi's column measured, but no minimax column has run yet.
+    # minimax-m3 is not on TokenRouter (_TOKENROUTER_NO_CHANNEL); Vercel and OpenRouter serve it.
+    "minimax": {"default": "minimax-m3",
+                "models": [
+                    "minimax-m3",
+                    "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                    "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                    "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
+                    "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                    "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
+                    "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                    "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
+                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                    "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
+                    "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
+                    "nemotron-3.5-lightning", "nemotron-3-super"]},
+    # grok (Grok Build): the same relay reach as kimi (one custom chat/completions model through the
+    # loopback relay), so the list is kimi's, xAI's own family (its default) included. The id
+    # reaches the provider verbatim (the config's `model`, captured at a stub on 1.0.41), so there is
+    # no client-side substitution to prune for.
+    # OFFERED, NOT YET MEASURED: no column has run on this base. One local end-to-end turn set per
+    # id named in the PR body is the whole of the evidence; the matrix decides the rest of the list.
+    "grok": {"default": "grok-4.6",
+             "models": [
+                 "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
+                 "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                 "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
+                 "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-spark-1.3", "muse-spark-1.2",
+                 "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
+                 "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
+                 "nemotron-3.5-lightning", "nemotron-3-super"]},
     # openhands: the same relay reach as kimi and qwen (litellm's openai provider through the
     # loopback relay), so the list is theirs. Measured 2026-09-18/19: the Vercel column ran 49 of
     # these ids (239 of 245 scenarios) and the Google column ran the eight gemini ids, so the list
@@ -6593,6 +6686,16 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
                          "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
                          "nemotron-3-super"]},
+    # agentzero (Agent Zero v2.13): the same relay reach as openhands (chat/completions through the
+    # loopback relay), so the list is openhands'. OFFERED SO THE MATRIX CAN MEASURE IT HERE, not
+    # measured: no column has run on this base. What HAS run, through a local runner on 2026-09-27:
+    # gemini-3.1-flash-lite on Vercel, five turns, each served as itself per the relay. The id
+    # reaches the provider EXACTLY as the connection names it, and that was measured rather than
+    # assumed, because openhands lost a prefix here (#296): at a loopback recorder,
+    # openai/gpt-6-sol, gpt-5.4, google/gemini-3.1-flash-lite and anthropic/claude-sonnet-4.6 each
+    # arrived as `model` unchanged (Agent Zero's provider `other` hands litellm `openai/<id>`, and
+    # litellm 1.88.1 takes off that one prefix and nothing else).
+    "agentzero": {"default": "gpt-5.4", "models": []},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -6711,6 +6814,16 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# kilo (Kilo CLI) is an opencode fork: the same ai-sdk packages chosen per turn by the same function
+# (_opencode_npm), through the same relay, so it is offered opencode's set — Responses-API-only ids
+# included, since @ai-sdk/openai is how both reach them. Measured on kilo so far: gpt-5.4-mini and
+# claude-haiku-4.5, one local E2E on Vercel (docs/support-matrix-notes.md, "The kilo backend"); every
+# other id is offered so the matrix can measure it here, and no column has run yet. claude ids on an
+# aggregator ride chat/completions (_kilo_npm) and a direct Anthropic connection rides Messages, both through the relay. The wire itself was checked at a stub: kilo 7.8.1 sends the
+# id it is given verbatim (gpt-5.4, claude-sonnet-4.6, gemini-3.8-flash, deepseek-v4-flash), so any
+# substitution would be the provider's, and the relay's served model shows it.
+_MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -6729,6 +6842,20 @@ _MODEL_CATALOG["systemone"] = {"default": "jev-latest",
 _NOT_OFFERED: dict[str, frozenset[str]] = {
     "qwen": frozenset({"llama-4-maverick"}), "goose": frozenset({"llama-3.3-70b"}),
     "hermes": frozenset({"llama-3.3-70b"}), "pi": frozenset({"llama-3.3-70b"}),
+    # The four bases of 0.29.0, full-catalog columns on hr-test 2026-10-03 (rc.3, retested on rc.4;
+    # docs/support-matrix-notes.md). Each id failed twice the same way:
+    #   kilo        llama-3.3-70b on OpenRouter: a runaway of Webfetch calls on its first turn, then
+    #               the write call printed as text instead of made (no file).
+    #   minimax     gpt-5.6-terra answers DONE without writing the file; gemini-3.5-flash-lite's
+    #               artifact turn ends "Conversation history could not be safely updated".
+    #   grok        deepseek-v4-pro's artifact turn ends "empty response from model
+    #               (reasoning_only)": reasoning and no answer.
+    #   agentzero   claude-fable-5 and claude-fable-5-1 decline the FIRST turn (finish_reason
+    #               content_filter) with Agent Zero's system prompt; the other three bases run both.
+    "kilo": frozenset({"llama-3.3-70b"}),
+    "minimax": frozenset({"gpt-5.6-terra", "gemini-3.5-flash-lite"}),
+    "grok": frozenset({"deepseek-v4-pro"}),
+    "agentzero": frozenset({"claude-fable-5", "claude-fable-5-1"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
@@ -6744,8 +6871,15 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # aider and openhands speak chat/completions through litellm (aider under its openai provider, the
 # id sent `openai/<id>`; openhands under litellm's proxy provider, the id sent as it is), so a
 # Responses-API-only id would be a picker row that fails on send.
+# minimax: the runner defines its endpoint with api `openai-completions` (MiniMax Code also has an
+# openai-responses api, but it is not the one the runner sets), the kimi case exactly.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
+# grok: the runner's one custom model is `api_backend = "chat_completions"` (Grok Build can speak the
+# Responses and Messages APIs too, but that is not the model the runner defines).
+# agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
+                      "cheetahclaws", "grok",
+                      "agentzero")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -15211,6 +15345,29 @@ _BASE_CATALOG: dict[str, dict] = {
         # as claude's permissions.deny and pi's -xt, not the instruction-only tier.
         "tool_enforcement": "hard",
     },
+    "kilo": {
+        "label": "Kilo Code", "backend": "kilo", "status": "ready",
+        "system_prompt": ("You are Kilo Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tools Kilo CLI 7.8.1 put in the request's `tools` under the runner's config (captured at
+        # a stub, gpt-5.4 and claude-sonnet-4.6), by those names — which are also its permission keys.
+        # `edit` stands for write and apply_patch too: Kilo gates all three on that one key, so a
+        # separate "write" switch would disable nothing (runner/server.py, _kilo_denies). The
+        # scheduling tools (schedule_wakeup, cron_*, goal) are not listed: the runner always denies
+        # them, because nothing resumes a session later here. No websearch: 7.8.1 offers it only with
+        # Kilo's own gateway or an Exa key.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("edit", "Edit / Write"),
+                  ("glob", "Glob"), ("grep", "Grep"), ("webfetch", "Web Fetch"), ("task", "Task"),
+                  ("todowrite", "Todo"), ("skill", "Skill"),
+                  ("background_process", "Background Process"),
+                  ("kilo_local_recall", "Local Recall"), ("board_post", "Board Post"),
+                  ("board_read", "Board Read"), ("link_pr", "Link PR"),
+                  ("agent_manager_models", "Agent Models")],
+        # HARD, measured: a deny rule removes the tool from the request the model receives (bash,
+        # edit, the scheduling tools each checked at the stub), opencode's action set unchanged.
+        "tool_enforcement": "hard",
+    },
     "aider": {
         "label": "Aider", "backend": "aider", "status": "ready",
         # aider composes its own system message from the edit format; the runner's driver puts
@@ -15264,6 +15421,68 @@ _BASE_CATALOG: dict[str, dict] = {
         # through the product). It matches by exact tool NAME and a name it does not know
         # matches nothing, so test_catalog_kimi_tool_paths.py pins these ids equal to the runner's
         # _KIMI_TOOLS tuple and the claim cannot drift into an overstatement.
+        "tool_enforcement": "hard",
+    },
+    "minimax": {
+        "label": "MiniMax Code", "backend": "minimax", "status": "ready",
+        "system_prompt": ("You are MiniMax Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The built-in tools the runner can WITHHOLD, by the names MiniMax Code 0.5.4 sends its
+        # provider (the request's `tools`, captured at a local stub) — runner/server.py's
+        # _MINIMAX_TOOLS, pinned equal by test_catalog_minimax_tools.py. The eight file/shell/web
+        # tools are the config's `agents.default.tools` allowlist; `task` is the delegation feature
+        # (its subagents carry their own tools, so the runner also turns it off whenever anything
+        # else is withheld). NOT listed: web_search and website_deploy, MiniMax's own hosted services
+        # that need a MiniMax account and are never enabled here; skill, update_goal and get_goal,
+        # which have no switch. MCP tools reach the model as mcp__<server>__<tool> and have no
+        # per-tool switch in 0.5.4 either, so they are per-harness rather than catalog entries.
+        "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"), ("edit", "Edit"),
+                  ("grep", "Grep"), ("glob", "Glob"), ("todowrite", "Todo"),
+                  ("web_fetch", "Web Fetch"), ("task", "Subagent")],
+        # "hard": a tool left out of the allowlist is ABSENT from the request, so the model cannot
+        # call it — measured at a stub with bash withheld (the `tools` array lost bash and its
+        # task_* companions) and through a local runner (see the PR). Enforcement by omission, as for
+        # openhands, with openhands' honest limit: a shell is also a file writer.
+        "tool_enforcement": "hard",
+    },
+    "grok": {
+        "label": "Grok Build", "backend": "grok", "status": "ready",
+        "system_prompt": ("You are Grok Build, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The names in the `tools` array a live Grok Build 1.0.41 run SENT ITS PROVIDER (captured at a
+        # local stub), limited to the ones that can be withheld ALONE: read_file cannot (search_replace
+        # requires a read tool and the session then refuses to start), nor the plan-mode or scheduler
+        # tools. The media tools (xAI Imagine models) and send_feedback (reports to xAI) are withheld on
+        # every turn by the runner and are not offered. test_catalog_grok_tools.py pins these ids equal
+        # to the runner's _GROK_TOOL_POLICY_IDS, which carries the one name that differs on the policy
+        # side (the shell is `run_terminal_cmd` there).
+        "tools": [("run_terminal_command", "Shell"), ("search_replace", "Edit"), ("write", "File Write"),
+                  ("list_dir", "List"), ("grep", "Search"), ("todo_write", "Todo"),
+                  ("spawn_subagent", "Subagent"), ("monitor", "Monitor"), ("workflow", "Workflow"),
+                  ("ask_user_question", "Question"), ("search_tool", "MCP Search"),
+                  ("use_tool", "MCP Call")],
+        # "hard", and MEASURED with a control rather than asserted: --disallowed-tools removes a tool
+        # from the toolset the model is given (the request's `tools` no longer carries it), and the
+        # A/B on 2026-09-28 was the shell. Control, nothing withheld: asked to run
+        # `echo <token> > shellproof.txt`, the agent called run_terminal_command and the file was
+        # there. Treatment: the tool was gone from the list, the agent answered "I could not run it.
+        # No shell execution tool ... was available", and nothing executed.
+        #
+        # WHAT THAT A/B FIRST CAUGHT, and why the runner's Shell switch withholds three tools rather
+        # than one: withholding run_terminal_command ALONE left `monitor` — the streaming counterpart
+        # of /loop, which takes a command — and the agent ran the very same command through it and read
+        # the output back. The runner's _GROK_TOOL_IMPLIES now withholds monitor and the CLI's `Agent`
+        # entry (the subagent family and the scheduler, both command surfaces) with the shell, which
+        # is what makes this claim true rather than a tool-list observation.
+        #
+        # ONE HONEST LIMIT, the openhands standing in reverse: with the shell withheld a file of that
+        # name still appeared, written by `write`. A file is not evidence of execution, and a claim
+        # that no file appears needs the File Write switch off too.
+        #
+        # MCP tools reach the model only through search_tool and use_tool; withholding use_tool
+        # withholds every MCP tool.
         "tool_enforcement": "hard",
     },
     "openhands": {
@@ -15325,6 +15544,32 @@ _BASE_CATALOG: dict[str, dict] = {
         # (Bash and Write disabled: absent from the provider's `tools`). An MCP tool is withheld the
         # same way, by its bare or server.tool name. The honest limit every shell-bearing base has:
         # disabling Write alone does not stop a file being written through Bash.
+        "tool_enforcement": "hard",
+    },
+    "agentzero": {
+        "label": "Agent Zero", "backend": "agentzero", "status": "ready",
+        # NOT delivered as a system prompt: Agent Zero composes its own from its prompt files, so
+        # these instructions reach the model through the workspace's AGENTS.md, which the driver
+        # has Agent Zero's _promptinclude plugin inline into its system prompt.
+        "system_prompt": ("You are Agent Zero, an autonomous agent. You work on a real git "
+                          "workspace with a terminal and file tools, running commands and editing "
+                          "files to complete the task end to end."),
+        # Agent Zero's own tool names, the ids its tool policy and the runner's card mapping use
+        # (runner/agentzero_driver.py TOOLS). Not offered, because they cannot run in this sandbox
+        # and the driver withholds them on every turn: search_engine (needs the SearXNG only its
+        # image runs), document_query and the memory tools (FAISS and local embeddings are not
+        # installed), browser, scheduler, notify_user, a2a_chat and the A0-connector remote tools.
+        # `input` is not listed on its own: it types into the terminal, so it goes with
+        # code_execution_tool and is withheld with it.
+        "tools": [("code_execution_tool", "Shell"), ("text_editor", "Edit"),
+                  ("call_subordinate", "Subagent"), ("skills_tool", "Skill"),
+                  ("parallel", "Parallel"), ("wait", "Wait"), ("goal", "Goal")],
+        # "hard", and measured: Agent Zero's own _tool_access policy strips a blocked tool from the
+        # prompt AND refuses its execution (the tool_execute_before gate, which parallel calls go
+        # through too). With code_execution_tool withheld, "run uname -a with your terminal tool"
+        # produced no shell call: the prompt no longer named the tool, the model guessed `terminal`
+        # and got "not found" (v2.13, 2026-09-27). MCP tools are withheld by the server's own
+        # `disabled_tools`, hidden and refused at call time.
         "tool_enforcement": "hard",
     },
     "systemone": {
