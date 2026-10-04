@@ -85,8 +85,10 @@ PUT    /v1/memories/{id}                     rename; description; restricted; mo
 DELETE /v1/memories/{id}                     delete the memory, its records and its descendants
 ```
 
-A listing is one level. A client that wants a subtree asks level by level, or passes
-`ancestor={id}` for every descendant it may read. A server MUST NOT return a memory on which the
+A listing is one level. Without `parent` it answers where the caller enters the tree: every memory
+it holds a privilege on whose parent it cannot see, so a caller granted one branch enters at that
+branch. A client that wants a subtree asks level by level, or passes `ancestor={id}` for every
+descendant it may read. A server MUST NOT return a memory on which the
 caller has no effective privilege, and MUST NOT reveal that one exists.
 
 ## 3. Access
@@ -95,7 +97,8 @@ caller has no effective privilege, and MUST NOT reveal that one exists.
 
 A **grant** gives one principal a set of privileges on one memory. A principal's effective
 privileges on a memory are the union of its grants on that memory and on every ancestor. Access is
-additive: there is no deny, and no grant means no access.
+additive: there is no deny, and no grant means no access. Whoever creates a memory holds all four
+privileges on it, an implicit grant that flows down like any other.
 
 | Privilege | Permits |
 |---|---|
@@ -129,7 +132,7 @@ A filter applied by the agent, or one a query the agent wrote could omit, is not
 
 ## 4. Records
 
-A record is one thing a memory holds.
+A record is one thing a memory holds. Its `id` is the provider's and opaque to a client.
 
 ```json
 {
@@ -408,8 +411,11 @@ A harness names the memories it works with:
 ] }
 ```
 
-- The server checks each entry against the harness's effective privileges when the harness is
-  written. An entry the harness has no grant for is refused then, not at run time.
+- Attaching is granting. Access has one source, the grants ([§3](#3-access)): an entry the
+  harness already holds is attached as it is; one it does not hold is granted by the same call when
+  the caller may change that memory's grants (`delete`), and refused otherwise, when the harness is
+  written and not at run time. Detaching removes a starting point and leaves the grant, which is
+  revoked where grants are.
 - `access` narrows; it never widens. `read` on a memory the harness may also write gives the agent
   read tools only, on that memory and on whatever it walks to from it.
 - One entry MAY be marked `default`: where `observe` and an unaddressed `remember` go.
@@ -425,7 +431,7 @@ A harness names the memories it works with:
 | Moment | Called by | What happens |
 |---|---|---|
 | **Prime** | server, at session start and after the conversation is compacted | The server reads what the provider marks as always-relevant in each attached memory and places it, with each memory's `name`, `description` and children, in the agent's instructions |
-| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, plus one tool per named query and per type operation, and `memory_query` where the provider offers free queries. The attached memories are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as the harness's own privileges reach. The server checks every step |
+| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, `memory_run_query` for the named queries a memory lists, `memory_operate` for a type's operations, and `memory_query` where a provider offers free queries. Write tools are offered only to a harness attached somewhere to write. The attached memories are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as the harness's own privileges reach. The server checks every step |
 | **Observe** | server, when a turn ends | The turn (what was asked, what was answered, which tools ran) is sent to the default memory as episodes. No model is involved on the server's side |
 | **Consolidate** | server, on a schedule or when idle | The server asks the provider to do its background work. What that is belongs to the provider |
 
@@ -516,7 +522,7 @@ GET /v1/memories/providers
 
 | | Kept as | `observe` | `remember` | `recall` signals | History | Isolation |
 |---|---|---|---|---|---|---|
-| ContextualGraph (reference) | A graph per memory; documents and files beside it | Episode nodes; background consolidation | Fact with subject, attribute, value | query, text, filters | versions | container |
+| ContextualGraph | A graph per memory | not yet | a Fact vertex | query; words as an unranked substring filter | none yet | container |
 | mem0 | Extracted facts | `add(messages)` | `add(infer=false)` | query, filters | native per record | filter by its scope ids |
 | Zep | Temporal graph | thread messages, `graph.add` | `graph.add` text or JSON | query, text, filters | bi-temporal edges | container (a graph) |
 | Letta | Files and blocks kept by its own agent | messages to its agent | file or passage write | query | commit log | container (an agent or a shared block) |
@@ -607,7 +613,7 @@ score that leaves out the questions a memory should decline to answer is not rep
 11. A task names its memories by id. The server derives no node from a request.
 12. Consolidation is visible: runs with their reads, changes, usage and budget, and a revert.
 13. How much is primed is the provider's decision; the server reports the size.
-14. The first providers are ContextualGraph (reference), mem0, Zep, Letta and Cognee. The server
+14. The first providers are ContextualGraph, mem0, Zep, Letta and Cognee. The server
     keeps no memory of its own.
 15. Conformance is the interface suite plus one shared evaluation across providers.
 16. Export and import between providers are out of this version.
