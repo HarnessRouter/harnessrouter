@@ -168,3 +168,31 @@ def test_the_observed_answer_includes_the_message_still_open_when_the_turn_retur
     assert gw._translator_answer(tr) == "First part.\nLast part."
     tr.cur = {"kind": "reasoning", "id": "r", "oi": 3, "text": "not an answer"}
     assert gw._translator_answer(tr) == "First part."
+
+
+def test_a_task_names_one_more_memory_and_the_session_writes_there(client, world):
+    """metadata.memory: checked against the harness's privileges before the task starts, kept on
+    the session, and where that session's agent writes by default when the harness may write it."""
+    from types import SimpleNamespace
+    hid = world["hid"]
+    person = client.post("/v1/memories", headers=ADA, json={"provider": "fixture", "name": "Dana", "restricted": True,
+                                                            "parent_id": world["team"]}).json()["id"]
+    body = SimpleNamespace(metadata={"memory": person})
+    with pytest.raises(Exception) as refused:                      # restricted, and the harness holds nothing on it
+        asyncio.run(gw._task_memory_for_turn(ORG, hid, body))
+    assert refused.value.status_code == 404 and refused.value.detail["code"] == "memory_not_found"
+    client.post(f"/v1/memories/{person}/grants", headers=ADA, json={"principal": f"harness:{hid}", "privileges": ["read", "write"]})
+    assert asyncio.run(gw._task_memory_for_turn(ORG, hid, body)) == person
+    assert asyncio.run(gw._task_memory_for_turn(ORG, hid, SimpleNamespace(metadata={}))) == ""
+    sid = "sess_" + os.urandom(6).hex()
+    asyncio.run(gw._vg_upsert("HarnessSession", sid, {"tenant": ORG, "status": "idle", "turn_status": "idle",
+                                                      "harness_id": hid, "memory": person}))
+    hv = asyncio.run(gw._harness_vertex(hid))
+    entries = asyncio.run(gw._harness_memories(hid, ORG, hv, sid=sid))
+    assert [(e["memory_id"], e["default"]) for e in entries] == [(world["team"], False), (world["notes"], False), (person, True)]
+    tok = gw._mint_hosted_cred(hid, sid, gw._hosted_secret_key(hid, "mcp.memories"))
+    made, err = _call(client, tok, "memory_remember", content="Dana prefers a call over email.")
+    assert not err and made["remembered"]["memory_id"] == person
+    # another session of the same harness does not carry it
+    other = [e["memory_id"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv, sid="sess_none"))]
+    assert person not in other
