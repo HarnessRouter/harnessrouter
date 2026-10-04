@@ -28,14 +28,14 @@ except ImportError:  # pragma: no cover
 HERE = pathlib.Path(__file__).parent
 ROOT = HERE.parent                        # protocol/
 DIST = HERE / "dist"
-VERSION = "2026-09-28"
+VERSION = "2026-10-04"
 # Published specification versions, latest first. The spec is served under a per-version path
 # (/spec/<date>/…, mirroring MCP's /specification/<date>/…) so every version keeps a permanent
 # address: a citation to the 2026-08-11 architecture never silently becomes a later version. Only
 # the specification is versioned this way; conformance, governance and versioning are living docs.
 # Every version listed is built from its own frozen tree under protocol/versions/<date>/; the latest
 # is the one in the sidebar, the rest are served at their dated addresses with a notice.
-VERSIONS = ["2026-09-28", "2026-09-12", "2026-08-11"]
+VERSIONS = ["2026-10-04", "2026-09-28", "2026-09-12", "2026-08-11"]
 SITE = "unifiedharnessprotocol.org"
 
 # The specification's chapters, in reading order. NAV builds their per-version paths from this so
@@ -47,6 +47,7 @@ SPEC_CHAPTERS = [
     ("harnesses", "Harnesses"),
     ("plugins", "Plugins"),
     ("environments", "Environments"),
+    ("memories", "Memories"),
     ("tasks", "Tasks"),
     ("streaming", "Streaming"),
     ("sessions", "Sessions"),
@@ -246,6 +247,9 @@ DESCRIPTIONS = {
     "spec/environments.html":
         "UHP environments: a project's files and installed dependencies, built once and mounted "
         "read-only at a fixed path in every session that names it.",
+    "spec/memories.html":
+        "UHP memories: memory that outlasts a session, as a tree with access granted per node, "
+        "records kept by a connected provider, and tools an agent reaches them with.",
     "spec/tasks.html":
         "UHP tasks: one unit of work, input in and result out — the request shape, execution "
         "semantics, and response contract clients build on.",

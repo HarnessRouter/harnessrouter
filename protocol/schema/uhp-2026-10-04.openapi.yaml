@@ -1,0 +1,2944 @@
+openapi: 3.1.0
+info:
+  title: Unified Harness Protocol
+  version: '2026-10-04'
+  summary: An open standard for running complete agent harnesses as shared infrastructure.
+  description: |
+    UHP defines how a product drives a complete agent harness — Codex, Claude Code, Hermes, or any
+    other — over HTTP: selecting and configuring a harness, sending work, following progress,
+    continuing a session, cancelling execution, handling errors and files, and receiving results.
+
+    This document is normative for **structure**. The prose specification in `protocol/versions/`
+    is normative for **behaviour**; where they disagree about behaviour, the prose wins, because
+    behaviour is not expressible in OpenAPI.
+
+    Conformance is defined by the suite in `protocol/conformance/`, not by this document.
+
+    This version is additive to 2026-08-11. It adds plugins (packages of tools and skills in the
+    Agent Plugins format, installed into a harness, with stdio MCP servers inside them), the
+    `plugins` capability, and the error codes those need. Every request and object valid under
+    2026-08-11 is valid here, and no object 2026-08-11 defined changes shape, so a server serves
+    both versions from one code path.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  contact:
+    name: UHP maintainers
+    url: https://github.com/HarnessRouter/harnessrouter
+
+servers:
+  - url: https://your-uhp-server
+    description: Any conformant UHP server. The protocol requires no hosted service.
+  - url: http://127.0.0.1:3000/api/harness
+    description: HarnessRouter Community Edition, default local deployment
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Discovery
+    description: Protocol version and capability discovery (conformance class Core)
+  - name: Harnesses
+    description: Discovering, selecting and managing configured harnesses
+  - name: Tasks
+    description: Running work and reading results
+  - name: Sessions
+    description: Continuing, inspecting and cancelling sessions
+  - name: Files
+    description: File input and artifact retrieval (conformance class Extended)
+  - name: Plugins
+    description: Packages of tools and skills installed into a harness (optional capability `plugins`).
+  - name: Environments
+    description: A project's files and installed dependencies, built once and read by every session that names it (optional capability `environments`).
+  - name: Memories
+    description: Memory that outlasts a session, as a tree of memories with access granted per node (optional capability `memories`).
+    description: Packages of tools and skills installed into a harness (capability `plugins`)
+
+paths:
+  /v1/uhp:
+    get:
+      tags: [Discovery]
+      operationId: getDiscovery
+      summary: Protocol discovery document
+      description: |
+        Served without authentication: a client must be able to learn whether it is talking to a UHP
+        server, and which versions it speaks, before presenting credentials. The document contains
+        nothing principal-specific.
+      security: []
+      responses:
+        '200':
+          description: The discovery document
+          headers:
+            UHP-Version: { $ref: '#/components/headers/UHPVersion' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Discovery' }
+
+  /v1/harnesses:
+    get:
+      tags: [Harnesses]
+      operationId: listHarnesses
+      summary: List configured harnesses
+      responses:
+        '200':
+          description: Harnesses within the caller's scope. May be empty.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [harnesses]
+                properties:
+                  harnesses:
+                    type: array
+                    items: { $ref: '#/components/schemas/Harness' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Harnesses]
+      operationId: createHarness
+      summary: Create a configured harness
+      description: Conformance class Full. Check the `harness_management` capability first.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HarnessCreate' }
+      responses:
+        '200':
+          description: The created harness
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Harness' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/harnesses/{harness_id}:
+    parameters:
+      - $ref: '#/components/parameters/HarnessId'
+    get:
+      tags: [Harnesses]
+      operationId: getHarness
+      summary: Get one harness
+      responses:
+        '200':
+          description: The harness
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Harness' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Harnesses]
+      operationId: updateHarness
+      summary: Update a harness configuration
+      description: |
+        Conformance class Full. `id`, `base` and `createdAt` are immutable — changing the base of an
+        existing harness would silently change the behaviour of every session attached to it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HarnessCreate' }
+      responses:
+        '200':
+          description: The updated harness
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Harness' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Harnesses]
+      operationId: deleteHarness
+      summary: Delete a harness
+      description: Must not delete the sessions or responses that used it.
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  deleted: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/harnesses/{harness_id}/skills/{skill_name}/files:
+    parameters:
+      - $ref: '#/components/parameters/HarnessId'
+      - $ref: '#/components/parameters/SkillName'
+    get:
+      tags: [Harnesses]
+      operationId: getSkillFiles
+      summary: The complete file list of one skill
+      description: |
+        Conformance class Full. Whether or not the server stores the bundle out of line, this returns
+        every file of the skill folder, byte-for-byte.
+      responses:
+        '200':
+          description: The skill's files
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/harnesses/{harness_id}/plugins/{plugin_name}/files:
+    parameters:
+      - $ref: '#/components/parameters/HarnessId'
+      - $ref: '#/components/parameters/PluginName'
+    get:
+      tags: [Plugins]
+      operationId: getPluginFiles
+      summary: The complete package of one installed plugin
+      description: |
+        Conformance class Full, capability `plugins`. Every file of the package, byte-for-byte, whether
+        or not the server stores it out of line. `404` with `plugin_not_found` when the harness has no
+        plugin of that name.
+      responses:
+        '200':
+          description: The plugin's files
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/harnesses/{harness_id}/plugin:
+    parameters:
+      - $ref: '#/components/parameters/HarnessId'
+    get:
+      tags: [Plugins]
+      operationId: exportHarnessPlugin
+      summary: The harness's own tools and skills as an Agent Plugins package
+      description: |
+        Conformance class Full, capability `plugins`. Builds a package from the harness's direct
+        `mcpServers` and `skills`: a `plugin.json` whose name derives from the harness name, an
+        `mcp.json` of the enabled servers with `auth` and `headers` omitted (each omission recorded in
+        `skipped`), and each enabled skill folder. Installed plugins, the system prompt, the model,
+        the base and `disabledTools` are not included. The result installs into another harness by
+        passing it to `plugins` unchanged.
+      responses:
+        '200':
+          description: The package
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plugin' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/environments:
+    get:
+      tags: [Environments]
+      operationId: listEnvironments
+      summary: The caller's environments
+      description: Conformance class Full, capability `environments`. Scoped like harnesses.
+      responses:
+        '200':
+          description: The list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentList' }
+    post:
+      tags: [Environments]
+      operationId: createEnvironment
+      summary: Create an environment
+      description: |
+        An empty environment with a name; its slug (the path sessions see) derives from the name and
+        cannot change afterwards. `environment_exists` when another environment already occupies
+        that path; `environment_invalid` when the name yields no path segment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnvironmentCreate' }
+      responses:
+        '200':
+          description: The environment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/environments/runtimes:
+    get:
+      tags: [Environments]
+      operationId: listEnvironmentRuntimes
+      summary: The runtimes a build can be made with here
+      responses:
+        '200':
+          description: The runtimes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentRuntimes' }
+
+  /v1/environments/packages/check:
+    get:
+      tags: [Environments]
+      operationId: checkEnvironmentPackage
+      summary: What the manager's registry says about a spec, before any build
+      description: |
+        Optional (a server without it answers 404). Whether the name exists, its latest version,
+        and whether an exact pin is published, so a client can refuse a typo where it is typed.
+        `environment_invalid` for a manager other than pip, npm or apt, or a string that is not a spec.
+      parameters:
+        - { name: manager, in: query, required: true, schema: { type: string, enum: [pip, npm, apt] } }
+        - { name: spec, in: query, required: true, schema: { type: string }, description: "A spec as the build takes it: numpy, numpy==2.3.1, sharp@0.33.5, ffmpeg" }
+      responses:
+        '200':
+          description: The registry's answer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentPackageCheck' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /v1/environments/{environment_id}:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    get:
+      tags: [Environments]
+      operationId: getEnvironment
+      summary: One environment, with its versions and the active build's packages
+      responses:
+        '200':
+          description: The environment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Environments]
+      operationId: updateEnvironment
+      summary: Rename, or change the description or entry
+      description: The slug stays; a session's instructions name it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnvironmentCreate' }
+      responses:
+        '200':
+          description: The environment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Environments]
+      operationId: deleteEnvironment
+      summary: Delete the environment and every version of it
+      description: |
+        Refused with `environment_busy` while a build runs. Harnesses that named it keep the
+        reference; their next task is refused with `environment_not_found`.
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  deleted: { type: boolean, const: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/environments/{environment_id}/files:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    get:
+      tags: [Environments]
+      operationId: listEnvironmentFiles
+      summary: The source tree
+      description: What the owner put in, every file and directory with its size. Not the built layer.
+      responses:
+        '200':
+          description: The tree
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentFileList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/environments/{environment_id}/files/{path}:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+      - $ref: '#/components/parameters/EnvironmentPath'
+    get:
+      tags: [Environments]
+      operationId: getEnvironmentFile
+      summary: One file's bytes
+      responses:
+        '200':
+          description: The file, with its content type
+          content:
+            '*/*':
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Environments]
+      operationId: putEnvironmentFile
+      summary: Write one file
+      description: |
+        The body is the file's bytes; the directories on its path are made. A server MUST reject a
+        path that escapes the root with `environment_invalid`, and an oversized file with
+        `file_too_large` rather than truncating it. Writing the source changes nothing a session
+        sees until the next build. An empty directory is made with `POST …/directories`.
+      requestBody:
+        required: true
+        content:
+          '*/*':
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: Written
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+                  bytes: { type: integer }
+                  dir: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+    delete:
+      tags: [Environments]
+      operationId: deleteEnvironmentFile
+      summary: Remove a file or a directory tree
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+                  deleted: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/environments/{environment_id}/directories:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    post:
+      tags: [Environments]
+      operationId: makeEnvironmentDirectory
+      summary: Make an empty directory
+      description: Its own request rather than a trailing slash on a file path, which a proxy may normalise away.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, description: Relative to the environment's root. }
+      responses:
+        '200':
+          description: Made
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+                  dir: { type: boolean, const: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/environments/{environment_id}/import:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    post:
+      tags: [Environments]
+      operationId: importEnvironment
+      summary: Import a whole project, keeping its tree
+      description: |
+        Either an archive (zip or tar) as the body, or a JSON body naming a git repository. A single
+        directory wrapping everything (the shape of a repository archive) is stripped. Members that
+        must not land (links, paths that escape the root) are dropped and counted in `skipped`, never
+        written. `?replace=1` clears the source first. Dependency directories in the archive
+        (`node_modules`, `.venv`) are not what a build installs: the build installs from the
+        manifests, in the server's own toolchain.
+      parameters:
+        - name: replace
+          in: query
+          schema: { type: integer, enum: [0, 1], default: 0 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnvironmentImport' }
+          '*/*':
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: What landed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentImportResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/environments/{environment_id}/build:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    post:
+      tags: [Environments]
+      operationId: buildEnvironment
+      summary: Build a new version from the source
+      description: |
+        Snapshots the source into the next version, installs what its manifests declare
+        (`requirements.txt`, `pyproject.toml`, `package.json`, then `setup.sh` when present), and
+        makes the version the active one when it succeeds. Returns at once; poll the build. One
+        build at a time per environment (`environment_busy`). Sessions started before the build
+        finishes keep reading the version they started with.
+      responses:
+        '200':
+          description: The build started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentBuild' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/environments/{environment_id}/builds/{version}:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+      - $ref: '#/components/parameters/BuildVersion'
+    get:
+      tags: [Environments]
+      operationId: getEnvironmentBuild
+      summary: A build's record, log included
+      responses:
+        '200':
+          description: The build
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentBuild' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/environments/{environment_id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    get:
+      tags: [Environments]
+      operationId: listEnvironmentVersions
+      summary: Every build, and which one is active
+      responses:
+        '200':
+          description: The versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  active: { type: [integer, 'null'] }
+                  versions: { type: array, items: { $ref: '#/components/schemas/EnvironmentVersion' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/environments/{environment_id}/versions/{version}/activate:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+      - $ref: '#/components/parameters/BuildVersion'
+    post:
+      tags: [Environments]
+      operationId: activateEnvironmentVersion
+      summary: Make an older build the active one
+      description: Rollback by pointer; nothing is rebuilt. Only a finished build can be activated (`environment_not_ready`).
+      responses:
+        '200':
+          description: The environment, with its new active version
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/environments/{environment_id}/harnesses:
+    parameters:
+      - $ref: '#/components/parameters/EnvironmentId'
+    get:
+      tags: [Environments]
+      operationId: listEnvironmentHarnesses
+      summary: The harnesses that read this environment
+      responses:
+        '200':
+          description: The harnesses, id, name and base each
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  harnesses:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        base: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories:
+    get:
+      parameters:
+        - { name: parent, in: query, schema: { type: string } }
+        - { name: ancestor, in: query, schema: { type: string } }
+      tags: [Memories]
+      operationId: listMemories
+      summary: "The memories a caller may see, one level at a time"
+      description: "Conformance class Full, capability `memories`. Without `parent`, where the caller enters the tree. A memory the caller holds no privilege on is never listed."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Memories]
+      operationId: createMemory
+      summary: "Create a memory"
+      description: "Needs `create` on the parent when one is named."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryCreate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Memory' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/providers:
+    get:
+      tags: [Memories]
+      operationId: listMemoryProviders
+      summary: "What each connected provider does"
+      description: "The capability documents of the providers this server is connected to."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryProviderList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/types:
+    get:
+      tags: [Memories]
+      operationId: listMemoryTypes
+      summary: "The record types this server understands"
+      description: "The core types, and the extension types its providers register with their operations."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryTypeList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    get:
+      tags: [Memories]
+      operationId: getMemory
+      summary: "One memory"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Memory' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Memories]
+      operationId: updateMemory
+      summary: "Rename, describe, restrict or move a memory"
+      description: "Needs `write`; changing `restricted` or `parent_id` needs `delete`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Memory' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Memories]
+      operationId: deleteMemory
+      summary: "Delete a memory, its records and its descendants"
+      description: "Needs `delete`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryDeleted' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/grants:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    get:
+      tags: [Memories]
+      operationId: listMemoryGrants
+      summary: "Who holds what on this memory"
+      description: "Needs `delete`. Each grant names the node it sits on."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryGrantList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Memories]
+      operationId: createMemoryGrant
+      summary: "Grant a principal privileges on this memory"
+      description: "Needs `delete`. One grant per principal per node; a second replaces it."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryGrantCreate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryGrant' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/grants/{grant_id}:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - { name: grant_id, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [Memories]
+      operationId: deleteMemoryGrant
+      summary: "Revoke a grant"
+      description: "Needs `delete`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deleted' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/observe:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    post:
+      tags: [Memories]
+      operationId: observeMemory
+      summary: "Append episodes; the provider decides what to derive"
+      description: "Needs `write`. Answers `202` with a job when the provider derives after it answers."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryObserve' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecordList' }
+        '202':
+          description: Taken; the records are read from the job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecordList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/jobs/{job_id}:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Memories]
+      operationId: getMemoryJob
+      summary: "What an observe that answered 202 has written since"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/records:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    get:
+      parameters:
+        - { name: type, in: query, schema: { type: string } }
+        - { name: as_of, in: query, schema: { type: string } }
+        - { name: include, in: query, schema: { type: string, enum: [active, all] } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: cursor, in: query, schema: { type: string } }
+      tags: [Memories]
+      operationId: listMemoryRecords
+      summary: "The records of one memory"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecordList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Memories]
+      operationId: rememberRecord
+      summary: "Write one record as stated"
+      description: "Needs `write`. `written_by` is stamped by the server."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryRecordCreate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecord' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/records/{record_id}:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - $ref: '#/components/parameters/MemoryRecordId'
+    get:
+      parameters:
+        - { name: as_of, in: query, schema: { type: string } }
+      tags: [Memories]
+      operationId: getMemoryRecord
+      summary: "One record"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecord' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Memories]
+      operationId: reviseMemoryRecord
+      summary: "Revise a record; the earlier version is kept"
+      description: "Needs `write`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryRecordRevise' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecord' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Memories]
+      operationId: forgetMemoryRecord
+      summary: "Close a record; its place in the history remains"
+      description: "Needs `write`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecord' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/records/{record_id}/history:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - $ref: '#/components/parameters/MemoryRecordId'
+    get:
+      tags: [Memories]
+      operationId: getMemoryRecordHistory
+      summary: "The versions of a record, oldest first"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecordList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/records/{record_id}/operations/{name}:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - $ref: '#/components/parameters/MemoryRecordId'
+      - { name: name, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Memories]
+      operationId: operateMemoryRecord
+      summary: "Run an operation a record's type offers"
+      description: "Needs the privilege the operation declares."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FreeObject' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryOperationResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/recall:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    post:
+      tags: [Memories]
+      operationId: recallMemory
+      summary: "Retrieve from one memory by meaning, words and fields"
+      description: "Needs `read`. Acts on this memory alone; the answer names its parent and children."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryRecallRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecall' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/erase:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    post:
+      tags: [Memories]
+      operationId: eraseMemoryRecords
+      summary: "Remove content for good, and say what could not be reached"
+      description: "Needs `delete`. Never offered to an agent."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryErase' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryErasure' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/queries:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    get:
+      tags: [Memories]
+      operationId: listMemoryQueries
+      summary: "The named queries of a memory"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryQueryList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/queries/{name}:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - { name: name, in: path, required: true, schema: { type: string } }
+    put:
+      tags: [Memories]
+      operationId: defineMemoryQuery
+      summary: "Define or replace a named query in the provider's language"
+      description: "Needs `write`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryQuery' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryQuery' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Memories]
+      operationId: runMemoryQuery
+      summary: "Run a named query"
+      description: "Needs the privilege the query declares."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryQueryRun' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecall' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/query:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    post:
+      tags: [Memories]
+      operationId: freeMemoryQuery
+      summary: "Run a query the caller wrote, inside this memory"
+      description: "Offered only where the provider declares `queries.free`. The provider confines it by a means the statement cannot undo."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryFreeQuery' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecall' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/snapshots:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    get:
+      tags: [Memories]
+      operationId: listMemorySnapshots
+      summary: "The named instants of a memory"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemorySnapshotList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Memories]
+      operationId: createMemorySnapshot
+      summary: "Name the present instant"
+      description: "Needs `write`. Copies nothing."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemorySnapshotCreate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemorySnapshot' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/consolidations:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    get:
+      tags: [Memories]
+      operationId: listMemoryConsolidations
+      summary: "Consolidation runs, newest first"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryConsolidationList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Memories]
+      operationId: startMemoryConsolidation
+      summary: "Start a consolidation run now"
+      description: "Needs `write`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemoryConsolidationStart' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryConsolidation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/consolidations/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Memories]
+      operationId: getMemoryConsolidation
+      summary: "One consolidation run"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryConsolidation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/consolidations/{run_id}/changes:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Memories]
+      operationId: listMemoryConsolidationChanges
+      summary: "The records a run wrote, superseded or forgot"
+      description: "Needs `read`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryRecordList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories/{memory_id}/consolidations/{run_id}/revert:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Memories]
+      operationId: revertMemoryConsolidation
+      summary: "Revert a run by appending"
+      description: "Needs `delete`. History keeps the run and its reversal."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryConsolidation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/harnesses/{harness_id}/memories:
+    parameters:
+      - { name: harness_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Memories]
+      operationId: listHarnessMemories
+      summary: "The memories a harness is attached to"
+      description: "Capability `memories`."
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HarnessMemories' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Memories]
+      operationId: attachHarnessMemories
+      summary: "Attach memories to a harness"
+      description: "Attaching is granting. An entry the harness does not hold is granted when the caller may change the grants of that memory, and refused otherwise. An empty list detaches."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HarnessMemories' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HarnessMemories' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/models:
+    get:
+      tags: [Harnesses]
+      operationId: listModels
+      summary: The model catalogue, by backend
+      responses:
+        '200':
+          description: Models grouped by backend, each with computed availability
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelCatalog' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/harnesses/{harness_id}/models:
+    parameters:
+      - $ref: '#/components/parameters/HarnessId'
+    get:
+      tags: [Harnesses]
+      operationId: listHarnessModels
+      summary: Models this harness can run
+      responses:
+        '200':
+          description: The harness's allowed models, default and authorized fallback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HarnessModels' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/responses:
+    post:
+      tags: [Tasks]
+      operationId: createResponse
+      summary: Run a task
+      description: |
+        The core of the protocol. With `stream: false` the server returns one Response object when
+        the task reaches a terminal state. With `stream: true` it returns `text/event-stream`
+        carrying the events defined in the Streaming chapter.
+
+        Retries MUST carry `Idempotency-Key`: without one, a retry after a timeout runs the task a
+        second time while the first may still be running.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 255 }
+          description: Repeating a key returns the first request's result and does not re-execute.
+        - name: UHP-Version
+          in: header
+          required: false
+          schema: { type: string, examples: ['2026-08-11'] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateResponseRequest' }
+      responses:
+        '200':
+          description: |
+            The finished Response (non-streaming), or the event stream (streaming).
+          headers:
+            UHP-Version: { $ref: '#/components/headers/UHPVersion' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Response' }
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE; each `data:` line is one Event object.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/responses/{response_id}:
+    parameters:
+      - $ref: '#/components/parameters/ResponseId'
+    get:
+      tags: [Tasks]
+      operationId: getResponse
+      summary: Read a task back
+      responses:
+        '200':
+          description: The Response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Response' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Tasks]
+      operationId: deleteResponse
+      summary: Delete a stored response
+      description: Must not cancel a running task — deletion and cancellation are different intentions.
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  deleted: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/responses/{response_id}/input_items:
+    parameters:
+      - $ref: '#/components/parameters/ResponseId'
+    get:
+      tags: [Tasks]
+      operationId: getResponseInputItems
+      summary: The input the task was created with
+      responses:
+        '200':
+          description: Input items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object: { type: string, const: list }
+                  data: { type: array, items: { type: object, additionalProperties: true } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/responses/{response_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ResponseId'
+    post:
+      tags: [Sessions]
+      operationId: cancelResponse
+      summary: Cancel a running task
+      description: |
+        Idempotent. Cancelling an already-terminal task succeeds and changes nothing — a client
+        retrying a cancel after a dropped connection must not be punished for having succeeded.
+      responses:
+        '200':
+          description: The Response, now cancelling or terminal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Response' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List sessions
+      description: Conformance class Extended.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: harness, in: query, schema: { type: string }, description: Filter by harness id }
+      responses:
+        '200':
+          description: A page of sessions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: Get one session
+      responses:
+        '200':
+          description: The session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/turns:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Sessions]
+      operationId: getSessionTurns
+      summary: The ordered task history of a session
+      responses:
+        '200':
+          description: Turns, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  turns: { type: array, items: { $ref: '#/components/schemas/TurnItem' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/share:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [Sessions]
+      operationId: shareSession
+      summary: Publish a read-only view of the session (Sessions §5, class Full)
+      description: |
+        A body is OPTIONAL; no body means publish. A server MAY accept `{"enabled": bool}` as a
+        toggle. Sharing itself is a MAY; a server that does not implement it answers 404/405/501.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean, default: true }
+              additionalProperties: true
+      responses:
+        '200':
+          description: The share
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionShare' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Sessions]
+      operationId: getSessionShare
+      summary: Read the session's share back
+      responses:
+        '200':
+          description: The share, agreeing with what POST published
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionShare' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Sessions]
+      operationId: revokeSessionShare
+      summary: Revoke — every link minted for the session stops resolving
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionShare' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [Sessions]
+      operationId: cancelSession
+      summary: Cancel whatever is running in a session
+      responses:
+        '200':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/files:
+    post:
+      tags: [Files]
+      operationId: uploadFile
+      summary: Upload a file for use as task input
+      description: Conformance class Extended.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                purpose: { type: string, default: user_data }
+      responses:
+        '200':
+          description: The stored file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /v1/sessions/{session_id}/files:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Files]
+      operationId: listSessionFiles
+      summary: Every artifact of a session
+      description: Must include artifacts from earlier tasks, not only the most recent.
+      responses:
+        '200':
+          description: Artifacts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files]
+                properties:
+                  files: { type: array, items: { $ref: '#/components/schemas/File' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/sessions/{session_id}/files/archive:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Files]
+      operationId: downloadSessionArchive
+      summary: Every artifact as one archive
+      responses:
+        '200':
+          description: An archive of the session's artifacts
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/containers/{container_id}/files/{file_id}/content:
+    parameters:
+      - $ref: '#/components/parameters/ContainerId'
+      - $ref: '#/components/parameters/FileId'
+    get:
+      tags: [Files]
+      operationId: downloadFile
+      summary: Download an artifact
+      description: |
+        Returns raw bytes with the file's own media type — never JSON-wrapped. Servers must send
+        `X-Content-Type-Options: nosniff`: artifacts are attacker-influenceable content, and serving
+        them without it turns an artifact into stored XSS against the client's origin.
+      responses:
+        '200':
+          description: The bytes
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            X-Content-Type-Options:
+              required: true
+              schema: { type: string, const: nosniff }
+          content:
+            '*/*':
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/containers/{container_id}/files/{file_id}/pdf:
+    parameters:
+      - $ref: '#/components/parameters/ContainerId'
+      - $ref: '#/components/parameters/FileId'
+    get:
+      tags: [Files]
+      operationId: previewFile
+      summary: A rendered PDF preview of a document artifact
+      responses:
+        '200':
+          description: The rendered PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501':
+          description: This server does not implement preview conversion
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '502':
+          description: Conversion of this file failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: How tokens are issued is out of scope for this protocol.
+
+  headers:
+    UHPVersion:
+      description: The protocol version actually used to serve this response.
+      required: true
+      schema: { type: string, examples: ['2026-08-11'] }
+
+  parameters:
+    MemoryId:
+      name: memory_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^hmem_' }
+    MemoryRecordId:
+      name: record_id
+      in: path
+      required: true
+      schema: { type: string }
+    EnvironmentId:
+      name: environment_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^henv_' }
+    EnvironmentPath:
+      name: path
+      in: path
+      required: true
+      description: A path relative to the environment's root. A trailing slash names a directory.
+      schema: { type: string }
+    BuildVersion:
+      name: version
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    HarnessId:
+      name: harness_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^chrn_' }
+    SkillName:
+      name: skill_name
+      in: path
+      required: true
+      schema: { type: string }
+    PluginName:
+      name: plugin_name
+      in: path
+      required: true
+      schema: { type: string }
+    ResponseId:
+      name: response_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^resp_' }
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: string }
+    ContainerId:
+      name: container_id
+      in: path
+      required: true
+      schema: { type: string }
+    FileId:
+      name: file_id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing, malformed or unknown credential
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: |
+        No such object in the caller's scope. Servers return 404 rather than 403 for objects outside
+        the caller's scope, so that an id's existence is not disclosed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: '`session_busy` or `harness_mismatch`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    UnprocessableEntity:
+      description: '`model_unavailable` or `unsupported_base`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    PayloadTooLarge:
+      description: '`file_too_large`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RateLimited:
+      description: '`rate_limited` or `quota_exhausted`'
+      headers:
+        Retry-After:
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+    Discovery:
+      type: object
+      required: [object, protocol, versions, default_version, conformance_class, capabilities]
+      properties:
+        object: { type: string, const: uhp.discovery }
+        protocol: { type: string, const: uhp }
+        versions:
+          type: array
+          minItems: 1
+          items: { type: string }
+        default_version: { type: string }
+        conformance_class: { type: string, enum: [core, extended, full] }
+        capabilities: { $ref: '#/components/schemas/Capabilities' }
+        plugin_schemas:
+          type: array
+          items: { type: string, format: uri }
+          description: |
+            The Agent Plugins manifest schema identifiers this server installs. Present and non-empty
+            when `capabilities.plugins` is true.
+          examples: [['https://agent-plugins.org/schemas/1.0.0/plugin.schema.json']]
+        implementation:
+          type: object
+          properties:
+            name: { type: string }
+            version: { type: string }
+          additionalProperties: true
+      additionalProperties: true
+
+    Capabilities:
+      type: object
+      description: |
+        Named booleans. A server reports `false` for a capability it does not implement rather than
+        omitting it, so a client can distinguish "not supported" from "server predates this field".
+        A client treats an absent key as `false`.
+      properties:
+        streaming: { type: boolean }
+        sessions: { type: boolean }
+        cancellation: { type: boolean }
+        files_input: { type: boolean }
+        files_output: { type: boolean }
+        session_listing: { type: boolean }
+        harness_management: { type: boolean }
+        session_sharing: { type: boolean }
+        idempotency: { type: boolean }
+        plugins:
+          type: boolean
+          description: |
+            The server installs Agent Plugins packages into harnesses, serves their files, and exports
+            a harness as a package. Optional at every class.
+        environments:
+          type: boolean
+          description: |
+            The server holds environments: a project's files and installed dependencies, built once,
+            read-only at a fixed path in every session that names one. Optional at every class.
+        memories:
+          type: boolean
+          description: |
+            The server holds memories: a tree of memories with access granted per node, records kept
+            by a connected provider, and tools a harness's agent reaches them with. Optional at every class.
+      additionalProperties: { type: boolean }
+
+    Harness:
+      type: object
+      required: [id, name, base]
+      properties:
+        id: { type: string, pattern: '^chrn_' }
+        object: { type: string, const: harness }
+        name: { type: string }
+        base:
+          type: string
+          description: |
+            Opaque. Not enumerated by this specification — a client must treat it as a string, or the
+            protocol would need revising every time a harness is released.
+          examples: [codex, claude-code, hermes]
+        baseLabel: { type: string }
+        defaultModel: { type: string }
+        systemPrompt: { type: string }
+        mcpServers: { type: array, items: { $ref: '#/components/schemas/McpServer' } }
+        skills: { type: array, items: { $ref: '#/components/schemas/Skill' } }
+        plugins:
+          type: array
+          items: { $ref: '#/components/schemas/Plugin' }
+          description: |
+            Installed plugins. Their servers and skills join the harness's own for every turn;
+            `mcpServers` and `skills` above report only what was written to them directly.
+        environment:
+          type: string
+          description: |
+            The environment (`henv_`) this harness's tasks read, mounted read-only at its `mount`;
+            empty when none. A task may name another with its own `environment` field.
+        disabledTools: { type: array, items: { type: string } }
+        maxStep: { type: [integer, 'null'] }
+        timeoutSeconds: { type: [integer, 'null'] }
+        createdAt: { type: integer, description: Unix milliseconds }
+      additionalProperties: true
+
+    McpServer:
+      type: object
+      required: [name, url]
+      description: |
+        A remote MCP server attached to a harness. Only enabled entries are connected for a turn; a
+        disabled entry must not be contacted at all. An unreachable server must not fail the task.
+        Unchanged from 2026-08-11: a process (stdio) server is declared inside a plugin, see
+        PluginMcpServer.
+      properties:
+        name: { type: string, description: Sanitised to a CLI-safe identifier by the server. }
+        url: { type: string, format: uri }
+        transport: { type: string, enum: [http, sse], default: http }
+        enabled: { type: boolean, default: true }
+        headers: { type: object, additionalProperties: { type: string } }
+        auth:
+          type: string
+          description: |
+            Bearer token, or a server-side reference the server resolves. A server must never return
+            a resolved credential to a client.
+      additionalProperties: true
+
+    PluginMcpServer:
+      type: object
+      required: [name]
+      description: |
+        An MCP server a plugin's mcp.json declares, derived by the server. The harness MCP server
+        object plus the `stdio` transport: `url` is required for `http` and `sse`, `command` for
+        `stdio`. Placeholders are reported unexpanded; `enabled` is always true, the plugin's own
+        `enabled` governs.
+      properties:
+        name: { type: string }
+        transport:
+          type: string
+          enum: [http, sse, stdio]
+          default: http
+          description: |
+            `http` is Streamable HTTP (`streamable-http` in mcp.json); `sse` the older HTTP+SSE
+            transport; `stdio` a process the server launches inside the agent's sandbox.
+        url: { type: string, format: uri, description: Endpoint (`http` and `sse`). }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Fixed request headers (`http` and `sse`). Never subject to placeholder expansion.
+        command:
+          type: string
+          description: |
+            One executable token (`stdio`): a bare name resolved on the sandbox's search path, or a
+            plugin-relative path beginning with `./`. Never a shell string, never expanded.
+        args:
+          type: array
+          items: { type: string }
+          description: Arguments (`stdio`). `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` expand at run time.
+        env:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            Environment overlay (`stdio`). Must not name PLUGIN_ROOT or PLUGIN_DATA; the server sets
+            those. Values expand at run time.
+        cwd:
+          type: string
+          description: |
+            Working directory (`stdio`). Defaults to the plugin root; must stay within the plugin
+            root or PLUGIN_DATA.
+        enabled: { type: boolean, default: true }
+      allOf:
+        - if:
+            properties: { transport: { const: stdio } }
+            required: [transport]
+          then: { required: [command] }
+          else: { required: [url] }
+      additionalProperties: true
+
+    Skill:
+      type: object
+      required: [name]
+      description: |
+        A skill is a FOLDER, not a file. A server must materialise the whole folder where the agent
+        can read it — materialising only SKILL.md breaks every skill carrying references, scripts or
+        data. Round-tripping a harness through GET and PUT must not lose skill contents.
+      properties:
+        name: { type: string }
+        enabled:
+          type: boolean
+          default: true
+          description: false suppresses the skill, including one inherited from the base.
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/SkillFile' }
+          description: The bundle. Must contain a SKILL.md.
+        content:
+          type: string
+          description: Shorthand for a single-file bundle whose only member is SKILL.md.
+        blob:
+          type: string
+          description: |
+            Server-assigned handle for a bundle stored out of line. A client receives it, passes it
+            back unchanged, and reads the files from the skill files endpoint.
+      additionalProperties: true
+
+    SkillFile:
+      type: object
+      required: [path]
+      description: One file of a skill folder or of a plugin package.
+      properties:
+        path:
+          type: string
+          description: |
+            Relative to the skill's own folder, or to the plugin root; nested directories are
+            supported. A server must reject a path that escapes the folder.
+          examples: ['SKILL.md', 'references/codes.md', 'assets/logo.png']
+        content: { type: string, description: Text content. }
+        content_b64: { type: string, description: Base64 for binary content; preserved byte-for-byte. }
+      additionalProperties: true
+
+    FileList:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/SkillFile' }
+
+    Plugin:
+      type: object
+      required: [name]
+      description: |
+        An Agent Plugins package installed into a harness: `plugin.json` at the root, MCP servers in
+        `mcp.json`, skills under `skills/`. A client writes `files` (or passes back `blob`) and
+        optionally `name` and `enabled`; the server derives `manifest`, `mcpServers`, `skills` and
+        `skipped` from the package on every write and ignores those fields on input. A refused
+        package leaves the harness unchanged.
+      properties:
+        name:
+          type: string
+          pattern: '^(?!.*(--|\.\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
+          maxLength: 64
+          description: The manifest's `name`. Optional on write; if sent it must equal the manifest's.
+        enabled:
+          type: boolean
+          default: true
+          description: false keeps the plugin installed and inert; nothing in it is materialised or contacted.
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/SkillFile' }
+          description: The package. Must contain `plugin.json` at its root.
+        blob:
+          type: string
+          description: |
+            Server-assigned handle for a package stored out of line. A client passes it back unchanged
+            and reads the files from the plugin files endpoint.
+        manifest: { $ref: '#/components/schemas/PluginManifest' }
+        mcpServers:
+          type: array
+          items: { $ref: '#/components/schemas/PluginMcpServer' }
+          description: |
+            Derived from `mcp.json`. Placeholders are reported unexpanded; `enabled` is always true,
+            the plugin's own `enabled` governs.
+        skills:
+          type: array
+          items: { $ref: '#/components/schemas/PluginSkill' }
+          description: Derived from `skills/`, one entry per immediate child directory with a SKILL.md.
+        skipped:
+          type: array
+          items: { $ref: '#/components/schemas/PluginSkipped' }
+          description: |
+            What the server found and could not load. Present on every plugin object the server
+            returns, empty when nothing was skipped.
+      additionalProperties: true
+
+    PluginManifest:
+      type: object
+      required: ['$schema', name]
+      description: |
+        `plugin.json`, parsed. Mirrors the Agent Plugins 1.0.0 manifest schema
+        (https://agent-plugins.org/schemas/1.0.0/plugin.schema.json, Apache-2.0) field for field, and
+        permits additional properties because a UHP client ignores fields it does not know. The
+        schema a manifest's own `$schema` names is authoritative; a server validates against that.
+      properties:
+        '$schema': { type: string, format: uri }
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^(?!.*(--|\.\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
+        version: { type: string }
+        description: { type: string }
+        author:
+          type: object
+          properties:
+            name: { type: string }
+            email: { type: string }
+            url: { type: string }
+          additionalProperties: true
+        homepage: { type: string }
+        repository: { type: string }
+        license: { type: string }
+        keywords: { type: array, items: { type: string } }
+        extensions:
+          type: object
+          description: Client-specific data keyed by reverse-domain namespace, per Agent Plugins §8.
+          additionalProperties: { type: object }
+      additionalProperties: true
+
+    PluginSkill:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: The SKILL.md frontmatter name, equal to the directory name. }
+        description: { type: string }
+      additionalProperties: true
+
+    PluginSkipped:
+      type: object
+      required: [path, reason]
+      properties:
+        path:
+          type: string
+          description: Where in the package, e.g. `skills/broken`, `mcp.json#/mcpServers/redline`, `plugin.json#/vendorField`.
+          examples: ['skills/broken', 'mcp.json#/mcpServers/redline']
+        reason: { type: string, description: One sentence. }
+      additionalProperties: true
+
+    HarnessCreate:
+      type: object
+      required: [base]
+      properties:
+        name: { type: string }
+        base: { type: string }
+        default_model: { type: string }
+        system_prompt: { type: string }
+        mcp_servers: { type: array, items: { $ref: '#/components/schemas/McpServer' } }
+        skills: { type: array, items: { $ref: '#/components/schemas/Skill' } }
+        plugins:
+          type: array
+          items: { $ref: '#/components/schemas/Plugin' }
+          description: Requires the `plugins` capability. Each item needs `files` or `blob`.
+        environment: { type: string, description: An environment id of the caller's scope, or empty. Requires the `environments` capability. }
+        disabled_tools: { type: array, items: { type: string } }
+        max_step: { type: [integer, 'null'] }
+        timeout_seconds: { type: [integer, 'null'] }
+      additionalProperties: true
+
+    ModelCatalog:
+      type: object
+      required: [backends]
+      properties:
+        backends:
+          type: object
+          additionalProperties:
+            type: object
+            required: [default, models]
+            properties:
+              default: { type: string }
+              models: { type: array, items: { $ref: '#/components/schemas/Model' } }
+
+    HarnessModels:
+      type: object
+      required: [models]
+      properties:
+        harness_id: { type: string }
+        backend: { type: string }
+        default: { type: string }
+        fallback: { type: string }
+        models: { type: array, items: { $ref: '#/components/schemas/Model' } }
+
+    Model:
+      type: object
+      required: [id, available]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        backend: { type: string }
+        available:
+          type: boolean
+          description: |
+            Computed, not asserted: true means the server can serve this model for this harness right
+            now. Listing a model as available and then failing the task is the worst outcome for a
+            client, because a user has already chosen it.
+        default: { type: boolean }
+      additionalProperties: true
+
+    CreateResponseRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object, additionalProperties: true }
+          description: A bare string is shorthand for one user message.
+        model: { type: string, description: Canonical model id. Omitted means the harness default. }
+        metadata:
+          type: object
+          description: |
+            Client metadata, the extension point of the Responses surface. `harness_id` selects the
+            configured harness; `environment` names the environment this task reads, overriding the
+            harness's (capability `environments`), refused with `environment_not_found` or
+            `environment_not_ready` before the task starts.
+          properties:
+            harness_id: { type: string }
+            environment: { type: string }
+          additionalProperties: true
+        stream: { type: boolean, default: false }
+        previous_response_id: { type: [string, 'null'] }
+        instructions: { type: string }
+        store: { type: boolean, default: true }
+        max_output_tokens: { type: [integer, 'null'] }
+        max_step: { type: [integer, 'null'], description: Agent step (tool-call round) budget }
+        timeout_seconds: { type: [integer, 'null'], description: Wall-clock budget }
+        tools:
+          type: array
+          items: { type: object, additionalProperties: true }
+          description: |
+            Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in
+            `metadata.ignored_fields` on the response. A UHP harness invokes and executes tools
+            itself and reports them in `output`; there is no input path for a tool result, so the
+            client-executed tool loop this field implies cannot be completed by a conformant server.
+            Configure tools on the harness instead — see Harnesses §4.1. Tasks §1.4.
+        include:
+          type: array
+          items: { type: string }
+          description: |
+            Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in
+            `metadata.ignored_fields` on the response. No values are enumerated, so any string a
+            server recognised would be one it named itself. Tasks §1.4.
+        background: { type: boolean, default: false }
+      additionalProperties: true
+
+    Response:
+      type: object
+      required: [id, object, created_at, status, output, model]
+      properties:
+        id: { type: string, pattern: '^resp_' }
+        object: { type: string, const: response }
+        created_at: { type: integer, description: Unix seconds }
+        status: { $ref: '#/components/schemas/ResponseStatus' }
+        error:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Error'
+          description: Non-null only when status is `failed`.
+        incomplete_details: { type: [object, 'null'], additionalProperties: true }
+        previous_response_id: { type: [string, 'null'] }
+        model: { type: string, description: The model that actually ran. }
+        output:
+          type: array
+          items: { $ref: '#/components/schemas/OutputItem' }
+        store: { type: boolean }
+        usage:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Usage'
+          description: |
+            null when the server cannot account for usage. A fabricated zero would be worse than an
+            honest absence, because a client cannot tell it from a free task.
+        metadata:
+          type: object
+          properties:
+            session_id: { type: string }
+            environment:
+              type: string
+              description: The environment the task read, when it read one (capability `environments`).
+            requested_model:
+              type: string
+              description: Present when the server ran a different model than was requested.
+            model_fallback: { type: boolean }
+            model_fallback_reason: { type: string }
+            ignored_fields:
+              type: array
+              items: { type: string }
+              description: |
+                Request fields the server did not act on, by name, in any order. Required when the
+                request carried `tools` or `include`, which are reserved and ignored. A silently
+                ignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.
+          additionalProperties: true
+      additionalProperties: true
+
+    ResponseStatus:
+      type: string
+      enum: [in_progress, completed, failed, incomplete, cancelled]
+      description: |
+        `incomplete` means a budget stopped the work and is usually worth continuing.
+        `failed` means it could not be done. `cancelled` means the client asked for a stop, and must
+        never be reported as `failed`.
+
+    OutputItem:
+      type: object
+      required: [type]
+      description: |
+        A client must tolerate item types it does not recognise. A client that renders only `message`
+        items and ignores the rest is a valid client.
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          examples: [message, reasoning, function_call, function_call_output]
+        status: { type: string }
+        role: { type: string }
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/ContentPart' }
+        summary:
+          type: array
+          items: { type: object, additionalProperties: true }
+        call_id: { type: string }
+        name: { type: string }
+        arguments: { type: string, description: JSON, as a string }
+        output: { type: string }
+      additionalProperties: true
+
+    ContentPart:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, examples: [output_text] }
+        text: { type: string }
+        annotations:
+          type: array
+          items: { $ref: '#/components/schemas/Annotation' }
+      additionalProperties: true
+
+    Annotation:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: container_file_citation }
+        container_id: { type: string }
+        file_id: { type: string }
+        filename: { type: string }
+        download_url: { type: string, format: uri }
+        start_index: { type: integer }
+        end_index: { type: integer }
+      additionalProperties: true
+
+    Usage:
+      type: object
+      properties:
+        input_tokens: { type: integer, minimum: 0 }
+        output_tokens: { type: integer, minimum: 0 }
+        total_tokens: { type: integer, minimum: 0 }
+        cache_read_tokens: { type: integer, minimum: 0 }
+        cache_write_tokens: { type: integer, minimum: 0 }
+      additionalProperties: true
+
+    SessionShare:
+      type: object
+      description: |
+        A published read-only view of a session (Sessions §5). `url` may be relative, resolving
+        against the base URL the caller is already using — a server behind a proxy cannot know its
+        public origin, and a base-relative path survives every fronting. The share's id MUST NOT
+        function as a credential for the rest of the API.
+      required: [id, url]
+      properties:
+        id: { type: string }
+        url: { type: string }
+        object: { type: string, description: 'SHOULD be "session.share"' }
+        enabled: { type: boolean }
+      additionalProperties: true
+
+    TurnItem:
+      type: object
+      description: |
+        One turn of a session's history (Sessions §3). Previously an object with no stated shape,
+        which kept every conformance check at "the endpoint answered 200" and made transcript
+        rebuilding an exercise in one implementation's habits.
+      required: [id, status]
+      properties:
+        id: { type: string, description: "The response id, usable with GET /v1/responses/{id}" }
+        status: { type: string }
+        user: { type: string }
+        assistant: { type: string }
+        tools: { type: array, items: { type: object, additionalProperties: true } }
+        files: { type: array, items: { type: object, additionalProperties: true } }
+      additionalProperties: true
+
+    Environment:
+      type: object
+      required: [id, name, slug, status, mount]
+      properties:
+        id: { type: string, pattern: '^henv_' }
+        object: { type: string, const: environment }
+        name: { type: string }
+        slug:
+          type: string
+          description: The path segment sessions see; derived from the name at creation and fixed after.
+        description: { type: string }
+        entry:
+          type: string
+          description: How the project is run, in the owner's words; repeated to the agent.
+        status:
+          type: string
+          enum: [empty, building, ready, failed]
+          description: |
+            `ready` means a built version is active and tasks may read it. `empty` means nothing
+            was built yet; `building` and `failed` describe the latest build.
+        mount:
+          type: string
+          description: Where a session finds the environment, read-only. `/env/<slug>` on the reference server.
+        version: { type: [integer, 'null'], description: The active build, the one sessions read; null until one is ready. }
+        latestVersion: { type: [integer, 'null'] }
+        files:
+          type: object
+          description: The source's size (what the owner put in, before any build).
+          properties:
+            count: { type: integer, minimum: 0 }
+            bytes: { type: integer, minimum: 0 }
+        packages:
+          type: array
+          description: What the active build installed, as the package managers report it.
+          items: { $ref: '#/components/schemas/EnvironmentPackage' }
+        declared:
+          type: object
+          description: |
+            What the owner declared, per manager, as the build installs it beside the project's own
+            manifests: `pip` (`name==1.0`), `npm` (`name@1.0`), `apt` (`name`). Each entry carries
+            the spec as written and its parsed name and version.
+          properties:
+            pip: { type: array, items: { $ref: '#/components/schemas/DeclaredPackage' } }
+            npm: { type: array, items: { $ref: '#/components/schemas/DeclaredPackage' } }
+            apt: { type: array, items: { $ref: '#/components/schemas/DeclaredPackage' } }
+        runtime:
+          type: object
+          description: The interpreter a build makes the virtual environment with; empty means the server's default.
+          properties:
+            python: { type: string, examples: ['3.12'] }
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/EnvironmentVersion' }
+        build:
+          description: The latest build's status, or null before the first.
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/EnvironmentVersion'
+        createdAt: { type: integer, description: Unix milliseconds }
+        updatedAt: { type: integer, description: Unix milliseconds }
+      additionalProperties: true
+
+    DeclaredPackage:
+      type: object
+      required: [spec]
+      properties:
+        spec: { type: string, description: 'As written: moviepy==2.1.1, sharp@0.33.5, ffmpeg' }
+        name: { type: string }
+        version: { type: string }
+      additionalProperties: true
+
+    EnvironmentPackageCheck:
+      type: object
+      required: [manager, name, spec, exists]
+      description: What the manager's registry says about a spec, before any build.
+      properties:
+        object: { type: string, const: environment.package }
+        manager: { type: string, enum: [pip, npm, apt] }
+        name: { type: string }
+        spec: { type: string }
+        exists: { type: [boolean, 'null'], description: "null when the registry could not be asked" }
+        latest: { type: string }
+        version: { type: string, description: "The exact pin when it is published; empty otherwise" }
+        error: { type: string, description: "In words: why the spec was refused, or why the registry could not be asked" }
+      additionalProperties: true
+
+    EnvironmentRuntimes:
+      type: object
+      description: What a build can be made with on this server, and nothing that is not there.
+      properties:
+        python: { type: array, items: { type: string }, examples: [['3.12', '3.13']] }
+        node: { type: array, items: { type: string }, examples: [['22']] }
+        os:
+          type: object
+          properties:
+            name: { type: string }
+            version: { type: string }
+        apt: { type: boolean, description: Whether apt packages can be declared here. }
+      additionalProperties: true
+
+    EnvironmentPackage:
+      type: object
+      required: [manager, name]
+      properties:
+        manager: { type: string, examples: [pip, npm] }
+        name: { type: string }
+        version: { type: string }
+      additionalProperties: true
+
+    EnvironmentVersion:
+      type: object
+      required: [version, status]
+      properties:
+        version: { type: integer, minimum: 1 }
+        status: { type: string, enum: [building, ready, failed, unknown] }
+        started_at: { type: [integer, 'null'] }
+        finished_at: { type: [integer, 'null'] }
+        error: { type: string }
+        files: { type: integer }
+        bytes: { type: integer }
+        packages: { type: integer, description: How many packages the build installed. }
+      additionalProperties: true
+
+    EnvironmentBuild:
+      type: object
+      required: [id, version, status]
+      description: A build's record; the log is the installers' own output, capped by the server.
+      properties:
+        id: { type: string }
+        object: { type: string, const: environment.build }
+        version: { type: integer }
+        status: { type: string, enum: [building, ready, failed] }
+        started_at: { type: [integer, 'null'] }
+        finished_at: { type: [integer, 'null'] }
+        error: { type: string }
+        stage: { type: string, description: "The step a running build is on; empty once it ended" }
+        log: { type: string }
+        packages: { type: array, items: { $ref: '#/components/schemas/EnvironmentPackage' } }
+        files: { type: integer }
+        bytes: { type: integer }
+      additionalProperties: true
+
+    EnvironmentCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: Must start with a letter or digit; the slug derives from it. }
+        description: { type: string }
+        entry: { type: string }
+        packages:
+          type: object
+          description: Declared packages per manager, as spec strings; omitted on update means unchanged.
+          properties:
+            pip: { type: array, items: { type: string } }
+            npm: { type: array, items: { type: string } }
+            apt: { type: array, items: { type: string } }
+        runtime:
+          type: object
+          properties:
+            python: { type: string }
+      additionalProperties: true
+
+    EnvironmentList:
+      type: object
+      required: [environments]
+      properties:
+        environments: { type: array, items: { $ref: '#/components/schemas/Environment' } }
+      additionalProperties: true
+
+    EnvironmentFileEntry:
+      type: object
+      required: [path, dir]
+      properties:
+        path: { type: string, description: Relative to the environment's root. }
+        dir: { type: boolean }
+        bytes: { type: integer, minimum: 0 }
+        mtime: { type: integer, description: Unix seconds. }
+      additionalProperties: true
+
+    EnvironmentFileList:
+      type: object
+      required: [entries]
+      properties:
+        entries: { type: array, items: { $ref: '#/components/schemas/EnvironmentFileEntry' } }
+        count: { type: integer, description: Files, not directories. }
+        bytes: { type: integer }
+      additionalProperties: true
+
+    EnvironmentImport:
+      type: object
+      description: |
+        The JSON form of an import: a git repository. The other form is the archive itself as the
+        request body (a zip or a tar, any content type but `application/json`).
+      properties:
+        git:
+          type: object
+          required: [url]
+          properties:
+            url: { type: string }
+            ref: { type: string, description: A branch or tag; the default branch when omitted. }
+        replace: { type: boolean, default: false, description: Clear the source before importing. }
+      additionalProperties: true
+
+    EnvironmentImportResult:
+      type: object
+      properties:
+        written: { type: integer }
+        skipped: { type: integer, description: Members that must not land (links, escapes) and were dropped. }
+        count: { type: integer }
+        bytes: { type: integer }
+      additionalProperties: true
+
+    Session:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        object: { type: string, const: session }
+        harness_id: { type: string }
+        environment: { type: string, description: The environment the session's turns read, when one did. }
+        title: { type: string }
+        status: { type: string }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+      additionalProperties: true
+
+    SessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions: { type: array, items: { $ref: '#/components/schemas/Session' } }
+        next_cursor:
+          type: [string, 'null']
+          description: |
+            null on the last page. A client must not be required to detect the end by receiving fewer
+            items than requested — that heuristic is wrong whenever a page is exactly full.
+      additionalProperties: true
+
+    File:
+      type: object
+      required: [id, filename]
+      properties:
+        id: { type: string }
+        object: { type: string, const: file }
+        container_id: { type: string }
+        filename: { type: string }
+        bytes: { type: integer, minimum: 0 }
+        created_at: { type: integer }
+      additionalProperties: true
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: '#/components/schemas/Error' }
+        detail:
+          type: string
+          deprecated: true
+          description: |
+            A human-readable alias of `error.message`, retained for clients written against
+            implementations that predate this envelope. Carries no information not in `error`.
+      additionalProperties: true
+
+    Error:
+      type: object
+      required: [type, code, message]
+      properties:
+        type:
+          type: string
+          enum:
+            - invalid_request_error
+            - authentication_error
+            - permission_error
+            - rate_limit_error
+            - harness_error
+            - server_error
+        code:
+          type: string
+          description: |
+            Specific and machine-readable. Servers may define additional codes for conditions this
+            specification does not cover, and must namespace them with a vendor prefix so a future
+            version cannot collide with them.
+          examples:
+            - unsupported_protocol_version
+            - invalid_input
+            - harness_not_found
+            - response_not_found
+            - session_not_found
+            - plugin_not_found
+            - file_not_found
+            - session_expired
+            - harness_mismatch
+            - session_busy
+            - plugin_conflict
+            - file_too_large
+            - model_unavailable
+            - unsupported_base
+            - plugin_invalid
+            - unsupported_plugin_schema
+            - environment_not_found
+            - environment_not_ready
+            - environment_busy
+            - environment_exists
+            - environment_invalid
+            - environment_unavailable
+            - unsupported_transport
+            - missing_credential
+            - invalid_credential
+            - insufficient_scope
+            - rate_limited
+            - quota_exhausted
+            - harness_error
+            - harness_unavailable
+            - provider_error
+            - timeout
+            - cancelled
+            - preview_unavailable
+            - preview_failed
+        message:
+          type: string
+          description: |
+            One sentence, safe to show a user. Must not contain credentials, internal hostnames, file
+            paths, or stack traces.
+        param: { type: [string, 'null'], description: Dotted path to the offending field. }
+        detail: { type: [object, 'null'], additionalProperties: true }
+      additionalProperties: true
+
+    Event:
+      type: object
+      required: [type, sequence_number]
+      description: |
+        One streamed event. `sequence_number` starts at 0 and increases by exactly 1 per event, so a
+        client can detect a dropped event rather than silently rendering a gap.
+      properties:
+        type:
+          type: string
+          examples:
+            - response.created
+            - response.in_progress
+            - response.output_item.added
+            - response.output_item.done
+            - response.content_part.added
+            - response.content_part.done
+            - response.output_text.delta
+            - response.output_text.done
+            - response.output_text.annotation.added
+            - response.reasoning_summary_part.added
+            - response.reasoning_summary_text.delta
+            - response.reasoning_summary_part.done
+            - response.function_call_arguments.delta
+            - response.function_call_arguments.done
+            - response.completed
+            - response.incomplete
+            - response.failed
+            - error
+        sequence_number: { type: integer, minimum: 0 }
+        response: { $ref: '#/components/schemas/Response' }
+        item: { $ref: '#/components/schemas/OutputItem' }
+        part: { $ref: '#/components/schemas/ContentPart' }
+        annotation: { $ref: '#/components/schemas/Annotation' }
+        delta: { type: string }
+        text: { type: string }
+        arguments: { type: string }
+        item_id: { type: string }
+        output_index: { type: integer, minimum: 0 }
+        content_index: { type: integer, minimum: 0 }
+        summary_index: { type: integer, minimum: 0 }
+        annotation_index: { type: integer, minimum: 0 }
+        code: { type: string }
+        message: { type: string }
+        param: { type: [string, 'null'] }
+      additionalProperties: true
+
+    Memory:
+      type: object
+      required: [id, name, privileges]
+      properties:
+        id: { type: string, pattern: '^hmem_' }
+        object: { type: string, const: memory }
+        name: { type: string }
+        description: { type: string, description: What this memory holds; an agent reads it to decide whether to look inside. }
+        parent_id: { type: [string, 'null'] }
+        ancestors: { type: array, items: { type: string }, description: 'Ids from the root down to the parent, as far up as the caller may see.' }
+        restricted: { type: boolean, description: 'When true, grants on ancestors stop here.' }
+        provider: { type: string }
+        privileges: { type: array, items: { $ref: '#/components/schemas/MemoryPrivilege' }, description: The effective privileges of the caller on this memory. }
+        records: { type: object, properties: { count: { type: [integer, 'null'] } } }
+        children: { type: object, properties: { count: { type: integer } } }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+      additionalProperties: true
+    MemoryPrivilege: { type: string, enum: [read, write, create, delete] }
+    MemoryCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        parent_id: { type: [string, 'null'] }
+        restricted: { type: boolean }
+        provider: { type: string, description: A connected provider; inherited from the parent when omitted. }
+    MemoryUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        restricted: { type: boolean }
+        parent_id: { type: [string, 'null'] }
+    MemoryList:
+      type: object
+      properties:
+        object: { type: string, const: list }
+        data: { type: array, items: { $ref: '#/components/schemas/Memory' } }
+    MemoryDeleted:
+      type: object
+      properties:
+        id: { type: string }
+        deleted: { type: boolean }
+        memories: { type: array, items: { type: string }, description: 'Every memory removed: the named one and its descendants.' }
+    Deleted:
+      type: object
+      properties:
+        id: { type: string }
+        deleted: { type: boolean }
+      additionalProperties: true
+    FreeObject: { type: object, additionalProperties: true }
+    MemoryNeighbour:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        records: { type: object }
+        children: { type: object }
+        privileges: { type: array, items: { $ref: '#/components/schemas/MemoryPrivilege' } }
+    MemoryGrant:
+      type: object
+      required: [id, memory_id, principal, privileges]
+      properties:
+        id: { type: string }
+        object: { type: string, const: memory.grant }
+        memory_id: { type: string }
+        principal: { type: string, description: 'A typed identifier, `<kind>:<id>`; the kinds a server accepts are its own.' }
+        privileges: { type: array, items: { $ref: '#/components/schemas/MemoryPrivilege' } }
+        inherited: { type: boolean, description: True when the grant sits on an ancestor. }
+    MemoryGrantCreate:
+      type: object
+      required: [principal, privileges]
+      properties:
+        principal: { type: string }
+        privileges: { type: array, items: { $ref: '#/components/schemas/MemoryPrivilege' } }
+    MemoryGrantList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryGrant' } }
+    MemoryReference:
+      type: object
+      required: [record_id]
+      properties:
+        rel: { type: string }
+        memory_id: { type: string }
+        record_id: { type: string }
+        available: { type: boolean, description: False when the reader may not read the target; nothing else of it is returned. }
+    MemoryRecord:
+      type: object
+      required: [id, memory_id, type, trust]
+      properties:
+        id: { type: string, description: Assigned by the provider and opaque to a client. }
+        object: { type: string, const: memory.record }
+        memory_id: { type: string }
+        type: { type: string, description: 'episode, fact, note, procedure, link, or an extension type.' }
+        content: { description: 'Text, or a file reference.' }
+        attributes: { type: object, additionalProperties: true }
+        version: { type: integer }
+        status: { type: string, enum: [active, superseded, forgotten] }
+        supersedes: { type: [integer, string, 'null'] }
+        time:
+          type: object
+          properties:
+            valid_from: { type: [string, 'null'] }
+            valid_to: { type: [string, 'null'] }
+            written_at: { type: [string, 'null'] }
+            invalidated_at: { type: [string, 'null'] }
+        written_by: { type: object, additionalProperties: true, description: Stamped by the server from the authenticated caller. }
+        references: { type: array, items: { $ref: '#/components/schemas/MemoryReference' } }
+        trust: { type: string, const: untrusted }
+      additionalProperties: true
+    MemoryRecordCreate:
+      type: object
+      required: [content]
+      properties:
+        type: { type: string }
+        content: {}
+        attributes: { type: object, additionalProperties: true }
+        references: { type: array, items: { $ref: '#/components/schemas/MemoryReference' } }
+        time: { type: object, additionalProperties: true }
+    MemoryRecordRevise:
+      type: object
+      properties:
+        content: {}
+        attributes: { type: object, additionalProperties: true }
+        references: { type: array, items: { $ref: '#/components/schemas/MemoryReference' } }
+        time: { type: object, additionalProperties: true }
+    MemoryRecordList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryRecord' } }
+        next: { type: [string, 'null'] }
+        job: { $ref: '#/components/schemas/MemoryJob' }
+        parent: { $ref: '#/components/schemas/MemoryNeighbour' }
+        children: { type: array, items: { $ref: '#/components/schemas/MemoryNeighbour' } }
+    MemoryObserve:
+      type: object
+      required: [episodes]
+      properties:
+        episodes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [content]
+            properties:
+              content: {}
+              attributes: { type: object, additionalProperties: true }
+    MemoryJob:
+      type: object
+      required: [id, status]
+      properties:
+        object: { type: string, const: memory.job }
+        id: { type: string }
+        status: { type: string, enum: [pending, completed, failed] }
+        error: { type: string }
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryRecord' } }
+    MemoryFilter:
+      type: object
+      description: 'One of `{field, op, value}`, `{and: [...]}` or `{or: [...]}`.'
+      additionalProperties: true
+    MemoryRecallRequest:
+      type: object
+      properties:
+        query: { type: string, description: Meaning. }
+        text: { type: string, description: Words. }
+        filters: { $ref: '#/components/schemas/MemoryFilter' }
+        types: { type: array, items: { type: string } }
+        as_of: { type: [string, 'null'] }
+        include: { type: string, enum: [active, all] }
+        depth: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+    MemoryRecall:
+      type: object
+      required: [results, degraded, abstain]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required: [record]
+            properties:
+              record: { $ref: '#/components/schemas/MemoryRecord' }
+              score: { type: [number, 'null'] }
+              why: { type: array, items: { type: string } }
+        parent: { $ref: '#/components/schemas/MemoryNeighbour' }
+        children: { type: array, items: { $ref: '#/components/schemas/MemoryNeighbour' } }
+        degraded: { type: array, items: { type: string }, description: What the request asked for and the provider did not do. }
+        abstain: { type: boolean, description: True when the provider judges that nothing it returned answers the question. }
+      additionalProperties: true
+    MemoryErase:
+      type: object
+      required: [record_ids]
+      properties:
+        record_ids: { type: array, minItems: 1, items: { type: string } }
+    MemoryErasure:
+      type: object
+      required: [erased, unreachable]
+      properties:
+        erased: { type: array, items: { type: string } }
+        unreachable: { type: array, items: { type: string }, description: Content the provider could not remove. Empty is a guarantee. }
+    MemoryQuery:
+      type: object
+      required: [body]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        params: { type: object, additionalProperties: true, description: A JSON Schema for the parameters. }
+        requires: { type: string, enum: [read, write] }
+        language: { type: string, description: Opaque to the protocol. }
+        body: { type: string, description: Opaque to the protocol. }
+      additionalProperties: true
+    MemoryQueryList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryQuery' } }
+    MemoryQueryRun:
+      type: object
+      properties:
+        params: { type: object, additionalProperties: true }
+    MemoryFreeQuery:
+      type: object
+      required: [statement]
+      properties:
+        language: { type: string }
+        statement: { type: string }
+        params: { type: object, additionalProperties: true }
+        write: { type: boolean }
+    MemoryOperationResult:
+      type: object
+      properties:
+        name: { type: string }
+        result: {}
+    MemorySnapshot:
+      type: object
+      required: [id, name, at]
+      properties:
+        id: { type: string }
+        object: { type: string, const: memory.snapshot }
+        memory_id: { type: string }
+        name: { type: string }
+        message: { type: string }
+        at: { type: string }
+    MemorySnapshotCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        message: { type: string }
+    MemorySnapshotList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/MemorySnapshot' } }
+    MemoryConsolidation:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string }
+        object: { type: string, const: memory.consolidation }
+        memory_id: { type: string }
+        status: { type: string, enum: [queued, running, completed, stopped, failed] }
+        trigger: { type: string }
+        started_at: { type: [integer, 'null'] }
+        finished_at: { type: [integer, 'null'] }
+        read: { type: object, additionalProperties: true }
+        changes: { type: object, additionalProperties: true }
+        usage: { type: object, additionalProperties: true }
+        budget: { type: object, additionalProperties: true }
+        written_by: { type: object, additionalProperties: true }
+        error: { type: string }
+      additionalProperties: true
+    MemoryConsolidationStart:
+      type: object
+      properties:
+        budget: { type: object, additionalProperties: true }
+    MemoryConsolidationList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryConsolidation' } }
+    MemoryProvider:
+      type: object
+      required: [id, isolation]
+      properties:
+        id: { type: string }
+        isolation: { type: string, enum: [container, enforced_filter] }
+        derivation: { type: string, enum: [write_time, background, agent, none] }
+        observe: { type: object, additionalProperties: true }
+        recall: { type: object, additionalProperties: true }
+        history: { type: object, additionalProperties: true }
+        erase: { type: object, additionalProperties: true }
+        queries: { type: object, additionalProperties: true }
+      additionalProperties: true
+    MemoryProviderList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryProvider' } }
+    MemoryType:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string }
+        core: { type: boolean }
+        description: { type: string }
+        schema: { type: object, additionalProperties: true }
+        text: { type: string }
+        operations:
+          type: array
+          items:
+            type: object
+            required: [name, requires]
+            properties:
+              name: { type: string }
+              description: { type: string }
+              input: { type: object, additionalProperties: true }
+              requires: { $ref: '#/components/schemas/MemoryPrivilege' }
+      additionalProperties: true
+    MemoryTypeList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryType' } }
+    HarnessMemoryEntry:
+      type: object
+      required: [memory_id]
+      properties:
+        memory_id: { type: string, pattern: '^hmem_' }
+        access: { type: string, enum: [read, write] }
+        default: { type: boolean, description: 'Where observe and an unaddressed remember go: one entry at most, and one the agent writes.' }
+    HarnessMemories:
+      type: object
+      properties:
+        memories: { type: array, items: { $ref: '#/components/schemas/HarnessMemoryEntry' } }
+        data: { type: array, items: { $ref: '#/components/schemas/HarnessMemoryEntry' } }

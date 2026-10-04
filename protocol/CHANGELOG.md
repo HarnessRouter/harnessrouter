@@ -2,6 +2,43 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-10-04
+
+Additive to `2026-09-28`: every request and object valid under the previous version is valid here.
+
+- **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
+  optional at every class behind the `memories` capability. A memory is a named node in a tree:
+  it holds records and may have child memories. A grant gives a principal privileges (`read`,
+  `write`, `create`, `delete`) on a node and the node's descendants inherit it, up to a
+  `restricted` node; what a caller may not read is answered exactly as what does not exist.
+- Records are written two ways (`observe`: raw episodes, the provider decides what to derive, and
+  may answer `202` with a job; `remember`: one record as stated) and removed two ways (`forget`:
+  closed, trace kept; `erase`: content gone, with a list of what could not be reached). A change
+  appends a version; `history`, `as_of` and named snapshots read the past.
+- `recall` acts on one memory, by meaning, words and fields, and answers with the parent and
+  children the caller may read, so an agent walks the tree itself, up or down. What a provider did
+  not do is said in `degraded`; `abstain` says that nothing returned answers the question. Named
+  queries, and free queries where a provider offers them, run in the provider's own language,
+  confined to what the caller may read by a means the statement cannot undo.
+- A server keeps no memory of its own: records are kept by a **provider** the server is connected
+  to, behind one contract, and each provider says what it does in a capability document
+  (`GET /v1/memories/providers`): isolation, derivation, signals, history, erase, queries, types.
+- A harness is attached to memories at `PUT /v1/harnesses/{id}/memories`; attaching is granting.
+  A task names one more in `metadata.memory`. A session reaches memory at four moments: priming,
+  the agent's tools, observation after a turn, and consolidation, whose runs are visible, bounded
+  and reversible.
+- Extension record types carry their own schema and operations, for resources that are more than text.
+- New objects in the schema: `Memory`, `MemoryRecord`, `MemoryRecall`, `MemoryGrant`,
+  `MemoryProvider`, `MemoryConsolidation` and their requests; 23 paths under `/v1/memories` and
+  `/v1/harnesses/{id}/memories`. New error codes: `memory_not_found`, `memory_forbidden`,
+  `memory_record_not_found`, `memories_not_attached`, `memory_invalid`, `memory_unsupported`,
+  `memory_busy`, `memory_unavailable`.
+- Conformance suite `2026.10.4`: ME-01 to ME-08 drive the tree, records, recall and the provider's
+  capability document on a server that reports the capability and has a provider connected; a
+  server without the capability skips them. They pass, 8 of 8, on a build of the reference server
+  with a hosted memory service as the provider. The suite runs with one credential, so isolation
+  between principals is not yet checked by it.
+
 ## 2026-09-28 (patched 2026-09-29)
 
 Additive to `2026-09-12`: every request and object valid under the previous version is valid here.
