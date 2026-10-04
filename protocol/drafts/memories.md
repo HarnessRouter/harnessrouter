@@ -320,9 +320,29 @@ POST   /v1/memories/{id}/queries/{name}      run with params; answers in the sha
 `language` and `body` are opaque to the protocol. A named query is offered to an agent as a tool
 with `params` as its input schema. The server MUST run it within what the caller may read.
 
-A server does not accept a query an agent composed at run time unless the provider isolates by
-container and declares `queries.raw`: a statement written by a model is a statement that can leave
-out the condition that confines it.
+### 6.5 Free queries
+
+A provider MAY also let a caller, an agent included, write a query and run it:
+
+```http
+POST /v1/memories/{id}/query        { "language": "gremlin++", "statement": "…", "params": { } }
+```
+
+It is optional and provider-dependent: the provider declares `queries.free` with the languages it
+accepts ([§10.2](#102-the-capability-document)), and an agent is offered it as the tool
+`memory_query`, whose description names the language and the memory's schema. The answer has the
+shape of [§6.3](#63-the-response) where the result is records, and the provider's own rows otherwise.
+
+Freedom over the statement is not freedom over the reach. A statement written by a model can leave
+out the condition that confines it, so the confinement cannot be in the statement:
+
+- The provider MUST run a free query within what the caller may read, by a means the statement
+  cannot undo: a container the query cannot leave, or a scope the provider applies outside the
+  statement. A provider that cannot do this MUST NOT declare `queries.free`.
+- A free query reads. A provider that lets one write declares `queries.free.write`, needs `write`
+  from the caller, and stamps `written_by` as on any other write.
+- The server MAY bound a free query's time and result size and reports a bound it applied in
+  `degraded`.
 
 ## 7. Files
 
@@ -396,7 +416,7 @@ A harness names the memories it works with:
 | Moment | Called by | What happens |
 |---|---|---|
 | **Prime** | server, at session start and after the conversation is compacted | The server reads what the provider marks as always-relevant in each attached memory and places it, with each memory's `name`, `description` and children, in the agent's instructions |
-| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, plus one tool per named query and per type operation. The agent names a memory by id among those attached and their descendants; the server refuses any other |
+| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, plus one tool per named query and per type operation, and `memory_query` where the provider offers free queries. The agent names a memory by id among those attached and their descendants; the server refuses any other |
 | **Observe** | server, when a turn ends | The turn (what was asked, what was answered, which tools ran) is sent to the default memory as episodes. No model is involved on the server's side |
 | **Consolidate** | server, on a schedule or when idle | The server asks the provider to do its background work. What that is belongs to the provider |
 
@@ -432,7 +452,7 @@ GET /v1/memories/providers
   "history": { "content": "versions", "structure": "versions" },
   "revise": "native", "forget": "native", "erase": { "unreachable": "reported" },
   "prime": true, "consolidate": true,
-  "queries": { "named": true, "raw": false, "language": "gremlin++" },
+  "queries": { "named": true, "free": { "languages": ["gremlin++"], "write": false } },
   "types": true, "files": true
 } ] }
 ```
@@ -462,7 +482,7 @@ This table is the plan, not a measurement. Each row is replaced by what conforma
 ```
 
 A server that reports `memories: true` implements [§2](#2-the-memory-object) to [§6.3](#63-the-response)
-and [§9](#9-attaching-memories-to-a-harness). Named queries, types, files, snapshots and erase are
+and [§9](#9-attaching-memories-to-a-harness). Named and free queries, types, files, snapshots and erase are
 reported per provider ([§10.2](#102-the-capability-document)). A server that does not implement the
 chapter reports `false` or omits it and answers its endpoints with `404`.
 
@@ -504,7 +524,9 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
 5. `observe` is on by default for an attached memory.
 6. A provider's internals are invisible; Letta is a provider like any other.
 7. Other resources (calendar, tasks, tables) enter as extension types with operations; optional.
-8. Recall has fixed signals (meaning, words, fields) and named queries in the provider's language.
+8. Recall has fixed signals (meaning, words, fields), named queries in the provider's language, and,
+   where a provider offers them, free queries an agent writes itself. The provider confines a free
+   query to what the caller may read by a means the statement cannot undo.
 9. References cross the tree freely and resolve with the reader's privileges.
 10. On the hosted service, a memory is a Space: the same vertex, tree and grants, with no migration.
 
@@ -514,8 +536,6 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
   ([§3.3](#33-enforcement)), in place of "always a container".
 - History is append-and-close for content and structure alike; file bytes are kept by content
   address, a snapshot is a named instant, and no git repository is involved ([§5.3](#53-nothing-is-overwritten)).
-- No run-time queries composed by an agent, except on a container-isolated provider that opts in
-  ([§6.4](#64-named-queries)).
 
 **Open**
 
