@@ -2,7 +2,7 @@
 
 **Unified Harness Protocol, DRAFT 0.1 (2026-10-03). Not part of any published version.**
 
-> Status: a working draft for discussion. Section 14 lists what is decided, what is proposed and
+> Status: a working draft for discussion. Section 15 lists what is decided, what is proposed and
 > not yet confirmed, and what is open. Nothing here is implemented.
 
 A session's conversation ([Sessions](../versions/2026-09-28/sessions.md)) ends with the session, and
@@ -404,8 +404,7 @@ A harness names the memories it works with:
 ```json
 { "memories": [
     { "memory_id": "hmem_0a1b…", "access": "read" },
-    { "memory_id": "hmem_7c1e…", "access": "write", "default": true },
-    { "memory_id": "hmem_user_{subject}", "access": "write" }
+    { "memory_id": "hmem_7c1e…", "access": "write", "default": true }
 ] }
 ```
 
@@ -414,9 +413,12 @@ A harness names the memories it works with:
 - `access` narrows; it never widens. `read` on a memory the harness may also write gives the agent
   read tools only, on that memory and on whatever it walks to from it.
 - One entry MAY be marked `default`: where `observe` and an unaddressed `remember` go.
-- An entry MAY name a memory by a template the server resolves per task from
-  `metadata.memory` on the request ([Tasks](../versions/2026-09-28/tasks.md)), creating it under a
-  parent the harness has `create` on. How a server maps a task to a node is its own convention.
+- A task MAY carry `memories` of its own, in the same shape, on the request
+  ([Tasks](../versions/2026-09-28/tasks.md)): the memory of the person this task is for, say. They
+  are added to the harness's for that session, a `default` among them replaces the harness's, and
+  each is checked against the harness's privileges exactly as a harness entry is. A memory is
+  always named by its id. The server does not derive a node from anything else in a request, and
+  creating a person's memory is the caller's act, done before the task with `POST /v1/memories`.
 
 ### 9.1 What a session does
 
@@ -427,11 +429,52 @@ A harness names the memories it works with:
 | **Observe** | server, when a turn ends | The turn (what was asked, what was answered, which tools ran) is sent to the default memory as episodes. No model is involved on the server's side |
 | **Consolidate** | server, on a schedule or when idle | The server asks the provider to do its background work. What that is belongs to the provider |
 
+How much a provider returns for priming is the provider's decision. The server reports what it
+placed, per memory, in tokens, on the session ([Sessions](../versions/2026-09-28/sessions.md)), so
+the cost is visible even where it is not set by the client.
+
 Priming is not repeated every turn. Instructions that change every turn defeat prompt caching, and
 retrieval during a turn is what the tools are for.
 
 A server MUST tell the person who attaches a memory whose provider is outside the server that every
 turn will be sent to it.
+
+### 9.2 Consolidation runs
+
+Background work that rewrites what a memory holds is visible, bounded and reversible, or it is not
+trusted. A provider that consolidates through the protocol exposes each pass as a **run**:
+
+```http
+POST   /v1/memories/{id}/consolidations              start one now (budget optional)
+GET    /v1/memories/{id}/consolidations              runs, newest first
+GET    /v1/memories/{id}/consolidations/{run}        one run
+GET    /v1/memories/{id}/consolidations/{run}/changes   the records it wrote, superseded or forgot
+POST   /v1/memories/{id}/consolidations/{run}/revert
+```
+
+```json
+{
+  "id": "hcon_5d2e…", "object": "memory.consolidation", "memory_id": "hmem_7c1e…",
+  "status": "completed",
+  "trigger": "schedule",
+  "started_at": 1790570000, "finished_at": 1790570094,
+  "read": { "episodes": 240, "through": "2026-10-03T08:00:00Z" },
+  "changes": { "created": 31, "superseded": 6, "forgotten": 2 },
+  "usage": { "input_tokens": 182000, "output_tokens": 9100 },
+  "budget": { "limit": 250000, "unit": "tokens", "exhausted": false },
+  "written_by": { "kind": "consolidator", "id": "native" },
+  "error": ""
+}
+```
+
+- `status` is `queued`, `running`, `completed`, `stopped` (the budget ran out; what was done stays
+  done and the next run resumes after `read.through`) or `failed`.
+- Every record a run writes carries the run's `written_by`, so a reader can tell what a person or
+  an agent stated from what consolidation concluded.
+- `revert` appends: each record the run superseded or forgot becomes current again as a new
+  version, and each record it created is forgotten. History keeps both the run and its reversal.
+- A provider declares `consolidate` as `runs` (this section), `trigger` (it can be started and
+  nothing more is reported), or `false`.
 
 ## 10. Providers
 
@@ -458,7 +501,7 @@ GET /v1/memories/providers
   "recall": { "signals": ["query", "text", "filters"], "abstain": true, "max_depth": 3 },
   "history": { "content": "versions", "structure": "versions" },
   "revise": "native", "forget": "native", "erase": { "unreachable": "reported" },
-  "prime": true, "consolidate": true,
+  "prime": true, "consolidate": "runs",
   "queries": { "named": true, "free": { "languages": ["gremlin++"], "write": false } },
   "types": true, "files": true
 } ] }
@@ -478,9 +521,9 @@ GET /v1/memories/providers
 | Zep | Temporal graph | thread messages, `graph.add` | `graph.add` text or JSON | query, text, filters | bi-temporal edges | container (a graph) |
 | Letta | Files and blocks kept by its own agent | messages to its agent | file or passage write | query | commit log | container (an agent or a shared block) |
 | Cognee | Document-derived graph | `remember` / `add` + `cognify` | `add` | query, text | emulated | container (a dataset) |
-| Files (built in) | Markdown files in a folder | appended transcript | a file | text | versions | container (a folder) |
 
-This table is the plan, not a measurement. Each row is replaced by what conformance finds.
+This table is the plan, not a measurement. Each row is replaced by what conformance finds. A UHP
+server keeps no memory of its own: a deployment has memories once it is connected to a provider.
 
 ## 11. Discovery
 
@@ -489,7 +532,7 @@ This table is the plan, not a measurement. Each row is replaced by what conforma
 ```
 
 A server that reports `memories: true` implements [§2](#2-the-memory-object) to [§6.3](#63-the-response)
-and [§9](#9-attaching-memories-to-a-harness). Named and free queries, types, files, snapshots and erase are
+and [§9](#9-attaching-memories-to-a-harness). Named and free queries, types, files, snapshots, consolidation runs and erase are
 reported per provider ([§10.2](#102-the-capability-document)). A server that does not implement the
 chapter reports `false` or omits it and answers its endpoints with `404`.
 
@@ -521,13 +564,34 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
   ([Security](../versions/2026-09-28/security.md)); an agent never holds it.
 - **Erase is a person's act.** It is not a tool.
 
-## 14. Status of this draft
+## 14. Conformance
+
+Two things are measured, and they answer different questions.
+
+**The interface.** The conformance suite gains a `memories` class that runs every operation of this
+chapter against a server and one of its providers, and checks the capability document against what
+the provider actually does: an operation declared `native` that the suite finds emulated, or a
+signal declared and ignored without `degraded`, fails. Access is tested with two principals and a
+restricted node: what one may not read must be absent from every answer, references included.
+
+**The memory.** An interface that passes says nothing about whether the memory is any good. One
+harness and one model run the same long-conversation evaluations on every provider through this
+chapter's operations and nothing else:
+
+- LoCoMo with all five categories, the unanswerable one included;
+- LongMemEval with abstention, temporal reasoning and knowledge updates reported separately;
+- cost per thousand records written and per question answered.
+
+Results are published per provider, worst rows shown, with the command that reproduces them. A
+score that leaves out the questions a memory should decline to answer is not reported.
+
+## 15. Status of this draft
 
 **Decided**
 
 1. The whole sub-protocol lives in UHP as one chapter, named as Plugins and Environments are.
 2. A memory is a node in a generic tree; levels have no fixed meaning. Access is granted per node
-   and inherited downward, with a restricted cutoff: the Spaces model.
+   and inherited downward, with a restricted cutoff.
 3. A node exists only where access differs. A session has no node of its own.
 4. Reads act on one node. The agent walks the tree itself, up to a parent or down to a child,
    within what its harness may read. Subtree reads are opt-in.
@@ -538,9 +602,15 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
    where a provider offers them, free queries an agent writes itself. The provider confines a free
    query to what the caller may read by a means the statement cannot undo.
 9. References cross the tree freely and resolve with the reader's privileges.
-10. On the hosted service, a memory is a Space: the same vertex, tree and grants, with no migration.
-11. Isolation is "enforced by the server": a container per memory and a condition the server adds
+10. Isolation is "enforced by the server": a container per memory and a condition the server adds
     to every operation are both conformant ([§3.3](#33-enforcement)).
+11. A task names its memories by id. The server derives no node from a request.
+12. Consolidation is visible: runs with their reads, changes, usage and budget, and a revert.
+13. How much is primed is the provider's decision; the server reports the size.
+14. The first providers are ContextualGraph (reference), mem0, Zep, Letta and Cognee. The server
+    keeps no memory of its own.
+15. Conformance is the interface suite plus one shared evaluation across providers.
+16. Export and import between providers are out of this version.
 
 **Accepted for now, to revisit**
 
@@ -549,14 +619,9 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
 
 **Open**
 
-- How `metadata.memory` names the per-task node, and whether the protocol should say more than
-  "the server's convention" ([§9](#9-attaching-memories-to-a-harness)).
-- Whether `prime` needs a budget the client sets, and how its size is reported.
-- Whether consolidation deserves a visible object (runs, their cost, what they changed) or stays
-  entirely inside the provider.
 - The second round of providers (Hindsight, Mastra Observational Memory, OMEGA, Supermemory, the
   cloud vendors' services): each needs its own reading of first-hand documentation before a row is
   written for it.
-- Export and import between providers, and alignment with an existing archive format.
-- Conformance: the fixture, and the shared recall evaluation (LoCoMo with all five categories,
-  LongMemEval with abstention broken out) run on one harness across providers.
+- Whether a revert of a consolidation run needs a privilege of its own, or `delete` is right.
+- The session field that reports priming, once [Sessions](../versions/2026-09-28/sessions.md) is
+  opened for it.
