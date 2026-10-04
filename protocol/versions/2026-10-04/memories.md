@@ -2,15 +2,23 @@
 
 **Unified Harness Protocol, version `2026-10-04`**
 
-A session's conversation ([Sessions](sessions.md)) ends with the session, and
-a harness's instructions are written once by its owner. What an agent learns between those two, the
-facts about the people it works for, the decisions a team made, the procedure that worked last time,
-has had no place in the protocol: every product that wanted it bolted a memory vendor onto one
-harness, with that vendor's API, its own idea of scope, and no way to say who may read what.
+An agent forgets. A session's conversation ends when the session ends ([Sessions](sessions.md)),
+and a harness's instructions are written once by its owner and do not change as the agent works.
+So whatever an agent learns along the way is lost: that a customer prefers email, what the team
+decided last week, which procedure worked last time.
 
-A **memory** is that place as one object: a named node in a tree, holding records, with access
-granted per node and inherited downward. A harness names the memories it works with; the server
-decides, from the harness's grants, what it may read and where it may write.
+Until this version the protocol had nowhere to keep those things. A product that wanted memory
+attached a memory service to one harness, through that service's own API, with that service's own
+idea of whose memory it was, and with no way to say who may read what.
+
+A **memory** is where they are kept. It is a named container of **records**: a fact, a note, a
+procedure. Memories are arranged in a tree, the way folders are, so one memory can hold what a whole
+company knows and another, beneath it, what is known about one customer. Access is granted per
+memory, and a memory's children inherit it.
+
+A harness is attached to the memories its agent should start from. During a task the agent searches
+them and adds to them with tools. What it may read and where it may write is decided by the server,
+from what the harness was granted, and never by the agent itself.
 
 This chapter is the Harness Memories sub-protocol. It is optional: a server advertises it with the
 `memories` capability, and a server that does not implement it is conformant at every class.
