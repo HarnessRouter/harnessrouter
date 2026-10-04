@@ -4240,11 +4240,11 @@ async def llm_broker(path: str, request: Request):
 #      retry. Added the structured error envelope. The old `detail` string is still emitted beside
 #      it, because clients in the wild read it — it is documented as deprecated, not removed under
 #      them.
-UHP_VERSION = "2026-09-28"
+UHP_VERSION = "2026-10-04"
 # Both versions, one code path: 2026-09-12 is additive to 2026-08-11 (plugins, and nothing
 # the earlier version defined changes shape), so the same objects answer either request and
 # the header is the only thing that differs. VERSIONING.md, server rule 3.
-UHP_VERSIONS = [UHP_VERSION, "2026-09-12", "2026-08-11"]
+UHP_VERSIONS = [UHP_VERSION, "2026-09-28", "2026-09-12", "2026-08-11"]
 # The Agent Plugins manifest schemas this server installs (Plugins §7). A package targeting
 # another version is refused with unsupported_plugin_schema naming this list.
 UHP_PLUGIN_SCHEMAS = ["https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"]
@@ -7626,7 +7626,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         partial_messages: bool = False, probe: dict | None = None,
                         codex_appserver: bool = False,
                         hv: dict | None = None,
-                        environment: dict | None = None) -> tuple[str, list[dict], dict]:
+                        environment: dict | None = None,
+                        task_memory: str = "") -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -7725,7 +7726,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                       await _harness_plug_types(harness_id, org, hv))
     # The Memory section: the attached memories with their descriptions, and what each provider
     # marks as always relevant. Its size is recorded on the turn, per memory, in tokens.
-    _mem_section, _mem_primed = await memory_tools.doc_section(org, harness_id, await _harness_memories(harness_id, org, hv))
+    if task_memory:
+        await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
+    _mem_section, _mem_primed = await memory_tools.doc_section(org, harness_id, await _harness_memories(harness_id, org, hv, sid=sid))
     if _mem_section:
         agent_doc = (agent_doc + "\n\n" + _mem_section).strip()
         rec["memories"] = {"primed_tokens": _mem_primed}
@@ -8479,6 +8482,9 @@ async def create_response(body: CreateResponseBody, request: Request):
     # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
     # failed turn.
     environment = await _environment_for_turn(org, _task_environment_ref(body, hv))
+    # One more memory for this task, named by id in metadata.memory: checked against the HARNESS's
+    # privileges here, before anything is allocated (Memories §9).
+    task_memory = await _task_memory_for_turn(org, harness_id, body)
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -8713,7 +8719,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit_bg,
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
-                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment, task_memory=task_memory)
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
                     for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -8762,7 +8768,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
-                            timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                            timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment, task_memory=task_memory)
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
                         for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -8820,7 +8826,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
-                timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment, task_memory=task_memory)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -16290,9 +16296,11 @@ def _memories_entries_ok(items) -> list[dict]:
     return out
 
 
-async def _harness_memories(hid: str, org: str, hv: dict | None) -> list[dict]:
+async def _harness_memories(hid: str, org: str, hv: dict | None, sid: str = "") -> list[dict]:
     """The memories a harness is attached to, from its memories server's record; [] when it has no
-    enabled entry or the record cannot be read (the turn runs without them)."""
+    enabled entry or the record cannot be read (the turn runs without them). With a session, the
+    memory its task named in metadata.memory is added: where that session writes by default when
+    the harness may write it, read otherwise."""
     if not hid or not hv:
         return []
     try:
@@ -16300,7 +16308,28 @@ async def _harness_memories(hid: str, org: str, hv: dict | None) -> list[dict]:
                                        entry_id=_MEMORIES_ENTRY["id"], check_enabled=True)
     except HTTPException:
         return []
-    return [e for e in rec.get("memories") or [] if isinstance(e, dict)]
+    entries = [e for e in rec.get("memories") or [] if isinstance(e, dict)]
+    mid = str(((await _vertex_get(sid)) or {}).get("memory") or "") if sid else ""
+    if mid:
+        m = await memory_plane._load(org, mid)
+        privs = await memory_plane.effective(org, m, [f"harness:{hid}"]) if m else []
+        if "read" in privs:
+            writes = "write" in privs
+            entries = [{**e, "default": bool(e.get("default")) and not writes} for e in entries if e.get("memory_id") != mid]
+            entries.append({"memory_id": mid, "access": "write" if writes else "read", "default": writes})
+    return entries
+
+
+async def _task_memory_for_turn(org: str, hid: str, body) -> str:
+    """The memory a task names in `metadata.memory`, or ''. The harness must hold a privilege on it:
+    a memory it holds nothing on is refused exactly as one that does not exist, before the task starts."""
+    mid = str((getattr(body, "metadata", None) or {}).get("memory") or "").strip()
+    if not mid:
+        return ""
+    m = await memory_plane._load(org, mid) if hid else None
+    if not m or "read" not in await memory_plane.effective(org, m, [f"harness:{hid}"]):
+        raise uhp_error(404, "memory_not_found", "No memory with that id.", "metadata.memory")
+    return mid
 
 
 @app.get("/v1/harnesses/{hid}/memories")
@@ -16369,7 +16398,7 @@ async def memories_mcp(request: Request):
     claims = _verify_hosted_cred(_broker_token(request))
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
-    hid, _sid, key = claims
+    hid, sid, key = claims
     try:
         req = json.loads(await request.body() or b"{}")
     except Exception:  # noqa: BLE001
@@ -16387,13 +16416,13 @@ async def memories_mcp(request: Request):
         v = None
     org = str((v or {}).get("org") or "")
     try:
-        _, rec = await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(v), key=key, check_enabled=True)
+        await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(v), key=key, check_enabled=True)
     except HTTPException:
         if method == "tools/list":
             return _jsonrpc_result(rid, {"tools": []})
         return _jsonrpc_result(rid, _tool_text("No memories are attached to this agent. Ask the person to attach "
                                                "them; you cannot attach them yourself.", True))
-    entries = [e for e in rec.get("memories") or [] if isinstance(e, dict)]
+    entries = await _harness_memories(hid, org, v, sid=sid)       # the harness's, and the one this session's task named
     if method == "tools/list":
         return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(entries)})
     args = params.get("arguments") or {}
@@ -16420,7 +16449,7 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
     and when, is the provider's. Best-effort: a memory that cannot take the episode never fails
     the turn it describes."""
     try:
-        entries = await _harness_memories(hid, org, hv)
+        entries = await _harness_memories(hid, org, hv, sid=sid)
         mid = next((e["memory_id"] for e in entries if e.get("default")), "")
         if not mid or not (str(rec.get("user_text") or "").strip() or answer.strip()):
             return
