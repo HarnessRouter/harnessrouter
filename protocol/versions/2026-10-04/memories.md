@@ -31,10 +31,10 @@ folder of files. This chapter defines the three things a harness and a provider 
 nothing else:
 
 ```
-the provider     its own store and intelligence    how memory is derived and kept
-UHP Memories     this chapter                      what a memory is, who may reach it,
-                                                   and when a harness calls it
-MCP              the tools an agent holds          how the agent calls it during a turn
+the provider    its own store and intelligence   how memory is derived and kept
+UHP Memories    this chapter                     what a memory is, who may reach
+                                                 it, when a harness calls it
+MCP             the tools an agent holds         how an agent calls it in a turn
 ```
 
 - **The object.** A memory is a node in a tree. It holds **records** and may have child memories.
@@ -57,7 +57,7 @@ MCP              the tools an agent holds          how the agent calls it during
   "id": "hmem_7c1e4b9a2d3f4e5a8b6c7d8e9f0a1b2c",
   "object": "memory",
   "name": "Sales",
-  "description": "What the sales team knows: accounts, objections that came up, pricing decisions.",
+  "description": "What the sales team knows: accounts and pricing decisions.",
   "parent_id": "hmem_0a1b2c3d4e5f60718293a4b5c6d7e8f9",
   "ancestors": ["hmem_0a1b2c3d4e5f60718293a4b5c6d7e8f9"],
   "restricted": false,
@@ -82,13 +82,13 @@ MCP              the tools an agent holds          how the agent calls it during
 | `privileges` | array | server | The caller's effective privileges on this node |
 | `records`, `children` | object | server | Counts, for a caller deciding where to look |
 
-```http
-POST   /v1/memories                          create (name, description, parent_id, restricted, provider)
-GET    /v1/memories?parent={id}              the direct children of a memory (or the roots), paginated
-GET    /v1/memories/{id}                     one memory
-PUT    /v1/memories/{id}                     rename; description; restricted; move (parent_id)
-DELETE /v1/memories/{id}                     delete the memory, its records and its descendants
-```
+| Request | What it does |
+|---|---|
+| `POST /v1/memories` | Create a memory: `name`, `description`, `parent_id`, `restricted`, `provider` |
+| `GET /v1/memories?parent={id}` | The direct children of a memory, paginated. Without `parent`: where the caller enters the tree |
+| `GET /v1/memories/{id}` | One memory |
+| `PUT /v1/memories/{id}` | Rename it, describe it, restrict it, or move it by giving a new `parent_id` |
+| `DELETE /v1/memories/{id}` | Delete the memory, its records and its descendants |
 
 A listing is one level. Without `parent` it answers where the caller enters the tree: every memory
 it holds a privilege on whose parent it cannot see, so a caller granted one branch enters at that
@@ -112,11 +112,11 @@ privileges on it, an implicit grant that flows down like any other.
 | `create` | Creating a child memory |
 | `delete` | `erase`, deleting the memory, changing its grants |
 
-```http
-GET    /v1/memories/{id}/grants              who holds what, and on which node each grant sits
-POST   /v1/memories/{id}/grants              { principal, privileges }
-DELETE /v1/memories/{id}/grants/{grant_id}
-```
+| Request | What it does |
+|---|---|
+| `GET /v1/memories/{id}/grants` | Who holds what on this memory, and on which node each grant sits |
+| `POST /v1/memories/{id}/grants` | Grant a principal privileges: `{ principal, privileges }` |
+| `DELETE /v1/memories/{id}/grants/{grant_id}` | Revoke one grant |
 
 A **principal** is an opaque typed identifier the server resolves: a harness, a credential, a
 person, a group. The protocol does not define principals beyond that; a server documents the kinds
@@ -145,7 +145,9 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
   "object": "memory.record",
   "memory_id": "hmem_7c1e4b9a2d3f4e5a8b6c7d8e9f0a1b2c",
   "type": "fact",
-  "content": [ { "type": "text", "text": "Acme renews in March and wants the annual discount kept." } ],
+  "content": [
+    { "type": "text", "text": "Acme renews in March and wants its discount kept." }
+  ],
   "attributes": { "account": "acme" },
   "version": 2,
   "status": "active",
@@ -155,7 +157,9 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
     "written_at": "2026-10-01T17:02:11Z", "invalidated_at": null
   },
   "written_by": { "kind": "harness", "id": "chrn_41c0" },
-  "references": [ { "rel": "derived_from", "memory_id": "hmem_…", "record_id": "hrec_…" } ],
+  "references": [
+    { "rel": "derived_from", "memory_id": "hmem_…", "record_id": "hrec_…" }
+  ],
   "trust": "untrusted"
 }
 ```
@@ -205,7 +209,8 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
 "content": [
   { "type": "text", "text": "The new logo, final on 1 October." },
   { "type": "file",
-    "file": { "id": "file_9a2c…", "name": "logo.png", "media_type": "image/png", "bytes": 48213 },
+    "file": { "id": "file_9a2c…", "name": "logo.png",
+              "media_type": "image/png", "bytes": 48213 },
     "text": "A blue circle with a white letter A.", "text_source": "stated" }
 ]
 ```
@@ -226,12 +231,8 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
 - **A record holds a reference to a file, never its bytes.** The bytes are sent first as
   [Files](files.md) says (`POST /v1/files`), and the part names the file by `id`. The server
   completes `name`, `media_type` and `bytes` from its own file store; a client's values for them
-  are not read. The bytes of a part are read at their own address by whoever may read the record:
-
-  ```http
-  GET /v1/memories/{id}/records/{rid}/content/{index}
-  ```
-
+  are not read. The bytes of a part are read at their own address, the record's `content/{index}`
+  ([§5](#5-operations)), by whoever may read the record.
 - **A string is shorthand** for one text part on a write. What is read back is always the list,
   so a client handles one shape.
 - **A part may name who said it**: `role` is `user`, `assistant`, `system` or `tool`. A turn of a
@@ -244,18 +245,19 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
 
 ## 5. Operations
 
-```http
-POST   /v1/memories/{id}/observe             append episodes; the provider decides what to derive
-GET    /v1/memories/{id}/jobs/{job}          what an observe that answered 202 has written since
-POST   /v1/memories/{id}/records             remember: write one record as stated
-POST   /v1/memories/{id}/recall              retrieve (§6)
-GET    /v1/memories/{id}/records             list, paginated; filters; as_of
-GET    /v1/memories/{id}/records/{rid}       one record; as_of
-PATCH  /v1/memories/{id}/records/{rid}       revise: a new version
-DELETE /v1/memories/{id}/records/{rid}       forget: close it, keep the trace
-POST   /v1/memories/{id}/erase               remove content for good; reports what it could not reach
-GET    /v1/memories/{id}/records/{rid}/history
-```
+| Request | What it does |
+|---|---|
+| `POST /v1/memories/{id}/observe` | **observe**: append episodes; the provider decides what to derive from them |
+| `GET /v1/memories/{id}/jobs/{job}` | What an `observe` that answered `202` has written since |
+| `POST /v1/memories/{id}/records` | **remember**: write one record as stated |
+| `POST /v1/memories/{id}/recall` | **recall**: retrieve from this memory ([§6](#6-recall)) |
+| `GET /v1/memories/{id}/records` | List the records, paginated; accepts `type`, `include` and `as_of` |
+| `GET /v1/memories/{id}/records/{rid}` | One record; accepts `as_of` |
+| `GET /v1/memories/{id}/records/{rid}/history` | **history**: every version of a record, oldest first, each with its writer and time |
+| `GET /v1/memories/{id}/records/{rid}/content/{index}` | The bytes of one file part of a record ([§4.3](#43-content)) |
+| `PATCH /v1/memories/{id}/records/{rid}` | **revise**: write a new version; the earlier one is kept |
+| `DELETE /v1/memories/{id}/records/{rid}` | **forget**: close the record and keep its trace |
+| `POST /v1/memories/{id}/erase` | **erase**: remove content for good, and report what could not be reached |
 
 ### 5.1 Two ways to write
 
@@ -321,7 +323,7 @@ report a cap it applied in `degraded`.
 {
   "query": "what did Acme say about renewal?",
   "text": "renewal",
-  "filters": { "and": [ { "field": "attributes.account", "op": "eq", "value": "acme" } ] },
+  "filters": { "field": "attributes.account", "op": "eq", "value": "acme" },
   "types": ["fact", "note"],
   "as_of": null,
   "include": "active",
@@ -342,11 +344,16 @@ Any one may be given alone. Given together, the provider fuses them into one ran
 ```json
 {
   "results": [
-    { "record": { "id": "hrec_…", "type": "fact", "content": "…", "trust": "untrusted" },
+    { "record": { "id": "hrec_…", "type": "fact", "content": [ … ],
+                  "trust": "untrusted" },
       "score": 0.91, "why": ["query", "filters"] }
   ],
-  "parent": { "id": "hmem_…", "name": "Company", "description": "…", "records": { "count": 97 } },
-  "children": [ { "id": "hmem_…", "name": "Acme", "description": "…", "records": { "count": 58 } } ],
+  "parent": { "id": "hmem_…", "name": "Company", "description": "…",
+              "records": { "count": 97 } },
+  "children": [
+    { "id": "hmem_…", "name": "Acme", "description": "…",
+      "records": { "count": 58 } }
+  ],
   "degraded": [],
   "abstain": false
 }
@@ -369,18 +376,19 @@ language, as a **named query** with typed parameters:
 {
   "name": "open_deals_for",
   "description": "Deals not yet closed for one account.",
-  "params": { "type": "object", "properties": { "account": { "type": "string" } }, "required": ["account"] },
+  "params": { "type": "object", "required": ["account"],
+              "properties": { "account": { "type": "string" } } },
   "requires": "read",
   "language": "cypher",
   "body": "…"
 }
 ```
 
-```http
-GET    /v1/memories/{id}/queries
-PUT    /v1/memories/{id}/queries/{name}      define or replace; needs write
-POST   /v1/memories/{id}/queries/{name}      run with params; answers in the shape of §6.3
-```
+| Request | What it does |
+|---|---|
+| `GET /v1/memories/{id}/queries` | The named queries of this memory, with their parameters |
+| `PUT /v1/memories/{id}/queries/{name}` | Define or replace one; needs `write` |
+| `POST /v1/memories/{id}/queries/{name}` | Run it with `params`; the answer has the shape of [§6.3](#63-the-response) |
 
 `language` and `body` are opaque to the protocol. A named query is offered to an agent as a tool
 with `params` as its input schema. The server MUST run it within what the caller may read.
@@ -390,7 +398,9 @@ with `params` as its input schema. The server MUST run it within what the caller
 A provider MAY also let a caller, an agent included, write a query and run it:
 
 ```http
-POST /v1/memories/{id}/query        { "language": "cypher", "statement": "…", "params": { } }
+POST /v1/memories/{id}/query
+
+{ "language": "cypher", "statement": "…", "params": { } }
 ```
 
 It is optional and provider-dependent: the provider declares `queries.free` with the languages it
@@ -434,11 +444,15 @@ GET /v1/memories/types
 { "data": [ {
   "type": "x.calendar.event",
   "description": "A meeting or a block of time.",
-  "schema": { "type": "object", "properties": { "starts_at": { "type": "string" }, "attendees": { "type": "array" } } },
+  "schema": { "type": "object",
+              "properties": { "starts_at": { "type": "string" },
+                              "attendees": { "type": "array" } } },
   "text": "title, attendees and time as one line, for recall",
   "operations": [
-    { "name": "reschedule", "description": "Move to a new time.", "input": { "…": "…" }, "requires": "write" },
-    { "name": "free_slots", "description": "Open time around this event.", "input": { "…": "…" }, "requires": "read" }
+    { "name": "reschedule", "description": "Move to a new time.",
+      "input": { "…": "…" }, "requires": "write" },
+    { "name": "free_slots", "description": "Open time around this event.",
+      "input": { "…": "…" }, "requires": "read" }
   ] } ] }
 ```
 
@@ -458,10 +472,10 @@ A provider that registers none reports `types: false` and answers the listing wi
 
 A harness names the memories it works with:
 
-```http
-PUT /v1/harnesses/{id}/memories          replace the list; an empty list detaches every memory
-GET /v1/harnesses/{id}/memories
-```
+| Request | What it does |
+|---|---|
+| `PUT /v1/harnesses/{id}/memories` | Replace the list of attached memories; an empty list detaches them all |
+| `GET /v1/harnesses/{id}/memories` | The memories this harness is attached to |
 
 ```json
 { "memories": [
@@ -511,17 +525,18 @@ turn will be sent to it.
 Background work that rewrites what a memory holds is visible, bounded and reversible, or it is not
 trusted. A provider that consolidates through the protocol exposes each pass as a **run**:
 
-```http
-POST   /v1/memories/{id}/consolidations              start one now (budget optional)
-GET    /v1/memories/{id}/consolidations              runs, newest first
-GET    /v1/memories/{id}/consolidations/{run}        one run
-GET    /v1/memories/{id}/consolidations/{run}/changes   the records it wrote, superseded or forgot
-POST   /v1/memories/{id}/consolidations/{run}/revert
-```
+| Request | What it does |
+|---|---|
+| `POST /v1/memories/{id}/consolidations` | Start a run now; a `budget` is optional |
+| `GET /v1/memories/{id}/consolidations` | The runs, newest first |
+| `GET /v1/memories/{id}/consolidations/{run}` | One run |
+| `GET /v1/memories/{id}/consolidations/{run}/changes` | The records the run wrote, superseded or forgot |
+| `POST /v1/memories/{id}/consolidations/{run}/revert` | Undo the run by appending: history keeps both the run and its reversal |
 
 ```json
 {
-  "id": "hcon_5d2e…", "object": "memory.consolidation", "memory_id": "hmem_7c1e…",
+  "id": "hcon_5d2e…", "object": "memory.consolidation",
+  "memory_id": "hmem_7c1e…",
   "status": "completed",
   "trigger": "schedule",
   "started_at": 1790570000, "finished_at": 1790570094,
@@ -570,13 +585,17 @@ GET /v1/memories/providers
   "isolation": "container",
   "derivation": "background",
   "observe": { "keeps_episodes": true, "answers": "records" },
-  "recall": { "signals": ["query", "text", "filters"], "abstain": true, "max_depth": 3 },
+  "recall": { "signals": ["query", "text", "filters"], "abstain": true,
+              "max_depth": 3 },
   "history": { "content": "versions", "structure": "versions" },
-  "revise": "native", "forget": "native", "erase": { "unreachable": "reported" },
+  "revise": "native", "forget": "native",
+  "erase": { "unreachable": "reported" },
   "prime": true, "consolidate": "runs",
-  "queries": { "named": true, "free": { "languages": ["cypher"], "write": false } },
+  "queries": { "named": true,
+               "free": { "languages": ["cypher"], "write": false } },
   "types": true,
-  "content": { "media": ["text/*", "image/*"], "bytes": "referenced", "describes": ["image/*"] }
+  "content": { "media": ["text/*", "image/*"], "bytes": "referenced",
+               "describes": ["image/*"] }
 } ] }
 ```
 
