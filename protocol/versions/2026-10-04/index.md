@@ -78,7 +78,7 @@ the [protocol README](../../README.md).
 | `GET` `POST` | `/v1/memories/{id}/records` | Full, capability `memories` | [Memories](memories.md) |
 | `GET` `PATCH` `DELETE` | `/v1/memories/{id}/records/{rid}` | Full, capability `memories` | [Memories](memories.md) |
 | `GET` | `/v1/memories/{id}/records/{rid}/history` | Full, capability `memories` | [Memories](memories.md) |
-| `GET` | `/v1/memories/{id}/records/{rid}/content` | Full, capability `memories` | [Memories](memories.md) |
+| `GET` | `/v1/memories/{id}/records/{rid}/content/{index}` | Full, capability `memories` | [Memories](memories.md) |
 | `POST` | `/v1/memories/{id}/records/{rid}/operations/{name}` | Full, capability `memories` | [Memories](memories.md) |
 | `POST` | `/v1/memories/{id}/recall` | Full, capability `memories` | [Memories](memories.md) |
 | `POST` | `/v1/memories/{id}/erase` | Full, capability `memories` | [Memories](memories.md) |
@@ -98,7 +98,7 @@ The `plugins` column entries are served only by a server whose discovery documen
 `plugins` capability; the capability is optional at every class.
 
 The `memories` entries are served only by a server that reports the `memories` capability, which is
-optional at every class as well; within it, named and free queries, types, files, snapshots,
+optional at every class as well; within it, named and free queries, types, the media a record may carry, snapshots,
 consolidation runs and erase are declared per provider ([Memories §10.2](memories.md#102-the-capability-document)).
 
 ## What changed in this version

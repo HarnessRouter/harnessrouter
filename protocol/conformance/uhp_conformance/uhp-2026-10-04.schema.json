@@ -2271,7 +2271,11 @@
           "description": "episode, fact, note, procedure, link, or an extension type."
         },
         "content": {
-          "description": "Text, or a file reference."
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryContentPart"
+          },
+          "description": "An ordered list of parts. Always a list on a read."
         },
         "attributes": {
           "type": "object",
@@ -2342,6 +2346,62 @@
       },
       "additionalProperties": true
     },
+    "MemoryContentPart": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "description": "One part of the content of a record. `text` and `file` are defined; any other kind is `x.`-prefixed and carried unchanged.",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "description": "The words of a text part, or the words that stand for a file."
+        },
+        "text_source": {
+          "type": "string",
+          "enum": [
+            "stated",
+            "derived"
+          ]
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant",
+            "system",
+            "tool"
+          ]
+        },
+        "file": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
     "MemoryRecordCreate": {
       "type": "object",
       "required": [
@@ -2351,7 +2411,20 @@
         "type": {
           "type": "string"
         },
-        "content": {},
+        "content": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Shorthand for one text part."
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MemoryContentPart"
+              }
+            }
+          ]
+        },
         "attributes": {
           "type": "object",
           "additionalProperties": true
@@ -2371,7 +2444,20 @@
     "MemoryRecordRevise": {
       "type": "object",
       "properties": {
-        "content": {},
+        "content": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Shorthand for one text part."
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MemoryContentPart"
+              }
+            }
+          ]
+        },
         "attributes": {
           "type": "object",
           "additionalProperties": true
@@ -2432,7 +2518,20 @@
               "content"
             ],
             "properties": {
-              "content": {},
+              "content": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "Shorthand for one text part."
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/MemoryContentPart"
+                    }
+                  }
+                ]
+              },
               "attributes": {
                 "type": "object",
                 "additionalProperties": true
@@ -2890,6 +2989,32 @@
         "queries": {
           "type": "object",
           "additionalProperties": true
+        },
+        "content": {
+          "type": "object",
+          "description": "What the content of a record may carry on this provider.",
+          "properties": {
+            "media": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Media types kept, as patterns such as `text/*` or `image/*`."
+            },
+            "bytes": {
+              "type": "string",
+              "enum": [
+                "kept",
+                "referenced"
+              ]
+            },
+            "describes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         }
       },
       "additionalProperties": true
