@@ -151,7 +151,7 @@ def test_the_two_ways_to_write_and_a_writer_the_client_cannot_supply(people, tre
 def test_recall_acts_on_one_memory_and_says_where_the_caller_can_go(people, tree):
     ada, ben = people
     r = ada.post(f"/v1/memories/{tree['acme']}/recall", json={"query": "when does Acme renew?"}).json()
-    assert r["results"][0]["record"]["content"].startswith(("Acme renews", "Dana from Acme"))
+    assert r["results"][0]["record"]["content"][0]["text"].startswith(("Acme renews", "Dana from Acme"))
     assert r["results"][0]["why"] == ["query"] and r["abstain"] is False and r["degraded"] == []
     assert r["parent"]["id"] == tree["sales"] and r["children"] == []
     # one memory: the parent holds none of the child's records
@@ -188,7 +188,7 @@ def test_nothing_is_overwritten(people, tree):
     assert [(h["version"], h["status"]) for h in hist] == [(1, "superseded"), (2, "active")]
     assert hist[0]["time"]["invalidated_at"] == hist[1]["time"]["written_at"]
     # as of the first write, the memory still says March
-    assert ada.get(base, params={"as_of": before}).json()["content"] == "Acme renews in March."
+    assert ada.get(base, params={"as_of": before}).json()["content"] == [{"type": "text", "text": "Acme renews in March."}]
     assert ada.post(f"/v1/memories/{tree['acme']}/recall",
                     json={"text": "april", "as_of": before}).json()["results"] == []
     snap = ada.post(f"/v1/memories/{tree['acme']}/snapshots", json={"name": "before-forgetting"}).json()
@@ -198,7 +198,7 @@ def test_nothing_is_overwritten(people, tree):
     assert gone["status"] == "forgotten"
     assert ada.post(f"/v1/memories/{tree['acme']}/recall", json={"text": "april"}).json()["results"] == []
     assert len(ada.get(base + "/history").json()["data"]) == 2
-    assert ada.get(base, params={"as_of": snap["at"]}).json()["content"] == "Acme renews in April."
+    assert ada.get(base, params={"as_of": snap["at"]}).json()["content"] == [{"type": "text", "text": "Acme renews in April."}]
 
 
 def test_a_reference_crosses_the_tree_and_resolves_for_the_reader(people, tree):
@@ -210,7 +210,7 @@ def test_a_reference_crosses_the_tree_and_resolves_for_the_reader(people, tree):
         "references": [{"rel": "derived_from", "memory_id": tree["private"], "record_id": secret["id"]}]}).json()
     assert shared["references"][0]["available"] is True
     seen = ben.get(f"/v1/memories/{tree['sales']}/records/{shared['id']}").json()
-    assert seen["content"] == "Acme's budget is under review."
+    assert seen["content"] == [{"type": "text", "text": "Acme's budget is under review."}]
     assert seen["references"] == [{"memory_id": tree["private"], "record_id": secret["id"], "available": False}]
     assert "Dana" not in str(ben.post(f"/v1/memories/{tree['sales']}/recall", json={"text": "budget"}).json())
 
@@ -301,3 +301,48 @@ def test_a_move_carries_the_subtree_and_a_delete_takes_it(people, tree):
     gone = ada.delete(f"/v1/memories/{region['id']}").json()["memories"]
     assert set(gone) == {region["id"], tree["sales"], tree["acme"]}
     assert ada.get(f"/v1/memories/{tree['acme']}").status_code == 404
+
+
+def test_content_is_an_ordered_list_of_text_and_file_parts(people):
+    """Two kinds of part, text and file; what a file is (an image, a recording) is its media type.
+    A string is shorthand on the way in; what comes back is always the list."""
+    ada, ben = people
+    mid = ada.post("/v1/memories", json={"provider": "fixture", "name": "Brand"}).json()["id"]
+    plain = ada.post(f"/v1/memories/{mid}/records", json={"content": "The brand colour is blue."}).json()
+    assert plain["content"] == [{"type": "text", "text": "The brand colour is blue."}]
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+    up = ada.post("/v1/files", files={"file": ("logo.png", png, "image/png")}, data={"purpose": "user_data"})
+    assert up.status_code == 200, up.text
+    fid = up.json()["id"]
+    rec = ada.post(f"/v1/memories/{mid}/records", json={"type": "note", "content": [
+        {"type": "text", "text": "The new logo, final on 1 October."},
+        {"type": "file", "file": {"id": fid, "name": "forged.exe", "media_type": "application/x-evil", "bytes": 1},
+         "text": "A blue circle with a white letter A."},
+        {"type": "x.vendor.embedding", "ref": "abc"}]})
+    assert rec.status_code == 200, rec.text
+    parts = rec.json()["content"]
+    assert [p["type"] for p in parts] == ["text", "file", "x.vendor.embedding"]            # in order, the unknown kind kept
+    assert parts[1]["file"] == {"id": fid, "name": "logo.png", "media_type": "image/png", "bytes": len(png)}   # the store's, not the caller's
+    assert parts[1]["text"] == "A blue circle with a white letter A." and parts[1]["text_source"] == "stated"
+    rid = rec.json()["id"]
+    # found by the words that stand for the file
+    hit = ada.post(f"/v1/memories/{mid}/recall", json={"text": "circle"}).json()["results"]
+    assert [x["record"]["id"] for x in hit] == [rid]
+    # the bytes are read at their own address, by whoever may read the record
+    got = ada.get(f"/v1/memories/{mid}/records/{rid}/content/1")
+    assert got.status_code == 200 and got.content == png and got.headers["content-type"] == "image/png"
+    assert ada.get(f"/v1/memories/{mid}/records/{rid}/content/0").status_code == 404        # a text part has no bytes
+    assert ben.get(f"/v1/memories/{mid}/records/{rid}/content/1").status_code == 404
+    # a conversation is the same shape, each part under the role that said it
+    eps = ada.post(f"/v1/memories/{mid}/observe", json={"episodes": [{"content": [
+        {"type": "text", "role": "user", "text": "Here is our logo."}, {"type": "file", "role": "user", "file": {"id": fid}},
+        {"type": "text", "role": "assistant", "text": "Kept."}]}]}).json()["data"]
+    assert [(p["type"], p["role"]) for p in eps[0]["content"]] == [("text", "user"), ("file", "user"), ("text", "assistant")]
+    for bad in ([{"type": "image", "url": "x"}], [{"type": "text"}], [{"type": "file", "file": {}}],
+                [{"type": "text", "text": "x", "role": "narrator"}], [], {"text": "x"},
+                [{"type": "file", "file": {"id": "file_does_not_exist"}}]):
+        r = ada.post(f"/v1/memories/{mid}/records", json={"content": bad})
+        assert r.status_code == 422 and _code(r) == "memory_invalid", (bad, r.text)
+    caps = next(p for p in ada.get("/v1/memories/providers").json()["data"] if p["id"] == "fixture")
+    assert caps["content"] == {"media": ["*/*"], "bytes": "referenced", "describes": []}

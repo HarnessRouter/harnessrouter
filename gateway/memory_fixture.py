@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 
-from memory_plane import MemoryError, Provider
+from memory_plane import MemoryError, Provider, text_of
 
 _OPEN = None
 
@@ -42,7 +42,9 @@ class FixtureProvider(Provider):
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": True, "consolidate": "runs",
                 "queries": {"named": True, "free": {"languages": ["fixture-filter"], "write": False}},
-                "types": True, "files": False}
+                "types": True,
+                # it keeps the reference of any file; the bytes stay with the server's file store
+                "content": {"media": ["*/*"], "bytes": "referenced", "describes": []}}
 
     # ── storage ───────────────────────────────────────────────────────────────────────────────
     async def create(self, mid, memory):
@@ -194,7 +196,7 @@ class FixtureProvider(Provider):
         q, tx = _words(req.get("query") or ""), _words(req.get("text") or "")
         scored = []
         for r in self._select(mid, req):
-            w, why, score = _words(r["content"]) | _words(r["attributes"]), [], 0.0
+            w, why, score = _words(text_of(r["content"])) | _words(r["attributes"]), [], 0.0
             if tx:
                 if not tx <= w:
                     continue           # words are a match or they are not

@@ -22,6 +22,8 @@ adapter claims only what that showed:
   erase    = DELETE. The memory is gone from search, listing and get, and its HISTORY IS STILL
       SERVED by id, original input included, even after the whole user is deleted (measured). So
       every erased id is reported `unreachable`: the content can still be read from mem0.
+  content = text only. A record's text parts are stored as one memory; a file part is refused by the
+      gateway before it reaches here, because mem0 is declared to keep `text/*` and nothing else.
   no `as_of` on recall or list (a single record's past is read from its history), no named or free
       queries, no extension types, no files, no consolidation the caller can start or read.
 
@@ -93,7 +95,7 @@ class Mem0(mp.Provider):
                 "history": {"content": "versions", "structure": "none"}, "as_of": "one record",
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": False, "consolidate": False, "queries": {"named": False, "free": None},
-                "types": False, "files": False}
+                "types": False, "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org: str, workspace: str) -> "Mem0":
         fields = await mp.CREDENTIALS(org, workspace, self.id) if mp.CREDENTIALS else None
@@ -145,7 +147,7 @@ class Mem0(mp.Provider):
         if meta.get(_RESERVED + "observed_by"):
             writer = {"kind": "provider", "id": "mem0", "observed_by": meta[_RESERVED + "observed_by"]}
         return {"id": str(item["id"]), "type": meta.get(_RESERVED + "type") or "fact",
-                "content": item.get("memory") or "",
+                "content": [{"type": "text", "text": item["memory"]}] if item.get("memory") else [],
                 "attributes": {k: v for k, v in meta.items() if not str(k).startswith(_RESERVED)},
                 "references": refs if isinstance(refs, list) else [],
                 "version": int(meta.get(_RESERVED + "version") or 1), "status": "forgotten" if gone else "active",
@@ -181,7 +183,7 @@ class Mem0(mp.Provider):
 
     # ── writes ────────────────────────────────────────────────────────────────────────────────
     async def remember(self, mid, record, writer):
-        text = record["content"] if isinstance(record["content"], str) else json.dumps(record["content"], ensure_ascii=False)
+        text = mp.text_of(record["content"])
         r = await self._call("POST", "/v3/memories/add/", body={
             "user_id": mid, "infer": False, "messages": [{"role": "user", "content": text}],
             "metadata": self._meta(record, writer)})
@@ -197,11 +199,9 @@ class Mem0(mp.Provider):
         answers a job; with several episodes the job id names every event."""
         events = []
         for e in episodes:
-            c = e.get("content")
-            if isinstance(c, dict) and ("user" in c or "assistant" in c):
-                msgs = [{"role": role, "content": str(c[role])} for role in ("user", "assistant") if str(c.get(role) or "").strip()]
-            else:
-                msgs = [{"role": "user", "content": c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)}]
+            # each text part is one message, under the role it carries (mem0 takes user, assistant, system)
+            msgs = [{"role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]}
+                    for p in e.get("content") or [] if p.get("text")]
             meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
             meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
             r = await self._call("POST", "/v3/memories/add/", body={"user_id": mid, "messages": msgs, "metadata": meta})
@@ -242,7 +242,7 @@ class Mem0(mp.Provider):
                   "time": {**{k: cur["time"][k] for k in ("valid_from", "valid_to")}, **(patch.get("time") or {})}}
         body: dict = {"metadata": self._meta(merged, writer, cur["version"] + 1)}
         if "content" in patch:
-            body["text"] = patch["content"] if isinstance(patch["content"], str) else json.dumps(patch["content"], ensure_ascii=False)
+            body["text"] = mp.text_of(patch["content"])
         r = await self._call("PUT", f"/v1/memories/{rid}/", body=body)
         if r.status_code != 200:
             raise Mem0Unavailable("the revision was not stored")
@@ -294,7 +294,7 @@ class Mem0(mp.Provider):
         for e in events:
             if e.get("event") != "ADD" and e.get("old_memory") == e.get("new_memory"):
                 continue                    # a change of metadata or expiry, not of what the record says
-            versions.append({**head, "content": e.get("new_memory") or "", "version": len(versions) + 1,
+            versions.append({**head, "content": [{"type": "text", "text": e.get("new_memory") or ""}], "version": len(versions) + 1,
                              "status": "superseded", "supersedes": len(versions) or None,
                              "time": {**head["time"], "written_at": _utc(e.get("updated_at")), "invalidated_at": None}})
         if not versions:

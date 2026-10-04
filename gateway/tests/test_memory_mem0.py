@@ -157,28 +157,31 @@ def test_every_search_and_listing_carries_the_memorys_id_and_nothing_can_remove_
                  c.get(f"/v1/memories/{a}/records/{rb['id']}/history", headers=ADA)):
         assert call.status_code == 404 and call.json()["error"]["code"] == "memory_record_not_found"
     assert c.post(f"/v1/memories/{a}/erase", headers=ADA, json={"record_ids": [rb["id"]]}).json()["erased"] == []
-    assert c.get(f"/v1/memories/{b}/records/{rb['id']}", headers=ADA).json()["content"] == "Beta ships on Monday."
+    assert c.get(f"/v1/memories/{b}/records/{rb['id']}", headers=ADA).json()["content"] == [{"type": "text", "text": "Beta ships on Monday."}]
 
 
 def test_what_the_gateway_stamped_survives_the_round_trip_and_the_key_never_does(world):
     c, stub, a, _ = world
     r = c.post(f"/v1/memories/{a}/records", headers=ADA, json={
-        "type": "procedure", "content": {"steps": ["ask", "confirm"]}, "attributes": {"hr_writer_id": "forged", "team": "x"},
+        "type": "procedure", "content": [{"type": "text", "text": "Ask."}, {"type": "text", "text": "Confirm."}],
+        "attributes": {"hr_writer_id": "forged", "team": "x"},
         "references": [{"rel": "derived_from", "record_id": "some-id"}], "time": {"valid_from": "2026-01-01"}})
     rec = r.json()
     assert rec["type"] == "procedure" and rec["written_by"] == {"kind": "member", "id": "ada@example.com"}
     assert rec["attributes"] == {"team": "x"} and rec["time"]["valid_from"] == "2026-01-01"
-    assert rec["references"][0]["record_id"] == "some-id" and json.loads(rec["content"]) == {"steps": ["ask", "confirm"]}
+    assert rec["references"][0]["record_id"] == "some-id"
+    assert rec["content"] == [{"type": "text", "text": "Ask.\nConfirm."}]        # mem0 keeps one text per memory
     assert KEY not in r.text and KEY not in c.get("/v1/memories/providers", headers=ADA).text
 
 
 def test_observe_is_a_job_whose_records_are_the_facts_mem0_derived(world):
     c, _, a, b = world
     r = c.post(f"/v1/memories/{a}/observe", headers=ADA, json={"episodes": [
-        {"content": {"user": "I moved to Austin. My dog is Max.", "assistant": "Noted."}, "attributes": {"session_id": "s1"}}]})
+        {"content": [{"type": "text", "role": "user", "text": "I moved to Austin. My dog is Max."},
+                     {"type": "text", "role": "assistant", "text": "Noted."}], "attributes": {"session_id": "s1"}}]})
     assert r.status_code == 202 and r.json()["data"] == []
     job = c.get(f"/v1/memories/{a}/jobs/{r.json()['job']['id']}", headers=ADA).json()
-    assert job["status"] == "completed" and [x["content"] for x in job["data"]] == ["User said: I moved to Austin", "User said: My dog is Max"]
+    assert job["status"] == "completed" and [x["content"][0]["text"] for x in job["data"]] == ["User said: I moved to Austin", "User said: My dog is Max"]
     assert all(x["written_by"] == {"kind": "provider", "id": "mem0", "observed_by": "member:ada@example.com"} for x in job["data"])
     assert c.get(f"/v1/memories/{b}/jobs/{r.json()['job']['id']}", headers=ADA).status_code == 404
 
@@ -188,7 +191,7 @@ def test_forget_is_mem0s_expiry_and_erase_names_what_it_still_serves(world):
     rid = c.post(f"/v1/memories/{a}/records", headers=ADA, json={"type": "fact", "content": "Gamma is cancelled."}).json()["id"]
     c.patch(f"/v1/memories/{a}/records/{rid}", headers=ADA, json={"content": "Gamma is postponed."})
     hist = c.get(f"/v1/memories/{a}/records/{rid}/history", headers=ADA).json()["data"]
-    assert [(h["version"], h["status"], h["content"]) for h in hist] == [(1, "superseded", "Gamma is cancelled."), (2, "active", "Gamma is postponed.")]
+    assert [(h["version"], h["status"], h["content"][0]["text"]) for h in hist] == [(1, "superseded", "Gamma is cancelled."), (2, "active", "Gamma is postponed.")]
     assert c.delete(f"/v1/memories/{a}/records/{rid}", headers=ADA).json()["status"] == "forgotten"
     assert stub.mem[rid]["expiration_date"] < "2026-10-05" and rid in stub.mem           # closed, still stored
     assert rid not in [x["record"]["id"] for x in c.post(f"/v1/memories/{a}/recall", headers=ADA, json={"query": "Gamma"}).json()["results"]]
@@ -201,3 +204,19 @@ def test_deleting_a_memory_removes_its_scope_at_mem0(world):
     assert any(m["user_id"] == b for m in stub.mem.values())
     c.delete(f"/v1/memories/{b}", headers=ADA)
     assert not any(m["user_id"] == b for m in stub.mem.values())
+
+
+def test_mem0_keeps_text_and_a_file_part_is_refused_not_dropped(world):
+    c, stub, a, _ = world
+    caps = next(p for p in c.get("/v1/memories/providers", headers=ADA).json()["data"] if p["id"] == "mem0")
+    assert caps["content"] == {"media": ["text/*"], "describes": []}
+    up = c.post("/v1/files", headers=ADA, files={"file": ("chart.png", b"\x89PNG\r\n\x1a\n", "image/png")}, data={"purpose": "user_data"})
+    before = len(stub.mem)
+    r = c.post(f"/v1/memories/{a}/records", headers=ADA, json={"content": [
+        {"type": "text", "text": "Q3 chart."}, {"type": "file", "file": {"id": up.json()["id"]}, "text": "Revenue up 12%."}]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "memory_unsupported"
+    assert "image/png" in r.json()["error"]["message"] and len(stub.mem) == before          # nothing half-written
+    # several text parts are one mem0 memory, and read back as one text part
+    ok = c.post(f"/v1/memories/{a}/records", headers=ADA, json={"content": [
+        {"type": "text", "text": "Q3 revenue rose."}, {"type": "text", "text": "Churn fell."}]}).json()
+    assert ok["content"] == [{"type": "text", "text": "Q3 revenue rose.\nChurn fell."}]

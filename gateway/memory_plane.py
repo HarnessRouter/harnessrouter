@@ -36,6 +36,11 @@ PROVIDERS: dict[str, "Provider"] = {}
 # How a provider that needs the workspace's own credential gets it: app.py binds a resolver over
 # the plug registry, `await CREDENTIALS(org, workspace, provider_id) -> {field: value} | None`.
 CREDENTIALS = None
+# How a file part's reference is checked and completed: app.py binds a resolver over the server's
+# file store, `await FILES(org, file_id) -> {"name", "media_type", "bytes"} | None` (None for a
+# file that does not exist or is not this caller's).
+FILES = None
+_ROLES = ("user", "assistant", "system", "tool")
 
 
 class MemoryError(Exception):
@@ -474,6 +479,8 @@ async def present(org: str, mid: str, record: dict, principals: list[str], _seen
     """A record as this reader gets it: marked untrusted, and each reference resolved with the
     READER's privileges. A target in a memory the reader may not read is named and nothing more."""
     r = {**record, "object": "memory.record", "memory_id": mid, "trust": "untrusted"}
+    c = record.get("content")
+    r["content"] = c if isinstance(c, list) else ([{"type": "text", "text": c}] if isinstance(c, str) and c else [])
     refs, seen = [], _seen if _seen is not None else {}
     for ref in record.get("references") or []:
         tm = str(ref.get("memory_id") or mid)
@@ -491,14 +498,78 @@ def writer_of(member: str, harness: str = "") -> dict:
     return {"kind": "harness", "id": harness} if harness else {"kind": "member", "id": member}
 
 
+def parts_of(content, *, empty_ok: bool = False) -> list[dict]:
+    """A record's content as the protocol carries it: an ordered list of parts. Two kinds are
+    defined, `text` and `file`; what a file IS (an image, a recording, a video, a PDF) is its media
+    type, so a new modality needs no new kind. A string is shorthand for one text part. A part of a
+    kind this server does not define is kept as it is when its type is `x.`-prefixed."""
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}] if content.strip() else []
+    if not isinstance(content, list):
+        raise MemoryError(422, "memory_invalid", "Content is text, or a list of parts.", "content")
+    parts = []
+    for p in content:
+        if not isinstance(p, dict):
+            raise MemoryError(422, "memory_invalid", "Each part of the content is an object with a type.", "content")
+        typ = str(p.get("type") or "")
+        if typ == "text":
+            if not isinstance(p.get("text"), str) or not p["text"].strip():
+                raise MemoryError(422, "memory_invalid", "A text part carries text.", "content")
+            out = {"type": "text", "text": p["text"]}
+        elif typ == "file":
+            f = p.get("file")
+            if not isinstance(f, dict) or not str(f.get("id") or "").strip():
+                raise MemoryError(422, "memory_invalid", "A file part names a file by its id.", "content")
+            out = {"type": "file", "file": {k: f[k] for k in ("id", "name", "media_type", "bytes", "version") if f.get(k) is not None}}
+            if isinstance(p.get("text"), str) and p["text"].strip():
+                out["text"] = p["text"]
+                out["text_source"] = p.get("text_source") if p.get("text_source") in ("stated", "derived") else "stated"
+        elif typ.startswith("x."):
+            out = dict(p)
+        else:
+            raise MemoryError(422, "memory_invalid", "A part is `text` or `file`; any other kind is `x.`-prefixed.", "content")
+        if p.get("role") is not None:
+            if p["role"] not in _ROLES:
+                raise MemoryError(422, "memory_invalid", "A part's role is user, assistant, system or tool.", "content")
+            out["role"] = p["role"]
+        parts.append(out)
+    if not parts and not empty_ok:
+        raise MemoryError(422, "memory_invalid", "A record carries content: text, or a list of parts.", "content")
+    return parts
+
+
+def text_of(parts) -> str:
+    """Every word a record says: its text parts and the text that stands for its files."""
+    if isinstance(parts, str):
+        return parts
+    return "\n".join(str(p.get("text")) for p in parts or [] if isinstance(p, dict) and p.get("text"))
+
+
+async def settle_files(org: str, parts: list[dict], provider: "Provider") -> list[dict]:
+    """Each file part checked against the server's file store and completed from it (the name,
+    media type and size are the store's, never the caller's), then against what the memory's
+    provider keeps: a media type it does not keep is refused, never dropped."""
+    import fnmatch
+    kept = ((provider.capabilities().get("content") or {}).get("media")) or ["text/*"]
+    for p in parts:
+        if p.get("type") != "file":
+            continue
+        meta = await FILES(org, str(p["file"]["id"])) if FILES else None
+        if not meta:
+            raise MemoryError(422, "memory_invalid", "A file part names a file this caller uploaded.", "content")
+        p["file"] = {"id": str(p["file"]["id"]), "name": meta.get("name") or "", "media_type": meta.get("media_type") or "application/octet-stream",
+                     "bytes": int(meta.get("bytes") or 0)}
+        if not any(fnmatch.fnmatch(p["file"]["media_type"], pat) for pat in kept):
+            raise MemoryError(422, "memory_unsupported",
+                              f"This memory's provider does not keep {p['file']['media_type']} content.", "content")
+    return parts
+
+
 def _record_in(body: dict) -> dict:
     typ = str(body.get("type") or "fact")
     if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*", typ):
         raise MemoryError(422, "memory_invalid", "A record type is lower-case words joined by dots.", "type")
-    content = body.get("content")
-    if not isinstance(content, (str, dict)) or (isinstance(content, str) and not content.strip()
-                                               and typ in CORE_TYPES and typ != "link"):
-        raise MemoryError(422, "memory_invalid", "A record carries content: text, or a file reference.", "content")
+    content = parts_of(body.get("content"), empty_ok=(typ == "link" or typ not in CORE_TYPES))
     refs = []
     for ref in body.get("references") or []:
         if not isinstance(ref, dict) or not ref.get("record_id"):

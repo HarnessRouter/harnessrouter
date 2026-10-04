@@ -105,7 +105,7 @@ def test_the_agent_walks_up_and_down_and_its_reach_ends_where_the_grants_do(clie
     top, _ = _call(client, tok, "memory_list", memory=world["company"])
     assert [c["name"] for c in top["children"]] == ["Support"]
     found, _ = _call(client, tok, "memory_recall", memory=world["company"], query="are refunds allowed")
-    assert found["results"][0]["record"]["content"] == "Refunds are allowed within 30 days."
+    assert found["results"][0]["record"]["content"] == [{"type": "text", "text": "Refunds are allowed within 30 days."}]
     assert found["results"][0]["record"]["trust"] == "untrusted"
     out, err = _call(client, tok, "memory_recall", memory=world["finance"], query="runway")
     assert err and "Runway" not in str(out)
@@ -155,8 +155,9 @@ def test_a_finished_turn_is_observed_into_the_default_memory(client, world):
     asyncio.run(gw._memories_observe(ORG, hid, "sess_x", hv, {"user_text": "Can I get a refund after 40 days?", "model": "m"},
                                      "No: refunds are allowed within 30 days."))
     eps = client.get(f"/v1/memories/{world['notes']}/records?type=episode", headers=ADA).json()["data"]
-    assert len(eps) == 1 and eps[0]["content"] == {"user": "Can I get a refund after 40 days?",
-                                                    "assistant": "No: refunds are allowed within 30 days."}
+    assert len(eps) == 1 and eps[0]["content"] == [
+        {"type": "text", "text": "Can I get a refund after 40 days?", "role": "user"},
+        {"type": "text", "text": "No: refunds are allowed within 30 days.", "role": "assistant"}]
     assert eps[0]["written_by"] == {"kind": "harness", "id": hid} and eps[0]["attributes"]["session_id"] == "sess_x"
 
 
