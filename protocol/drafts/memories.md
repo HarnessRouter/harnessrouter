@@ -71,7 +71,7 @@ MCP                  the tools an agent holds                   how the agent ca
 | `name` | string | client | Human-readable |
 | `description` | string | client | What this memory holds, in a sentence or two. An agent reads it to decide whether to look inside ([§6.1](#61-reading-is-a-walk)), so it is content, not decoration |
 | `parent_id` | string or null | client | The containing memory; `null` on a root |
-| `ancestors` | array | server | The ids from the root down to the parent. Placement only: reading a memory never reads an ancestor's records |
+| `ancestors` | array | server | The ids from the root down to the parent, as far up as the caller may see. Placement only: reading a memory never reads an ancestor's records |
 | `restricted` | boolean | client | When `true`, grants on ancestors stop here ([§3.2](#32-the-cutoff)) |
 | `provider` | string | client | Which provider keeps this memory's records ([§10](#10-providers)). Set at creation; a server MAY refuse to change it |
 | `privileges` | array | server | The caller's effective privileges on this node |
@@ -243,10 +243,14 @@ A provider declares how much of this it keeps, for content and for structure sep
 
 ### 6.1 Reading is a walk
 
-`recall`, `list` and `get` act on the one memory named in the path. They do not descend. A response
-carries the memory's direct children the caller may read, each with its `name`, `description` and
-counts, so an agent chooses where to look next and reads there. A caller that wants several levels
-at once passes `depth`; a server MAY cap it and MUST report a cap it applied in `degraded`.
+`recall`, `list` and `get` act on the one memory named in the path. They read neither its
+descendants nor its ancestors. A response carries where the caller can go from here: the memory's
+`parent` and its direct `children`, each with its `name`, `description` and counts, and only those
+the caller may read. An agent chooses where to look next, up or down, and reads there. The tree is
+walked in both directions by the agent's own decisions, never by the server on its behalf.
+
+A caller that wants several levels below at once passes `depth`; a server MAY cap it and MUST
+report a cap it applied in `degraded`.
 
 > **Why not search the whole subtree by default?**
 > A subtree can hold one node per customer. A read that fans out across all of them is slow, costs
@@ -283,6 +287,7 @@ Any one may be given alone. Given together, the provider fuses them into one ran
     { "record": { "id": "hrec_…", "type": "fact", "content": "…", "trust": "untrusted" },
       "score": 0.91, "why": ["query", "filters"] }
   ],
+  "parent": { "id": "hmem_…", "name": "Company", "description": "…", "records": { "count": 97 } },
   "children": [ { "id": "hmem_…", "name": "Acme", "description": "…", "records": { "count": 58 } } ],
   "degraded": [],
   "abstain": false
@@ -292,6 +297,8 @@ Any one may be given alone. Given together, the provider fuses them into one ran
 - `why` names the signals that produced each result.
 - `degraded` lists what the request asked for and the provider did not do (`"text:not_supported"`,
   `"depth:capped_at_2"`). A server MUST NOT ignore part of a request silently.
+- `parent` is absent on a root, and equally absent when the caller may not read the parent: the two
+  cases look the same.
 - `abstain` is `true` when the provider judges that nothing it returned answers the question. A
   memory that cannot say "I do not know" will be believed when it should not be.
 
@@ -405,7 +412,7 @@ A harness names the memories it works with:
 - The server checks each entry against the harness's effective privileges when the harness is
   written. An entry the harness has no grant for is refused then, not at run time.
 - `access` narrows; it never widens. `read` on a memory the harness may also write gives the agent
-  read tools only.
+  read tools only, on that memory and on whatever it walks to from it.
 - One entry MAY be marked `default`: where `observe` and an unaddressed `remember` go.
 - An entry MAY name a memory by a template the server resolves per task from
   `metadata.memory` on the request ([Tasks](../versions/2026-09-28/tasks.md)), creating it under a
@@ -416,7 +423,7 @@ A harness names the memories it works with:
 | Moment | Called by | What happens |
 |---|---|---|
 | **Prime** | server, at session start and after the conversation is compacted | The server reads what the provider marks as always-relevant in each attached memory and places it, with each memory's `name`, `description` and children, in the agent's instructions |
-| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, plus one tool per named query and per type operation, and `memory_query` where the provider offers free queries. The agent names a memory by id among those attached and their descendants; the server refuses any other |
+| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, plus one tool per named query and per type operation, and `memory_query` where the provider offers free queries. The attached memories are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as the harness's own privileges reach. The server checks every step |
 | **Observe** | server, when a turn ends | The turn (what was asked, what was answered, which tools ran) is sent to the default memory as episodes. No model is involved on the server's side |
 | **Consolidate** | server, on a schedule or when idle | The server asks the provider to do its background work. What that is belongs to the provider |
 
@@ -503,8 +510,10 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
 - **What a memory returns is untrusted.** A record written in one session is read in another, by
   another agent, for another person. A server MUST present recalled content to the agent as data,
   fenced from instructions, and MUST carry `written_by` with it.
-- **The agent never chooses its reach.** The memories an agent may name are those its harness
-  attaches and their descendants, checked by the server on every call.
+- **The agent chooses its path, never its reach.** An agent may walk up and down the tree from the
+  memories its harness attaches. What it can reach is every memory the harness holds a privilege
+  on, no more, checked by the server on every call. A harness that should see one branch and
+  nothing above it is granted that branch and nothing above it.
 - **Provenance is stamped, not supplied.** `written_by` and `written_at` come from the authenticated
   caller and the server's clock.
 - **Unknown is indistinguishable from forbidden** on reads of memories and of reference targets.
@@ -520,7 +529,8 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
 2. A memory is a node in a generic tree; levels have no fixed meaning. Access is granted per node
    and inherited downward, with a restricted cutoff: the Spaces model.
 3. A node exists only where access differs. A session has no node of its own.
-4. Reads act on one node; the agent walks down. Subtree reads are opt-in.
+4. Reads act on one node. The agent walks the tree itself, up to a parent or down to a child,
+   within what its harness may read. Subtree reads are opt-in.
 5. `observe` is on by default for an attached memory.
 6. A provider's internals are invisible; Letta is a provider like any other.
 7. Other resources (calendar, tasks, tables) enter as extension types with operations; optional.
