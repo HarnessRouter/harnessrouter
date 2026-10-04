@@ -92,9 +92,9 @@ class FixtureProvider(Provider):
 
     # ── writes ────────────────────────────────────────────────────────────────────────────────
     async def observe(self, mid, episodes, writer):
-        return [self._append(mid, {"type": "episode", "content": e.get("content"),
-                                   "attributes": e.get("attributes") or {}, "time": e.get("time")}, writer)
-                for e in episodes]
+        return {"records": [self._append(mid, {"type": "episode", "content": e.get("content"),
+                                               "attributes": e.get("attributes") or {}, "time": e.get("time")}, writer)
+                            for e in episodes], "job": None}
 
     async def remember(self, mid, record, writer):
         return self._append(mid, record, writer)

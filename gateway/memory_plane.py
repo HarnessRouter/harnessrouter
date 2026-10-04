@@ -33,6 +33,9 @@ _NAME_MAX, _DESC_MAX = 120, 2000
 # bound by app.py at import. Providers keep the records of the memories themselves.
 GRAPH = None
 PROVIDERS: dict[str, "Provider"] = {}
+# How a provider that needs the workspace's own credential gets it: app.py binds a resolver over
+# the plug registry, `await CREDENTIALS(org, workspace, provider_id) -> {field: value} | None`.
+CREDENTIALS = None
 
 
 class MemoryError(Exception):
@@ -65,6 +68,14 @@ class Provider:
     def capabilities(self) -> dict:
         return {"id": self.id}
 
+    async def bind(self, org: str, workspace: str) -> "Provider":
+        """The provider as one workspace reaches it. A provider that needs the workspace's own
+        account returns an instance holding that credential, or refuses when none is connected."""
+        return self
+
+    async def job(self, mid: str, job_id: str) -> dict | None:
+        return None
+
     def _no(self, what: str):
         raise MemoryError(422, "memory_unsupported", f"This memory's provider does not {what}.")
 
@@ -77,7 +88,9 @@ class Provider:
     async def count(self, mid: str) -> int:
         return 0
 
-    async def observe(self, mid: str, episodes: list[dict], writer: dict) -> list[dict]:
+    async def observe(self, mid: str, episodes: list[dict], writer: dict) -> dict:
+        """-> {"records": [...], "job": None | {"id", "status"}}: what was written now, and the
+        work still running when the provider derives after it answers."""
         self._no("take episodes")
 
     async def remember(self, mid: str, record: dict, writer: dict) -> dict:
@@ -144,11 +157,40 @@ class Provider:
         self._no("revert a consolidation")
 
 
-def provider_of(memory: dict) -> Provider:
+async def provider_of(memory: dict) -> Provider:
+    """The provider behind a memory, bound to the memory's own workspace."""
     p = PROVIDERS.get(str(memory.get("provider") or ""))
     if p is None:
         raise MemoryError(503, "memory_unavailable", "This memory's provider is not connected.")
-    return p
+    return await p.bind(str(memory.get("org") or ""), str(memory.get("workspace") or "") or "default")
+
+
+def field_of(record: dict, field: str):
+    cur = record
+    for part in str(field).split("."):
+        cur = cur.get(part) if isinstance(cur, dict) else None
+    return cur
+
+
+def matches(record: dict, flt) -> bool:
+    """One record against a protocol filter: {"field", "op", "value"}, {"and": [...]}, {"or": [...]}.
+    A provider that cannot express a filter itself applies it here and says so in `degraded`."""
+    if not flt:
+        return True
+    if "and" in flt:
+        return all(matches(record, f) for f in flt["and"])
+    if "or" in flt:
+        return any(matches(record, f) for f in flt["or"])
+    v, op, want = field_of(record, flt.get("field")), flt.get("op", "eq"), flt.get("value")
+    if op == "eq":
+        return v == want
+    if op == "in":
+        return v in (want or [])
+    if op in ("gte", "lte", "gt", "lt"):
+        return v is not None and {"gte": v >= want, "lte": v <= want, "gt": v > want, "lt": v < want}[op]
+    if op == "contains":
+        return str(want).lower() in str(v or "").lower()
+    raise MemoryError(422, "memory_invalid", f"Unknown filter operator `{op}`.", "filters")
 
 
 # ── the tree ──────────────────────────────────────────────────────────────────────────────────
@@ -227,9 +269,9 @@ async def out(org: str, memory: dict, principals: list[str], privs: list[str] | 
     kids = [k for k in await GRAPH.find("Memory", {"org": org, "parent_id": memory["id"]})
             if str(k.get("deleted") or "0") != "1"]
     try:
-        n = await provider_of(memory).count(str(memory["id"]))
+        n = await (await provider_of(memory)).count(str(memory["id"]))
     except MemoryError:
-        n = 0
+        n = None                       # the provider is not reachable: unknown, not zero
     return {"id": memory["id"], "object": "memory", "name": memory.get("name") or "",
             "description": memory.get("description") or "",
             "parent_id": parent if parent and parent in anc else None, "ancestors": anc,
@@ -283,11 +325,12 @@ async def create(org: str, member: str, workspace: str, principals: list[str], *
         raise MemoryError(422, "memory_invalid",
                           "Name a connected memory provider." if prov else
                           "No memory provider is connected: connect one, then create the memory.", "provider")
+    bound = await PROVIDERS[prov].bind(org, workspace or "default")     # refuses when the workspace has not connected it
     mid, now = "hmem_" + uuid.uuid4().hex, _now_ms()
     props = {"org": org, "workspace": workspace, "name": name, "description": description,
              "parent_id": str(parent_id or ""), "anc": ",".join(anc), "restricted": "1" if restricted else "0",
              "provider": prov, "created_by": member, "created_at": now, "updated_at": now, "deleted": "0"}
-    await PROVIDERS[prov].create(mid, {"id": mid, **props})
+    await bound.create(mid, {"id": mid, **props})
     await GRAPH.upsert("Memory", mid, props, raise_on_fail=True)
     return {"id": mid, **props}
 
@@ -340,7 +383,7 @@ async def delete(org: str, mid: str, principals: list[str]) -> list[str]:
     gone = []
     for x in [m] + await _subtree(org, mid):
         try:
-            await provider_of(x).drop(str(x["id"]))
+            await (await provider_of(x)).drop(str(x["id"]))
         except MemoryError:
             pass                       # a provider that is gone cannot hold what is being deleted
         await GRAPH.upsert("Memory", str(x["id"]), {"deleted": "1", "updated_at": _now_ms()}, raise_on_fail=True)
