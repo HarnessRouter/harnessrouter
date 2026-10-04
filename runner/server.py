@@ -2452,6 +2452,8 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     # a loopback relay URL and a placeholder key — the credential never enters its environment.
     env["HR_DSH_BASE_URL"] = base
     env["HR_DSH_API_KEY"] = auth.api_key or ""
+    # The driver's own relay waits on the provider as long as this one does (dsh_driver._upstream_wait).
+    env["HR_RELAY_UPSTREAM_TIMEOUT_S"] = f"{HR_RELAY_UPSTREAM_TIMEOUT_S:g}"
     # No system_prompt in the job: harness instructions land in AGENTS.md (dsh reads it via
     # its dsh-agent-instructions loader), same mechanism as codex/hermes/pi.
     job = {"prompt": prompt, "model": model, "cwd": cwd,
@@ -3524,7 +3526,9 @@ def _aws_eventstream_frames(resp):
     import struct
     buf = b""
     while True:
-        chunk = resp.read(65536)
+        # read1, for the reason _forward reads that way: `read(65536)` waits for 64 KB or the end
+        # of the stream, so an answer shorter than that reached the client all at once at the end.
+        chunk = resp.read1(65536)
         buf += chunk
         while len(buf) >= 16:
             total = struct.unpack(">I", buf[:4])[0]
@@ -4350,37 +4354,53 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
+
+            def _stopped(why: str) -> None:
+                # The answer began and then stopped: the provider went silent past the socket's
+                # timeout, dropped the connection mid-stream, or kept the socket warm and sent no
+                # event. The status line is long gone, so the reason travels as the stream's own
+                # error event (the shape of the API being spoken) and the chunked body is then left
+                # UNTERMINATED with the connection closed. Ending it with the zero chunk would hand
+                # the client a well-formed, complete answer that merely lacks its last events —
+                # measured at a stub: one event, a stall, and the client read 200 with nothing wrong.
+                print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: {why}",
+                      flush=True)
+                msg = f"the provider stopped answering mid-stream: {why}"
+                if "/messages" in tail:
+                    ev = "event: error\ndata: " + json.dumps(
+                        {"type": "error", "error": {"type": "api_error", "message": msg}}) + "\n\n"
+                else:
+                    ev = "data: " + json.dumps({"error": {
+                        "message": msg, "type": "upstream_unavailable",
+                        "code": "upstream_unavailable"}}) + "\n\n"
+                call_usage.update(_usage_in_sse_line(pending.strip()))
+                _usage_add(flags, call_usage)
+                try:
+                    raw = ev.encode()
+                    self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
+                    self.wfile.flush()
+                except OSError:
+                    pass
+                self.close_connection = True
+
+            # When the provider last sent an EVENT (or the answer began). Bytes are not the measure:
+            # an aggregator trickles comment lines (": OPENROUTER PROCESSING") for as long as its own
+            # upstream says nothing, so the socket never goes quiet and its timeout never fires.
+            last_event = time.monotonic()
             while True:
                 try:
-                    chunk = resp.read(4096)
+                    # read1: what has arrived, as it arrives. `read(4096)` on an HTTP response waits
+                    # for 4096 BYTES or the end of the stream, so a short first event sat here until
+                    # the rest of the answer filled the block (an answer under 4 KB reached the client
+                    # all at once, at its end), and a provider that sent a little and then stalled,
+                    # or only kept the connection warm, delivered nothing at all and was never timed
+                    # out. Both reproduced at a stub (runner/tests/test_relay_upstream_failure.py);
+                    # neither has been caught on a live provider, where the long turns looked at so
+                    # far were a model streaming reasoning without end, which is an answer arriving
+                    # and is rightly left alone here.
+                    chunk = resp.read1(65536)
                 except (http.client.HTTPException, TimeoutError, OSError) as e:
-                    # The answer began and then stopped: the provider went silent past the socket's
-                    # timeout, or dropped the connection mid-stream. The status line is long gone, so
-                    # the reason travels as the stream's own error event (the shape of the API being
-                    # spoken) and the chunked body is then left UNTERMINATED with the connection
-                    # closed. Ending it with the zero chunk would hand the client a well-formed,
-                    # complete answer that merely lacks its last events — measured at a stub: one
-                    # event, a stall, and the client read 200 with nothing wrong.
-                    why = f"{type(e).__name__}: {e}"[:300]
-                    print(f"[relay] upstream stopped mid-answer on {tail} model={_body_model}: {why}",
-                          flush=True)
-                    msg = f"the provider stopped answering mid-stream: {why}"
-                    if "/messages" in tail:
-                        ev = "event: error\ndata: " + json.dumps(
-                            {"type": "error", "error": {"type": "api_error", "message": msg}}) + "\n\n"
-                    else:
-                        ev = "data: " + json.dumps({"error": {
-                            "message": msg, "type": "upstream_unavailable",
-                            "code": "upstream_unavailable"}}) + "\n\n"
-                    call_usage.update(_usage_in_sse_line(pending.strip()))
-                    _usage_add(flags, call_usage)
-                    try:
-                        raw = ev.encode()
-                        self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
-                        self.wfile.flush()
-                    except OSError:
-                        pass
-                    self.close_connection = True
+                    _stopped(f"{type(e).__name__}: {e}"[:300])
                     return
                 if not chunk:
                     break
@@ -4392,12 +4412,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         # A read boundary can fall inside the field, and a miss here is silent:
                         # served_model stays empty and the turn is simply not substitution-checked.
                         # 256 bytes covers the longest id this can carry (the regex caps at 200).
-                        carry = chunk[-256:]
+                        # The tail of the STREAM, not of the last read: a read returns whatever has
+                        # arrived, so the field can span three of them.
+                        carry = (carry + chunk)[-256:]
                 # the last finish_reason, across read boundaries (64 bytes covers the field)
                 fr = _finish_reason_in(fcarry + chunk)
                 if fr:
                     flags["last_finish"] = fr
-                fcarry = chunk[-64:]
+                fcarry = (fcarry + chunk)[-64:]
                 # usage (and Google's tool-call signatures) live on whole SSE lines, so the
                 # stream is line-buffered as it passes; the bytes still go through untouched
                 pending += chunk
@@ -4409,6 +4431,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     if out_lines is not None:
                         out_lines.append(_usage_without_nulls(line) + b"\n")
                     line = line.strip()
+                    if line and not line.startswith(b":"):
+                        last_event = time.monotonic()     # an event's line; a comment is not one
                     call_usage.update(_usage_in_sse_line(line))
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
@@ -4418,6 +4442,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 if chunk:
                     self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                     self.wfile.flush()
+                if time.monotonic() - last_event > HR_RELAY_UPSTREAM_TIMEOUT_S:
+                    # No event for the whole of the relay's wait, only lines that keep the connection
+                    # open: the same silence the socket's timeout reports, by another door.
+                    _stopped(f"no data for {HR_RELAY_UPSTREAM_TIMEOUT_S:g} s, only keep-alive lines")
+                    return
             call_usage.update(_usage_in_sse_line(pending.strip()))
             _usage_add(flags, call_usage)
             if flags.get("usage_no_nulls") and pending:
@@ -4601,9 +4630,10 @@ def _adapt_custom_auth(auth):
     return auth.model_copy(update={"base_url": base, "api_key": tok})
 
 
-# How long the relay waits for the provider on ONE upstream call, and how long a stalled READ of an
-# answer already begun may block (it is the socket's timeout: connect, the wait for the status line,
-# and every later read). It must stay BELOW the turn cap above it, or a provider that accepts a
+# How long the relay waits for the provider on ONE upstream call, and how long an answer already
+# begun may go without an EVENT (it is the socket's timeout: connect, the wait for the status line,
+# and every later read; and, in a stream, the longest run of keep-alive lines with no event between
+# them, since those keep the socket from ever timing out). It must stay BELOW the turn cap above it, or a provider that accepts a
 # request and then goes silent is indistinguishable from a working turn: the cap fires first and the
 # turn is cancelled with no served model, no tool call and no reason. The default is the 600 s this
 # relay has always waited, far under MAX_TURN_SECONDS: a reasoning model answering a non-streaming
