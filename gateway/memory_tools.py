@@ -151,6 +151,8 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
             patch = {k: args[k] for k in ("content", "attributes") if k in args}
             if not patch or not str(args.get("reason") or "").strip():
                 return "Give the new content or attributes, and the reason.", True
+            if "content" in patch:
+                patch["content"] = mp.parts_of(patch["content"])
             patch.setdefault("attributes", {})["revision_reason"] = str(args["reason"])[:500]
             rec = await (await mp.provider_of(m)).revise(mid, str(args.get("record") or ""), patch, writer)
             return _text({"revised": _slim(await mp.present(org, mid, rec, pr))}), False

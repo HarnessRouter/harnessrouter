@@ -16257,7 +16257,32 @@ async def _skill_bundle_files(sk: dict) -> list:
 # ── Memories (the Harness Memories sub-protocol) ──────────────────────────────────────────────
 # The tree, the grants and the provider seam are memory_plane's; the routes are memory_routes'.
 # Bound here because the routes need this process's principal resolver and error envelope.
-memory_routes.install(app, _principal, uhp_error, BACKING.graph)
+async def _memory_file_meta(org: str, file_id: str) -> dict | None:
+    """An uploaded file as a memory record may name it: this org's, with the name, media type and
+    size the file store holds (Files §5: another principal's file is not found)."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,80}", file_id or ""):
+        return None
+    raw = await _blob_get(f"uploads/{file_id}.meta", kb=RESP_BLOB_KB)
+    if raw is None:
+        return None
+    try:
+        meta = json.loads(raw)
+    except ValueError:
+        return None
+    if str(meta.get("org") or "") not in ("", org):
+        return None
+    data = await _blob_get(f"uploads/{file_id}", kb=RESP_BLOB_KB)
+    if data is None:
+        return None
+    return {"name": str(meta.get("filename") or ""), "media_type": str(meta.get("media_type") or "application/octet-stream"),
+            "bytes": len(data)}
+
+
+async def _memory_file_bytes(org: str, file_id: str) -> bytes | None:
+    return await _blob_get(f"uploads/{file_id}", kb=RESP_BLOB_KB) if await _memory_file_meta(org, file_id) else None
+
+
+memory_routes.install(app, _principal, uhp_error, BACKING.graph, _memory_file_meta, _memory_file_bytes)
 memory_plane.PROVIDERS["mem0"] = memory_mem0.Mem0()
 _MEMORY_CHECKS = {"mem0": memory_mem0.check}
 
@@ -16455,7 +16480,8 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             return
         m, _ = await memory_plane.need(org, mid, [f"harness:{hid}"], "write")
         await (await memory_plane.provider_of(m)).observe(mid, [{
-            "content": {"user": str(rec.get("user_text") or ""), "assistant": answer},
+            "content": [{"type": "text", "role": role, "text": text}
+                        for role, text in (("user", str(rec.get("user_text") or "")), ("assistant", answer)) if text.strip()],
             "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
             memory_plane.writer_of("", harness=hid))
         print(f"[memories] {sid}: the turn was observed into {mid}", flush=True)

@@ -7,7 +7,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 import memory_plane as mp
 
@@ -16,10 +16,14 @@ _principal = None          # app.py's resolver, bound by install()
 _uhp_error = None
 
 
-def install(app, principal, uhp_error, graph) -> None:
-    """Bind the gateway's principal resolver, error envelope and graph backing, and mount the routes."""
-    global _principal, _uhp_error
-    _principal, _uhp_error, mp.GRAPH = principal, uhp_error, graph
+_file_bytes = None          # app.py's reader of an uploaded file's bytes, bound by install()
+
+
+def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None) -> None:
+    """Bind the gateway's principal resolver, error envelope, graph backing and file store, and
+    mount the routes."""
+    global _principal, _uhp_error, _file_bytes
+    _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes = principal, uhp_error, graph, file_meta, file_bytes
     if os.environ.get("HR_MEMORY_FIXTURE") == "1" and "fixture" not in mp.PROVIDERS:
         import memory_fixture
         mp.PROVIDERS["fixture"] = memory_fixture.FixtureProvider()
@@ -187,9 +191,12 @@ async def observe(mid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
     eps = (await _json(request)).get("episodes")
-    if not isinstance(eps, list) or not eps or not all(isinstance(e, dict) and e.get("content") for e in eps):
+    if not isinstance(eps, list) or not eps or not all(isinstance(e, dict) for e in eps):
         raise _uhp_error(422, "memory_invalid", "`episodes` is a non-empty list, each with content.", "episodes")
-    made = await (await mp.provider_of(m)).observe(mid, eps, mp.writer_of(member))
+    prov = await mp.provider_of(m)
+    eps = [{"content": await mp.settle_files(org, mp.parts_of(e.get("content")), prov),
+            "attributes": dict(e.get("attributes") or {})} for e in eps]
+    made = await prov.observe(mid, eps, mp.writer_of(member))
     body = {"object": "list", "data": await _records_out(org, mid, made.get("records") or [], pr)}
     if made.get("job"):
         # the provider derives after it answers: what it wrote is read from the job once it settles
@@ -214,8 +221,9 @@ async def job(mid: str, job_id: str, request: Request) -> dict:
 async def remember(mid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
-    rec = await (await mp.provider_of(m)).remember(mid, mp._record_in(await _json(request)), mp.writer_of(member))
-    return await mp.present(org, mid, rec, pr)
+    prov, rec_in = await mp.provider_of(m), mp._record_in(await _json(request))
+    await mp.settle_files(org, rec_in["content"], prov)
+    return await mp.present(org, mid, await prov.remember(mid, rec_in, mp.writer_of(member)), pr)
 
 
 @router.patch("/v1/memories/{mid}/records/{rid}")
@@ -227,7 +235,10 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
     patch = {k: b[k] for k in ("content", "attributes", "references", "time") if k in b}
     if not patch:
         raise _uhp_error(422, "memory_invalid", "A revision changes content, attributes, references or time.")
-    return await mp.present(org, mid, await (await mp.provider_of(m)).revise(mid, rid, patch, mp.writer_of(member)), pr)
+    prov = await mp.provider_of(m)
+    if "content" in patch:
+        patch["content"] = await mp.settle_files(org, mp.parts_of(patch["content"]), prov)
+    return await mp.present(org, mid, await prov.revise(mid, rid, patch, mp.writer_of(member)), pr)
 
 
 @router.delete("/v1/memories/{mid}/records/{rid}")
@@ -292,6 +303,26 @@ async def get_record(mid: str, rid: str, request: Request, as_of: str = "") -> d
     if not rec:
         raise _uhp_error(404, "memory_record_not_found", "No such record in this memory.", "record_id")
     return await mp.present(org, mid, rec, pr)
+
+
+@router.get("/v1/memories/{mid}/records/{rid}/content/{index}")
+@guarded
+async def record_file(mid: str, rid: str, index: int, request: Request, as_of: str = ""):
+    """The bytes of one file part of a record. The record carries the reference; this is where
+    the bytes are read, by whoever may read the record."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "read")
+    rec = await (await mp.provider_of(m)).get(mid, rid, as_of or None)
+    parts = (await mp.present(org, mid, rec, pr))["content"] if rec else []
+    if not rec or index < 0 or index >= len(parts) or parts[index].get("type") != "file":
+        raise _uhp_error(404, "memory_record_not_found", "No such file part in this record.", "index")
+    f = parts[index]["file"]
+    data = await _file_bytes(org, str(f["id"])) if _file_bytes else None
+    if data is None:
+        raise _uhp_error(404, "memory_record_not_found", "The file this part names is no longer kept.", "index")
+    return Response(content=data, media_type=f.get("media_type") or "application/octet-stream",
+                    headers={"content-disposition": f'attachment; filename="{str(f.get("name") or "file").replace(chr(34), "")}"',
+                             "x-content-type-options": "nosniff"})
 
 
 @router.get("/v1/memories/{mid}/records/{rid}/history")

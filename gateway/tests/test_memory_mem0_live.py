@@ -75,6 +75,7 @@ def test_remember_recall_revise_history_and_as_of(c, tree):
         "type": "fact", "content": "Acme renews in March and wants the annual discount kept.",
         "attributes": {"account": "acme"}}).json()
     assert fact["status"] == "active" and fact["version"] == 1 and fact["memory_id"] == acme
+    assert fact["content"] == [{"type": "text", "text": "Acme renews in March and wants the annual discount kept."}]
     assert fact["written_by"] == {"kind": "member", "id": "ada@example.com"} and fact["attributes"] == {"account": "acme"}
     tree["fact"], t1 = fact["id"], fact["time"]["written_at"]
     time.sleep(2)                                              # mem0 indexes a moment after it stores
@@ -100,8 +101,8 @@ def test_remember_recall_revise_history_and_as_of(c, tree):
     assert v2["version"] == 2 and v2["supersedes"] == 1 and v2["id"] == fact["id"]
     hist = c.get(f"/v1/memories/{acme}/records/{fact['id']}/history", headers=ADA).json()["data"]
     assert [(h["version"], h["status"]) for h in hist] == [(1, "superseded"), (2, "active")]
-    assert "March" in hist[0]["content"] and "April" in hist[1]["content"]
-    assert "March" in c.get(f"/v1/memories/{acme}/records/{fact['id']}", headers=ADA, params={"as_of": hist[0]["time"]["written_at"]}).json()["content"]
+    assert "March" in hist[0]["content"][0]["text"] and "April" in hist[1]["content"][0]["text"]
+    assert "March" in c.get(f"/v1/memories/{acme}/records/{fact['id']}", headers=ADA, params={"as_of": hist[0]["time"]["written_at"]}).json()["content"][0]["text"]
 
 
 def test_a_record_of_one_memory_cannot_be_read_through_another(c, tree):
@@ -112,9 +113,9 @@ def test_a_record_of_one_memory_cannot_be_read_through_another(c, tree):
 
 
 def test_observe_answers_a_job_and_mem0_keeps_facts_not_the_episode(c, tree):
-    r = c.post(f"/v1/memories/{tree['acme']}/observe", headers=ADA, json={"episodes": [{"content": {
-        "user": "Dana at Acme told me their budget owner is now Priya, and they prefer invoices by email.",
-        "assistant": "Noted."}, "attributes": {"session_id": "sess_live"}}]})
+    r = c.post(f"/v1/memories/{tree['acme']}/observe", headers=ADA, json={"episodes": [{"content": [
+        {"type": "text", "role": "user", "text": "Dana at Acme told me their budget owner is now Priya, and they prefer invoices by email."},
+        {"type": "text", "role": "assistant", "text": "Noted."}], "attributes": {"session_id": "sess_live"}}]})
     assert r.status_code == 202 and r.json()["data"] == [] and r.json()["job"]["status"] == "pending"
     done = _wait_job(c, tree["acme"], r.json()["job"]["id"])
     assert done["status"] == "completed" and done["data"], done
@@ -162,7 +163,7 @@ def test_an_agent_holds_a_mem0_memory_as_tools(c, tree):
     for _ in range(10):                                        # mem0 indexes a moment after it stores
         time.sleep(2)
         text, err = call("memory_recall", memory=tree["acme"], query="who is the procurement contact at Acme?")
-        found = [x["record"]["content"] for x in json.loads(text)["results"]]
+        found = [x["record"]["content"][0]["text"] for x in json.loads(text)["results"]]
         if any("Lee" in x for x in found):
             break
     assert not err and any("Lee" in x for x in found), found
