@@ -51,6 +51,7 @@ import plugs_plane           # the plugs surface: the vendor tools behind the ho
 from public_artifacts import public_artifact_headers
 import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
+import memory_routes        # the Harness Memories sub-protocol (tree, access, provider seam)
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 
 POOL_ENDPOINT = os.environ.get("POOL_MGMT_ENDPOINT", "").rstrip("/")
@@ -4055,6 +4056,7 @@ UHP_CAPABILITIES = {
     "idempotency": True,
     "plugins": True,
     "environments": True,
+    "memories": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 
@@ -15947,6 +15949,12 @@ async def _skill_bundle_files(sk: dict) -> list:
     if not files and sk.get("content"):
         files = [{"path": "SKILL.md", "content": sk["content"]}]
     return files or []
+
+
+# ── Memories (the Harness Memories sub-protocol) ──────────────────────────────────────────────
+# The tree, the grants and the provider seam are memory_plane's; the routes are memory_routes'.
+# Bound here because the routes need this process's principal resolver and error envelope.
+memory_routes.install(app, _principal, uhp_error, BACKING.graph)
 
 
 # ── Environments (UHP 2026-09-28, Environments chapter) ───────────────────────────────────────
