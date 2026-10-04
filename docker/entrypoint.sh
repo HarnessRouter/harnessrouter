@@ -438,8 +438,8 @@ MINIMAX_PIN="${HR_MINIMAX_VERSION:-0.5.4}"; MINIMAX_PIN="${MINIMAX_PIN#v}"
 KILO_PIN="${HR_KILO_VERSION:-7.8.1}"; KILO_PIN="${KILO_PIN#v}"
 # Grok Build, Apache-2.0 (xai-org/grok-build), pinned to 1.0.41.
 #
-# The GitHub repository is source only — no tags, no releases — so the artifact is the one xAI's own
-# installer (https://x.ai/cli/install.sh) downloads: a single static binary per platform at
+# The GitHub repository is source only — no tags, no releases — so the artifact is the one the
+# publisher's own installer (SpaceXAI's, https://x.ai/cli/install.sh) downloads: a single static binary per platform at
 # https://x.ai/cli/grok-<version>-linux-<arch>, a Cloudflare front for the public bucket
 # storage.googleapis.com/grok-build-public-artifacts/cli, which is the fallback here as it is there.
 # NOT the install script: it resolves "latest" from a channel pointer, installs a self-updating
