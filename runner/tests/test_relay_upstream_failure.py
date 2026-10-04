@@ -244,9 +244,9 @@ def test_keep_alive_lines_alone_are_a_provider_that_stopped_answering(monkeypatc
     """An aggregator trickles comment lines while its own upstream says nothing. The socket never
     goes quiet, so the socket's timeout never fires, and a read that waits for 4096 bytes never
     returns either: the client got nothing at all and nothing ended the call but the turn's cap.
-    Measured on a test instance on 2026-10-04: two of three fresh turns on one model sat with the
-    model call open for 345 s and 196 s, the relay's log empty, its timeout at 180 s. No DATA for the
-    relay's wait is the provider having stopped, whatever else arrives."""
+    Reproduced here at a stub; not caught on a live provider (the long turns that prompted the look,
+    2026-10-04, turned out to be a model streaming reasoning without end, which sends events and is
+    not this). No EVENT for the relay's wait is the provider having stopped, whatever else arrives."""
     import time
     monkeypatch.setattr(rs, "HR_RELAY_UPSTREAM_TIMEOUT_S", 1.0)
     up = _Upstream("keepalive_forever")

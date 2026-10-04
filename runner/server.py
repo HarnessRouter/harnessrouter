@@ -4391,11 +4391,13 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     # read1: what has arrived, as it arrives. `read(4096)` on an HTTP response waits
                     # for 4096 BYTES or the end of the stream, so a short first event sat here until
-                    # the rest of the answer filled the block, and a provider that sent a little and
-                    # then stalled, or only kept the connection warm, delivered nothing at all and
-                    # was never timed out: the turn hung until its cap with this relay's log empty
-                    # (two of three fresh turns on one model, 345 s and 196 s into a 180 s wait, on
-                    # 2026-10-04; the same shape as a family tour's "not settled in 600s").
+                    # the rest of the answer filled the block (an answer under 4 KB reached the client
+                    # all at once, at its end), and a provider that sent a little and then stalled,
+                    # or only kept the connection warm, delivered nothing at all and was never timed
+                    # out. Both reproduced at a stub (runner/tests/test_relay_upstream_failure.py);
+                    # neither has been caught on a live provider, where the long turns looked at so
+                    # far were a model streaming reasoning without end, which is an answer arriving
+                    # and is rightly left alone here.
                     chunk = resp.read1(65536)
                 except (http.client.HTTPException, TimeoutError, OSError) as e:
                     _stopped(f"{type(e).__name__}: {e}"[:300])
