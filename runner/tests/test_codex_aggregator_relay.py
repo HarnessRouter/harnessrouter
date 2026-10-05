@@ -8,8 +8,9 @@ it received, Codex with gpt-6-luna, two runs per connection:
     intact        intact   intact   intact       [{}], [{}, {}]
 
 and the same on Vercel with gpt-6.1-sol. (gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5.6-sol and gpt-6-astra
-passed there: Codex defers their tool definitions.) The repair lives in the relay, and Codex was the
-one base that never passed through it: it was handed the connection's base and key.
+passed there; for gpt-5.4 Codex was seen to defer its tool definitions behind a tool search, and the
+other four are assumed alike.) The repair lives in the relay, and Codex was the one base that never
+passed through it: it was handed the connection's base and key.
 """
 import http.client
 import http.server

@@ -2235,13 +2235,13 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         pass
     # A connection that is not OpenAI's own or Azure's rides the relay, as it does for every other
     # base. Codex groups a server's MCP tools in a namespace and adds an empty `properties` to each
-    # object node of their schemas; through Vercel a model it does not defer tools for then handed
-    # the tool empty objects (gpt-6-luna and gpt-6.1-sol, two of two, 2026-10-05), and the repair
-    # lives in the relay (_with_free_form_objects). The CLI is given a loopback URL and a
-    # placeholder, so the connection's key is no longer in its environment either. OpenAI's own
-    # endpoint and Azure's keep the direct route: both were intact as Codex sends it. The account
-    # fingerprint above is taken from the connection itself, never from the route, which is new on
-    # every turn.
+    # object node of their schemas; through Vercel the tool then received empty objects with
+    # gpt-6-luna and gpt-6.1-sol (two of two, 2026-10-05; not with gpt-5.4, whose tool definitions
+    # Codex defers behind a tool search), and the repair lives in the relay
+    # (_with_free_form_objects). The CLI is given a loopback URL and a placeholder, so the
+    # connection's key is no longer in its environment either. OpenAI's own endpoint and Azure's
+    # keep the direct route: both were intact as Codex sends it. The account fingerprint above is
+    # taken from the connection itself, never from the route, which is new on every turn.
     cli_base, cli_key = base_url, auth.api_key
     if p == "tokenrouter" and auth.api_key:
         cli_base, cli_key = _hermes_relay_route(base_url, auth.api_key, exact_base=True)

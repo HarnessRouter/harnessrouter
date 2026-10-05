@@ -2540,8 +2540,10 @@ four models by five scenarios, 20 of 20.
 **Codex (0.29.4).** 0.29.3 did not reach Codex: it was handed the connection's base and key and never
 passed through the relay. Codex 0.154.0 with gpt-6-luna, two runs per connection: the rows on
 TokenRouter, OpenRouter, OpenAI and Azure; `[{}]` and `[{}, {}]` on Vercel, and the same there with
-gpt-6.1-sol. gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5.6-sol and gpt-6-astra passed on Vercel: Codex
-defers their tool definitions behind a tool search (captured on the hosted service). Now every Codex
+gpt-6.1-sol. gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5.6-sol and gpt-6-astra passed on Vercel. For
+gpt-5.4 the hosted service captured why: Codex sends `{"type":"tool_search"}` and no MCP schema in
+the first request, so there is no empty `properties` to act on. That the other four pass for the
+same reason is inferred, not captured. Now every Codex
 connection that is not OpenAI's own or Azure's takes a relay route. The route keeps the connection's
 base exactly as stored, since Codex called `<base>/responses` whatever the base looked like; the CLI
 gets a loopback URL and a placeholder, so the connection's key is out of its environment; and the
