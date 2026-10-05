@@ -48,6 +48,7 @@ export interface CustomHarness {
   disabledTools?: string[];  // inherited/built-in tool names disabled for this harness
   maxStep?: number | null;        // default agent step budget per turn (blank = 40)
   timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = server default)
+  reasoningEffort?: string;       // how much the model thinks on this harness's Tasks ('' = the model's default)
   additionalHeaders?: string[]; // declared header NAMES callers pass per request (app-level auth)
   // Variables every Task's shell and tools start with. A value is `$headers.X-Name` (a declared
   // request header), `vault:ref` (a stored secret) or a literal. Resolved by the service per turn.
@@ -313,7 +314,9 @@ export interface BuiltinSkill { name: string; title: string; description: string
 export interface BaseInfo {
   id: string; label: string; backend: string; status: string; systemPrompt: string;
   defaultModel: string;
-  models: { id: string; available: boolean; default: boolean }[];
+  /** `reasoning`: the thinking levels the model has, lowest first; empty or absent where it has
+   *  none to offer. The control is drawn from this list and never from one kept here. */
+  models: { id: string; available: boolean; default: boolean; reasoning?: string[] }[];
   tools: BaseTool[];
   /** Skills bundled into the image, which any harness can use. `defaultEnabled` is what a NEW
    *  harness starts with; a harness that stored its own answer overrides it. */
@@ -453,6 +456,7 @@ function harnessBody(input: Partial<CustomHarness> & { name: string; base: strin
     plugins: input.plugins || [],
     max_step: input.maxStep || null,
     timeout_seconds: input.timeoutSeconds || null,
+    reasoning_effort: input.reasoningEffort || null,
     additional_headers: input.additionalHeaders || [],
     env: input.env || {},
     environment: input.environment || '',

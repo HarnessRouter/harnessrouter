@@ -121,6 +121,7 @@ ${addHdrs.map((h) => `  -H "${h}: <value>" \\\n`).join('')}  -d '{ "model": "${m
           <Param name="metadata" type="object">Up to 16 key/value string pairs attached to the response. <code>metadata.session_id</code> doubles as a continuation fallback (send it together with <code>previous_response_id</code>).</Param>
           <Param name="max_step" type="integer">Per-request override of the agent&apos;s step budget (harness default, else 400).</Param>
           <Param name="timeout_seconds" type="integer">Per-request override of the per-task wall-clock cap (harness default, else 1800).</Param>
+          <Param name="reasoning" type="object">How much the model thinks on this turn: <code>{'{"effort": "low"}'}</code>, one of <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>. Overrides the harness default. A model that lacks the level gets the nearest one it has, and the response&apos;s <code>reasoning</code> field says what was asked and what was applied. Unset leaves the model at its own default.</Param>
         </ParamTable>
         <div className="apidoc-sub">Response (200)</div>
         <CodeBlock lang="json" code={`{
@@ -301,6 +302,7 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
           <Param name="additional_headers" type="array">Header NAMES your product passes per request for app-level auth (see Additional headers above).</Param>
           <Param name="max_step" type="integer">Default agent step budget (default 400).</Param>
           <Param name="timeout_seconds" type="integer">Default per-task wall-clock cap (default 1800).</Param>
+          <Param name="reasoning_effort" type="string">Default thinking level for this harness&apos;s tasks, one of the levels above. <code>GET /v1/bases</code> lists the levels each model has. Unset leaves each model at its own default.</Param>
         </ParamTable>
         <p className="hr-meta">Casing note: request bodies are snake_case (<code>default_model</code>,
           <code> mcp_servers</code>, <code>max_step</code>); responses come back camelCase

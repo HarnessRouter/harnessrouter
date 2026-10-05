@@ -2585,3 +2585,176 @@ columns 5 of 5.
 
 **Not measured.** A Codex turn whose provider stays silent past the relay's wait: the relay ends such a
 call with its reason, as for every other base, and Codex was not driven into that case here.
+
+## How much a model thinks (2026-10-05)
+
+A turn can ask for a thinking level: `reasoning: {"effort": ...}` on a task, `reasoning_effort` on a
+harness, one of none, minimal, low, medium, high, xhigh. This section is what was measured to make
+that true, and it is the source of the table in `runner/reasoning.py`.
+
+**Method.** One question with a short answer, sent with no setting and then once per setting, straight
+at each provider through a connection of hr-test (`scripts/support-matrix/thinking/probe.py`, run as a
+shell command of a turn so no key leaves the instance). Judged by the provider's own usage:
+`reasoning_tokens`, with output tokens and elapsed time where a provider gives no such count. Seven
+routes (Vercel, TokenRouter, OpenRouter, OpenAI, Azure, Google AI Studio, and Anthropic's Messages API
+as TokenRouter passes it through), 66 model ids, three API shapes, about 900 calls. One sample per
+cell: the direction is the finding, not the number.
+
+**What it showed.** No field means the same thing everywhere, and a level a model lacks is refused
+with a 400, not ignored.
+
+`reasoning_effort` on Chat Completions:
+
+| models | Vercel | TokenRouter | OpenRouter | the vendor directly |
+|---|---|---|---|---|
+| gpt-5.2, 5.3-codex, 5.4, 5.4-mini | none, low to xhigh; `minimal` 400 | the same | all six | OpenAI and Azure: none, low to xhigh |
+| gpt-5.5, 5.6 line, 6-luna, 6-sol | all six | all six | all six | none, low to xhigh |
+| gpt-6.1-sol, gpt-6-astra | `none` accepted, not honoured | `none` 400 | `none` 400 | `none` 400 |
+| Claude, 4.5 to 5.5 | all six move it; opus-5.5 ignores `none` | accepted; the usage carries no count | the 5.5 line: `none` 400 | (Messages, below) |
+| Gemini 3 line | only `low` differs; `none` and `minimal` read as MORE | ignored | minimal, low, medium, high; `none` 400 | Google: none to high; `xhigh` 400 |
+| Grok 4.3, 4.5, 4.6 | two tiers; `none` reads as low | minimal to xhigh, in order; `none` 400 | the same; `none` 400 | |
+| DeepSeek v4 flash, v4.1 flash, v4 pro | `none` is off, the rest is on | the same; v4-pro `none` 400 | the same | |
+| Kimi k3 | `none` off; levels | `none` off | `none` off | |
+| Qwen 3.7-max, 3.8-flash | `none` off, the rest on | the same; low and medium 400 against the token cap | the same | |
+| Mistral medium 3.5 | none and high; minimal, low, medium 400 | none and every level | the same | |
+| Step 3.7 flash | minimal to xhigh, in order; `none` reads as more | the same | `none` 400 | |
+| MiniMax m3, Ling 3.0 flash, Nemotron 3.5 lightning, Hunyuan 3 | `none` off, the rest on | | the same | |
+| GLM 5.3, Kimi k2.7-code, Llama, Nemotron 3 super | nothing moved it, or it does not think | | | |
+
+The Responses API (`reasoning.effort`, OpenAI models only): as the first three rows, and `minimal` is
+a 400 on every route for every model tried, so `minimal` is never sent to an OpenAI model.
+
+Gemini needs Google's own setting where the field fails, and each aggregator keeps it under its own
+key. Through Vercel, `providerOptions.google.thinkingConfig` with `thinkingBudget: 0` for off and
+`thinkingLevel` for minimal, low, medium and high: gemini-3.5-flash 1,302 thinking tokens with no
+setting, 0 at a zero budget, about 600 at low, about 1,900 at high. Through TokenRouter the same
+setting under `extra_body.google.thinking_config` moves gemini-3.5-flash (0, 605, 1,636, 2,001) and
+nothing else: 3.6, 3.7, 3.8 flash and the lite models answered to no setting there. Per model: the
+pro model and the 3.7 and 3.8 flash models refuse a zero budget and `minimal` ("only works in
+thinking mode", "Thinking level MINIMAL is not supported"); the lite models do not think unless
+asked, and Google refuses `none` for them, so `none` there sends nothing.
+
+Anthropic's Messages API, read through TokenRouter's pass-through (the API's own refusals came back
+with their request ids):
+
+| model | off | a level |
+|---|---|---|
+| claude-haiku-4.5 | `thinking: disabled` | a budget (`enabled`, `budget_tokens`); adaptive and effort are 400 |
+| claude-sonnet-4.6 | `disabled` | adaptive with `output_config.effort` low, medium, high, max; `xhigh` 400 |
+| claude-opus-4.8 | `disabled` | adaptive with an effort; `enabled` 400 |
+| claude-sonnet-5, claude-opus-5 | `disabled` | adaptive with an effort |
+| claude-sonnet-5.5 | `between_tools`, the API's own word; `disabled` 400 | adaptive with an effort, xhigh and max included |
+| claude-fable-5.1 | cannot be turned off (both spellings 400) | adaptive with an effort |
+
+**The rules that follow from it** (`runner/reasoning.py`):
+
+- A level is sent only where a row above showed it accepted. A model that lacks the level asked for
+  gets the nearest one it has; `none` is given only to a turn that asked for it, and a model that
+  cannot be turned off gets its lowest level instead.
+- A model or a route that was not measured gets nothing sent and the turn's record says
+  `"applied": "default"`. A route is known by its host; a custom endpoint is not measured.
+- A level must never be what fails a call. If the provider answers 400 or 422 to a body the relay
+  wrote a level into, the body goes again as the client wrote it; if that is answered, the level is
+  dropped for that model for the rest of the turn.
+- One place by wire shape: the relay writes the level into Chat Completions, Responses, Messages and
+  Google's own bodies, for every base whose calls pass it. Three bases set it their own way: Claude
+  Code (`CLAUDE_CODE_EFFORT_LEVEL`, and `MAX_THINKING_TOKENS` for off and for the model that takes a
+  budget), Codex (`model_reasoning_effort`, which also holds on OpenAI's own endpoint and Azure's),
+  and the DeepSeek Harness driver, whose own relay calls the same functions.
+- The record: `reasoning: {"effort": asked, "applied": level}` on the response, and the provider's
+  count under `usage.output_tokens_details.reasoning_tokens`. The count is read where the relay reads
+  usage and kept apart from the usage that prices a turn, which is unchanged.
+- A turn and a harness that set no level send what they sent before: no route flag, no field, and
+  the tests compare the bytes.
+
+**Not measured, and said so in the table by absence:** Anthropic's API directly (the instance's key
+was refused that day; its rows come from the pass-through and are taken to hold), Bedrock and Vertex,
+any custom endpoint, and these ids: grok-4.20, grok-build-0.1, the other Qwen and Muse models,
+hunyuan-4-preview, claude-fable-5 (taken to be as fable-5.1). The direct OpenAI and Azure Chat
+Completions cells gave erratic counts for some models at some levels (zero where the Responses API
+gave a normal figure for the same level); the levels are accepted there, and the bases that reach
+those endpoints with OpenAI models speak the Responses API.
+
+**The column, every base** (`scripts/support-matrix/thinking/run-column.py`): one harness per base, the
+same task with no level and at none, low and high, through hr-test's connections (TokenRouter for
+these models), judged from the turn's record and the provider's count of thinking tokens. gpt-5.4
+wherever the base lists it. Run in a side container on the branch's runner, five bases at a time.
+
+| base | model | no level | none | low | high |
+|---|---|---:|---:|---:|---:|
+| codex | gpt-5.4 | 270 | 0 | 248 | 516 |
+| hermes | gpt-5.4 | 63 | 0 | 40 | 516 |
+| opencode | gpt-5.4 | 393 | 0 | 313 | 921 |
+| kilo | gpt-5.4 | 478 | 0 | 215 | 513 |
+| openhands | gpt-5.4 | 677 | 0 | 287 | 650 |
+| pi | gpt-5.4 | 0 | 0 | 230 | 485 |
+| omp | gpt-5.4 | 0 | 0 | 262 | 640 |
+| qwen | gpt-5.4 | 0 | 0 | 276 | 1,019 |
+| cline | gpt-5.4 | 0 | 0 | 298 | 778 |
+| kimi | gpt-5.4 | 0 | 0 | 242 | 666 |
+| minimax | gpt-5.4 | 0 | 0 | 192 | 512 |
+| grok | gpt-5.4 | 0 | 0 | 44 | 100 |
+| aider | gpt-5.4 | 0 | 0 | 313 | 512 |
+| agentzero | gpt-5.4 | 0 | 0 | 314 | 638 |
+| cheetahclaws | gpt-5.4 | 0 | 0 | 402 | 797 |
+| gemini | gemini-3.5-flash | 3,158 | no count | 2,531 | 4,125 |
+| goose | gpt-5.4 | 12 out | 12 out | 302 out | 652 out |
+| dsh | gpt-5.4 | 12 out | 12 out | 321 out | 698 out |
+| claude-code | claude-haiku-4.5 | 7,678 out | 859 out | 2,145 out | 7,757 out |
+
+19 of 19 bases that have a model with levels pass: every level asked is recorded as applied, none
+spends no thinking tokens, low spends fewer than high, and a turn with no level carries no
+`reasoning` on its record. System One has no model with levels and offers none. "out" is output
+tokens, where the turn has no thinking count: goose's and the DeepSeek Harness driver's calls do not
+give the relay one, and Anthropic gives none. On Gemini the provider left the count out of the answer
+that spent none (605 output tokens against 13 at the other levels: the answer written out).
+
+Claude Code's row is the weakest judge in the table and is read that way. Anthropic gives no thinking
+count, the level reaches the model as a budget (a ceiling, not a target) and the answer is written
+out at length, so one sample per level can cross: on Anthropic's own endpoint, three samples per level
+gave 791, 810 and 622 output tokens at none, 2,402, 1,700 and 2,128 at low, and 5,195, 2,838 and
+1,863 at high. Off is unmistakable; low below high holds on the sums (6,230 against 9,896) and not on
+every pair. The row above is the first run, through TokenRouter.
+
+**The same build, checked through the console and the API** (the candidate's image with the branch's
+runner and gateway, the day's last code):
+
+- The Thinking control on a harness's settings page, at 1440, 1024, 768 and 390 wide: in view, no
+  sideways scroll. Its options are the model's own (gpt-5.4: Model default, Off, Low, Medium, High,
+  Extra high; gpt-6.1-sol: the same without Off). Saved, reopened, still High. A level kept from
+  another model stays selected and the form says its tasks get the nearest one.
+- A task on that harness with no level of its own: `{"effort": "high", "applied": "high"}`, 15
+  thinking tokens. The same task asking for `none` itself: applied none. A value that is not a level:
+  400 "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh".
+- hermes with gpt-5.4, asked to write a 9,000 word file as its first action: completed after 619 s
+  with 13,340 output tokens, where 0.29.4 stopped it at 93 s.
+- CheetahClaws: 4 of 4 plain turns carry their usage.
+- A task sent with `backend: "claude-code"` completes, as with `backend: "claude"`.
+
+What "no level" means differs by base on the same model, which the column shows for the first time:
+gpt-5.4 does not think unless asked, and eleven bases leave it so; Codex asks for medium itself (its
+own config default), OpenHands asks for high for every model, and hermes, opencode and kilo ask for
+something of their own. A level set on the harness or the turn replaces all of these.
+
+**Three defects the column and the hosted service found, fixed with it:**
+
+- *A turn's record read "default" for a level that had been applied.* pi and omp keep their relay
+  placeholder in a file, not the environment, and the record was read through the environment: pi with
+  gpt-5.4 spent 12, 252 and 441 output tokens at none, low and high and recorded default three times.
+  A turn now keeps the routes it registered and reads its record off them.
+- *CheetahClaws turns had no usage at all.* The relay added a streamed call's usage to the route when
+  the stream ended, which is when the provider closes it, not when its last event passes; a client
+  that is done at `[DONE]` read the route before its own call was on it. On the published 0.29.4,
+  8 of 8 plain CheetahClaws turns came back with no usage; with each chunk's figures folded in before
+  the chunk is forwarded, 0 of 6. When this began was not measured (the relay has forwarded streams
+  as they arrive since 0.29.1, which is the likely start).
+- *hermes stopped a turn whose first answer was long.* hermes writes a message into its database only
+  when it is complete, so a first answer that streamed for more than 90 s looked like a hung call and
+  was stopped (found on the hosted service; on 0.29.4 here, hermes with gpt-5.4 asked to write a
+  9,000 word file as its first action ended `incomplete` after 93 s with nothing written). The guard
+  now also asks when a provider last sent an event on the turn's route; the CLI that hangs after its
+  provider answered is still caught.
+
+Also from the hosted service: `backend` on POST /v1/responses took a base's id ("claude-code") as the
+backend, matched no model, and refused every model as having no provider there. It names the base's
+backend now.

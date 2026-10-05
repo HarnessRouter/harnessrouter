@@ -112,7 +112,7 @@ def test_hermes_vision_auth_is_its_own_route(tmp_path, monkeypatch):
     import yaml
     env = {"HOME": str(tmp_path)}
     monkeypatch.setattr(server, "_hermes_relay_route",
-                        lambda base, key: ("http://127.0.0.1:1/v1", "hr-relay-placeholder"))
+                        lambda base, key, **kw: ("http://127.0.0.1:1/v1", "hr-relay-placeholder"))
     server._hermes_prepare_env("openai-api", server.Auth(api_key="k-chat", base_url="https://x/v1"),
                                str(tmp_path), env, model="qwen/qwen3.8-max",
                                vision_auth={"provider": "openai-api", "model": "gpt-5.4-mini",

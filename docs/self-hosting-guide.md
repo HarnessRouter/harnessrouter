@@ -975,7 +975,7 @@ To add a plugin to a harness that already exists, remember that `PUT /v1/harness
 the whole mutable configuration: any field you leave out is cleared, and an omitted `mcp_servers`
 also removes the hosted tools behind it. Read the harness first, then send back its current
 `system_prompt`, `default_model`, `mcp_servers`, `skills`, `disabled_tools`, `additional_headers`,
-`max_step` and `timeout_seconds` (the write body uses these snake_case names; the record you read
+`max_step`, `timeout_seconds` and `reasoning_effort` (the write body uses these snake_case names; the record you read
 uses camelCase) with the new package appended to `plugins`. Installed plugins round-trip as
 `{name, enabled, blob}`, so send those back unchanged and add the new one beside them.
 
@@ -1043,6 +1043,33 @@ A task you would rather not hold a connection for takes `"background": true`: th
 back at once with the task's id and `status: in_progress`, and `GET /v1/responses/{id}` reports
 it until it ends. Attached files land in the task's working directory under the name you give;
 a relative path in `filename` (`inputs/report.pdf`) puts the file in that folder.
+
+**How much the model thinks.** A task can say it, with the Responses API's own field:
+
+```bash
+curl -sS "$HR/api/harness/v1/responses" -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -d '{"input": "...", "metadata": {"harness_id": "hrn_..."}, "reasoning": {"effort": "low"}}'
+```
+
+The levels are `none`, `minimal`, `low`, `medium`, `high` and `xhigh`. A harness can keep a default
+for its tasks (`reasoning_effort` on the harness, the Thinking control on its settings page) and a
+task's own level wins. Models do not all have the same levels: `GET /v1/bases` lists, per base and
+model, the ones each has (`models[].reasoning`), and a model asked for a level it lacks gets the
+nearest one it has. A model that cannot be turned off gets its lowest level for `none`; a task
+that asked for some thinking is never given none. The response says what happened:
+
+```json
+"reasoning": {"effort": "minimal", "applied": "low"},
+"usage": {"output_tokens": 262, "output_tokens_details": {"reasoning_tokens": 248}}
+```
+
+`applied` is `"default"` when nothing could be set: the model has no measured level on the
+connection that served it, or the provider refused the level, in which case the call was made
+again without it rather than failed. `reasoning_tokens` is the provider's own count and is absent
+where the provider gives none. A task and a harness that set no level send what they sent before
+levels existed. Which setting moves which model on which provider was measured, not assumed; the
+table and the method are in [support-matrix-notes.md](support-matrix-notes.md), "How much a model
+thinks".
 
 <details>
 <summary>The rest of the surface</summary>

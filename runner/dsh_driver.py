@@ -29,7 +29,12 @@ import threading
 import time
 import urllib.request
 
+import reasoning   # how much a model thinks on a turn; the runner's relay applies the same functions
+
 UPSTREAM_BASE = ""   # set in main() from HR_DSH_BASE_URL, then scrubbed from the env
+EFFORT = ""          # the thinking level the turn asked for (HR_DSH_REASONING_EFFORT), "" for none
+EFFORT_ROUTE = ""    # the provider the gateway named for the connection (HR_DSH_REASONING_ROUTE), "" = read the base
+_effort_refused: set = set()   # models whose provider refused the level on this turn
 
 
 def _upstream_wait() -> float:
@@ -313,15 +318,34 @@ class _Relay(http.server.BaseHTTPRequestHandler):
                 _model = ""
             if "gemini" in _model.lower():
                 body = _with_gemini_schemas(body)   # TokenRouter's Gemini channels forward tool schemas to Google's validator as sent
+        # The turn's thinking level, as the runner's relay writes it (runner/reasoning.py): last of
+        # the body's changes, and never what fails the call.
+        plain, effort_model, effort_back = None, "", False
+        if EFFORT and reasoning.shape_of(tail):
+            try:
+                effort_model = str((json.loads(body) or {}).get("model") or "")
+            except (ValueError, AttributeError):
+                effort_model = ""
+            if effort_model not in _effort_refused:
+                leveled, applied = reasoning.apply(body, reasoning.shape_of(tail), UPSTREAM_BASE, EFFORT,
+                                                   route=EFFORT_ROUTE)
+                if applied:
+                    plain, body = body, leveled
         resp = None
         for attempt in (0, 1, 2):
             req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
                                          data=body, method="POST", headers=headers)
             try:
                 resp = urllib.request.urlopen(req, timeout=UPSTREAM_WAIT_S)
+                if effort_back:
+                    _effort_refused.add(effort_model)   # answered without the level: the level was the cause
                 break
             except urllib.error.HTTPError as e:
                 data = e.read()
+                if plain is not None and attempt < 2 and e.code in (400, 422):
+                    body, plain, effort_back = plain, None, True
+                    continue
+                effort_back = False
                 stripped = _drop_reasoning_effort(body)
                 if attempt < 2 and b"reasoning_effort" in data and stripped != body:
                     _strip_reasoning_effort = True
@@ -519,10 +543,12 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
 
 
 def main() -> int:
-    global UPSTREAM_BASE, UPSTREAM_KEY
+    global UPSTREAM_BASE, UPSTREAM_KEY, EFFORT, EFFORT_ROUTE
     job = json.loads(sys.argv[1])
     UPSTREAM_BASE = os.environ.pop("HR_DSH_BASE_URL", "")
     UPSTREAM_KEY = os.environ.pop("HR_DSH_API_KEY", "")
+    EFFORT = os.environ.pop("HR_DSH_REASONING_EFFORT", "")
+    EFFORT_ROUTE = os.environ.pop("HR_DSH_REASONING_ROUTE", "")
     home = pathlib.Path(os.environ.get("HOME") or ".")
     cwd = job.get("cwd") or os.getcwd()
 
