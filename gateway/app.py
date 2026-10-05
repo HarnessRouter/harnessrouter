@@ -13846,6 +13846,53 @@ _M365_GUIDE = (
     "identity. These tools read; they write nothing.")
 
 
+def _plug_tool_names(plug: str) -> str:
+    """Every tool of one plug as the agent sees it on the `plugs` server (<plug>_<tool>)."""
+    return ", ".join(f"{plug}_{t['name']}" for t in plugs_plane._TOOLS.get(plug, []))
+
+
+# GitHub, Vercel and InsForge had no section, and an agent that is told nothing looks where these
+# vendors usually live: a company's engineer (codex, gpt-5.4, 2026-10-04) searched the shell for
+# VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID, ran `npx vercel ls`, found nothing and stopped
+# with all three plugs connected. Codex keeps MCP tools behind its tool search, the Browser case
+# exactly. So each section names the tools, says how the usual job is done with them, and says in
+# words that the environment holds no token, which is the point: the credential never reaches a sandbox.
+_PLUG_GUIDES: dict[str, str] = {
+    "github": (
+        "## GitHub\n"
+        "This task works on the company's GitHub repository through the `plugs` server, with the "
+        "company's own access. Its tools: {tools}. Read files, branch, commit, open, review and merge "
+        "pull requests and run workflows with them; github_push_files commits several files to a "
+        "branch at once. There is no GitHub token in the environment, and `git push` and the `gh` "
+        "CLI are not signed in: a change reaches GitHub only through these tools. If they are not "
+        "in your tool list, look them up (they may be deferred) before deciding the repository is "
+        "out of reach."),
+    "vercel": (
+        "## Vercel\n"
+        "This task deploys the company's Vercel project through the `plugs` server. Its tools: "
+        "{tools}. To deploy: put the code in the linked GitHub repository, then call "
+        "vercel_deploy_from_repo (name a ref for a preview; production true for production) and "
+        "report the url it returns; vercel_get_deployment and vercel_get_deployment_logs say how a "
+        "deployment went, vercel_set_env sets an environment variable. There is no VERCEL_TOKEN, "
+        "project id or team id in the environment and the `vercel` CLI is not signed in: do not "
+        "look for them, and do not report that deploying is impossible because they are missing. "
+        "If these tools are not in your tool list, look them up (they may be deferred) first."),
+    "insforge": (
+        "## InsForge\n"
+        "This task uses the company's InsForge backend (database, sign-in users, storage, "
+        "functions) through the `plugs` server. Its tools: {tools}. insforge_get_project gives the "
+        "backend's url and its public anon key for the app's own code; tables and rows are created, "
+        "read and changed with the table tools, and insforge_request reaches the backend's other "
+        "routes under /api/. Do not guess a route: GET /api/metadata describes the whole backend "
+        "(its tables, auth settings, storage and functions); for sign-in users, POST /api/auth/users "
+        "registers one, POST /api/auth/sessions signs one in (a backend may ask for a verified email "
+        "first) and GET /api/auth/users lists them. A route that answers the backend's not-found "
+        "page does not exist: do not try other spellings of it. There is no InsForge key in the "
+        "environment. If these tools are not in your tool list, look them up (they may be deferred) "
+        "first."),
+}
+
+
 def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
     """The harness's instructions plus a section for each included plugin that needs one."""
     parts = [agent_doc.strip()] if agent_doc and agent_doc.strip() else []
@@ -13853,6 +13900,9 @@ def _agent_doc_with_plugs(agent_doc: str, plug_types: list[str]) -> str:
         parts.append(_BROWSER_GUIDE)
     if "microsoft365" in plug_types:
         parts.append(_M365_GUIDE)
+    for plug in ("github", "vercel", "insforge"):
+        if plug in plug_types:
+            parts.append(_PLUG_GUIDES[plug].format(tools=_plug_tool_names(plug)))
     return "\n\n".join(parts)
 
 

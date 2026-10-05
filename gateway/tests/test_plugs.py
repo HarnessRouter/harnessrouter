@@ -120,6 +120,11 @@ class Vendor:
                 return httpx.Response(201, json=json.loads(r.content))
             if path == "/api/health":
                 return httpx.Response(200, json={"status": "ok"})
+            if path == "/api/database/tables/orders/schema" and r.method == "GET":
+                return httpx.Response(200, json={"tableName": "orders", "columns": [{"columnName": "status", "type": "string"}]})
+            if path.startswith("/api/database/tables/") and r.method == "GET":
+                # what the real backend answers on a path it does not route: its not-found page
+                return httpx.Response(404, text="<!DOCTYPE html>\n<html lang=\"en\"><head><title>Not found</title></head></html>")
             return httpx.Response(404, text=f"no mock for {path}")
         return httpx.Response(500, text=f"unexpected host {host}")
 
@@ -435,6 +440,11 @@ def test_push_files_deploy_and_insert_drive_the_vendors_as_documented(world):
     out = json.loads(asyncio.run(plugs_plane.call("insforge", "insert_rows", {"table": "orders", "rows": [{"status": "new"}]},
                                                   {"api_key": INF_KEY}, _record("insforge")["config"])))
     assert out == [{"status": "new"}]
+    # a table's columns live at the vendor's /schema route; the path without it is its not-found page
+    out = json.loads(asyncio.run(plugs_plane.call("insforge", "describe_table", {"table": "orders"}, {"api_key": INF_KEY},
+                                                  _record("insforge")["config"])))
+    assert out["columns"] == [{"columnName": "status", "type": "string"}]
+    assert ven.calls[-1].url.path == "/api/database/tables/orders/schema"
     with pytest.raises(plugs_plane.PlugToolError):
         asyncio.run(plugs_plane.call("insforge", "delete_rows", {"table": "orders", "filters": {}}, {"api_key": INF_KEY},
                                      _record("insforge")["config"]))

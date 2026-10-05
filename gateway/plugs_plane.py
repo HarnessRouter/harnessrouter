@@ -1084,7 +1084,11 @@ async def _(c, f, cfg, a):
 
 @_tool("insforge", "describe_table", "read", "Columns of one table.", _obj({"table": _s("Table name")}, ("table",)))
 async def _(c, f, cfg, a):
-    return await _inf(c, f, cfg, "GET", f"/api/database/tables/{_need(a, 'table')}")
+    # The vendor's route for a table's columns ends in /schema (InsForge's own router: GET
+    # /:tableName/schema; the bare /:tableName is routed for DELETE alone). Without it the backend
+    # answers its not-found page: every call of this tool by a real agent failed, eight of eight on
+    # 2026-10-04, and the mock it was written against had no such path at all, so nothing said so.
+    return await _inf(c, f, cfg, "GET", f"/api/database/tables/{_need(a, 'table')}/schema")
 
 
 @_tool("insforge", "query_rows", "read", "Read rows of a table with optional column selection, filters, order and limit.",
