@@ -88,6 +88,21 @@ def test_an_agent_is_granted_like_a_person_and_the_harness_keeps_two_settings(cl
     r = client.put(url, headers=ADA, json={"default_memory_id": world["notes"]})
     assert r.status_code == 200 and r.json()["default_memory_id"] == world["notes"]
     assert [m["default"] for m in r.json()["data"]] == [False, True]
+    # the two settings are the harness's own: a save of the harness that leaves the memories
+    # server out of its list of servers loses neither them nor the agent's tools
+    h = client.get(f"/v1/harnesses/{hid}", headers=ADA).json()
+    saved = client.put(f"/v1/harnesses/{hid}", headers=ADA, json={"name": "Helper renamed", "base": "claude-code", "mcp_servers": []})
+    assert saved.status_code == 200, saved.text
+    after = client.get(url, headers=ADA).json()
+    assert after["default_memory_id"] == world["notes"] and [m["name"] for m in after["data"]] == ["Support", "Agent notes"]
+    assert asyncio.run(gw._harness_memories(hid, ORG, asyncio.run(gw._harness_vertex(hid)))), h
+    # a default the agent may no longer write stops being reported as one
+    g = client.get(f"/v1/memories/{world['notes']}/grants", headers=ADA).json()["data"]
+    mine = next(x for x in g if x["principal"] == f"member:{hid}" and not x["inherited"])
+    _grant(client, world["notes"], hid, ["read"])
+    assert client.get(url, headers=ADA).json()["default_memory_id"] is None
+    _grant(client, world["notes"], hid, ["read", "write"])
+    assert client.get(url, headers=ADA).json()["default_memory_id"] == world["notes"] and mine
     # there is no attach list and no narrowing: an old-shaped body sets nothing
     client.put(url, headers=ADA, json={"memories": [{"memory_id": world["company"], "access": "write"}]})
     assert [m["name"] for m in client.get(url, headers=ADA).json()["data"]] == ["Support", "Agent notes"]

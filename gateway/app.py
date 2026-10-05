@@ -14436,6 +14436,13 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         config.setdefault("deny_domains", [])
         config["proxy"] = False
     refs = {str(r.get("field")): str(r.get("ref")) for r in ((prev or {}).get("key_refs") or []) if isinstance(r, dict)}
+    if form.get("kind") == "memory" and str((body.secrets or {}).get("api_key") or "").strip():
+        # A memory engine's key is tried at the engine BEFORE it is kept. One it refuses is refused
+        # here, with the engine's reason, and whatever key was working stays: the memories on it
+        # must not go dark because someone pasted a wrong key.
+        refusal = await _MEMORY_CHECKS[plug_type](str(body.secrets["api_key"]).strip())
+        if refusal:
+            raise uhp_error(422, "memory_invalid", refusal, "secrets.api_key")
     for field, value in (body.secrets or {}).items():
         if field not in form["secrets"]:
             raise uhp_error(400, "invalid_input", f"{plug_type} takes no secret {field!r}.", "secrets")
@@ -14449,12 +14456,6 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
     attention = ""
     if plug_type == plugs_plane.MICROSOFT365 and body.enabled and not missing:
         status, attention, config = await _m365_connect(org, config, refs, body.secrets or {})
-    if form.get("kind") == "memory" and body.enabled and not missing and (body.secrets or {}).get("api_key"):
-        # The credential is tried at the provider before the record says connected: a key that is
-        # refused there would otherwise be found out by the first agent that tried to remember.
-        attention = await _MEMORY_CHECKS[plug_type](str(body.secrets["api_key"]).strip())
-        if attention:
-            status = "needs_auth"
     version = int((prev or {}).get("version") or 0) + 1
     now = int(time.time() * 1000)
     await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plug_type),
@@ -16318,11 +16319,12 @@ async def _memories_settings(hid: str, org: str, hv: dict | None) -> dict | None
     if not hid or not hv:
         return None
     try:
-        _, rec = await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(hv),
-                                       entry_id=_MEMORIES_ENTRY["id"], check_enabled=True)
+        await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(hv), entry_id=_MEMORIES_ENTRY["id"], check_enabled=True)
     except HTTPException:
         return None
-    return rec
+    # The two settings are the harness's own properties. They are not in the server's entry, so a
+    # save of the harness that leaves that entry out cannot lose them.
+    return {"default_memory_id": str(hv.get("memory_default") or ""), "observe": str(hv.get("memory_observe") or "1") != "0"}
 
 
 async def _harness_memories(hid: str, org: str, hv: dict | None, sid: str = "") -> list[dict]:
@@ -16378,16 +16380,20 @@ async def _memories_ensure(org: str, hid: str, v: dict, patch: dict | None = Non
     prev = next((x for x in cur if str(x.get("id") or "") == _MEMORIES_ENTRY["id"]), None)
     prev_key = _vault_key((prev or {}).get("auth"))
     key = prev_key if prev_key.startswith(_HOSTED_SECRET_PREFIX) else _hosted_secret_key(hid, _MEMORIES_ENTRY["id"])
-    old = await _memories_settings(hid, org, v) or {}
-    rec = {"server": _MEMORIES_SERVER, "harness": hid,
-           "default_memory_id": str(old.get("default_memory_id") or ""), "observe": old.get("observe", True) is not False,
-           **(patch or {}), "updated_at": int(time.time() * 1000)}
-    await _hosted_put_record(org, key, rec, secret=False, param="memories")
+    await _hosted_put_record(org, key, {"server": _MEMORIES_SERVER, "harness": hid, "updated_at": int(time.time() * 1000)},
+                             secret=False, param="memories")
     if prev is None:
         await _mcp_write(hid, cur + [{"id": _MEMORIES_ENTRY["id"], "name": _MEMORIES_ENTRY["name"],
                                       "url": origins[0] + _HOSTED_MCP_PREFIX + _MEMORIES_SERVER, "transport": "http",
                                       "auth": f"vault:{key}", "enabled": True}])
-    return rec
+    props = {}
+    if "default_memory_id" in (patch or {}):
+        props["memory_default"] = str(patch["default_memory_id"] or "")
+    if "observe" in (patch or {}):
+        props["memory_observe"] = "1" if patch["observe"] else "0"
+    if props:
+        await _vg_upsert("Harness", hid, props)
+    return {}
 
 
 async def _memories_on_grant(org: str, principal: str) -> None:
@@ -16401,8 +16407,13 @@ async def _memories_on_grant(org: str, principal: str) -> None:
 
 
 async def _harness_memories_out(hid: str, org: str, v: dict) -> dict:
-    rec = await _memories_settings(hid, org, v) or {}
-    who, default = _agent(hid), str(rec.get("default_memory_id") or "")
+    who = _agent(hid)
+    default = str(v.get("memory_default") or "")
+    if default:                      # a default the agent may no longer write is no default: said, not kept up
+        m = await memory_plane._load(org, default)
+        if not m or "write" not in await memory_plane.effective(org, m, [who]):
+            default = ""
+    rec = {"observe": str(v.get("memory_observe") or "1") != "0"}
     data = [{**memory_plane._brief(await memory_plane.out(org, m, [who], privs)), "privileges": privs,
              "default": str(m["id"]) == default} for m, privs in await memory_plane.granted(org, who)]
     return {"object": "harness.memories", "principal": who, "default_memory_id": default or None,
@@ -18786,6 +18797,10 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     # AFTER the write: see update_harness.
     await _hosted_scrub_removed(org, hid, _mcp_list(v), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
+    # An agent that holds memories keeps the tools to reach them, whatever list of servers a
+    # client saved: its access is its grants, and a harness save is not a revocation.
+    if await memory_plane.granted(org, _agent(hid)):
+        await _memories_ensure(org, hid, await _vertex_get(hid) or v)
     return _harness_out(await _vertex_get(hid) or {"id": hid})
 
 
