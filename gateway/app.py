@@ -5879,7 +5879,11 @@ def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
 
 def _route_backend(model: str | None, explicit: str | None) -> str:
     if explicit:
-        return explicit.lower()
+        # A base's id as GET /v1/bases lists it ("claude-code") or its backend ("claude"): the id
+        # was taken as the backend, matched no model, and every model was refused as having no
+        # provider there (found on the hosted service, 2026-10-05).
+        e = explicit.strip().lower()
+        return str((_BASE_CATALOG.get(e) or {}).get("backend") or e)
     m = (model or "").lower()
     if "hermes" in m:
         return "hermes"

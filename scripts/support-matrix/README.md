@@ -79,6 +79,25 @@ the harness's Browser section in the agent's instructions file is what the agent
 The table (`--md`) is the Browser section of docs/support-matrix.md; the run's findings go to
 docs/support-matrix-notes.md like every other column's.
 
+## The thinking column
+
+`thinking/run-column.py` asks whether a level a turn asks for changes how much the model thinks, on
+every base: one harness per base on a model that has levels, the same task with no level and at
+`none`, `low` and `high`, judged from the turn's own record (`reasoning.applied`) and the provider's
+count of thinking tokens (`usage.output_tokens_details.reasoning_tokens`), with output tokens
+standing in where a provider gives no count. What the agent says about itself is not read.
+
+    python3 thinking/run-column.py --base-url https://<instance>/api/harness --api-key "$KEY" \
+        --out thinking.json                           # every base, its first model with levels
+    python3 thinking/run-column.py ... --bases codex,pi --model gpt-5.4 --repeat 2
+
+`thinking/probe.py` is how the levels in runner/reasoning.py were found: one question at every
+level, and at each provider's own switches, straight at a provider's API, reading its usage. Run it
+again when a model is added; a level goes into the table only where it was seen to be accepted.
+
+    THINKING_PROBE_BASE=https://openrouter.ai/api/v1 THINKING_PROBE_KEY=... \
+        python3 thinking/probe.py chat:openai/gpt-5.4 responses:openai/gpt-5.4 messages:anthropic/claude-haiku-4.5
+
 ## Environments column
 
 `python3 environments/column.py --base-url ... --api-key ... --environment henv_...` runs three tasks per base (pip, npm, apt) on one built environment and judges each by the trace (no install), the answer (the package's path under the environment) and the session record. See docs/support-matrix-notes.md.

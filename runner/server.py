@@ -4700,6 +4700,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     line = line.strip()
                     if line and not line.startswith(b":"):
                         last_event = time.monotonic()     # an event's line; a comment is not one
+                        flags["last_data"] = time.time()  # ...and the route's own note of it (_hermes_startup_hung)
                     call_usage.update(_usage_in_sse_line(line))
                     seen_thinking = _thinking_in_sse_line(line)
                     if seen_thinking is not None:
@@ -9261,7 +9262,30 @@ _HERMES_POLL_S = 0.8
 #
 # A tool call that legitimately runs for minutes is NOT affected: hermes writes the assistant
 # message carrying the tool call before executing it, so output exists and the guard is disarmed.
+#
+# A first answer that is LONG is not affected either, since 2026-10-05: hermes writes a message
+# into its database only when the message is complete, so an answer that streams for more than the
+# limit looked exactly like a hung call and was stopped mid-stream (found on the hosted service:
+# gpt-6-luna and gpt-5.4 asked to write an 18,000 word file as their first step, both stopped at
+# 90 s; the same answers completed after 293 s and 676 s when a tool call came first). The relay
+# sees that call's events as they pass, so the guard also asks when a provider last sent one on any
+# of the turn's routes. The CLI that hangs AFTER its provider answered is still caught: the last
+# event is then older than the limit.
 _HERMES_STARTUP_TIMEOUT_S = float(os.environ.get("HERMES_STARTUP_TIMEOUT_S", "90"))
+
+
+def _hermes_startup_hung(produced: bool, started: float, last_data: float, now: float) -> bool:
+    """Whether a hermes turn that has written no message yet is hung, not merely slow to finish its
+    first one: nothing produced within the limit, and no provider event within it either."""
+    return (not produced and now - started > _HERMES_STARTUP_TIMEOUT_S
+            and now - last_data > _HERMES_STARTUP_TIMEOUT_S)
+
+
+def _routes_last_data(rec: dict) -> float:
+    """When a provider last sent an event on any route of this turn; 0.0 when none has, or the turn
+    has no route (its calls do not pass the relay)."""
+    return max((float(f.get("last_data") or 0.0) for f in rec.get("routes") or [] if isinstance(f, dict)),
+               default=0.0)
 
 
 def _hermes_db_ro(db_path: str) -> sqlite3.Connection | None:
@@ -9457,7 +9481,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
             # Fires whether the session row never appeared or appeared and then produced nothing;
             # both mean the provider call hung before any output, and both used to be survivable
             # only by the six-hour cap.
-            if not produced and (time.time() - t0) > _HERMES_STARTUP_TIMEOUT_S:
+            if _hermes_startup_hung(produced, t0, _routes_last_data(rec), time.time()):
                 rec["capped"] = True
                 rec["startup_timeout"] = True
                 _kill_proc_tree(proc)
@@ -10213,6 +10237,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
                            "backend": backend, "model": model, "started": time.time(),
                            "reasoning": turn_thinking,
+                           # the flags of every route the turn registered (see _turn_route)
+                           "routes": turn_thinking["routes"],
                            # the values the record may not carry (see get_turn)
                            "secrets": _turn_secrets(_caller_env(req.env), req.env_secret)}
         if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
