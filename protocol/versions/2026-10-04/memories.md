@@ -508,7 +508,7 @@ draws them or an agent that asks what something is connected to.
 
 | Field | Meaning |
 |---|---|
-| `around` | A record to start from. Left out, the start is every record of this memory |
+| `around` | A record to start from. Left out, the start is every record of this memory and of what is below it that the caller may read: the scope a search has |
 | `hops` | How many references away to go, in either direction: `0` to `3`, default `1` |
 | `types` | Return only nodes of these types |
 | `limit` | The most nodes to return |
