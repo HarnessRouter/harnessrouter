@@ -112,8 +112,8 @@ may act, and a record's `written_by` names who did.
 **A person and an agent are the same kind.** Both are members, granted the same way, checked the
 same way, and able to belong to the same groups. Which of the two a member is, is a property of
 the member, `type`: `human` or `agent`. It is carried for a reader who wants to know, and no rule
-of this chapter depends on it. An agent belongs to a group when someone adds it, as a person does;
-a server MUST NOT place an agent in a group on its own.
+of this chapter depends on it. A server treats an agent's membership of a group exactly as it treats a person's: whatever puts a
+new person in a group puts a new agent there, and nothing else does.
 
 A kind of a server's own is `x.`-prefixed (`x.team`). A server MUST NOT use another unprefixed
 kind, and refuses a grant that names one.
@@ -211,6 +211,7 @@ The core types every server understands:
 | `note` | A document an agent or a person wrote and maintains |
 | `procedure` | A how-to with the situation it applies to |
 | `link` | A pointer to something kept elsewhere: an address and a description, no content of its own |
+| `entity` | Something records are about: a person, a company, a product, a place. Its content is its name and what is known of it in a line or two |
 
 Any other type is an extension ([§8](#8-types)). A server MUST carry a record of a type it does not
 understand unchanged, and MUST NOT refuse a read because of it.
@@ -225,6 +226,32 @@ memory, or with the same provider.
   else.
 - Writing a reference does not require `read` on its target. A record promoted from a private
   memory into a shared one keeps its source, and only those who may read the source can follow it.
+
+**Records and references are the graph.** There is no second structure for entities and
+relationships: a record is a node, and a reference is an edge from the record that holds it to the
+record it names. `rel` says what the edge means. Five names have a defined meaning; any other is
+carried unchanged.
+
+| `rel` | From | To | Meaning |
+|---|---|---|---|
+| `derived_from` | any record | the record it came from | Provenance: this was concluded from that |
+| `part_of` | any record | the record it belongs to | Structure: a section of a document, a turn of a conversation |
+| `about` | any record | an `entity` | This record concerns that entity |
+| `subject` | a `fact` | an `entity` | Who or what the fact says something of |
+| `object` | a `fact` | an `entity` | Who or what it relates the subject to |
+
+A relationship between two entities that has something to say is therefore a **`fact`** with a
+`subject` and an `object`: "Dana is head of procurement at Quillon Freight" is a fact whose subject
+is the entity Dana and whose object is the entity Quillon Freight. Being a record, it has what
+every record has: a writer, a time it was true, a history, a way to be corrected and forgotten, and
+its own `derived_from` to the conversation it came from. A client MAY draw such a fact as one line
+between its two entities, labelled with the fact's text or its `attributes.predicate`. A
+relationship with nothing to say, such as a section belonging to its document, is a bare reference
+and needs no record of its own.
+
+A provider keeps the entities and relationships it has and no more
+([§10.2](#102-the-capability-document)). One that keeps none still has a graph: its records and
+the references between them.
 
 ### 4.3 Content
 
@@ -276,6 +303,7 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
 | `GET /v1/memories/{id}/jobs/{job}` | What an `observe` that answered `202` has written since |
 | `POST /v1/memories/{id}/records` | **remember**: write one record as stated |
 | `POST /v1/memories/{id}/recall` | **recall**: search this memory and what is below it ([§6](#6-recall)) |
+| `POST /v1/memories/{id}/graph` | **graph**: records as nodes and their references as edges, around one record or for the whole memory ([§6.6](#66-the-graph)) |
 | `GET /v1/memories/{id}/records` | List the records, paginated; accepts `type`, `include` and `as_of` |
 | `GET /v1/memories/{id}/records/{rid}` | One record; accepts `as_of` |
 | `GET /v1/memories/{id}/records/{rid}/history` | **history**: every version of a record, oldest first, each with its writer and time |
@@ -461,6 +489,55 @@ out the condition that confines it, so the confinement cannot be in the statemen
   from the caller, and stamps `written_by` as on any other write.
 - The server MAY bound a free query's time and result size and reports a bound it applied in
   `degraded`.
+
+### 6.6 The graph
+
+One read returns records and the references between them as nodes and edges, for a client that
+draws them or an agent that asks what something is connected to.
+
+```json
+{ "around": "hrec_dana…", "hops": 2, "types": ["entity", "fact"], "limit": 200 }
+```
+
+| Field | Meaning |
+|---|---|
+| `around` | A record to start from. Left out, the start is every record of this memory |
+| `hops` | How many references away to go, in either direction: `0` to `3`, default `1` |
+| `types` | Return only nodes of these types |
+| `limit` | The most nodes to return |
+
+```json
+{
+  "object": "memory.graph",
+  "nodes": [
+    { "record": { "id": "hrec_dana…", "type": "entity", "content": [ … ] },
+      "memory": { "id": "hmem_55d1…", "name": "Acme" } },
+    { "record": { "id": "hrec_job…", "type": "fact", "content": [ … ] },
+      "memory": { "id": "hmem_55d1…", "name": "Acme" } }
+  ],
+  "edges": [
+    { "from": { "memory_id": "hmem_55d1…", "record_id": "hrec_job…" },
+      "to":   { "memory_id": "hmem_55d1…", "record_id": "hrec_dana…" },
+      "rel": "subject", "available": true },
+    { "from": { "memory_id": "hmem_55d1…", "record_id": "hrec_job…" },
+      "to":   { "memory_id": "hmem_9f02…", "record_id": "hrec_77a1…" },
+      "available": false }
+  ],
+  "truncated": false,
+  "degraded": []
+}
+```
+
+- A node is a record as any read returns it, with the memory it is in. An edge is a reference:
+  `from` the record that holds it, `to` the record it names.
+- Records are looked for in this memory and in what is below it that the caller may read, as a
+  search does. An edge may lead into any memory. Its target is a node only when the caller may
+  read it; otherwise the edge is returned with `"available": false` and without its `rel`, and the
+  target is not a node. This is the rule of [§4.2](#42-references), unchanged.
+- `truncated` is `true` when there were more nodes than `limit`. `degraded` says what was cut
+  short, as a search's does.
+- The graph is the same for every provider because it is made of what every provider has. What
+  differs is how much is in it.
 
 ## 7. Files
 
@@ -649,6 +726,7 @@ GET /v1/memories/providers
   "queries": { "named": true,
                "free": { "languages": ["cypher"], "write": false } },
   "types": true,
+  "graph": { "entities": "derived" },
   "content": { "media": ["text/*", "image/*"], "bytes": "referenced",
                "describes": ["image/*"] }
 } ] }
@@ -660,6 +738,10 @@ GET /v1/memories/providers
   reported as `emulated`, never as `native`.
 - **A gap is declared.** A provider without full-text reports `signals` without `text`, and a
   request that names it is answered with `degraded`.
+- **`graph.entities`** says where a memory's entities come from: `derived` (the provider finds
+  them in what it is given and relates them itself), `stated` (it keeps the ones a writer states
+  and finds none of its own) or `none` (it keeps no record of that type). The graph read
+  ([§6.6](#66-the-graph)) works on all three.
 
 ### 10.3 What an adapter owes
 
@@ -708,8 +790,10 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
   reach either way is every memory it holds a privilege on, no more, checked by the server
   on every call and for every memory a search covers. An agent that should see one branch and
   nothing above it is granted that branch and nothing above it.
-- **An agent is granted on purpose.** It starts with nothing, and joins a group only when someone
-  adds it. Equal standing with a person does not mean an agent inherits what people share.
+- **An agent stands where a person stands.** It reaches what it was granted and what the groups it
+  belongs to were granted, and it joins a group by the same rule a person does. A server that puts
+  every new person in a group puts every new agent there too, and should say so where an agent is
+  created: that agent can read what the group was given from its first turn.
 - **Provenance is stamped, not supplied.** `written_by` and `written_at` come from the authenticated
   caller and the server's clock.
 - **Unknown is indistinguishable from forbidden** on reads of memories and of reference targets.
