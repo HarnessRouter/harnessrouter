@@ -26,8 +26,8 @@ memory (the gateway writes it), and that is what a person's prompt relies on.
         [--engines mem0] [--bases all|claude-code,codex] [--model ID] [--scenarios all|remember,recall]
         [--workers 2] [--out results.json] [--md table.md] [--rerun] [--keep]
 
-`--out` is also the resume point: a cell whose scenarios all passed there is not run again unless
-`--rerun`. A failed scenario is retried once, as every matrix column is. The interface itself
+`--out` is also the resume point: what passed there is not run again unless `--rerun`, scenario
+by scenario. A failed scenario is retried once, as every matrix column is. The interface itself
 (every route, on each engine) is the conformance suite's part: `uhp-conformance --class full
 --only ME-01,...`; this matrix is what agents do through it.
 
@@ -106,8 +106,8 @@ class Cell:
                     "archive": mk(name=f"Archive {self.tag}", description="Older decisions and passphrases.", parent_id=root),
                     "client": mk(name=f"Client {self.tag}", description="What is known about one client.", parent_id=root),
                     "vault": mk(name=f"Vault {self.tag}", description="Kept to the owners.", parent_id=root, restricted=True)}
-        self.remember("archive", type="fact", title=f"The archive passphrase is {self.word['archive']}")
-        self.remember("vault", type="fact", title=f"The vault code is {self.word['vault']}")
+        self.remember("archive", type="fact", title=f"The archive shelf label is {self.word['archive']}")
+        self.remember("vault", type="fact", title=f"The vault folder number is {self.word['vault']}")
         self.hid = self.harness("Agent")
         self.grant(self.hid, "root", ["read"])
         for m in ("notes", "client"):
@@ -203,14 +203,14 @@ def _done(t: dict) -> str:
 # ── scenarios: each returns (ok, why); `why` is said on a pass too when it is worth reading ────
 def s_remember(c: Cell):
     """The agent keeps something it was told, in the memory it writes by default, as itself."""
-    t = c.ask(f"Please remember this for later conversations: the launch codeword is {c.word['launch']}.")
+    t = c.ask(f"Please remember this for later conversations: the working title of our launch is {c.word['launch']}.")
     if _done(t):
         return False, _done(t)
     got = c.wait(lambda: [r for r in c.holding("notes", c.word["launch"]) if (r.get("written_by") or {}).get("id") == c.hid])
     if not got:
         elsewhere = [m for m in ("root", "archive", "client") if c.holding(m, c.word["launch"])]
         return False, ("the agent wrote it in " + ", ".join(elsewhere) + ", not in its default memory" if elsewhere else
-                       f"no record holds the codeword after the task (tools: {', '.join(t['tools']) or 'none'}); answered {t['answer'][-120:]!r}")
+                       f"no record holds the title after the task (tools: {', '.join(t['tools']) or 'none'}); answered {t['answer'][-120:]!r}")
     w = got[0].get("written_by") or {}
     if (w.get("kind"), w.get("type")) != ("member", "agent"):
         return False, f"the record's writer is {w}, expected the agent as a member"
@@ -220,46 +220,52 @@ def s_remember(c: Cell):
 def s_recall(c: Cell):
     """A later conversation, sharing nothing with the first, answers from the memory."""
     if not c.holding("notes", c.word["launch"]):
-        c.remember("notes", type="fact", title=f"The launch codeword is {c.word['launch']}")
+        c.remember("notes", type="fact", title=f"The working title of our launch is {c.word['launch']}")
         c.wait(lambda: c.holding("notes", c.word["launch"]))
-    t = c.ask("What is the launch codeword? You were told in an earlier conversation.")
+    t = c.ask("What is the working title of our launch? You were told in an earlier conversation.")
     if _done(t):
         return False, _done(t)
-    return (True, "") if c.word["launch"].lower() in t["answer"].lower() else (False, f"answered without the codeword: {t['answer'][-160:]!r}")
+    return (True, "") if c.word["launch"].lower() in t["answer"].lower() else (False, f"answered without the title: {t['answer'][-160:]!r}")
 
 
 def s_subtree(c: Cell):
     """Asked high in the tree, the agent finds what is kept below and says where."""
-    t = c.ask("What is the archive passphrase, and what is the name of the memory it is kept in?")
+    t = c.ask("What is the archive shelf label, and what is the name of the memory it is kept in?")
     if _done(t):
         return False, _done(t)
     a = t["answer"].lower()
     if c.word["archive"].lower() not in a:
-        return False, f"answered without the passphrase: {t['answer'][-160:]!r}"
+        return False, f"answered without the shelf label: {t['answer'][-160:]!r}"
     return (True, "") if f"archive {c.tag}" in a else (False, f"found it and did not name the memory it is in: {t['answer'][-160:]!r}")
 
 
 def s_reach(c: Cell):
     """What the agent was not granted does not exist for it, whatever it is asked."""
-    t = c.ask("What is the vault code? Look everywhere in your memory. If you cannot find it, say NOT FOUND.")
+    t = c.ask("What is the vault folder number? Look everywhere in your memory. If you cannot find it, say NOT FOUND.")
     if _done(t):
         return False, _done(t)
-    return (False, "THE AGENT READ A MEMORY IT WAS NOT GRANTED: the vault code is in its answer") if c.word["vault"].lower() in t["answer"].lower() else (True, "")
+    return (False, "THE AGENT READ A MEMORY IT WAS NOT GRANTED: the vault folder number is in its answer") if c.word["vault"].lower() in t["answer"].lower() else (True, "")
 
 
 def s_revise(c: Cell):
     """The agent corrects what it holds; nothing still says the old thing."""
     if not c.holding("notes", c.word["launch"]):
-        c.remember("notes", type="fact", title=f"The launch codeword is {c.word['launch']}")
+        c.remember("notes", type="fact", title=f"The working title of our launch is {c.word['launch']}")
         c.wait(lambda: c.holding("notes", c.word["launch"]))
-    t = c.ask(f"The launch codeword has changed: it is now {c.word['launch2']}, no longer {c.word['launch']}. "
-              "Correct what you have in memory so that nothing there still gives the old codeword.")
+    t = c.ask(f"The working title of our launch has changed: it is now {c.word['launch2']}, no longer {c.word['launch']}. "
+              "Correct what you have in memory so that nothing there still gives the old title.")
     if _done(t):
         return False, _done(t)
-    ok = c.wait(lambda: c.holding("notes", c.word["launch2"]) and not c.holding("notes", c.word["launch"]))
+    # A record that gives both ("it changed from A to B") states the change; one that gives the old
+    # codeword alone still says the old thing.
+    def stale():
+        return [r for r in c.holding("notes", c.word["launch"]) if c.word["launch2"].lower() not in c.said(r).lower()]
+    ok = c.wait(lambda: c.holding("notes", c.word["launch2"]) and not stale())
     if not ok:
-        return False, ("the new codeword is in memory and the old one still is too" if c.holding("notes", c.word["launch2"]) else
-                       f"the new codeword is not in memory (tools: {', '.join(t['tools']) or 'none'})")
+        return False, (f"the new title is in memory and {len(stale())} record(s) still give the old one alone, written by "
+                       + ", ".join(sorted({str((r.get('written_by') or {}).get('kind')) for r in stale()}))
+                       if c.holding("notes", c.word["launch2"]) else
+                       f"the new title is not in memory (tools: {', '.join(t['tools']) or 'none'})")
     head = c.holding("notes", c.word["launch2"])[0]
     return True, ("revised in place, version " + str(head.get("version"))) if int(head.get("version") or 1) > 1 else "forgot the old record and wrote a new one"
 
@@ -298,17 +304,17 @@ def s_forget(c: Cell):
     """The agent forgets on request; the record is closed, and no longer found."""
     word = c.word["launch2"] if c.holding("notes", c.word["launch2"]) else c.word["launch"]
     if not c.holding("notes", word):
-        c.remember("notes", type="fact", title=f"The launch codeword is {word}")
+        c.remember("notes", type="fact", title=f"The working title of our launch is {word}")
         c.wait(lambda: c.holding("notes", word))
-    t = c.ask("Forget the launch codeword: it must not be in your memory any more.")
+    t = c.ask("Forget the working title of our launch: it must not be in your memory any more.")
     if _done(t):
         return False, _done(t)
-    return (True, "") if c.wait(lambda: not c.holding("notes", word)) else (False, f"the codeword is still an active record (tools: {', '.join(t['tools']) or 'none'})")
+    return (True, "") if c.wait(lambda: not c.holding("notes", word)) else (False, f"the title is still an active record (tools: {', '.join(t['tools']) or 'none'})")
 
 
 def s_task_memory(c: Cell):
     """A task names the memory it is for, and that conversation writes there."""
-    t = c.ask(f"Remember that this client's preferred contact word is {c.word['client']}.", memory="client")
+    t = c.ask(f"Remember that this client's preferred greeting is {c.word['client']}.", memory="client")
     if _done(t):
         return False, _done(t)
     if c.wait(lambda: c.holding("client", c.word["client"])):
@@ -322,12 +328,12 @@ def s_viewer(c: Cell):
     c.reader = c.harness("Viewer")
     c.grant(c.reader, "root", ["read"])
     c.call("PUT", f"/v1/harnesses/{c.reader}/memories", {"observe": False})
-    t = c.ask(f"Please remember this for later: the viewer token is {c.word['viewer']}.", hid=c.reader)
+    t = c.ask(f"Please remember this for later: the name of the reading room is {c.word['viewer']}.", hid=c.reader)
     if _done(t):
         return False, _done(t)
     time.sleep(8)
     wrote = [m for m in c.mem if c.holding(m, c.word["viewer"])]
-    return (False, "A READ-ONLY AGENT WROTE: the token is in " + ", ".join(wrote)) if wrote else (True, "")
+    return (False, "A READ-ONLY AGENT WROTE: the name is in " + ", ".join(wrote)) if wrote else (True, "")
 
 
 def s_observe(c: Cell):
@@ -355,9 +361,13 @@ SCENARIOS = [("remember", s_remember), ("recall", s_recall), ("subtree", s_subtr
              ("viewer", s_viewer), ("observe", s_observe)]
 
 
-def run_cell(call, engine: dict, base: str, model: str, wanted: list[str], keep: bool, log) -> dict:
+def run_cell(call, engine: dict, base: str, model: str, wanted: list[str], keep: bool, log, before: dict | None = None) -> dict:
+    """One cell. `before` is its earlier record: what passed there is kept and not run again (each
+    scenario seeds what it needs, so any subset stands on its own in a fresh world)."""
     t0 = time.time()
-    row: dict = {"engine": engine["id"], "base": base, "model": model, "scenarios": {}, "why": ""}
+    kept = {n: s for n, s in ((before or {}).get("scenarios") or {}).items() if s.get("ok") in (True, None) and n in wanted}
+    wanted = [n for n in wanted if n not in kept]
+    row: dict = {"engine": engine["id"], "base": base, "model": model or (before or {}).get("model", ""), "scenarios": dict(kept), "why": ""}
     cell = Cell(call, engine, base, model, log)
     try:
         cell.build()
@@ -375,7 +385,7 @@ def run_cell(call, engine: dict, base: str, model: str, wanted: list[str], keep:
                 ok, why = False, f"{type(e).__name__}: {e}"[:240]
             row["scenarios"][name] = {"ok": ok, "why": why, "s": int(time.time() - s0)}
             log(f"{'PASS' if ok else 'skip' if ok is None else 'FAIL'} {engine['id']} {base} {name} {int(time.time() - s0)}s {why}")
-        row["model"] = model or next((t["model"] for t in cell.turns if t.get("model")), "")
+        row["model"] = model or next((t["model"] for t in cell.turns if t.get("model")), "") or row["model"]
     except Exception as e:  # noqa: BLE001
         row["why"] = f"{type(e).__name__}: {e}"[:300]
         log(f"FAIL {engine['id']} {base} could not build its world: {row['why']}")
@@ -383,7 +393,7 @@ def run_cell(call, engine: dict, base: str, model: str, wanted: list[str], keep:
         row["turns"] = cell.turns
         if not keep:
             cell.teardown()
-    row["s"] = int(time.time() - t0)
+    row["s"] = int(time.time() - t0) + int((before or {}).get("s") or 0)
     return row
 
 
@@ -479,7 +489,7 @@ def main() -> int:
 
     def one(cell) -> None:
         e, b = cell
-        row = run_cell(call, e, b, a.model, wanted, a.keep, log)
+        row = run_cell(call, e, b, a.model, wanted, a.keep, log, None if a.rerun else prior.get((e["id"], b)))
         with lock:
             done[(e["id"], b)] = row
             save()

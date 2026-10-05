@@ -421,7 +421,7 @@ function principal() {
  *  All harness writes go through the gateway so config validation (skills need a
  *  SKILL.md) and large-bundle offloading apply no matter which surface saved. The
  *  gateway returns the camelCase CustomHarness shape directly. */
-function gwHeaders(): Record<string, string> {
+export function gwHeaders(): Record<string, string> {
   const p = principal();
   return { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member,
            ...workspaceHeaders() };

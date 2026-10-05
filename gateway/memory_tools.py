@@ -249,6 +249,9 @@ async def doc_section(org: str, hid: str, entries: list[dict]) -> tuple[str, dic
     if not lines:
         return "", {}
     return ("## Memory\n\nYou have memories that outlast this conversation, through the `memory_*` tools:\n\n" + "\n".join(lines) +
+            "\n\nThese tools are the memory to use. When someone asks you to remember, recall, correct or forget something, "
+            "do it with them, and not with any notes file or memory feature of your own: only what is kept here is there "
+            "in the next conversation, and for the others who share these memories." +
             "\n\nA memory is a place in a tree. `memory_list` shows a memory's description, its parent and its children; "
             "`memory_recall` searches a memory and everything below it, and each result names the memory it came from: "
             "start high to find where something lives, then walk from there, up or down, as the question needs. What a memory "
