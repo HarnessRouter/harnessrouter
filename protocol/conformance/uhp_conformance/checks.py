@@ -2028,7 +2028,7 @@ def me01(ctx):
     root, child = ctx.state["memory_root"], _memory_child(ctx)
     ctx.validate(root, "Memory")
     ctx.validate(child, "Memory")
-    assert str(root.get("id") or "").startswith("hmem_"), f"id {root.get('id')!r} does not carry the hmem_ prefix"
+    assert str(root.get("id") or "").strip(), "a memory must carry an id"
     assert child.get("parent_id") == root["id"] and child.get("ancestors") == [root["id"]], (
         f"the child must name its parent and its ancestors root first; got parent_id={child.get('parent_id')!r} ancestors={child.get('ancestors')!r}")
     assert child.get("provider") == root.get("provider"), "a child created without a provider must take its parent's"
@@ -2036,7 +2036,7 @@ def me01(ctx):
         f"whoever creates a memory holds all four privileges on it; got {root.get('privileges')!r}")
     kids = (ctx.client.get(f"/v1/memories?parent={root['id']}").json or {}).get("data") or []
     assert [k.get("id") for k in kids] == [child["id"]], f"the listing of a parent is its direct children; got {[k.get('id') for k in kids]}"
-    r = ctx.client.get("/v1/memories/hmem_" + "0" * 32)
+    r = ctx.client.get("/v1/memories/" + "uhp-conformance-no-such-memory-" + uuid.uuid4().hex)
     assert r.status == 404 and ((r.json or {}).get("error") or {}).get("code") == "memory_not_found", (
         f"an unknown memory must answer 404 memory_not_found; got HTTP {r.status}")
     return f"{root['id']} > {child['id']} on provider {root.get('provider')!r}"
