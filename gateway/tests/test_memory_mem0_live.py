@@ -139,6 +139,25 @@ def test_mem0_holds_entities_someone_states_and_the_graph_is_built_from_referenc
     assert caps["graph"] == {"entities": "stated"}
 
 
+def test_a_title_is_kept_apart_from_the_body_and_found_by_search(c, tree):
+    base = f"/v1/memories/{tree['acme']}/records"
+    body = "Either side can end the order form with 90 days written notice.\n\nPrice increases are capped at 5% a year."
+    note = c.post(base, headers=ADA, json={"type": "note", "title": "Acme master agreement", "content": body}).json()
+    assert note["title"] == "Acme master agreement" and note["content"] == [{"type": "text", "text": body}], note
+    got = c.get(f"{base}/{note['id']}", headers=ADA).json()
+    assert got["title"] == "Acme master agreement" and got["content"][0]["text"] == body
+    v2 = c.patch(f"{base}/{note['id']}", headers=ADA, json={"title": "Acme master agreement (2024)"}).json()
+    assert v2["title"] == "Acme master agreement (2024)" and v2["content"][0]["text"] == body
+    for _ in range(20):
+        hits = c.post(f"/v1/memories/{tree['acme']}/recall", headers=ADA, json={"query": "master agreement notice period"}).json()["results"]
+        if any(x["record"]["id"] == note["id"] for x in hits):
+            break
+        time.sleep(2)
+    hit = next(x["record"] for x in hits if x["record"]["id"] == note["id"])
+    assert hit["title"] == "Acme master agreement (2024)"
+    assert [h["title"] for h in c.get(f"{base}/{note['id']}/history", headers=ADA).json()["data"]][-1] == "Acme master agreement (2024)"
+
+
 def test_a_record_of_one_memory_cannot_be_read_through_another(c, tree):
     r = c.get(f"/v1/memories/{tree['team']}/records/{tree['fact']}", headers=ADA)
     assert r.status_code == 404 and r.json()["error"]["code"] == "memory_record_not_found"
