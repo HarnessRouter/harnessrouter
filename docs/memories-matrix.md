@@ -98,9 +98,11 @@ one real task in a session of its own. A failed scenario was retried once.
 
 Read as:
 
-- **claude-code, revise**: not a memory failure. Every Claude Code turn on this instance ended
-  "Not logged in" after the instance was moved to this build; the same scenario passed on the build
-  before it. Open, and not in the memories code.
+- **claude-code, revise**: not a memory failure and not this build. The instance routes
+  `claude-sonnet-4.6`, Claude Code's default model there, to an Anthropic key that stopped being
+  accepted during the run; every Claude Code turn on that model then ends "Not logged in". On
+  `claude-sonnet-5.5`, which the instance routes through a working connection, Claude Code passes
+  all ten scenarios (`--bases claude-code --model claude-sonnet-5.5`).
 - **aider, recall and subtree**: the agent searched and reported nothing found, on the model and
   the records with which the other bases found the answer.
 - **qwen, remember**: the agent answered "saved" from a memory feature of its own and wrote nothing
