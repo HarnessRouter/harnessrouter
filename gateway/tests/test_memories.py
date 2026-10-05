@@ -272,6 +272,10 @@ def test_entities_and_relationships_are_records_and_references_in_one_graph(peop
     assert boss["id"] not in {n["record"]["id"] for n in gb["nodes"]} and "board member Dana reports to" not in str(gb)
     hidden = [e for e in gb["edges"] if e["to"]["record_id"] == boss["id"]]
     assert hidden == [{"from": hidden[0]["from"], "to": {"memory_id": tree["private"], "record_id": boss["id"]}, "available": False}]
+    # one subject and one object at most: a second of either is refused, not kept
+    two = ada.post(acme + "/records", json={"type": "fact", "title": "Dana and Quillon both", "references": [
+        {"rel": "subject", "record_id": dana["id"]}, {"rel": "subject", "record_id": quil["id"]}]})
+    assert two.status_code == 422 and _code(two) == "memory_invalid"
     assert ada.post(acme + "/graph", json={"around": "nope"}).status_code == 404
     assert ada.post(acme + "/graph", json={"hops": 9}).status_code == 422
     caps = next(p for p in ada.get("/v1/memories/providers").json()["data"] if p["id"] == "fixture")

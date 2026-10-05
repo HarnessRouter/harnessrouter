@@ -771,6 +771,10 @@ def _record_in(body: dict) -> dict:
             raise MemoryError(422, "memory_invalid", "A reference names a record_id (and a memory_id when it is elsewhere).", "references")
         refs.append({"rel": str(ref.get("rel") or "related"), "memory_id": str(ref.get("memory_id") or ""),
                      "record_id": str(ref["record_id"])})
+    # a record says something of one subject and relates it to one object: two of either is two records
+    for rel in ("subject", "object"):
+        if sum(1 for r in refs if r["rel"] == rel) > 1:
+            raise MemoryError(422, "memory_invalid", f"A record names at most one `{rel}`: write one record for each.", "references")
     t = body.get("time") or {}
     return {"type": typ, "title": title, "content": content, "attributes": dict(body.get("attributes") or {}),
             "references": refs, "time": {k: t.get(k) for k in ("valid_from", "valid_to") if t.get(k)}}
