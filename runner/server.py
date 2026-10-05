@@ -4069,21 +4069,13 @@ def _usage_fields(u) -> dict:
         except (TypeError, ValueError):
             return 0
 
-    def thought(details) -> dict:
-        # the provider's own count of what it spent thinking, where it gives one (it is part of the
-        # output count on OpenAI's shapes; Anthropic gives none)
-        if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
-            return {"reasoning_tokens": n(details["reasoning_tokens"])}
-        return {}
-
     if "prompt_tokens" in u or "completion_tokens" in u:
         det = u.get("prompt_tokens_details")
         cached = n(det.get("cached_tokens")) if isinstance(det, dict) else 0
         return {"input_tokens": max(n(u.get("prompt_tokens")) - cached, 0),
-                "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached,
-                **thought(u.get("completion_tokens_details"))}
+                "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached}
     if "input_tokens" in u or "output_tokens" in u:
-        out = thought(u.get("output_tokens_details"))
+        out = {}
         for src, dst in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
                          ("cache_read_input_tokens", "cache_read_tokens"),
                          ("cache_creation_input_tokens", "cache_write_tokens")):
@@ -4093,8 +4085,7 @@ def _usage_fields(u) -> dict:
     if "promptTokenCount" in u or "candidatesTokenCount" in u:
         cached = n(u.get("cachedContentTokenCount"))
         return {"input_tokens": max(n(u.get("promptTokenCount")) - cached, 0),
-                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached,
-                **({"reasoning_tokens": n(u["thoughtsTokenCount"])} if u.get("thoughtsTokenCount") is not None else {})}
+                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached}
     return {}
 
 
@@ -4120,6 +4111,42 @@ def _usage_in_sse_line(line: bytes) -> dict:
         return _usage_in_doc(json.loads(line[5:].strip()))
     except ValueError:
         return {}
+
+
+def _thinking_tokens_in(doc) -> int | None:
+    """The provider's own count of thinking tokens in a response document or a stream event, None
+    where it gives none: `reasoning_tokens` under the usage's details on Chat Completions and on the
+    Responses API (whose stream carries the usage inside `response`), `thoughtsTokenCount` on
+    Google's own API. Anthropic's Messages API has no such figure. Kept apart from the usage that
+    prices a turn (_usage_fields), which this does not touch."""
+    if not isinstance(doc, dict):
+        return None
+    inner = doc.get("response")
+    for u in (doc.get("usage"), inner.get("usage") if isinstance(inner, dict) else None):
+        if isinstance(u, dict):
+            for key in ("completion_tokens_details", "output_tokens_details"):
+                d = u.get(key)
+                if isinstance(d, dict) and d.get("reasoning_tokens") is not None:
+                    return max(int(d["reasoning_tokens"] or 0), 0)
+    meta = doc.get("usageMetadata")
+    if isinstance(meta, dict) and meta.get("thoughtsTokenCount") is not None:
+        return max(int(meta["thoughtsTokenCount"] or 0), 0)
+    return None
+
+
+def _thinking_in_sse_line(line: bytes) -> int | None:
+    if not line.startswith(b"data:") or not (b"reasoning_tokens" in line or b"thoughtsTokenCount" in line):
+        return None
+    try:
+        return _thinking_tokens_in(json.loads(line[5:].strip()))
+    except (ValueError, TypeError):
+        return None
+
+
+def _thinking_add(flags: dict, count: int | None) -> None:
+    """Fold one call's thinking count into the route's total; the key exists only once a provider gave one."""
+    if count is not None:
+        flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + count
 
 
 def _usage_add(flags: dict, call_usage: dict) -> None:
@@ -4217,22 +4244,27 @@ def _stamp_thinking(ev: dict, env: dict, rec: dict) -> None:
     turn's own model, "" when the model or the route has no measured setting or the provider refused
     it), then from what a backend that never passes the relay set for its CLI. "default" says nothing
     was applied and the model ran as it does without a level."""
-    relay = _relay_usage(env)
-    if relay.get("reasoning_tokens") is not None and isinstance(ev.get("usage"), dict):
-        ev["usage"].setdefault("reasoning_tokens", relay["reasoning_tokens"])
+    flags: dict = {}
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            if route:
+                flags = route[2] or {}
+                break
+    if flags.get("reasoning_tokens") is not None:
+        usage = ev.get("usage") if isinstance(ev.get("usage"), dict) else None
+        if usage is None:
+            usage = ev["usage"] = {}
+        usage.setdefault("reasoning_tokens", int(flags["reasoning_tokens"]))
     asked = rec.get("reasoning")
     if not isinstance(asked, dict) or not asked.get("asked"):
         return
     applied = str(asked.get("applied") or "")
-    for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            seen = (route[2] or {}).get("effort_applied") if route else None
-            if isinstance(seen, dict) and seen:
-                model = str(rec.get("model") or "")
-                mine = [lv for m, lv in seen.items() if m == model or reasoning.bare(m) == reasoning.bare(model)]
-                applied = (mine or list(seen.values()))[-1] or ""
-                break
+    seen = flags.get("effort_applied")
+    if isinstance(seen, dict) and seen:
+        model = str(rec.get("model") or "")
+        mine = [lv for m, lv in seen.items() if m == model or reasoning.bare(m) == reasoning.bare(model)]
+        applied = (mine or list(seen.values()))[-1] or ""
     ev["reasoning"] = {"effort": asked["asked"], "applied": applied or "default"}
 
 
@@ -4577,6 +4609,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
+            call_thinking: int | None = None   # ...and about thinking tokens, the last figure given
 
             def _stopped(why: str) -> None:
                 # The answer began and then stopped: the provider went silent past the socket's
@@ -4598,6 +4631,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         "code": "upstream_unavailable"}}) + "\n\n"
                 call_usage.update(_usage_in_sse_line(pending.strip()))
                 _usage_add(flags, call_usage)
+                _thinking_add(flags, call_thinking)
                 try:
                     raw = ev.encode()
                     self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
@@ -4657,6 +4691,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     if line and not line.startswith(b":"):
                         last_event = time.monotonic()     # an event's line; a comment is not one
                     call_usage.update(_usage_in_sse_line(line))
+                    seen_thinking = _thinking_in_sse_line(line)
+                    if seen_thinking is not None:
+                        call_thinking = seen_thinking
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
@@ -4672,6 +4709,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     return
             call_usage.update(_usage_in_sse_line(pending.strip()))
             _usage_add(flags, call_usage)
+            seen_thinking = _thinking_in_sse_line(pending.strip())
+            _thinking_add(flags, seen_thinking if seen_thinking is not None else call_thinking)
             if flags.get("usage_no_nulls") and pending:
                 tail_bytes = _usage_without_nulls(pending)      # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
@@ -4709,7 +4748,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 flags["last_finish"] = fr
             if body is not None and b"sage" in data:
                 try:
-                    _usage_add(flags, _usage_in_doc(json.loads(data)))
+                    whole = json.loads(data)
+                    _usage_add(flags, _usage_in_doc(whole))
+                    _thinking_add(flags, _thinking_tokens_in(whole))
                 except ValueError:
                     pass
             if body is None and "/models" in tail.split("?", 1)[0]:

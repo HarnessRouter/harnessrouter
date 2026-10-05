@@ -211,7 +211,8 @@ def test_the_relay_writes_the_level_and_remembers_what_it_applied(monkeypatch):
         _post(host, tok, {"model": "meta-llama/llama-3.3-70b-instruct", "messages": []})
         assert "reasoning_effort" not in json.loads(up.seen[1])
         assert flags["effort_applied"]["meta-llama/llama-3.3-70b-instruct"] == ""
-        assert flags["usage"]["reasoning_tokens"] == 14          # the provider's own count, both calls
+        assert flags["reasoning_tokens"] == 14                   # the provider's own count, both calls
+        assert "reasoning_tokens" not in flags["usage"]          # the usage that prices a turn is untouched
     finally:
         up.srv.shutdown(); rs._HERMES_RELAY["routes"].pop(tok, None)
 
@@ -254,7 +255,7 @@ def test_the_result_says_what_was_asked_and_what_was_applied():
     tok = "hr-relay-test-stamp"
     rs._HERMES_RELAY["routes"][tok] = ("https://x/v1", "k", {
         "effort": "minimal", "effort_applied": {"aux/model": "", "openai/gpt-5.4": "low"},
-        "usage": {"input_tokens": 1, "output_tokens": 9, "reasoning_tokens": 7}})
+        "usage": {"input_tokens": 1, "output_tokens": 9}, "reasoning_tokens": 7})
     try:
         ev = {"type": "result", "usage": {"input_tokens": 1, "output_tokens": 9}}
         rs._stamp_thinking(ev, {"K": tok}, {"model": "openai/gpt-5.4", "reasoning": {"asked": "minimal", "applied": ""}})
@@ -314,11 +315,15 @@ def test_codex_writes_the_level_into_its_own_config(tmp_path):
     assert 'model_reasoning_effort = "low"' in text and applied == "low"
 
 
-def test_the_providers_count_of_thinking_tokens_is_read_in_every_shape():
-    assert rs._usage_fields({"prompt_tokens": 5, "completion_tokens": 9,
-                             "completion_tokens_details": {"reasoning_tokens": 7}})["reasoning_tokens"] == 7
-    assert rs._usage_fields({"input_tokens": 5, "output_tokens": 9,
-                             "output_tokens_details": {"reasoning_tokens": 4}})["reasoning_tokens"] == 4
-    assert rs._usage_fields({"promptTokenCount": 5, "candidatesTokenCount": 9, "thoughtsTokenCount": 3})["reasoning_tokens"] == 3
-    assert "reasoning_tokens" not in rs._usage_fields({"prompt_tokens": 5, "completion_tokens": 9})
-    assert "reasoning_tokens" not in rs._usage_fields({"input_tokens": 5, "output_tokens": 9})
+def test_the_providers_count_of_thinking_tokens_is_read_in_every_shape_and_apart_from_pricing():
+    chat = {"usage": {"prompt_tokens": 5, "completion_tokens": 9, "completion_tokens_details": {"reasoning_tokens": 7}}}
+    responses = {"usage": {"input_tokens": 5, "output_tokens": 9, "output_tokens_details": {"reasoning_tokens": 4}}}
+    stream_end = {"type": "response.completed", "response": responses}      # the Responses API's stream
+    google = {"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 9, "thoughtsTokenCount": 3}}
+    assert [rs._thinking_tokens_in(d) for d in (chat, responses, stream_end, google)] == [7, 4, 4, 3]
+    assert rs._thinking_tokens_in({"usage": {"input_tokens": 5, "output_tokens": 9}}) is None    # Anthropic gives none
+    assert rs._thinking_in_sse_line(b"data: " + json.dumps(stream_end).encode()) == 4
+    assert rs._thinking_in_sse_line(b"data: [DONE]") is None
+    # the usage that prices a turn carries what it carried before
+    assert rs._usage_fields(chat["usage"]) == {"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 0}
+    assert rs._usage_fields(google["usageMetadata"]) == {"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 0}
