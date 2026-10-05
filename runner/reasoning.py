@@ -25,6 +25,8 @@ import json
 import re
 
 LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
+# The providers that were measured. A route is one of these or "", and "" gets nothing sent.
+ROUTES = ("vercel", "tokenrouter", "openrouter", "openai", "azure", "google", "anthropic")
 
 # The levels a model has, by its bare id (the part after the vendor's prefix). First match wins.
 # Only ids that were measured are named; a family's unmeasured members are left out on purpose.
@@ -213,13 +215,17 @@ def _google(doc: dict, level: str) -> bool:
     return True
 
 
-def apply(body: bytes, shape: str, base_url: str, asked: str, model: str = "") -> tuple[bytes, str]:
+def apply(body: bytes, shape: str, base_url: str, asked: str, model: str = "", route: str = "") -> tuple[bytes, str]:
     """One request body with the level a turn asked for → (the body to send, the level applied).
 
     `shape` is the API the body is written for: "chat" (Chat Completions), "responses", "messages"
     (Anthropic) or "google" (generateContent, whose model is in the URL and comes as `model`). The
     level applied is "" when nothing was sent: the model or the route was not measured, or the shape
-    has no setting for the family. The body comes back as the same object in that case."""
+    has no setting for the family. The body comes back as the same object in that case.
+
+    `route` names the provider when the caller knows it and the base does not say: behind a broker
+    every base is the broker's, and the gateway, which knows the connection, names the route. A
+    name that is not one of ROUTES is no route."""
     if asked not in LEVELS or not body:
         return body, ""
     try:
@@ -229,7 +235,7 @@ def apply(body: bytes, shape: str, base_url: str, asked: str, model: str = "") -
     if not isinstance(doc, dict):
         return body, ""
     b = bare(model or doc.get("model") or "")
-    route = route_of(base_url)
+    route = route if route in ROUTES else route_of(base_url)
     if not route:
         return body, ""
     if shape == "messages" and route not in ("anthropic", "tokenrouter", "vercel", "openrouter"):

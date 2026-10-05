@@ -33,6 +33,7 @@ import reasoning   # how much a model thinks on a turn; the runner's relay appli
 
 UPSTREAM_BASE = ""   # set in main() from HR_DSH_BASE_URL, then scrubbed from the env
 EFFORT = ""          # the thinking level the turn asked for (HR_DSH_REASONING_EFFORT), "" for none
+EFFORT_ROUTE = ""    # the provider the gateway named for the connection (HR_DSH_REASONING_ROUTE), "" = read the base
 _effort_refused: set = set()   # models whose provider refused the level on this turn
 
 
@@ -326,7 +327,8 @@ class _Relay(http.server.BaseHTTPRequestHandler):
             except (ValueError, AttributeError):
                 effort_model = ""
             if effort_model not in _effort_refused:
-                leveled, applied = reasoning.apply(body, reasoning.shape_of(tail), UPSTREAM_BASE, EFFORT)
+                leveled, applied = reasoning.apply(body, reasoning.shape_of(tail), UPSTREAM_BASE, EFFORT,
+                                                   route=EFFORT_ROUTE)
                 if applied:
                     plain, body = body, leveled
         resp = None
@@ -541,11 +543,12 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
 
 
 def main() -> int:
-    global UPSTREAM_BASE, UPSTREAM_KEY, EFFORT
+    global UPSTREAM_BASE, UPSTREAM_KEY, EFFORT, EFFORT_ROUTE
     job = json.loads(sys.argv[1])
     UPSTREAM_BASE = os.environ.pop("HR_DSH_BASE_URL", "")
     UPSTREAM_KEY = os.environ.pop("HR_DSH_API_KEY", "")
     EFFORT = os.environ.pop("HR_DSH_REASONING_EFFORT", "")
+    EFFORT_ROUTE = os.environ.pop("HR_DSH_REASONING_ROUTE", "")
     home = pathlib.Path(os.environ.get("HOME") or ".")
     cwd = job.get("cwd") or os.getcwd()
 

@@ -383,3 +383,30 @@ def test_a_streamed_calls_usage_is_on_the_route_before_the_client_has_the_bytes(
         assert flags["usage"]["output_tokens"] == 9 and flags["reasoning_tokens"] == 7     # counted once
     finally:
         release.set(); conn.close(); up.shutdown(); rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_a_route_the_gateway_names_wins_over_the_base(monkeypatch):
+    """Behind a broker every base is the broker's, so the base says nothing about the provider. The
+    gateway, which knows the connection, names the route on the turn."""
+    body = json.dumps({"model": "google/gemini-3.5-flash", "messages": []}).encode()
+    broker = "https://hr.example/v1/llm"
+    assert reasoning.apply(body, "chat", broker, "none") == (body, "")
+    out, applied = reasoning.apply(body, "chat", broker, "none", route="vercel")
+    assert applied == "none" and json.loads(out)["providerOptions"]["google"]["thinkingConfig"] == {"thinkingBudget": 0}
+    assert reasoning.apply(body, "chat", broker, "none", route="not-a-route") == (body, "")
+    # the turn carries it to its routes, in the relay's memory and nowhere the agent can read
+    token = rs._TURN_THINKING.set({"asked": "low", "applied": "", "routes": [], "route": "openrouter"})
+    tok = ""
+    try:
+        _, tok = rs._hermes_relay_route(broker, "per-turn-credential")
+        flags = rs._HERMES_RELAY["routes"][tok][2]
+        assert flags["effort"] == "low" and flags["effort_route"] == "openrouter"
+    finally:
+        rs._TURN_THINKING.reset(token); rs._HERMES_RELAY["routes"].pop(tok, None)
+    # a turn with no named route reads the base, as before
+    token = rs._TURN_THINKING.set({"asked": "low", "applied": "", "routes": [], "route": ""})
+    try:
+        _, tok = rs._hermes_relay_route(VERCEL, "k")
+        assert "effort_route" not in rs._HERMES_RELAY["routes"][tok][2]
+    finally:
+        rs._TURN_THINKING.reset(token); rs._HERMES_RELAY["routes"].pop(tok, None)

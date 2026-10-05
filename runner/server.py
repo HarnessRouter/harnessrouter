@@ -2496,7 +2496,10 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     thinking = _TURN_THINKING.get() or {}
     if thinking.get("asked"):
         env["HR_DSH_REASONING_EFFORT"] = thinking["asked"]
-        thinking["applied"] = reasoning.level_on(reasoning.route_of(base), model, thinking["asked"])
+        if thinking.get("route"):          # scrubbed by the driver with the rest of HR_DSH_*, before the runtime starts
+            env["HR_DSH_REASONING_ROUTE"] = thinking["route"]
+        thinking["applied"] = reasoning.level_on(thinking.get("route") or reasoning.route_of(base), model,
+                                                 thinking["asked"])
     # The driver's own relay waits on the provider as long as this one does (dsh_driver._upstream_wait).
     env["HR_RELAY_UPSTREAM_TIMEOUT_S"] = f"{HR_RELAY_UPSTREAM_TIMEOUT_S:g}"
     # No system_prompt in the job: harness instructions land in AGENTS.md (dsh reads it via
@@ -3172,7 +3175,8 @@ _HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threadin
 # The thinking of the turn being built, while /turn runs a backend's builder: {"asked": the level
 # the turn asked for ("" for none), "applied": what a backend whose calls never pass the relay set
 # for its CLI (Claude Code, Codex on OpenAI's own endpoint), "routes": the flags of every route the
-# turn registered}. A route registered meanwhile carries the level, and the turn's result reads its
+# turn registered, "route": the provider the gateway named for the turn's connection, "" when it
+# named none and the base says}. A route registered meanwhile carries the level, and the turn's result reads its
 # routes back for what was applied and what the provider counted, whichever file or variable the
 # backend keeps its placeholder in. A context variable, so two turns being built at once never read
 # each other's.
@@ -3191,7 +3195,11 @@ def _turn_effort() -> dict:
     """The route flag that carries the turn's level, {} for a turn that asked for none: such a
     turn's routes are what they were before a level existed."""
     t = _TURN_THINKING.get()
-    return {"effort": t["asked"]} if t and t.get("asked") else {}
+    if not (t and t.get("asked")):
+        return {}
+    # effort_route stays in the relay's memory: which provider serves a model is not something the
+    # agent behind a broker is to read, so it is in no environment and no file.
+    return {"effort": t["asked"], **({"effort_route": t["route"]} if t.get("route") else {})}
 
 
 def _with_anthropic_cache(body: bytes) -> bytes:
@@ -4442,7 +4450,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 and not flags.get(f"effort_refused:{effort_model}")):
             shape = reasoning.shape_of(tail)
             if shape:
-                leveled, applied = reasoning.apply(body, shape, base, flags["effort"], model=effort_model)
+                leveled, applied = reasoning.apply(body, shape, base, flags["effort"], model=effort_model,
+                                                   route=str(flags.get("effort_route") or ""))
                 flags.setdefault("effort_applied", {})[effort_model] = applied
                 if applied:
                     plain, body = body, leveled
@@ -9967,6 +9976,8 @@ class TurnReq(BaseModel):
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
     environment: dict | None = None        # {id, slug, entry}: the project layer at /env/<slug>, read-only (environments.py)
     reasoning_effort: str | None = None    # how much the model thinks this turn: one of reasoning.LEVELS; unset = the model's default
+    reasoning_route: str | None = None     # which measured provider the connection is (reasoning.ROUTES), from the gateway,
+                                           # which knows it when the base here is a broker's; unset = read it off the base
 
 
 @app.post("/turn")
@@ -10050,7 +10061,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # The thinking level, for whatever the builder below registers or configures. Set for every
     # turn, so a turn that asked for none also clears what an earlier one left in this context.
     effort = str(req.reasoning_effort or "").strip().lower()
-    turn_thinking = {"asked": effort if effort in reasoning.LEVELS else "", "applied": "", "routes": []}
+    named = str(req.reasoning_route or "").strip().lower()
+    turn_thinking = {"asked": effort if effort in reasoning.LEVELS else "", "applied": "", "routes": [],
+                     "route": named if named in reasoning.ROUTES else ""}
     _TURN_THINKING.set(turn_thinking)
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can

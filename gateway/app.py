@@ -7610,6 +7610,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "timeout_seconds": timeout_s,
                 # How much the model thinks this turn; None asks nothing and changes nothing.
                 "reasoning_effort": effort or None,
+                # Which measured provider this connection is, read off its own base. The runner
+                # reads the base it is handed, and in broker trust that is this gateway's.
+                "reasoning_route": (reasoning.route_of(str((_with_provider_base(conn) or {}).get("base_url") or ""))
+                                    or None) if effort else None,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "plugins": plugin_pkgs, "agent_doc": agent_doc,
                 "skills_suppressed": skills_suppressed, "tools_disabled": turn_tools_off,

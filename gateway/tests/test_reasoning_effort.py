@@ -52,6 +52,11 @@ def test_the_turns_own_level_wins_over_the_harnesss_and_neither_asks_nothing():
     assert rule.index("body.reasoning") < rule.index('(hv or {}).get("reasoning_effort")')
     # the runner is told a level or nothing: None leaves its request as it was
     assert '"reasoning_effort": effort or None,' in src
+    # ...and which measured provider the connection is, read off the connection's own base, since
+    # in broker trust the base the runner is handed is this gateway's
+    assert '"reasoning_route": (reasoning.route_of(str((_with_provider_base(conn) or {}).get("base_url") or ""))' in src
+    assert gw.reasoning.route_of(gw._with_provider_base({"provider": "google"})["base_url"]) == "google"
+    assert gw.reasoning.route_of(gw._with_provider_base({"provider": "openai"})["base_url"]) == "openai"
 
 
 def test_the_record_says_what_was_asked_at_once_and_what_was_applied_when_the_result_comes():
