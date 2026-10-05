@@ -3352,6 +3352,99 @@ def _repair_tool_call_ids(body: bytes, dedupe: bool = False) -> bytes:
     return body
 
 
+_EMPTY_PROPERTIES = re.compile(rb'"properties"\s*:\s*\{\s*\}')
+# Where a schema keeps the schemas below it: by name, as a list, and as one schema.
+_SCHEMA_MAPS = ("properties", "patternProperties", "$defs", "definitions")
+_SCHEMA_LISTS = ("anyOf", "oneOf", "allOf", "prefixItems")
+_SCHEMA_ONES = ("items", "additionalProperties", "not", "if", "then", "else")
+
+
+def _drop_empty_properties(node, root: bool) -> bool:
+    """One schema node and everything below it, in place: an empty `properties` is removed from every
+    node but the root. → whether anything changed."""
+    if not isinstance(node, dict):
+        return False
+    changed = False
+    if not root and node.get("properties") == {} and "properties" in node:
+        del node["properties"]
+        changed = True
+    for key in _SCHEMA_MAPS:
+        below = node.get(key)
+        if isinstance(below, dict):
+            for child in below.values():
+                changed = _drop_empty_properties(child, False) or changed
+    for key in _SCHEMA_LISTS:
+        below = node.get(key)
+        if isinstance(below, list):
+            for child in below:
+                changed = _drop_empty_properties(child, False) or changed
+    for key in _SCHEMA_ONES:
+        below = node.get(key)
+        if isinstance(below, list):          # `items` as a list of schemas
+            for child in below:
+                changed = _drop_empty_properties(child, False) or changed
+        else:
+            changed = _drop_empty_properties(below, False) or changed
+    return changed
+
+
+def _with_free_form_objects(body: bytes) -> bytes:
+    """A request body in which no NESTED object of a function tool's parameters carries an empty
+    `properties`, in either shape a function tool takes: chat completions
+    (`tools[].function.parameters`) and the Responses API (`tools[].parameters`). Both matter: with
+    an OpenAI model on an aggregator hermes, opencode and kilo speak the Responses API, and a repair
+    of the chat shape alone left exactly those three losing their rows through Vercel (the plugin
+    matrix's rows column on a candidate, 2026-10-05: 14 of 17 before and after).
+
+    A free-form object (a row, a JSON body, a map of values) is written `{"type": "object"}`. Hermes
+    and opencode add `"properties": {}` to every object node before the request leaves, and with
+    that key present some gateways hand the model an object it may put nothing in: the argument
+    arrives at the tool as `[{}, {}]` or `[]` and the call "succeeds". Measured 2026-10-05, per
+    connection and model family (runner/tests/test_relay_free_form_objects.py has the table): an
+    empty `properties` lost the contents with OpenAI models through Vercel's gateway and through
+    OpenRouter, and with kimi-k3 through Vercel and TokenRouter; adding `additionalProperties:
+    true` beside it saved Vercel and not OpenRouter; and the node WITHOUT the key was intact in
+    every cell, eleven families on two aggregators, OpenRouter, and OpenAI, Azure and Google
+    directly. An empty `properties` says nothing a missing one does not, so it goes, for every
+    model: a test by gateway or by family would repair the cells measured and leave the next one.
+
+    The root `parameters` node keeps its shape: `{"type": "object", "properties": {}}` there is a
+    tool that takes no arguments, and validators want the key on the root. A body with no such
+    node comes back as the same object."""
+    if not _EMPTY_PROPERTIES.search(body) or b'"tools"' not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict):
+        return body
+
+    def _tools(tools) -> bool:
+        changed = False
+        for tool in tools if isinstance(tools, list) else []:
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function")
+            if isinstance(fn, dict):
+                changed = _drop_empty_properties(fn.get("parameters"), True) or changed
+            elif tool.get("type") == "function":
+                changed = _drop_empty_properties(tool.get("parameters"), True) or changed
+            # A namespace groups function tools one level down: Codex sends a server's MCP tools as
+            # {"type": "namespace", "name": "mcp__<server>", "tools": [{"type": "function", …}]} for
+            # a model it does not defer tools for, and adds the empty `properties` itself (captured
+            # on the hosted service, 2026-10-05; emptied through Vercel as sent, intact repaired).
+            changed = _tools(tool.get("tools")) or changed
+        return changed
+
+    changed = _tools(doc.get("tools"))
+    # ...and a tool search's answer carries definitions inside the conversation's own items.
+    for item in doc.get("input") if isinstance(doc.get("input"), list) else []:
+        if isinstance(item, dict):
+            changed = _tools(item.get("tools")) or changed
+    return json.dumps(doc, separators=(",", ":")).encode() if changed else body
+
+
 def _image_in_tool_result_refused(code: int, data: bytes) -> bool:
     """Whether a provider's refusal is about an image it was handed (see _tool_images_as_text)."""
     low = data.lower()
@@ -4131,6 +4224,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _body_model = ""
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
+            body = _with_free_form_objects(body)     # before the Gemini normaliser below, which has its own rules
             if flags.get("stream_usage"):
                 body = _request_stream_usage(body)
             if flags.get("rename_max_tokens"):
@@ -4152,6 +4246,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             for field in flags.get("drop_fields", ()):
                 body = _drop_top_level_field(body, field)
             headers["content-length"] = str(len(body))
+        elif body is not None and self.path.split("?", 1)[0].endswith("/responses"):
+            fixed = _with_free_form_objects(body)     # the same repair, in the Responses API's tool shape
+            if fixed is not body:
+                body = fixed
+                headers["content-length"] = str(len(body))
         google = _GOOGLE_HOST in base or bool(flags.get("thought_signature"))
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
@@ -4801,8 +4900,18 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
             env["AZURE_FOUNDRY_BASE_URL"] = auth.base_url
     elif p == "openrouter":  # OpenRouter aggregator (vendor/model ids)
         if auth.api_key:
-            env["OPENROUTER_API_KEY"] = auth.api_key
-        if auth.base_url:
+            # Through the relay, as hermes's openai-api and anthropic routes are. This one went to
+            # OpenRouter directly, with the connection's real key in the CLI's environment, so none
+            # of the relay's repairs reached it, and it is the route that needed one most: with an
+            # OpenAI model, OpenRouter hands a tool a free-form object EMPTY whenever its schema
+            # carries the empty `properties` hermes adds (see _with_free_form_objects; measured
+            # 2026-10-05, and found on the hosted service with rows arriving as [{}, {}]). hermes
+            # joins /chat/completions onto OPENROUTER_BASE_URL, which is what the relay expects.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url or "https://openrouter.ai/api/v1",
+                                                        auth.api_key)
+            env["OPENROUTER_API_KEY"] = relay_tok
+            env["OPENROUTER_BASE_URL"] = relay_base
+        elif auth.base_url:
             env["OPENROUTER_BASE_URL"] = auth.base_url
     elif p == "openai-api":  # any OpenAI-compatible endpoint (OpenAI official, TokenRouter, ...)
         if auth.api_key and auth.base_url:
