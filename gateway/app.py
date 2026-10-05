@@ -313,6 +313,33 @@ _TRACE_NONCE = uuid.uuid4().hex[:8]
 # Streaming poll cadence for the /v1/responses path — much faster than the background driver's 30s
 # because an open SSE connection wants timely deltas (and the fast poll also keeps the sandbox warm).
 RESP_POLL_S = float(os.environ.get("HARNESS_RESP_POLL_S", "1.2"))
+
+
+def _load_reasoning():
+    """runner/reasoning.py, by path: the levels a model has are kept with the functions that apply
+    them, and the two services share a tree, not an import path."""
+    import importlib.util
+    path = pathlib.Path(__file__).resolve().parents[1] / "runner" / "reasoning.py"
+    spec = importlib.util.spec_from_file_location("hr_reasoning", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# How much a model thinks on a turn: a level on the request (`reasoning.effort`), else the harness's
+# (`reasoning_effort`), else nothing, which leaves every request exactly as it was before levels.
+reasoning = _load_reasoning()
+
+
+def _reasoning_level(value, where: str = "") -> str:
+    """A level as the API takes it, "" for none given. A value that is not a level is refused when
+    it came with the request (`where` names the field) and read as none when it was stored."""
+    level = str(value or "").strip().lower()
+    if level and level not in reasoning.LEVELS:
+        if where:
+            raise HTTPException(400, f"{where} must be one of: {', '.join(reasoning.LEVELS)}")
+        return ""
+    return level
 # Output (container) files produced by a turn are capped to keep a single response bounded.
 RESP_MAX_FILES = int(os.environ.get("HARNESS_RESP_MAX_FILES", "25"))
 RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
@@ -513,7 +540,8 @@ def _req_hash(body: "CreateResponseBody") -> str:
     canon = {"model": body.model, "input": body.input, "instructions": body.instructions,
              "previous_response_id": body.previous_response_id, "backend": body.backend,
              "tools": body.tools, "max_output_tokens": body.max_output_tokens,
-             "max_step": body.max_step, "metadata": meta}
+             "max_step": body.max_step, "metadata": meta,
+             **({"reasoning": body.reasoning} if body.reasoning else {})}
     return hashlib.sha256(json.dumps(canon, sort_keys=True, default=str).encode()).hexdigest()
 
 REDIS_URL = os.environ.get("HARNESS_REDIS_URL", "")
@@ -5545,6 +5573,9 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
                                "is_error": bool(ev.get("is_error")),
+                               # the thinking level asked and the one applied (runner: _stamp_thinking);
+                               # absent for a turn that asked for none
+                               **({"reasoning": ev["reasoning"]} if ev.get("reasoning") else {}),
                                # the model the CLI reports it actually used, when it says (gemini-cli
                                # keys its stats by served model, and rewrites some ids on the way)
                                "model": str(ev.get("model") or "")}))
@@ -5601,6 +5632,9 @@ class _RespTranslator:
         # matrix read it per turn (a report that said "every turn record" was reading the session).
         self.connection = ""
         self.served_model = ""      # what the CLI reports it ran, when it reports; "" = unknown
+        # {"effort": asked, "applied": level | "default" | None}: None for a turn that asked for no
+        # level; "applied" is None until the runner's result says what the model was actually given.
+        self.reasoning: dict | None = None
         self.seq = 0
         self.out_index = -1
         self.output: list[dict] = []
@@ -5630,6 +5664,7 @@ class _RespTranslator:
                 "output": self.output, "store": self.store, "usage": self.usage,
                 "connection": self.connection,
                 "served_model": self.served_model,
+                "reasoning": self.reasoning,
                 "metadata": meta}
 
     def start(self) -> list[dict]:
@@ -5728,11 +5763,19 @@ class _RespTranslator:
         elif kind == "result":
             if payload.get("model"):
                 self.served_model = str(payload["model"])
+            r = payload.get("reasoning")
+            if isinstance(r, dict) and self.reasoning is not None:
+                self.reasoning = {"effort": self.reasoning.get("effort") or r.get("effort"),
+                                  "applied": r.get("applied") or "default"}
             u = payload.get("usage")
             if u:
                 self.usage = {"input_tokens": u.get("input_tokens", 0),
                               "output_tokens": u.get("output_tokens", 0),
                               "total_tokens": u.get("input_tokens", 0) + u.get("output_tokens", 0)}
+                # The provider's own count of thinking tokens, where it gave one (part of the
+                # output count, in the Responses API's place for it).
+                if u.get("reasoning_tokens") is not None:
+                    self.usage["output_tokens_details"] = {"reasoning_tokens": int(u["reasoning_tokens"] or 0)}
                 # Cache tokens, priced separately as cache_read/write. Accept both the claude CLI's
                 # raw names AND the runner's already-normalized cache_read_tokens/cache_write_tokens.
                 for src, dst in (("cache_read_input_tokens", "cache_read_tokens"),
@@ -7369,6 +7412,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         resume: str | None, emit, model_req: str = "", user_text: str = "",
                         harness_id: str = "", max_step: int = 40,
                         timeout_s: int | None = None,
+                        effort: str = "",
                         hdr_vals: dict[str, str] | None = None,
                         partial_messages: bool = False, probe: dict | None = None,
                         codex_appserver: bool = False,
@@ -7560,6 +7604,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                  if backend == "gemini" and model_req else None),
                 "prompt": runner_prompt, "max_turns": max_step,
                 "timeout_seconds": timeout_s,
+                # How much the model thinks this turn; None asks nothing and changes nothing.
+                "reasoning_effort": effort or None,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "plugins": plugin_pkgs, "agent_doc": agent_doc,
                 "skills_suppressed": skills_suppressed, "tools_disabled": turn_tools_off,
@@ -8113,6 +8159,7 @@ class CreateResponseBody(BaseModel):
     backend: str | None = None     # non-OpenAI convenience: force codex|claude
     max_step: int | None = None         # per-request agent step budget (claude --max-turns)
     timeout_seconds: int | None = None  # per-request wall-clock cap for the turn
+    reasoning: dict | None = None       # {"effort": level}: how much the model thinks this turn (the Responses API's field)
 
 
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
@@ -8245,6 +8292,10 @@ async def create_response(body: CreateResponseBody, request: Request):
                 or _num((hv or {}).get("max_step")) or DEFAULT_MAX_STEP)
     timeout_s = (_num(body.timeout_seconds) or _num(meta.get("timeout_seconds"))
                  or _num((hv or {}).get("timeout_seconds")) or DEFAULT_TIMEOUT_S)
+    # The turn's own level wins over the harness's; neither set, nothing is asked of the model.
+    effort = (_reasoning_level((body.reasoning or {}).get("effort") if isinstance(body.reasoning, dict) else body.reasoning,
+                               "reasoning.effort")
+              or _reasoning_level((hv or {}).get("reasoning_effort")))
     # Pin the backend to the harness's base (a custom harness always runs on its own backend);
     # only fall back to inferring it from the model name when there's no harness. This makes the
     # model permission check below meaningful — the requested model is validated against the
@@ -8384,6 +8435,8 @@ async def create_response(body: CreateResponseBody, request: Request):
         _ignored = [f for f in ("tools", "include") if getattr(body, f, None) is not None]
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
         tr.environment = str((environment or {}).get("id") or "")
+        if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
+            tr.reasoning = {"effort": effort, "applied": None}
 
         # Broadcast a synthetic turn-start so the bus alone can render a conversation turn from
         # scratch (the native Responses events don't echo the user's prompt).
@@ -8431,7 +8484,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                         prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit_bg,
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
-                        max_step=max_step, timeout_s=timeout_s, hdr_vals=hdr_vals,
+                        max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
@@ -8481,7 +8534,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
-                            timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                            timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
                         for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -8539,7 +8592,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
-                timeout_s=timeout_s, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
@@ -8814,6 +8867,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "model": rec.get("model") or None,
                       # the model the CLI reported it ran, when it reported one
                       "served_model": rec.get("served_model") or None,
+                      # the thinking level the turn asked for and the one the model was given
+                      "reasoning": rec.get("reasoning") or None,
                       # WHY an incomplete turn is incomplete ("max_steps" | "timeout" |
                       # "interrupted"), so the console can say what actually happened instead of
                       # one banner for every cause. Absent on records from before the field.
@@ -15787,6 +15842,7 @@ class HarnessBody(BaseModel):
     disabled_tools: list | None = _either("disabled_tools")     # built-in tool names the harness disabled
     max_step: int | None = _either("max_step")            # default agent step budget for this harness's turns
     timeout_seconds: int | None = _either("timeout_seconds")     # default per-turn wall-clock cap
+    reasoning_effort: str | None = _either("reasoning_effort")   # how much the model thinks on this harness's turns; a turn's own level wins
     additional_headers: list | None = _either("additional_headers")  # header NAMES callers may pass per request
     env: dict | None = None                 # variables every turn's shell and tools start with: name -> literal,
                                             # $headers.X-Name (a declared request header) or vault:ref
@@ -15832,6 +15888,7 @@ def _harness_out(v: dict) -> dict:
             "env": _parse_env(v.get("env")),
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
             "timeoutSeconds": int(v.get("timeout_seconds")) if str(v.get("timeout_seconds") or "").isdigit() else None,
+            "reasoningEffort": _reasoning_level(v.get("reasoning_effort")),
             "calibrates": str(v.get("calibrates") or ""),
             "environment": str(v.get("environment") or ""),
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created}
@@ -15854,7 +15911,8 @@ def _harness_props(body: HarnessBody) -> dict:
             "calibrates": str(body.calibrates or "").strip(),
             "environment": str(body.environment or "").strip(),
             "max_step": str(body.max_step) if body.max_step else "",
-            "timeout_seconds": str(body.timeout_seconds) if body.timeout_seconds else ""}
+            "timeout_seconds": str(body.timeout_seconds) if body.timeout_seconds else "",
+            "reasoning_effort": _reasoning_level(body.reasoning_effort, "reasoning_effort")}
 
 
 _WS_WRITE_MAX = 4 * 1024 * 1024   # an app writing its own state, not an upload path
@@ -17719,6 +17777,7 @@ async def _cloud_harness_body(org: str, hid: str, v: dict, plugins_ok: bool = Fa
             **({"plugins": plugins} if plugins_ok else {}),
             "disabled_tools": out.get("disabledTools") or [], "max_step": out.get("maxStep"),
             "timeout_seconds": out.get("timeoutSeconds"), "additional_headers": out.get("additionalHeaders") or [],
+            "reasoning_effort": out.get("reasoningEffort") or None,
             "kit": out.get("kit") or None,
             "source": "selfhost", "source_instance": socket.gethostname()}
 
@@ -18055,7 +18114,10 @@ async def list_bases(request: Request) -> dict:
             "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
             "status": b["status"], "systemPrompt": b["system_prompt"],
             "defaultModel": cat.get("default", ""),
-            "models": [{"id": m["id"], "available": m["available"], "default": m["default"]}
+            # `reasoning`: the thinking levels the model has, lowest first; empty where none was
+            # measured, and the console offers no level there (runner/reasoning.py has the table).
+            "models": [{"id": m["id"], "available": m["available"], "default": m["default"],
+                        "reasoning": list(reasoning.levels_for(m["id"]))}
                        for m in view["models"]],
             "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
                       for n, lbl in b["tools"]],

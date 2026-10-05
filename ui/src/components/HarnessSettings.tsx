@@ -29,6 +29,11 @@ const isOwnSkill = (s: Skill) => Boolean((s.files && s.files.length) || (s as { 
 
 /** Harness settings. `embedded`: rendered inside the Agent harnesses page, which owns the title
  *  row and the way back; navigation asks the host instead of pushing routes. */
+/** What each thinking level is called here. The levels themselves come from the server. */
+const THINKING_LABELS: Record<string, string> = {
+  none: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high',
+};
+
 export function HarnessSettings({ id, embedded = false, onNavigate }: {
   id: string; embedded?: boolean; onNavigate?: (to: 'tasks' | 'list') => void;
 }) {
@@ -200,6 +205,11 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   const srvBase = bases?.[base?.id || draft?.base || ''] || null;
   const baseTools = srvBase?.tools || [];
   const models = oobModels(base);
+  // The thinking levels of the model this Harness runs on, as the server lists them for it.
+  const thinkingModel = oob ? oobDefaultModel(oob) : (draft?.defaultModel || oobDefaultModel(oobById(draft?.base || '')) || '');
+  const thinkingLevels = bases?.[base?.id || '']?.models.find((m) => m.id === thinkingModel)?.reasoning || [];
+  const thinkingStored = draft?.reasoningEffort || '';
+  const thinkingKept = Boolean(thinkingStored) && !thinkingLevels.includes(thinkingStored);
   const upd = (p: Partial<CustomHarness>) => setDraft((d) => (d ? { ...d, ...p } : d));
 
   async function save() {
@@ -319,6 +329,19 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
                   ))}
                 </select>
                 <span className="field-help">Tasks may choose another compatible model at runtime.</span></div>
+              {!oob && (thinkingLevels.length > 0 || thinkingStored) && (
+                <div className="field"><label htmlFor="hsThinking">Thinking</label>
+                  <select id="hsThinking" disabled={readOnly} value={thinkingStored}
+                    onChange={(e) => upd({ reasoningEffort: e.target.value })}>
+                    <option value="">Model default</option>
+                    {(thinkingKept ? [...thinkingLevels, thinkingStored] : thinkingLevels).map((lv) => (
+                      <option key={lv} value={lv}>{THINKING_LABELS[lv] || lv}</option>
+                    ))}
+                  </select>
+                  <span className="field-help">{thinkingKept
+                    ? 'This model does not have that level. Its Tasks get the nearest one it has.'
+                    : 'How much the model thinks before it answers. A Task may set its own.'}</span></div>
+              )}
             </div>
           </section>
 
