@@ -57,6 +57,20 @@ def test_an_empty_properties_leaves_every_nested_object_and_nothing_else_changes
     assert p["required"] == ["table", "rows"] and p["properties"]["table"] == {"type": "string"}
 
 
+def test_the_responses_shape_is_repaired_as_well_and_other_tool_types_are_left_alone():
+    """With an OpenAI model on an aggregator, hermes, opencode and kilo speak the Responses API,
+    where a function tool carries `parameters` beside its name. A repair of the chat shape alone
+    left those three losing their rows through Vercel."""
+    body = json.dumps({"model": "m", "input": "hi", "tools": [
+        {"type": "function", "name": "insert_rows", "parameters": {"type": "object", "properties": {
+            "rows": {"type": "array", "items": {"type": "object", "properties": {}}}}}},
+        {"type": "web_search", "parameters": {"type": "object", "properties": {"x": {"type": "object", "properties": {}}}}},
+    ]}).encode()
+    tools = json.loads(_with_free_form_objects(body))["tools"]
+    assert tools[0]["parameters"]["properties"]["rows"]["items"] == {"type": "object"}
+    assert tools[1]["parameters"]["properties"]["x"] == {"type": "object", "properties": {}}   # not a function tool
+
+
 def test_the_root_of_a_tool_that_takes_no_arguments_keeps_its_shape():
     """`parameters: {"type": "object", "properties": {}}` is how a tool with no arguments is written,
     and several validators want `properties` on the root. Only nested nodes are touched."""
@@ -102,6 +116,15 @@ def test_the_relay_sends_the_repaired_schema_for_any_model():
             assert resp.status == 200
             sent = seen["body"]["tools"][0]["function"]["parameters"]
             assert sent["properties"]["rows"]["items"] == {"type": "object"}, model
+        # ...and on the Responses API's path, in its own tool shape
+        conn.request("POST", "/v1/responses", body=json.dumps({
+            "model": "openai/gpt-5.4", "input": "hi",
+            "tools": [{"type": "function", "name": "insert_rows", "parameters": {"type": "object", "properties": {
+                "rows": {"type": "array", "items": {"type": "object", "properties": {}}}}}}]}),
+            headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
+        resp = conn.getresponse(); resp.read()
+        assert resp.status == 200
+        assert seen["body"]["tools"][0]["parameters"]["properties"]["rows"]["items"] == {"type": "object"}
     finally:
         conn.close(); up.shutdown(); rs._HERMES_RELAY["routes"].pop(tok, None)
 

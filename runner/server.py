@@ -3389,8 +3389,12 @@ def _drop_empty_properties(node, root: bool) -> bool:
 
 
 def _with_free_form_objects(body: bytes) -> bytes:
-    """A chat-completions body in which no NESTED object of a tool's parameters carries an empty
-    `properties`.
+    """A request body in which no NESTED object of a function tool's parameters carries an empty
+    `properties`, in either shape a function tool takes: chat completions
+    (`tools[].function.parameters`) and the Responses API (`tools[].parameters`). Both matter: with
+    an OpenAI model on an aggregator hermes, opencode and kilo speak the Responses API, and a repair
+    of the chat shape alone left exactly those three losing their rows through Vercel (the plugin
+    matrix's rows column on a candidate, 2026-10-05: 14 of 17 before and after).
 
     A free-form object (a row, a JSON body, a map of values) is written `{"type": "object"}`. Hermes
     and opencode add `"properties": {}` to every object node before the request leaves, and with
@@ -3417,9 +3421,13 @@ def _with_free_form_objects(body: bytes) -> bytes:
         return body
     changed = False
     for tool in doc["tools"]:
-        fn = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
         if isinstance(fn, dict):
             changed = _drop_empty_properties(fn.get("parameters"), True) or changed
+        elif tool.get("type") == "function":
+            changed = _drop_empty_properties(tool.get("parameters"), True) or changed
     return json.dumps(doc, separators=(",", ":")).encode() if changed else body
 
 
@@ -4224,6 +4232,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             for field in flags.get("drop_fields", ()):
                 body = _drop_top_level_field(body, field)
             headers["content-length"] = str(len(body))
+        elif body is not None and self.path.split("?", 1)[0].endswith("/responses"):
+            fixed = _with_free_form_objects(body)     # the same repair, in the Responses API's tool shape
+            if fixed is not body:
+                body = fixed
+                headers["content-length"] = str(len(body))
         google = _GOOGLE_HOST in base or bool(flags.get("thought_signature"))
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
