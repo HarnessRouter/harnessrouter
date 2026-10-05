@@ -271,7 +271,7 @@ def test_entities_and_relationships_are_records_and_references_in_one_graph(peop
     gb = ben.post(acme + "/graph", json={"around": dana["id"], "hops": 2}).json()
     assert boss["id"] not in {n["record"]["id"] for n in gb["nodes"]} and "board member Dana reports to" not in str(gb)
     hidden = [e for e in gb["edges"] if e["to"]["record_id"] == boss["id"]]
-    assert hidden == [{"from": hidden[0]["from"], "to": {"memory_id": tree["private"], "record_id": boss["id"]}, "available": False}]
+    assert hidden == [{"from": hidden[0]["from"], "to": {"record_id": boss["id"]}, "available": False}] and tree["private"] not in str(gb)
     # one subject and one object at most: a second of either is refused, not kept
     two = ada.post(acme + "/records", json={"type": "fact", "title": "Dana and Quillon both", "references": [
         {"rel": "subject", "record_id": dana["id"]}, {"rel": "subject", "record_id": quil["id"]}]})
@@ -361,8 +361,16 @@ def test_a_reference_crosses_the_tree_and_resolves_for_the_reader(people, tree):
     assert shared["references"][0]["available"] is True
     seen = ben.get(f"/v1/memories/{tree['sales']}/records/{shared['id']}").json()
     assert seen["content"] == [{"type": "text", "text": "Acme's budget is under review."}]
-    assert seen["references"] == [{"memory_id": tree["private"], "record_id": secret["id"], "available": False}]
+    assert seen["references"] == [{"record_id": secret["id"], "available": False}] and tree["private"] not in str(seen)
     assert "Dana" not in str(ben.post(f"/v1/memories/{tree['sales']}/recall", json={"text": "budget"}).json())
+    # a reviser who cannot see where a reference leads neither restates nor removes it: it stays
+    ada.post(f"/v1/memories/{tree['sales']}/grants", json={"principal": "member:ben@example.com", "privileges": ["read", "write"]})
+    v2 = ben.patch(f"/v1/memories/{tree['sales']}/records/{shared['id']}", json={"title": "Budget", "references": seen["references"]})
+    assert v2.status_code == 200 and v2.json()["references"] == [{"record_id": secret["id"], "available": False}]
+    v3 = ben.patch(f"/v1/memories/{tree['sales']}/records/{shared['id']}", json={"references": []}).json()
+    assert v3["references"] == [{"record_id": secret["id"], "available": False}]
+    mine = ada.get(f"/v1/memories/{tree['sales']}/records/{shared['id']}").json()["references"]
+    assert mine == [{"rel": "derived_from", "record_id": secret["id"], "memory_id": tree["private"], "available": True}]
 
 
 def test_erase_reports_what_it_could_not_reach(people, tree):

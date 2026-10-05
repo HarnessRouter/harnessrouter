@@ -281,6 +281,20 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
     prov = await mp.provider_of(m)
     if "content" in patch:
         patch["content"] = await mp.settle_files(org, mp.parts_of(patch["content"]), prov)
+    if "references" in patch:
+        # A reviser sets the references it can see. One that leads into a memory it may not read was
+        # shown to it as unavailable, without where it leads: it can neither restate nor remove it,
+        # so it stays as it was.
+        cur = await prov.get(mid, rid)
+        kept = []
+        for ref in (cur or {}).get("references") or []:
+            tm = str(ref.get("memory_id") or mid)
+            t = await mp._load(org, tm)
+            if not t or "read" not in await mp.effective(org, t, pr):
+                kept.append(ref)
+        stated = mp._record_in({"type": (cur or {}).get("type") or "fact", "title": "x",
+                                "references": [r for r in patch["references"] if isinstance(r, dict) and r.get("available") is not False]})["references"]
+        patch["references"] = stated + kept
     return await mp.present(org, mid, await prov.revise(mid, rid, patch, mp.writer_of(member)), pr)
 
 

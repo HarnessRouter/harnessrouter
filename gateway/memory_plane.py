@@ -547,7 +547,7 @@ async def graph(org: str, memory: dict, principals: list[str], *, around: str = 
         if b in shown:
             out_edges.append({"from": {"memory_id": a[0], "record_id": a[1]}, "to": {"memory_id": b[0], "record_id": b[1]}, "rel": rel, "available": True})
         elif not await may_read(b[0]):                       # the caller may not read where it leads: said, and nothing more
-            out_edges.append({"from": {"memory_id": a[0], "record_id": a[1]}, "to": {"memory_id": b[0], "record_id": b[1]}, "available": False})
+            out_edges.append({"from": {"memory_id": a[0], "record_id": a[1]}, "to": {"record_id": b[1]}, "available": False})
     return {"nodes": nodes, "edges": out_edges, "truncated": truncated, "degraded": degraded}
 
 
@@ -662,7 +662,8 @@ async def present(org: str, mid: str, record: dict, principals: list[str], _seen
             t = await _load(org, tm)
             seen[tm] = bool(t) and "read" in await effective(org, t, principals)
         refs.append({**{k: ref.get(k) for k in ("rel", "record_id")}, "memory_id": tm, "available": seen[tm]}
-                    if seen[tm] else {"memory_id": tm, "record_id": ref.get("record_id"), "available": False})
+                    # not even the memory's id: naming it would say that it exists
+                    if seen[tm] else {"record_id": ref.get("record_id"), "available": False})
     r["references"] = refs
     return r
 
