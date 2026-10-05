@@ -175,6 +175,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
   "object": "memory.record",
   "memory_id": "hmem_7c1e4b9a2d3f4e5a8b6c7d8e9f0a1b2c",
   "type": "fact",
+  "title": "Acme renews in March and wants its discount kept",
   "content": [
     { "type": "text", "text": "Acme renews in March and wants its discount kept." }
   ],
@@ -197,7 +198,8 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
 | Field | Meaning |
 |---|---|
 | `type` | What kind of record ([§4.1](#41-types)) |
-| `content` | What the record says: an ordered list of parts, text and files ([§4.3](#43-content)) |
+| `title` | One line that names the record: a document's heading, an entity's name, a fact's statement. Optional, at most 300 characters. A search matches it with the content. A record without one is named by how its content begins |
+| `content` | What the record says: an ordered list of parts, text and files ([§4.3](#43-content)). MAY be empty when the record has a title: a fact is often one sentence |
 | `attributes` | Structured fields. Free-form for core types; the type's schema for extension types ([§8](#8-types)) |
 | `version`, `status`, `supersedes` | A change appends a version and closes the one before it ([§5.3](#53-nothing-is-overwritten)). `status` is `active`, `superseded` or `forgotten` |
 | `time` | When it was true in the world (`valid_*`) and when the memory held it (`written_at`, `invalidated_at`). A provider without validity leaves `valid_*` null |
@@ -216,7 +218,7 @@ The core types every server understands:
 | `note` | A document an agent or a person wrote and maintains |
 | `procedure` | A how-to with the situation it applies to |
 | `link` | A pointer to something kept elsewhere: an address and a description, no content of its own |
-| `entity` | Something records are about: a person, a company, a product, a place. Its content is its name and what is known of it in a line or two |
+| `entity` | Something records are about: a person, a company, a product, a place. Its `title` is its name; its content is what is known of it |
 
 Any other type is an extension ([§8](#8-types)). A server MUST carry a record of a type it does not
 understand unchanged, and MUST NOT refuse a read because of it.

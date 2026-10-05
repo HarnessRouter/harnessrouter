@@ -2743,7 +2743,8 @@ components:
         id: { type: string, description: Assigned by the provider and opaque to a client. }
         object: { type: string, const: memory.record }
         memory_id: { type: string }
-        type: { type: string, description: 'episode, fact, note, procedure, link, or an extension type.' }
+        type: { type: string, description: 'episode, fact, note, procedure, link, entity, or an extension type.' }
+        title: { type: string, maxLength: 300, description: 'One line that names the record. Optional; a search matches it with the content.' }
         content: { type: array, items: { $ref: '#/components/schemas/MemoryContentPart' }, description: An ordered list of parts. Always a list on a read. }
         attributes: { type: object, additionalProperties: true }
         version: { type: integer }

@@ -2057,6 +2057,16 @@ def me02(ctx):
     assert (rec.get("attributes") or {}).get("account") == "quillon", f"attributes did not round-trip: {rec.get('attributes')!r}"
     got = ctx.client.get(f"/v1/memories/{rec['memory_id']}/records/{rec['id']}").json or {}
     assert got.get("id") == rec["id"] and got.get("content") == rec["content"], "the record does not read back by its id"
+    # a title names a record, apart from what it says, and may stand alone
+    body = "Either side can end the order form with 90 days written notice."
+    t = ctx.client.post(f"/v1/memories/{rec['memory_id']}/records", body={"type": "note", "title": "Quillon master agreement", "content": body})
+    assert t.status == 200, f"POST a record with a title returned HTTP {t.status}: {t.text[:200]}"
+    back = ctx.client.get(f"/v1/memories/{rec['memory_id']}/records/{t.json['id']}").json or {}
+    assert back.get("title") == "Quillon master agreement", f"the title did not read back: {back.get('title')!r}"
+    assert back.get("content") == [{"type": "text", "text": body}], f"the title must not be folded into the content: {back.get('content')!r}"
+    alone = ctx.client.post(f"/v1/memories/{rec['memory_id']}/records", body={"type": "fact", "title": "The Quillon fiscal year starts on February 1"})
+    assert alone.status == 200 and (alone.json or {}).get("content") == [], (
+        f"a record with a title and no content is a record; got HTTP {alone.status} {str(alone.json)[:160]}")
     w = rec.get("written_by") or {}
     assert w.get("kind") == "member" or str(w.get("kind") or "").startswith("x."), (
         f"a stated record's writer is a member (a person or an agent) or an x.-prefixed kind of the server's own; got {w.get('kind')!r}")
