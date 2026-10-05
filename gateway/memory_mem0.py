@@ -89,6 +89,9 @@ class Mem0(mp.Provider):
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "enforced_filter", "derivation": "write_time",
                 "observe": {"keeps_episodes": False, "answers": "job"},
+                # mem0 links entities inside itself to rank, and no longer serves them: an entity is
+                # here only when someone states one
+                "graph": {"entities": "stated"},
                 "recall": {"signals": ["query", "text", "filters"], "abstain": False,
                            "filters": {"native": ["eq on type and attributes.*", "gte/lte/gt/lt on time.written_at"],
                                        "applied_after_ranking": "every other filter"}},

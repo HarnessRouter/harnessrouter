@@ -121,6 +121,24 @@ def test_a_question_asked_of_the_parent_finds_the_child_and_names_it(c, tree):
     assert tree["team"] not in {x["memory"]["id"] for x in up["results"]}          # never looks above
 
 
+def test_mem0_holds_entities_someone_states_and_the_graph_is_built_from_references(c, tree):
+    acme = f"/v1/memories/{tree['acme']}"
+    mk = lambda **b: c.post(acme + "/records", headers=ADA, json=b).json()   # noqa: E731
+    lee = mk(type="entity", content="Lee Tanaka, procurement at Acme")
+    link = mk(type="fact", content="Lee Tanaka signs Acme's renewals.", attributes={"predicate": "signs"},
+              references=[{"rel": "subject", "record_id": lee["id"]}])
+    for _ in range(20):
+        g = c.post(acme + "/graph", headers=ADA, json={"around": lee["id"], "hops": 1}).json()
+        if {lee["id"], link["id"]} <= {n["record"]["id"] for n in g.get("nodes") or []}:
+            break
+        time.sleep(2)
+    assert {lee["id"], link["id"]} <= {n["record"]["id"] for n in g["nodes"]}, g
+    assert [e for e in g["edges"] if e.get("rel") == "subject" and e["to"]["record_id"] == lee["id"]]
+    assert next(n for n in g["nodes"] if n["record"]["id"] == lee["id"])["record"]["type"] == "entity"
+    caps = next(p for p in c.get("/v1/memories/providers", headers=ADA).json()["data"] if p["id"] == "mem0")
+    assert caps["graph"] == {"entities": "stated"}
+
+
 def test_a_record_of_one_memory_cannot_be_read_through_another(c, tree):
     r = c.get(f"/v1/memories/{tree['team']}/records/{tree['fact']}", headers=ADA)
     assert r.status_code == 404 and r.json()["error"]["code"] == "memory_record_not_found"
