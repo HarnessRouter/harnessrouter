@@ -493,7 +493,10 @@ async def children(org: str, mid: str, principals: list[str]) -> list[dict]:
 
 
 # ── grants ────────────────────────────────────────────────────────────────────────────────────
-_PRINCIPAL = re.compile(r"(harness|member|workspace|key|group):[A-Za-z0-9_.@:+\-]{1,160}")
+# One vocabulary for who acts on a memory, in a grant (`<kind>:<id>`) and on a record's writer
+# (`{kind, id}`): a person, an agent, a set of people, the provider itself. Anything else is `x.`.
+ACTOR_KINDS = ("member", "harness", "group", "provider")
+_PRINCIPAL = re.compile(r"(member|harness|group|x\.[a-z0-9_.-]+):[A-Za-z0-9_.@:+\-]{1,160}")
 
 
 async def grants(org: str, mid: str, principals: list[str]) -> list[dict]:
@@ -515,7 +518,7 @@ async def grant(org: str, mid: str, principals: list[str], principal: str, privi
     principal = str(principal or "").strip()
     privs = [p for p in PRIVILEGES if p in (privileges or [])]
     if not _PRINCIPAL.fullmatch(principal):
-        raise MemoryError(422, "memory_invalid", "A principal is `<kind>:<id>`: harness, member, workspace, key or group.", "principal")
+        raise MemoryError(422, "memory_invalid", "A principal is `<kind>:<id>`: member, harness or group (a provider holds no grant).", "principal")
     if not privs:
         raise MemoryError(422, "memory_invalid", "Name at least one of read, write, create, delete.", "privileges")
     for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):

@@ -288,15 +288,18 @@ class FixtureProvider(Provider):
 
     # ── consolidation: every unconsolidated episode becomes one fact derived from it ────────────
     async def consolidate(self, mid, budget, trigger):
-        writer = {"kind": "consolidator", "id": self.id}
         limit = int((budget or {}).get("limit") or 0)
-        run = {"id": "hcon_" + uuid.uuid4().hex, "object": "memory.consolidation", "memory_id": mid,
+        rid = "hcon_" + uuid.uuid4().hex
+        # the provider is the writer; which run it was is said beside it, so a reader can tell what
+        # a person or an agent stated from what consolidation concluded, and find the run to revert
+        writer = {"kind": "provider", "id": self.id, "consolidation_id": rid}
+        run = {"id": rid, "object": "memory.consolidation", "memory_id": mid,
                "status": "running", "trigger": trigger, "started_at": int(time.time()), "finished_at": None,
                "read": {"episodes": 0, "through": None}, "changes": {"created": 0, "superseded": 0, "forgotten": 0},
                "usage": {"input_tokens": 0, "output_tokens": 0},
                "budget": {"limit": limit or None, "unit": "episodes", "exhausted": False},
-               "written_by": writer, "error": "", "_made": [], "reverted": False}
-        done = {x["record_id"] for r in self._rows(mid) if r["written_by"].get("kind") == "consolidator"
+               "written_by": {"kind": "provider", "id": self.id}, "error": "", "_made": [], "reverted": False}
+        done = {x["record_id"] for r in self._rows(mid) if r["written_by"].get("consolidation_id")
                 and r["status"] == "active" for x in r["references"] if x.get("rel") == "derived_from"}
         for ep in [r for r in self._current(mid) if r["type"] == "episode" and r["id"] not in done]:
             if limit and run["read"]["episodes"] >= limit:
