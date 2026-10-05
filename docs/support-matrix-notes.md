@@ -2758,3 +2758,52 @@ something of their own. A level set on the harness or the turn replaces all of t
 Also from the hosted service: `backend` on POST /v1/responses took a base's id ("claude-code") as the
 backend, matched no model, and refused every model as having no provider there. It names the base's
 backend now.
+
+## Where a turn's fixed seconds went (2026-10-05, 0.30.1)
+
+Two changes ported from the hosted service, where both were found and first measured, and measured
+again here through a streamed task (`stream: true`, timed at the client): when the first text
+arrives, in how many steps the answer grows (text arriving after a pause of 0.1 s or more), and how
+long after the last text the task says it is complete. Warm turns of one session, medians.
+
+**The gateway asked for a turn's events every 1.2 s.** So the first text waited up to that long, a
+streamed answer grew in jumps of that size, and the end was heard at the next ask. The runner now
+holds the request (`GET /turn/{id}?wait=`) until it has an event, the turn is done, or the wait has
+passed, and says `held`; the gateway asks again at once, writes the durable trace once per interval
+instead of once per answer, and paces itself the old way when an answer does not say held (an older
+runner) or a request failed. The duties that counted polls (the lease, the heartbeat, the durable
+cancel check) count the clock. `HARNESS_RESP_HOLD_S` sets the hold (3 s; 0 asks the old way). The
+hold waits on the runner's event loop, not on a worker thread: one runner serves every session of an
+instance, and 120 turns held at once answer together in the test.
+
+**A checkpoint carried what a CLI rebuilds for itself.** omp's two native binaries, Codex's plugin
+catalogue and the DeepSeek Harness's unpacked packages travelled in the workspace's archive after
+every turn. They are left out now (`_REBUILT_CACHES`). opencode's npm cache is deliberately not:
+rebuilding it cost a turn 20 s on the hosted service.
+
+| base, model | | 0.30.0 | with the hold | with the hold and the smaller checkpoint |
+|---|---|---:|---:|---:|
+| pi, deepseek-v4-flash | first text | 2.71 s | 2.68 s | 2.88 s |
+| | steps | 2 | 5.5 | 7.5 |
+| | last text to complete | 0.20 s | 0.18 s | 0.15 s |
+| codex, gpt-5.4 | first text | 4.13 s | 3.79 s | 3.98 s |
+| | steps | 3 | 7 | 8 |
+| | last text to complete | 3.72 s | 3.19 s | 0.22 s |
+| | whole turn | 10.4 s | 8.9 s | 6.0 s |
+| omp, gpt-5.4 | steps | | 7 to 9 | 10.5 |
+| | last text to complete | | 7.5 s | 0.37 s |
+| | whole turn | | 15.4 s | 9.6 s |
+| claude-code, claude-haiku-4.5 | first text | 3.99 s | 4.22 s | |
+| | steps | 1 | 1 | |
+| hermes, gpt-5.4 | first text | 28.7 s | 23.7 s | |
+| | steps | 1 | 1 | |
+
+Read with their sizes: four to eight turns per cell, and the model's own time is most of "first
+text". What moved beyond noise is the number of steps a streamed answer grows in (pi 2 to 7.5, Codex
+3 to 8) and the end of a turn on the two bases whose checkpoint shrank (Codex 3.7 s to 0.2 s, omp
+7.5 s to 0.4 s). Claude Code and hermes hand over whole messages, so their answers arrive in one step
+either way; hermes's first text is its whole answer and its difference here is the model's.
+
+Not ported, with the reason: the hosted change that lets a turn's record writes run beside the loop
+(each write costs about 0.4 s there; here the store is a local file), and the per-turn timing log
+line that found these.

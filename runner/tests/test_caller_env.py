@@ -38,7 +38,7 @@ def test_a_turn_is_read_back_without_its_secret_values(monkeypatch):
         "result": "the token is tok_0123456789abcdef in us-east-1", "error": "bad tok_0123456789abcdef",
         "events": [{"type": "assistant", "message": {"content": [{"type": "text", "text": "echo tok_0123456789abcdef"}]}}],
         "secrets": secrets})
-    out = server.get_turn("turn_x")
+    out = __import__("asyncio").run(server.get_turn("turn_x"))
     dumped = __import__("json").dumps(out)
     assert "tok_0123456789abcdef" not in dumped and "us-east-1" not in dumped
     assert out["result"] == "the token is [redacted] in [redacted]" and out["error"] == "bad [redacted]"
