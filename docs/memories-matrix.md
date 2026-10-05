@@ -1,7 +1,8 @@
 # Memories: what was measured
 
 Two runners in `scripts/support-matrix/memories/` (see its README) against one instance, the
-self-hosted image `0.30.0-rc.10` built from `feat/memories`, with Mem0 connected on the workspace's
+self-hosted image built from `feat/memories` as a release candidate (a test build, not a published
+version), with Mem0 connected on the workspace's
 own key. 2026-10-05.
 
 ## Every route, on Mem0

@@ -16507,7 +16507,7 @@ def _translator_answer(tr) -> str:
     """What the agent answered this turn: every closed message item, and the one still open. The
     turn's last message is closed by `complete()`, which runs after the turn function returns, so
     reading the closed items alone gave an observed turn with a question and no answer (hr-test,
-    0.30.0-rc.2: mem0's event log showed each turn's user message and nothing else)."""
+    an early candidate of this feature: mem0's event log showed each turn's user message and nothing else)."""
     parts = [str(c.get("text") or "") for o in tr.output if isinstance(o, dict) and o.get("type") == "message"
              for c in (o.get("content") or []) if isinstance(c, dict)]
     if tr.cur and tr.cur.get("kind") == "message":
