@@ -42,6 +42,7 @@ Yjs sidecar layer on next.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextvars
 import hashlib
@@ -72,6 +73,7 @@ import uuid
 
 import yaml
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -9307,6 +9309,20 @@ _HERMES_POLL_S = 0.8
 _HERMES_STARTUP_TIMEOUT_S = float(os.environ.get("HERMES_STARTUP_TIMEOUT_S", "90"))
 
 
+_HERMES_SID_LINE = re.compile(r"^session_id:\s*\S+$")
+
+
+def _hermes_error_text(err_lines: list[str], rc: int | None, silent_s: float) -> str:
+    """Why a hermes run failed, from its last stderr lines. The CLI closes every run with a
+    `session_id: <id>` line, a failed one too; taken as the reason, it told a person "The last one
+    said: session_id: 20261005_135032_0fb4fd" (the hosted service, 2026-10-05). When the CLI said
+    nothing else, the reason is what is known: it stopped with no final answer, its exit code, and
+    how long it had been silent by then."""
+    said = "\n".join(x for x in err_lines[-30:] if not _HERMES_SID_LINE.match(x.strip())).strip()
+    return (said or f"Hermes ended the turn without a final answer and gave no reason "
+                    f"(exit code {rc}, {silent_s:.0f} s after its last message).")[:2000]
+
+
 def _hermes_startup_hung(produced: bool, started: float, last_data: float, now: float) -> bool:
     """Whether a hermes turn that has written no message yet is hung, not merely slow to finish its
     first one: nothing produced within the limit, and no provider event within it either."""
@@ -9467,6 +9483,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     sid = resume
     cursor = 0
     produced = False        # has the model emitted ANY message yet (see _HERMES_STARTUP_TIMEOUT_S)
+    last_msg = t0           # when the last message of this turn was read from the CLI's database
     if resume:
         db = _hermes_db_ro(db_path)
         if db is not None:
@@ -9480,7 +9497,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
         append({"type": "system", "subtype": "init", "session_id": resume, "model": model})
 
     def _sweep() -> None:
-        nonlocal sid, cursor, produced
+        nonlocal sid, cursor, produced, last_msg
         db = _hermes_db_ro(db_path)
         if db is None:
             return
@@ -9498,6 +9515,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
             for row in db.execute(
                     "SELECT * FROM messages WHERE session_id=? AND id>? ORDER BY id", (sid, cursor)):
                 cursor = row["id"]
+                last_msg = time.time()
                 # The prompt hermes echoes back is not the model producing anything.
                 if str(row["role"] or "").lower() != "user":
                     produced = True
@@ -9565,7 +9583,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     if not use_chat:
         final = "\n".join(out_buf).strip() or final
     ok = rc == 0 and not run_failed and not rec.get("cancelled") and not rec.get("capped") and bool(final.strip())
-    err_txt = ("\n".join(err_buf[-30:]).strip() or f"exit_code={rc}")[:2000]
+    err_txt = _hermes_error_text(err_buf, rc, time.time() - last_msg)
     if rec.get("startup_timeout"):
         # The generic exit_code/stderr text is useless here (the process was killed by US, not a
         # normal failure) — say what actually happened instead of leaving a cryptic "exit_code=-9".
@@ -10358,13 +10376,16 @@ def cancel_turn(turn_id: str) -> dict:
     return {"turn_id": turn_id, "status": "cancelling", "cancelled": True}
 
 
-@app.get("/turn/{turn_id}")
-def get_turn(turn_id: str, since: int = 0) -> dict:
-    """Incremental turn status + normalized events (events[since:]). Polling also keeps the
-    Timed sandbox alive (every request resets the idle cooldown)."""
-    rec = _turns.get(turn_id)
-    if not rec:
-        raise HTTPException(404, "turn not found")
+# GET /turn/{id}?wait=S holds its answer until the turn has something new, so the gateway hears of
+# an event when it happens instead of at its next poll (it asked every 1.2 s: up to that long before
+# the first text of a turn and again before its end, measured on the hosted service 2026-10-05). The
+# hold is capped, and once something has arrived the answer lingers a moment so a burst of token
+# deltas travels as one answer rather than one request per delta.
+_TURN_HOLD_MAX_S = 10.0
+_TURN_HOLD_LINGER_S = 0.15
+
+
+def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
     with _turns_lock:
         evs = rec["events"][since:]
         n = len(rec["events"])
@@ -10374,5 +10395,30 @@ def get_turn(turn_id: str, since: int = 0) -> dict:
            "session_id": rec.get("session_id"), "reason": rec.get("reason") or "",
            "handoff": rec.get("handoff"),
            "events": evs, "n_total": n, "elapsed": round(time.time() - rec["started"], 1)}
+    if held:
+        out["held"] = True
     sec = rec.get("secrets")
     return json.loads(_scrub_secrets(json.dumps(out, default=str), sec)) if sec else out
+
+
+@app.get("/turn/{turn_id}")
+async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0) -> dict:
+    """Incremental turn status + normalized events (events[since:]). Polling also keeps the
+    Timed sandbox alive (every request resets the idle cooldown).
+
+    `wait` > 0 holds the answer until there is an event past `since`, the turn is done, or `wait`
+    seconds have passed. Such an answer says `held`, which is how a caller tells this runner from
+    one that ignores the parameter and has to be paced by the caller's own sleep.
+
+    The hold waits on the event loop, not on a worker thread: this one runner serves every session
+    of an instance, and a thread held per running turn would leave none to start the next."""
+    rec = _turns.get(turn_id)
+    if not rec:
+        raise HTTPException(404, "turn not found")
+    if wait > 0:
+        deadline = time.monotonic() + min(wait, _TURN_HOLD_MAX_S)
+        while time.monotonic() < deadline and not rec["done"] and len(rec["events"]) <= since:
+            await asyncio.sleep(0.02)
+        if not rec["done"] and len(rec["events"]) > since:
+            await asyncio.sleep(max(0.0, min(_TURN_HOLD_LINGER_S, deadline - time.monotonic())))
+    return await run_in_threadpool(_turn_answer, turn_id, rec, since, wait > 0)

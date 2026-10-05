@@ -313,6 +313,30 @@ _TRACE_NONCE = uuid.uuid4().hex[:8]
 # Streaming poll cadence for the /v1/responses path — much faster than the background driver's 30s
 # because an open SSE connection wants timely deltas (and the fast poll also keeps the sandbox warm).
 RESP_POLL_S = float(os.environ.get("HARNESS_RESP_POLL_S", "1.2"))
+# How long one request for a turn's events may be held by the runner until it has something new
+# (GET /turn/{id}?wait=). The gateway used to ask every RESP_POLL_S, which put up to that long
+# before a turn's first text and again before its end (measured on the hosted service, 2026-10-05:
+# first output heard a median 1,249 ms after the runner had it, 225 ms with the hold). 0 asks the
+# old way.
+RESP_HOLD_S = float(os.environ.get("HARNESS_RESP_HOLD_S", "3"))
+
+
+class _Every:
+    """A turn's loop no longer turns once per RESP_POLL_S: it turns when the runner has something.
+    Duties that ran every N polls (the lease, the heartbeat, the durable cancel check) run every N
+    poll intervals of the clock instead. `at_once` names the duties whose first run is immediate;
+    the others first run one interval after `t0`."""
+
+    def __init__(self, t0: float, at_once: tuple[str, ...] = ()) -> None:
+        self._t0 = t0
+        self._last = {k: 0.0 for k in at_once}
+
+    def __call__(self, what: str, polls: int) -> bool:
+        now = time.time()
+        if now - self._last.get(what, self._t0) >= polls * RESP_POLL_S:
+            self._last[what] = now
+            return True
+        return False
 
 
 def _load_reasoning():
@@ -7684,17 +7708,23 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         else:
             await _vertex_upsert(sid, {"status": "running", "turn_status": "running",
                                        "last_connection": name, "runner_turn_id": rt or ""})
-        # cursor = durable fetch offset (only advances on an ack'd flush); fed_upto = how far
-        # events have been fed to the translator/emit (advances always) so a held-cursor re-fetch
-        # after a failed flush re-persists WITHOUT re-emitting duplicate output.
-        cursor, fed_upto, terminal, poll_fails, kill_sent, polls = 0, 0, None, 0, False, 0
+        # cursor = how far the durable trace has been written; fed_upto = how far events have been
+        # fed to the translator and emitted. Events are asked for from fed_upto, so nothing comes
+        # twice, and what is fed and not yet written waits in `pending`.
+        cursor, fed_upto, terminal, poll_fails, kill_sent = 0, 0, None, 0, False
+        pending: list = []
+        last_flush = time.time()
+        # A runner that holds the request says so in its answer; one that does not is paced by our
+        # own sleep, as before. The first request goes out at once either way.
+        held = RESP_HOLD_S > 0
+        every = _Every(time.time())
         while True:
-            await asyncio.sleep(RESP_POLL_S)
-            polls += 1
+            if not held:
+                await asyncio.sleep(RESP_POLL_S)
+            renew = every("renew", LEASE_RENEW_EVERY)
             # Heartbeat-renew the session lease so a long turn's lease never expires and gets
             # stolen by a follow-up (which would wipe this live workspace). Best-effort.
-            if (rec.get("lease_fence") and control_store.enabled()
-                    and polls % LEASE_RENEW_EVERY == 0):
+            if rec.get("lease_fence") and control_store.enabled() and renew:
                 try:
                     await control_store.lease_renew(org, sid, translator.resp_id,
                                                     rec["lease_fence"], LEASE_TTL_S)
@@ -7702,16 +7732,16 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     pass
             # Renew the vertex heartbeat too, so the reconcile sweep sees a long turn as live (its
             # fresh-heartbeat fast path applies) instead of re-scanning trace chunks every cycle.
-            if polls % LEASE_RENEW_EVERY == 0:
+            if renew:
                 try:
                     await _vertex_upsert(sid, {"heartbeat": str(time.time())})
                 except Exception:  # noqa: BLE001
                     pass
             # Stop observed mid-turn (bypasses cancel_session's own sandbox call when that raced
-            # startup). The durable per-response latch is consulted every 10th poll so a cancel on
+            # startup). The durable per-response latch is consulted every tenth interval so a cancel on
             # any replica lands; the in-process flag is instant for a same-replica Stop.
             if not kill_sent and await _turn_cancelled(sid, org, translator.resp_id,
-                                                        check_store=(polls % 10 == 0)):
+                                                        check_store=every("cancel", 10)):
                 kill_sent = True
                 try:
                     await _sandbox_json(f"/turn/{rt}/cancel", sid, "POST", attempts=2)
@@ -7719,41 +7749,42 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     terminal = "cancelled"   # sandbox unreachable — settle the turn terminally anyway
                     break
             try:
-                s = await _sandbox_json(f"/turn/{rt}", sid, "GET", params={"since": cursor}, attempts=3, base=2.0)
+                s = await _sandbox_json(f"/turn/{rt}", sid, "GET", attempts=3, base=2.0,
+                                        params={"since": fed_upto, **({"wait": RESP_HOLD_S} if RESP_HOLD_S > 0 else {})})
                 poll_fails = 0
             except Exception as e:  # noqa: BLE001
                 # a transient poll hiccup must not abort a live turn — only give up after a run
                 poll_fails += 1
+                held = False          # nothing held the request this time: pace the next one ourselves
                 if poll_fails >= 5:
                     rec["tried"].append({"connection": name, "error": f"poll: {str(e)[:150]}"})
                     break
                 continue
+            held = bool(s.get("held"))
             new = s.get("events") or []
-            n_total = s.get("n_total", cursor)
-            flush_ok = True
-            if new:
-                flush_ok = await _trace_flush(tr, {"events": new, "n_total": n_total})
-            # Feed/emit ONLY the slice not already fed — so a held-cursor re-fetch (after a failed
-            # flush) re-persists the events without re-emitting them into the response/stream.
+            n_total = s.get("n_total", fed_upto)
+            # Fed and emitted the moment they arrive. Asked for from fed_upto, so nothing comes twice.
             if new and n_total > fed_upto:
-                skip = fed_upto - cursor if fed_upto > cursor else 0
-                for cev in new[skip:]:
+                for cev in new:
                     for oev in translator.feed(cev):
                         await emit(oev)
                 fed_upto = n_total
-            # HR-INF-014: advance the DURABLE fetch cursor only once the events are acknowledged.
-            # On a failed flush we hold it so the next poll re-fetches and re-persists them (the
-            # durable trace is the authority and must not lose events). No events → advance.
-            if flush_ok or not new:
-                if new and flush_ok and cursor != n_total and control_store.enabled():
-                    # Persist the per-turn harvest cursor so a replica that ADOPTS this turn after we
-                    # die resumes at exactly the right sandbox index — no re-flush, no re-emit. Only
-                    # on a real advance (new events actually flushed), so it's ≤ once per poll batch.
-                    try:
-                        await control_store.resp_set_cursor(org, translator.resp_id, int(n_total))
-                    except Exception:  # noqa: BLE001 — advisory; adoption falls back to session-count
-                        pass
-                cursor = n_total
+                pending.extend(new)
+            # HR-INF-014: the durable trace is the authority and must not lose events. It is written
+            # once per interval rather than once per answer (a stream of token deltas would otherwise
+            # be a chunk each), and at the turn's end; a failed write keeps `pending` for the next.
+            # `cursor` is how far the trace has been written, and only that is persisted: a replica
+            # that ADOPTS this turn after we die asks the runner again from exactly there.
+            if pending and (s.get("done") or time.time() - last_flush >= RESP_POLL_S):
+                last_flush = time.time()
+                if await _trace_flush(tr, {"events": pending, "n_total": fed_upto}):
+                    pending = []
+                    if cursor != fed_upto and control_store.enabled():
+                        try:
+                            await control_store.resp_set_cursor(org, translator.resp_id, int(fed_upto))
+                        except Exception:  # noqa: BLE001 — advisory; adoption falls back to session-count
+                            pass
+                    cursor = fed_upto
             # Persist the CLI resume id ONLY when it CHANGES (HR-INF-010). The runner echoes
             # session_id on every poll (~1.2s), but it's set once per turn — an unconditional
             # upsert was ~1500 identical writes/turn to the shared partition. This loop is the
@@ -7794,6 +7825,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                          # characters and 200 cut goose's tmp-dir panic at its path (2026-09-13).
                                          "error": (s.get("error") or s.get("result") or "")[:2000]})
                 break
+        if pending:   # the loop was left between two writes (a cancel, a poll that kept failing)
+            await _trace_flush(tr, {"events": pending, "n_total": fed_upto})
         _last_err = str(rec["tried"][-1].get("error") or "") if rec["tried"] else ""
         if (not terminal and rec["tried"] and rec["tried"][-1].get("connection") == name
                 and rec["tried"][-1].get("status") and _provider_refused(_last_err)):
