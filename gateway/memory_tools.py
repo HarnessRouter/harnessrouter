@@ -49,10 +49,11 @@ _TOOLS = [
           "Keep one thing worth remembering, in your own words, as a record. Leave `memory` out to write where this "
           "agent writes by default. `references` point at the records it came from.",
           {"memory": _MEM, "type": {"type": "string", "description": "fact (default), note, procedure, link"},
+           "title": {"type": "string", "description": "one line naming it: a document's heading, an entity's name, a fact's statement"},
            "content": {"type": "string"}, "attributes": {"type": "object"},
-           "references": {"type": "array", "items": {"type": "object"}}}, ["content"], write=True),
+           "references": {"type": "array", "items": {"type": "object"}}}, [], write=True),
     _tool("memory_revise", "Correct a record. The earlier version is kept in its history; say why.",
-          {"memory": _MEM, "record": {"type": "string"}, "content": {"type": "string"},
+          {"memory": _MEM, "record": {"type": "string"}, "title": {"type": "string"}, "content": {"type": "string"},
            "attributes": {"type": "object"}, "reason": {"type": "string"}}, ["memory", "record", "reason"], write=True),
     _tool("memory_forget", "Close a record that is no longer true or wanted. Its history remains.",
           {"memory": _MEM, "record": {"type": "string"}}, ["memory", "record"], write=True),
@@ -97,7 +98,7 @@ def _text(obj) -> str:
 
 def _slim(record: dict) -> dict:
     """A record as an agent needs it: what it says, where it is, who wrote it and when."""
-    keep = ("id", "memory_id", "type", "content", "attributes", "version", "status", "time", "written_by", "references", "trust")
+    keep = ("id", "memory_id", "type", "title", "content", "attributes", "version", "status", "time", "written_by", "references", "trust")
     return {k: record[k] for k in keep if k in record and record[k] not in (None, {}, [])}
 
 
@@ -169,7 +170,9 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
             return _text({"remembered": _slim(await mp.present(org, mid, rec, pr))}), False
         if name == "memory_revise":
             m, _ = await mp.need(org, mid, pr, "write")
-            patch = {k: args[k] for k in ("content", "attributes") if k in args}
+            patch = {k: args[k] for k in ("title", "content", "attributes") if k in args}
+            if "title" in patch:
+                patch["title"] = mp.title_of(patch["title"])
             if not patch or not str(args.get("reason") or "").strip():
                 return "Give the new content or attributes, and the reason.", True
             if "content" in patch:

@@ -274,6 +274,31 @@ def test_entities_and_relationships_are_records_and_references_in_one_graph(peop
     assert caps["graph"] == {"entities": "stated"}
 
 
+def test_a_record_may_carry_a_title_and_it_is_found_and_revised_like_what_it_says(people, tree):
+    ada, _ = people
+    base = f"/v1/memories/{tree['sales']}/records"
+    note = ada.post(base, json={"type": "note", "title": "Zephyrline pilot",
+                                "content": "Two warehouses for thirty days, with a weekly written summary."}).json()
+    assert note["title"] == "Zephyrline pilot" and note["content"][0]["text"].startswith("Two warehouses")
+    # a title alone is a record: a fact is often one sentence
+    fact = ada.post(base, json={"type": "fact", "title": "The fiscal year starts on February 1"}).json()
+    assert fact["title"].startswith("The fiscal year") and fact["content"] == []
+    assert ada.post(base, json={"type": "fact"}).status_code == 422                       # neither title nor content
+    assert ada.post(base, json={"type": "note", "title": "two\nlines", "content": "x"}).status_code == 422
+    plain = ada.post(base, json={"type": "note", "content": "No title here."}).json()
+    assert plain["title"] == ""
+    # the title is part of what a search matches
+    got = ada.post(f"/v1/memories/{tree['sales']}/recall", json={"text": "Zephyrline", "depth": 0}).json()["results"]
+    assert [x["record"]["id"] for x in got] == [note["id"]]
+    # and it is revised like anything else: a version, with the earlier title in the history
+    v2 = ada.patch(f"{base}/{note['id']}", json={"title": "Zephyrline pilot, phase one"}).json()
+    assert v2["version"] == 2 and v2["title"] == "Zephyrline pilot, phase one" and v2["content"] == note["content"]
+    hist = ada.get(f"{base}/{note['id']}/history").json()["data"]
+    assert [h["title"] for h in hist] == ["Zephyrline pilot", "Zephyrline pilot, phase one"]
+    for rid in (note["id"], fact["id"], plain["id"]):
+        ada.delete(f"{base}/{rid}")
+
+
 def test_nothing_is_overwritten(people, tree):
     ada, _ = people
     base = f"/v1/memories/{tree['acme']}/records/{tree['fact']}"

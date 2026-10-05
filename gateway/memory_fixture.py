@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 
-from memory_plane import MemoryError, Provider, text_of
+from memory_plane import MemoryError, Provider, said
 
 _OPEN = None
 
@@ -74,7 +74,7 @@ class FixtureProvider(Provider):
         return [r for r in out if not r.get("erased")]
 
     def _append(self, mid, rec: dict, writer: dict, *, rid=None, version=1, supersedes=None) -> dict:
-        row = {"id": rid or "hrec_" + uuid.uuid4().hex, "type": rec["type"], "content": rec["content"],
+        row = {"id": rid or "hrec_" + uuid.uuid4().hex, "type": rec["type"], "title": rec.get("title") or "", "content": rec["content"],
                "attributes": rec.get("attributes") or {}, "references": rec.get("references") or [],
                "version": version, "status": "active", "supersedes": supersedes,
                "time": {"valid_from": (rec.get("time") or {}).get("valid_from"),
@@ -105,7 +105,7 @@ class FixtureProvider(Provider):
         head = self._head(mid, rid)
         if not head or head["status"] != "active":
             raise MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
-        new = {"type": head["type"], "content": patch.get("content", head["content"]),
+        new = {"type": head["type"], "title": patch.get("title", head.get("title") or ""), "content": patch.get("content", head["content"]),
                "attributes": {**head["attributes"], **(patch.get("attributes") or {})},
                "references": patch.get("references", head["references"]),
                "time": {**{k: head["time"][k] for k in ("valid_from", "valid_to")}, **(patch.get("time") or {})}}
@@ -194,7 +194,7 @@ class FixtureProvider(Provider):
         q, tx = _words(req.get("query") or ""), _words(req.get("text") or "")
         scored = []
         for r in self._select(mid, req):
-            w, why, score = _words(text_of(r["content"])) | _words(r["attributes"]), [], 0.0
+            w, why, score = _words(said(r)) | _words(r["attributes"]), [], 0.0
             if tx:
                 if not tx <= w:
                     continue           # words are a match or they are not

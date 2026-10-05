@@ -242,9 +242,11 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
     b = await _json(request)
-    patch = {k: b[k] for k in ("content", "attributes", "references", "time") if k in b}
+    patch = {k: b[k] for k in ("title", "content", "attributes", "references", "time") if k in b}
     if not patch:
-        raise _uhp_error(422, "memory_invalid", "A revision changes content, attributes, references or time.")
+        raise _uhp_error(422, "memory_invalid", "A revision changes the title, content, attributes, references or time.")
+    if "title" in patch:
+        patch["title"] = mp.title_of(patch["title"])
     prov = await mp.provider_of(m)
     if "content" in patch:
         patch["content"] = await mp.settle_files(org, mp.parts_of(patch["content"]), prov)

@@ -79,6 +79,14 @@ async def check(api_key: str) -> str:
     return "" if r.status_code == 200 else f"mem0 refused the key (HTTP {r.status_code})."
 
 
+def _split(text: str, titled: bool) -> tuple[str, str]:
+    """(title, body) of a mem0 memory: its first line is the title when the record was given one."""
+    if not titled:
+        return "", text
+    head, _, rest = text.partition("\n")
+    return head.strip(), rest.strip()
+
+
 class Mem0(mp.Provider):
     id = "mem0"
 
@@ -128,6 +136,8 @@ class Mem0(mp.Provider):
         """The protocol's fields a mem0 memory has no place for, kept in its metadata."""
         m = {k: v for k, v in (record.get("attributes") or {}).items() if not str(k).startswith(_RESERVED)}
         m[_RESERVED + "type"] = record.get("type") or "fact"
+        if record.get("title"):
+            m[_RESERVED + "title"] = "1"        # the memory's first line is the record's title
         m[_RESERVED + "version"] = version
         m[_RESERVED + "writer_kind"], m[_RESERVED + "writer_id"] = writer.get("kind") or "", writer.get("id") or ""
         if writer.get("type"):
@@ -153,8 +163,9 @@ class Mem0(mp.Provider):
             writer["type"] = meta[_RESERVED + "writer_type"]
         if meta.get(_RESERVED + "observed_by"):
             writer = {"kind": "provider", "id": "mem0", "on_behalf_of": meta[_RESERVED + "observed_by"]}
-        return {"id": str(item["id"]), "type": meta.get(_RESERVED + "type") or "fact",
-                "content": [{"type": "text", "text": item["memory"]}] if item.get("memory") else [],
+        title, body = _split(item.get("memory") or "", bool(meta.get(_RESERVED + "title")))
+        return {"id": str(item["id"]), "type": meta.get(_RESERVED + "type") or "fact", "title": title,
+                "content": [{"type": "text", "text": body}] if body else [],
                 "attributes": {k: v for k, v in meta.items() if not str(k).startswith(_RESERVED)},
                 "references": refs if isinstance(refs, list) else [],
                 "version": int(meta.get(_RESERVED + "version") or 1), "status": "forgotten" if gone else "active",
@@ -190,7 +201,7 @@ class Mem0(mp.Provider):
 
     # ── writes ────────────────────────────────────────────────────────────────────────────────
     async def remember(self, mid, record, writer):
-        text = mp.text_of(record["content"])
+        text = mp.said(record)              # mem0 has one text per memory: the title is its first line
         r = await self._call("POST", "/v3/memories/add/", body={
             "user_id": mid, "infer": False, "messages": [{"role": "user", "content": text}],
             "metadata": self._meta(record, writer)})
@@ -244,12 +255,13 @@ class Mem0(mp.Provider):
         if not item or self._out(item)["status"] != "active":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
         cur = self._out(item)
-        merged = {"type": cur["type"], "attributes": {**cur["attributes"], **(patch.get("attributes") or {})},
+        merged = {"type": cur["type"], "title": patch.get("title", cur["title"]), "content": patch.get("content", cur["content"]),
+                  "attributes": {**cur["attributes"], **(patch.get("attributes") or {})},
                   "references": patch.get("references", cur["references"]),
                   "time": {**{k: cur["time"][k] for k in ("valid_from", "valid_to")}, **(patch.get("time") or {})}}
         body: dict = {"metadata": self._meta(merged, writer, cur["version"] + 1)}
-        if "content" in patch:
-            body["text"] = mp.text_of(patch["content"])
+        if "content" in patch or "title" in patch:
+            body["text"] = mp.said(merged)
         r = await self._call("PUT", f"/v1/memories/{rid}/", body=body)
         if r.status_code != 200:
             raise Mem0Unavailable("the revision was not stored")
@@ -301,7 +313,8 @@ class Mem0(mp.Provider):
         for e in events:
             if e.get("event") != "ADD" and e.get("old_memory") == e.get("new_memory"):
                 continue                    # a change of metadata or expiry, not of what the record says
-            versions.append({**head, "content": [{"type": "text", "text": e.get("new_memory") or ""}], "version": len(versions) + 1,
+            vt, vb = _split(e.get("new_memory") or "", bool(head["title"]))
+            versions.append({**head, "title": vt, "content": [{"type": "text", "text": vb}] if vb else [], "version": len(versions) + 1,
                              "status": "superseded", "supersedes": len(versions) or None,
                              "time": {**head["time"], "written_at": _utc(e.get("updated_at")), "invalidated_at": None}})
         if not versions:

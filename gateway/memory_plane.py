@@ -652,7 +652,7 @@ async def revoke(org: str, mid: str, principals: list[str], gid: str) -> None:
 async def present(org: str, mid: str, record: dict, principals: list[str], _seen: dict | None = None) -> dict:
     """A record as this reader gets it: marked untrusted, and each reference resolved with the
     READER's privileges. A target in a memory the reader may not read is named and nothing more."""
-    r = {**record, "object": "memory.record", "memory_id": mid, "trust": "untrusted"}
+    r = {**record, "object": "memory.record", "memory_id": mid, "trust": "untrusted", "title": str(record.get("title") or "")}
     c = record.get("content")
     r["content"] = c if isinstance(c, list) else ([{"type": "text", "text": c}] if isinstance(c, str) and c else [])
     refs, seen = [], _seen if _seen is not None else {}
@@ -713,6 +713,24 @@ def parts_of(content, *, empty_ok: bool = False) -> list[dict]:
     return parts
 
 
+TITLE_MAX = 300
+
+
+def title_of(v) -> str:
+    """A record's title: one line naming it (a document's heading, an entity's name, a fact's
+    statement). Optional; a record without one is named by how its content begins."""
+    if v is None:
+        return ""
+    if not isinstance(v, str) or "\n" in v.strip() or len(v.strip()) > TITLE_MAX:
+        raise MemoryError(422, "memory_invalid", f"A title is one line of at most {TITLE_MAX} characters.", "title")
+    return v.strip()
+
+
+def said(record: dict) -> str:
+    """Every word a record says, its title first: what a search by words or by meaning matches."""
+    return "\n\n".join(x for x in (str(record.get("title") or ""), text_of(record.get("content"))) if x)
+
+
 def text_of(parts) -> str:
     """Every word a record says: its text parts and the text that stands for its files."""
     if isinstance(parts, str):
@@ -744,7 +762,9 @@ def _record_in(body: dict) -> dict:
     typ = str(body.get("type") or "fact")
     if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*", typ):
         raise MemoryError(422, "memory_invalid", "A record type is lower-case words joined by dots.", "type")
-    content = parts_of(body.get("content"), empty_ok=(typ == "link" or typ not in CORE_TYPES))
+    title = title_of(body.get("title"))
+    content = parts_of(body.get("content") if body.get("content") is not None else [],
+                       empty_ok=(bool(title) or typ == "link" or typ not in CORE_TYPES))
     refs = []
     for ref in body.get("references") or []:
         if not isinstance(ref, dict) or not ref.get("record_id"):
@@ -752,5 +772,5 @@ def _record_in(body: dict) -> dict:
         refs.append({"rel": str(ref.get("rel") or "related"), "memory_id": str(ref.get("memory_id") or ""),
                      "record_id": str(ref["record_id"])})
     t = body.get("time") or {}
-    return {"type": typ, "content": content, "attributes": dict(body.get("attributes") or {}),
+    return {"type": typ, "title": title, "content": content, "attributes": dict(body.get("attributes") or {}),
             "references": refs, "time": {k: t.get(k) for k in ("valid_from", "valid_to") if t.get(k)}}
