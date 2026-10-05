@@ -2301,9 +2301,9 @@
         "supersedes": {
           "type": [
             "integer",
-            "string",
             "null"
-          ]
+          ],
+          "description": "The number of the version this one replaced; null on the first."
         },
         "time": {
           "type": "object",
@@ -2765,8 +2765,8 @@
     },
     "MemoryRecordRef": {
       "type": "object",
+      "description": "A record by where it is. `memory_id` is absent on the far end of an edge the caller may not follow.",
       "required": [
-        "memory_id",
         "record_id"
       ],
       "properties": {

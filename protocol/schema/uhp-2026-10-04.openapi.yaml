@@ -2749,7 +2749,7 @@ components:
         attributes: { type: object, additionalProperties: true }
         version: { type: integer }
         status: { type: string, enum: [active, superseded, forgotten] }
-        supersedes: { type: [integer, string, 'null'] }
+        supersedes: { type: [integer, 'null'], description: 'The number of the version this one replaced; null on the first.' }
         time:
           type: object
           properties:
@@ -2886,7 +2886,8 @@ components:
         limit: { type: integer, minimum: 1 }
     MemoryRecordRef:
       type: object
-      required: [memory_id, record_id]
+      description: 'A record by where it is. `memory_id` is absent on the far end of an edge the caller may not follow.'
+      required: [record_id]
       properties:
         memory_id: { type: string }
         record_id: { type: string }
