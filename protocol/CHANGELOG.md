@@ -70,6 +70,9 @@ follows the rule a person's does (the fifth patch forbade a server to place an a
 its own, which is not equal standing where every new person joins one). Schema: `MemoryGraph`,
 `MemoryGraphRequest`, `MemoryRecordRef`. Suite `2026.10.4.post6`: ME-10.
 
+The chapter's opening, §1, the list of an agent's tools (`memory_graph`) and §14 were then brought
+in line with the six patches above; no rule changed.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,

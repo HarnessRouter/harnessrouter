@@ -12,13 +12,17 @@ attached a memory service to one harness, through that service's own API, with t
 idea of whose memory it was, and with no way to say who may read what.
 
 A **memory** is where they are kept. It is a named container of **records**: a fact, a note, a
-procedure. Memories are arranged in a tree, the way folders are, so one memory can hold what a whole
-company knows and another, beneath it, what is known about one customer. Access is granted per
-memory, and a memory's children inherit it.
+procedure, a person or a company the others are about. Records point at one another, and those
+pointers are the only graph there is: what was concluded from what, who a fact is about.
 
-An agent is given access to memories the way a person is. During a task it searches them and adds
-to them with tools. What it may read and where it may write is decided by the server, from what
-the agent was granted, and never by the agent itself.
+Memories are arranged in a tree, the way folders are, so one memory can hold what a whole company
+knows and another, beneath it, what is known about one customer. Access is granted per memory, and
+a memory's children inherit it.
+
+People and agents stand the same before it. Both are members, both are granted access the same way,
+and neither reaches what it was not granted. During a task an agent searches its memories and adds
+to them with tools. A search covers a memory and everything below it and says where each answer is
+kept, so the agent knows where to look next.
 
 This chapter is the Harness Memories sub-protocol. It is optional: a server advertises it with the
 `memories` capability, and a server that does not implement it is conformant at every class.
@@ -37,7 +41,8 @@ UHP Memories    this chapter                     what a memory is, who may reach
 MCP             the tools an agent holds         how an agent calls it in a turn
 ```
 
-- **The object.** A memory is a node in a tree. It holds **records** and may have child memories.
+- **The object.** A memory is a node in a tree. It holds **records**, which reference one another,
+  and may have child memories.
 - **The access.** A grant gives a principal privileges on a node; the node's descendants inherit it.
 - **The seam.** A harness reaches memory at four moments of a session's life ([§9.1](#91-what-a-session-does)),
   and only two of them are the agent's choice.
@@ -638,7 +643,7 @@ A harness adds two settings of its own:
 | Moment | Called by | What happens |
 |---|---|---|
 | **Prime** | server, at session start and after the conversation is compacted | The server reads what the provider marks as always-relevant in each memory the agent was granted and places it, with each memory's `name`, `description` and children, in the agent's instructions |
-| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, `memory_run_query` for the named queries a memory lists, `memory_operate` for a type's operations, and `memory_query` where a provider offers free queries. Write tools are offered only to an agent that holds `write` somewhere. The memories it was granted are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as its own privileges reach. The server checks every step |
+| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_graph`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, `memory_run_query` for the named queries a memory lists, `memory_operate` for a type's operations, and `memory_query` where a provider offers free queries. Write tools are offered only to an agent that holds `write` somewhere. The memories it was granted are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as its own privileges reach. The server checks every step |
 | **Observe** | server, when a turn ends | The turn (what was asked, what was answered, which tools ran) is sent to the default memory as episodes. No model is involved on the server's side |
 | **Consolidate** | server, on a schedule or when idle | The server asks the provider to do its background work. What that is belongs to the provider |
 
@@ -807,7 +812,8 @@ The suite's `memories` checks (ME-01 onward) run against a server that reports t
 has a provider connected, and drive this chapter through the public surface on that provider: the
 tree and its listing, a stated record and its stamped writer, a question asked of a parent finding a record below it and naming where it is, never one above, each signal against the provider's own capability document (a signal the
 provider lacks must be reported in `degraded`, never ignored), revision and history, a record's id
-refused through a memory it is not in, forgetting and erasing, moving and deleting. The suite runs
+refused through a memory it is not in, forgetting and erasing, moving and deleting, and two
+entities and the fact between them read back as one graph. The suite runs
 with one credential, so what one principal may not read of another's is not yet checked by it.
 
 An interface that passes says nothing about whether a memory is any good. That is a separate
