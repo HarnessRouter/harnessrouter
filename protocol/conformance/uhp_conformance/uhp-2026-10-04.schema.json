@@ -1962,7 +1962,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^hmem_"
+          "description": "Opaque to a client. A server that maps a tree it already has keeps that tree's own ids."
         },
         "object": {
           "type": "string",
@@ -3098,8 +3098,7 @@
       ],
       "properties": {
         "memory_id": {
-          "type": "string",
-          "pattern": "^hmem_"
+          "type": "string"
         },
         "access": {
           "type": "string",

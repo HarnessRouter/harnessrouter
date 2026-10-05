@@ -74,7 +74,7 @@ type-distinguishing prefix so an identifier is never ambiguous about what it poi
 | File | `file` | `file_` | With its container |
 | Container | `container` | `cntr_` | With its session |
 | Environment | `environment` | `henv_` | Until deleted; optional, see [Environments](environments.md) |
-| Memory | `memory` | `hmem_` | Until deleted; optional, see [Memories](memories.md) |
+| Memory | `memory` | `hmem_`, or the id of the tree a server maps | Until deleted; optional, see [Memories](memories.md) |
 | Event | *(none — events carry `type`)* | — | Streamed, and replayable |
 
 Their relationships:

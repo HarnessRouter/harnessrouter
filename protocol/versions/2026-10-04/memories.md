@@ -72,7 +72,7 @@ MCP             the tools an agent holds         how an agent calls it in a turn
 
 | Field | Type | Written by | Meaning |
 |---|---|---|---|
-| `id` | string | server | `hmem_`-prefixed |
+| `id` | string | server | Opaque to a client. A server that mints its own uses the `hmem_` prefix ([Architecture §3](architecture.md#3-object-model)); a server whose memories are a tree it already has keeps that tree's ids |
 | `name` | string | client | Human-readable |
 | `description` | string | client | What this memory holds, in a sentence or two. An agent reads it to decide whether to look inside ([§6.1](#61-reading-is-a-walk)), so it is content, not decoration |
 | `parent_id` | string or null | client | The containing memory; `null` on a root |

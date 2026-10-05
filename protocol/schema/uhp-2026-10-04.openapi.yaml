@@ -1584,7 +1584,7 @@ components:
       name: memory_id
       in: path
       required: true
-      schema: { type: string, pattern: '^hmem_' }
+      schema: { type: string }
     MemoryRecordId:
       name: record_id
       in: path
@@ -2629,7 +2629,7 @@ components:
       type: object
       required: [id, name, privileges]
       properties:
-        id: { type: string, pattern: '^hmem_' }
+        id: { type: string, description: 'Opaque to a client. A server that maps a tree it already has keeps that tree''s own ids.' }
         object: { type: string, const: memory }
         name: { type: string }
         description: { type: string, description: What this memory holds; an agent reads it to decide whether to look inside. }
@@ -2978,7 +2978,7 @@ components:
       type: object
       required: [memory_id]
       properties:
-        memory_id: { type: string, pattern: '^hmem_' }
+        memory_id: { type: string }
         access: { type: string, enum: [read, write] }
         default: { type: boolean, description: 'Where observe and an unaddressed remember go: one entry at most, and one the agent writes.' }
     HarnessMemories:

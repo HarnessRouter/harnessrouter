@@ -23,6 +23,12 @@ Suite `2026.10.4.post1`: ME-02 expects the list, ME-09 exercises parts, order, r
 part kept with its description and read back byte for byte, or refused, as the provider declares.
 No implementation had shipped against the morning's text.
 
+**Second patch of 2026-10-04, same version.** A memory's `id` is opaque. The schema had required
+the `hmem_` prefix, which a server whose memories are a tree it already keeps (its own workspaces,
+its own folders) could meet only with a second id space and a lookup between the two. `hmem_`
+remains the prefix of a server that mints its own ids. Schema: the pattern is gone from `Memory.id`,
+the path parameter and a harness's entry. Suite `2026.10.4.post2`: ME-01 no longer asserts the prefix.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,
