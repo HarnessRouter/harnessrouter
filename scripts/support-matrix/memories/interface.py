@@ -32,8 +32,9 @@ def _client(base_url: str, api_key: str, workspace: str):
     H = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "x-harness-workspace": workspace,
          "User-Agent": "harnessrouter-memories-interface/1"}
 
-    def call(method: str, path: str, body=None, timeout=120):
-        req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None, headers=H, method=method)
+    def call(method: str, path: str, body=None, timeout=120, key: str = ""):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None,
+                                     headers={**H, **({"Idempotency-Key": key} if key else {})}, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 raw = r.read()
@@ -136,10 +137,16 @@ def probes(w: World):
     yield ("POST records (entity, fact)",) + _ok((code, code2, code3) == (200, 200, 200) and f.get("content") == [], f"HTTP {code}/{code2}/{code3}")
     i.update(a=a.get("id", ""), b=b.get("id", ""), fact=f.get("id", ""))
 
+    # a write retried with its key is one record: an agent's CLI retries tool calls
+    retry = {"type": "fact", "title": f"Retried once {w.tag}"}
+    code, r1 = c("POST", f"/v1/memories/{i['kid']}/records", retry, key=f"retry-{w.tag}")
+    code2, r2 = c("POST", f"/v1/memories/{i['kid']}/records", retry, key=f"retry-{w.tag}")
+    yield ("POST records (retried with its key)",) + _ok(code == 200 and code2 == 200 and r1.get("id") == r2.get("id"),
+                                                         f"HTTP {code}/{code2}, ids {r1.get('id') if isinstance(r1, dict) else r1} and {r2.get('id') if isinstance(r2, dict) else r2}")
     code, d = c("GET", f"/v1/memories/{i['kid']}/records/{i['note']}")
     yield ("GET record",) + _ok(code == 200 and d.get("trust") == "untrusted" and (d.get("written_by") or {}).get("kind") == "member", f"HTTP {code} {str(d)[:120]}")
-    got = w.until(lambda: (lambda r: r[1] if r[0] == 200 and len(r[1].get("data") or []) >= 4 else None)(c("GET", f"/v1/memories/{i['kid']}/records?limit=50")))
-    yield ("GET records",) + _ok(bool(got), "the four records written are not all listed")
+    got = w.until(lambda: (lambda r: r[1] if r[0] == 200 and len(r[1].get("data") or []) >= 5 else None)(c("GET", f"/v1/memories/{i['kid']}/records?limit=50")))
+    yield ("GET records",) + _ok(bool(got), "the five records written are not all listed")
     code, d = c("GET", f"/v1/memories/{i['kid']}/records?type=entity")
     yield ("GET records?type",) + _ok(code == 200 and {r["type"] for r in d.get("data") or []} <= {"entity"}, f"HTTP {code}")
 

@@ -2,6 +2,8 @@
 check in memory_plane, and one call to the memory's provider. Nothing here knows a provider."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import time
 import uuid
@@ -78,6 +80,29 @@ def guarded(fn):
         except mp.MemoryError as e:
             raise _err(e)
     return wrapper
+
+
+async def _once(request: Request, org: str, member: str, mid: str, what: str, write):
+    """A write that makes something, made once per Idempotency-Key: a retry with the key of a write
+    that was answered gets that answer again and makes nothing. The key is the caller's (an agent's
+    CLI retries a tool call; a client retries after a timeout), scoped to the caller, the memory and
+    the operation. Kept with the graph, so any replica answers the retry. `write()` returns
+    (status, body)."""
+    key = (request.headers.get("Idempotency-Key") or "").strip()
+    if not key:
+        return await write()
+    vid = "hmw_" + hashlib.sha256(f"{org}|{member}|{mid}|{what}|{key}".encode()).hexdigest()[:40]
+    seen = await mp.GRAPH.get(vid, label="MemoryWrite")
+    if seen and seen.get("answer"):
+        return int(seen.get("status") or 200), json.loads(seen["answer"])
+    status, body = await write()
+    await mp.GRAPH.upsert("MemoryWrite", vid, {"org": org, "memory_id": mid, "status": str(status),
+                                             "answer": json.dumps(body, separators=(",", ":")), "at": str(int(time.time()))})
+    return status, body
+
+
+def _answer_of(status: int, body: dict):
+    return body if status == 200 else JSONResponse(body, status_code=status)
 
 
 async def _records_out(org, mid, records, pr) -> list[dict]:
@@ -206,12 +231,15 @@ async def observe(mid: str, request: Request) -> dict:
     prov = await mp.provider_of(m)
     eps = [{"content": await mp.settle_files(org, mp.parts_of(e.get("content")), prov),
             "attributes": dict(e.get("attributes") or {})} for e in eps]
-    made = await prov.observe(mid, eps, mp.writer_of(member))
-    body = {"object": "list", "data": await _records_out(org, mid, made.get("records") or [], pr)}
-    if made.get("job"):
-        # the provider derives after it answers: what it wrote is read from the job once it settles
-        return JSONResponse({**body, "job": {"object": "memory.job", **made["job"]}}, status_code=202)
-    return body
+
+    async def write():
+        made = await prov.observe(mid, eps, mp.writer_of(member))
+        body = {"object": "list", "data": await _records_out(org, mid, made.get("records") or [], pr)}
+        if made.get("job"):
+            # the provider derives after it answers: what it wrote is read from the job once it settles
+            return 202, {**body, "job": {"object": "memory.job", **made["job"]}}
+        return 200, body
+    return _answer_of(*await _once(request, org, member, mid, "observe", write))
 
 
 @router.get("/v1/memories/{mid}/jobs/{job_id}")
@@ -233,7 +261,10 @@ async def remember(mid: str, request: Request) -> dict:
     m, _ = await mp.need(org, mid, pr, "write")
     prov, rec_in = await mp.provider_of(m), mp._record_in(await _json(request))
     await mp.settle_files(org, rec_in["content"], prov)
-    return await mp.present(org, mid, await prov.remember(mid, rec_in, mp.writer_of(member)), pr)
+
+    async def write():
+        return 200, await mp.present(org, mid, await prov.remember(mid, rec_in, mp.writer_of(member)), pr)
+    return _answer_of(*await _once(request, org, member, mid, "remember", write))
 
 
 @router.patch("/v1/memories/{mid}/records/{rid}")

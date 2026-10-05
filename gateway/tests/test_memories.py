@@ -303,6 +303,27 @@ def test_a_record_may_carry_a_title_and_it_is_found_and_revised_like_what_it_say
         ada.delete(f"{base}/{rid}")
 
 
+def test_a_retried_write_is_one_record(people, tree):
+    ada, ben = people
+    base = f"/v1/memories/{tree['sales']}/records"
+    body = {"type": "fact", "title": "Orlaith signs the Tuesday orders"}
+    key = {"Idempotency-Key": "tool-call-7f3a"}
+    a = ada.post(base, json=body, headers=key).json()
+    b = ada.post(base, json=body, headers=key).json()           # the retry: the same record, nothing new
+    assert a["id"] == b["id"]
+    held = [r for r in ada.get(base + "?limit=200").json()["data"] if r["title"] == body["title"]]
+    assert len(held) == 1
+    # another key, or no key, is another write; and a key is the caller's own, in one memory
+    c = ada.post(base, json=body, headers={"Idempotency-Key": "tool-call-8b1c"}).json()
+    d = ada.post(f"/v1/memories/{tree['acme']}/records", json=body, headers=key).json()
+    assert len({a["id"], c["id"], d["id"]}) == 3
+    e1 = ada.post(f"/v1/memories/{tree['private']}/observe", json={"episodes": [{"content": "retry me once"}]}, headers=key).json()["data"]
+    e2 = ada.post(f"/v1/memories/{tree['private']}/observe", json={"episodes": [{"content": "retry me once"}]}, headers=key).json()["data"]
+    assert [x["id"] for x in e1] == [x["id"] for x in e2]
+    for mid, rid in ((tree["sales"], a["id"]), (tree["sales"], c["id"]), (tree["acme"], d["id"])):
+        ada.delete(f"/v1/memories/{mid}/records/{rid}")
+
+
 def test_nothing_is_overwritten(people, tree):
     ada, _ = people
     base = f"/v1/memories/{tree['acme']}/records/{tree['fact']}"
