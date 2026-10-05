@@ -73,6 +73,13 @@ its own, which is not equal standing where every new person joins one). Schema: 
 The chapter's opening, §1, the list of an agent's tools (`memory_graph`) and §14 were then brought
 in line with the six patches above; no rule changed.
 
+**Seventh patch of 2026-10-04, same version.** A record MAY carry a `title`: one line that names
+it, apart from what it says (a document's heading, an entity's name, a fact's statement). It is
+optional, at most 300 characters, matched by a search together with the content, and revised like
+any other field. A record with a title MAY have empty content. An `entity`'s name is its title.
+Schema: `MemoryRecord.title`. Suite `2026.10.4.post7`: ME-02 checks that a title reads back apart
+from the content and may stand alone.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,
