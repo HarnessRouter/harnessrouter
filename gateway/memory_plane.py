@@ -472,7 +472,7 @@ async def graph(org: str, memory: dict, principals: list[str], *, around: str = 
                 types: list[str] | None = None, limit: int = 200) -> dict:
     """The records of a memory as a graph: nodes are records, edges are their references. With
     `around`, the neighbourhood of one record, `hops` references away in either direction; without
-    it, the records of this memory and what they point at. Records are looked for in the memory and
+    it, the records of this memory and of what is below it, and what they point at. Records are looked for in the memory and
     below it, as a search does; a reference may lead into any memory, and its target is a node only
     when the caller may read it. Nothing here is a provider's own structure: the same answer comes
     from any provider that keeps records and references."""
@@ -501,7 +501,7 @@ async def graph(org: str, memory: dict, principals: list[str], *, around: str = 
             raise MemoryError(404, "memory_record_not_found", "No such record in this memory.", "around")
         frontier = {start[0]}
     else:
-        frontier = {k for k in recs if k[0] == own}
+        frontier = set(recs)          # the memory and what is below it, as a search covers
     keep, readable = set(frontier), dict.fromkeys(names, True)
 
     async def may_read(mid: str) -> bool:

@@ -261,6 +261,10 @@ def test_entities_and_relationships_are_records_and_references_in_one_graph(peop
     # the whole memory, no start: its records and what they point at
     whole = ada.post(acme + "/graph", json={}).json()
     assert {dana["id"], quil["id"], job["id"]} <= {n["record"]["id"] for n in whole["nodes"]}
+    # asked two levels up, the graph is the same records: a memory's graph covers what is below it, as a search does
+    high = ada.post(f"/v1/memories/{tree['company']}/graph", json={"types": ["entity", "fact"]}).json()
+    assert {dana["id"], quil["id"], job["id"]} <= {n["record"]["id"] for n in high["nodes"]}
+    assert {n["memory"]["id"] for n in high["nodes"] if n["record"]["id"] == dana["id"]} == {tree["acme"]}
     # Ben reads Sales and below, not the restricted memory: the edge says it leads somewhere he
     # cannot read, and neither the node nor what it is called is there
     ada.post(f"/v1/memories/{tree['sales']}/grants", json={"principal": "member:ben@example.com", "privileges": ["read"]})

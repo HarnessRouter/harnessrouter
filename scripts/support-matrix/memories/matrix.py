@@ -275,15 +275,18 @@ def s_graph(c: Cell):
         return False, _done(t)
 
     def edges():
-        code, g = c.call("POST", f"/v1/memories/{c.mem['root']}/graph", {"limit": 300})
-        if code != 200:
-            return None
-        ents = {n["record"]["id"]: c.said(n["record"]) for n in g.get("nodes") or [] if n["record"].get("type") == "entity"}
-        rels = {}
-        for e in g.get("edges") or []:
-            if e.get("rel") in ("subject", "object") and e["to"]["record_id"] in ents:
-                rels.setdefault(e["from"]["record_id"], {})[e["rel"]] = ents[e["to"]["record_id"]]
-        return [r for r in rels.values() if person.lower() in r.get("subject", "").lower() and firm.lower() in r.get("object", "").lower()]
+        # read each memory the agent may write or read: where it keeps the graph is its choice
+        ents, rels = {}, {}
+        for m in ("root", "notes", "client", "archive"):
+            code, g = c.call("POST", f"/v1/memories/{c.mem[m]}/graph", {"limit": 300})
+            if code != 200:
+                continue
+            ents.update({n["record"]["id"]: c.said(n["record"]) for n in g.get("nodes") or [] if n["record"].get("type") == "entity"})
+            for e in g.get("edges") or []:
+                if e.get("rel") in ("subject", "object"):
+                    rels.setdefault(e["from"]["record_id"], {})[e["rel"]] = e["to"]["record_id"]
+        named = [{k: ents.get(v, "") for k, v in r.items()} for r in rels.values()]
+        return [r for r in named if person.lower() in r.get("subject", "").lower() and firm.lower() in r.get("object", "").lower()]
     if c.wait(edges):
         return True, ""
     ents = [c.said(r)[:40] for m in ("notes", "root", "client") for r in c.records(m) if r.get("type") == "entity"]
