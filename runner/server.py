@@ -4873,8 +4873,18 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
             env["AZURE_FOUNDRY_BASE_URL"] = auth.base_url
     elif p == "openrouter":  # OpenRouter aggregator (vendor/model ids)
         if auth.api_key:
-            env["OPENROUTER_API_KEY"] = auth.api_key
-        if auth.base_url:
+            # Through the relay, as hermes's openai-api and anthropic routes are. This one went to
+            # OpenRouter directly, with the connection's real key in the CLI's environment, so none
+            # of the relay's repairs reached it, and it is the route that needed one most: with an
+            # OpenAI model, OpenRouter hands a tool a free-form object EMPTY whenever its schema
+            # carries the empty `properties` hermes adds (see _with_free_form_objects; measured
+            # 2026-10-05, and found on the hosted service with rows arriving as [{}, {}]). hermes
+            # joins /chat/completions onto OPENROUTER_BASE_URL, which is what the relay expects.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url or "https://openrouter.ai/api/v1",
+                                                        auth.api_key)
+            env["OPENROUTER_API_KEY"] = relay_tok
+            env["OPENROUTER_BASE_URL"] = relay_base
+        elif auth.base_url:
             env["OPENROUTER_BASE_URL"] = auth.base_url
     elif p == "openai-api":  # any OpenAI-compatible endpoint (OpenAI official, TokenRouter, ...)
         if auth.api_key and auth.base_url:

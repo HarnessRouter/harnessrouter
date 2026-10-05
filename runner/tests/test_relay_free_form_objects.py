@@ -104,3 +104,22 @@ def test_the_relay_sends_the_repaired_schema_for_any_model():
             assert sent["properties"]["rows"]["items"] == {"type": "object"}, model
     finally:
         conn.close(); up.shutdown(); rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_hermes_on_openrouter_rides_the_relay_so_the_repair_reaches_it():
+    """hermes went to OpenRouter directly, with the connection's key in its environment, and that is
+    the one route where neither spelling with an empty `properties` survives an OpenAI model."""
+    import tempfile
+    d = tempfile.mkdtemp(); env = {"HOME": d}
+    rs._hermes_prepare_env("openrouter", rs.Auth(api_key="sk-or-real", base_url="https://openrouter.ai/api/v1"), d, env,
+                           model="openai/gpt-5.4")
+    assert env["OPENROUTER_API_KEY"].startswith("hr-relay-") and "sk-or-real" not in json.dumps(env)
+    assert env["OPENROUTER_BASE_URL"].startswith("http://127.0.0.1:") and env["OPENROUTER_BASE_URL"].endswith("/v1")
+    upstream, key, _flags = rs._HERMES_RELAY["routes"][env["OPENROUTER_API_KEY"]]
+    assert upstream == "https://openrouter.ai/api/v1" and key == "sk-or-real"
+    rs._HERMES_RELAY["routes"].pop(env["OPENROUTER_API_KEY"], None)
+    # a connection saved without a base url still gets a route, to OpenRouter's own address
+    env2 = {"HOME": tempfile.mkdtemp()}
+    rs._hermes_prepare_env("openrouter", rs.Auth(api_key="sk-or-real"), env2["HOME"], env2, model="openai/gpt-5.4")
+    assert rs._HERMES_RELAY["routes"][env2["OPENROUTER_API_KEY"]][0] == "https://openrouter.ai/api/v1"
+    rs._HERMES_RELAY["routes"].pop(env2["OPENROUTER_API_KEY"], None)
