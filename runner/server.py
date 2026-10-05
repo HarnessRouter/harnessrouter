@@ -3352,6 +3352,77 @@ def _repair_tool_call_ids(body: bytes, dedupe: bool = False) -> bytes:
     return body
 
 
+_EMPTY_PROPERTIES = re.compile(rb'"properties"\s*:\s*\{\s*\}')
+# Where a schema keeps the schemas below it: by name, as a list, and as one schema.
+_SCHEMA_MAPS = ("properties", "patternProperties", "$defs", "definitions")
+_SCHEMA_LISTS = ("anyOf", "oneOf", "allOf", "prefixItems")
+_SCHEMA_ONES = ("items", "additionalProperties", "not", "if", "then", "else")
+
+
+def _drop_empty_properties(node, root: bool) -> bool:
+    """One schema node and everything below it, in place: an empty `properties` is removed from every
+    node but the root. → whether anything changed."""
+    if not isinstance(node, dict):
+        return False
+    changed = False
+    if not root and node.get("properties") == {} and "properties" in node:
+        del node["properties"]
+        changed = True
+    for key in _SCHEMA_MAPS:
+        below = node.get(key)
+        if isinstance(below, dict):
+            for child in below.values():
+                changed = _drop_empty_properties(child, False) or changed
+    for key in _SCHEMA_LISTS:
+        below = node.get(key)
+        if isinstance(below, list):
+            for child in below:
+                changed = _drop_empty_properties(child, False) or changed
+    for key in _SCHEMA_ONES:
+        below = node.get(key)
+        if isinstance(below, list):          # `items` as a list of schemas
+            for child in below:
+                changed = _drop_empty_properties(child, False) or changed
+        else:
+            changed = _drop_empty_properties(below, False) or changed
+    return changed
+
+
+def _with_free_form_objects(body: bytes) -> bytes:
+    """A chat-completions body in which no NESTED object of a tool's parameters carries an empty
+    `properties`.
+
+    A free-form object (a row, a JSON body, a map of values) is written `{"type": "object"}`. Hermes
+    and opencode add `"properties": {}` to every object node before the request leaves, and with
+    that key present some gateways hand the model an object it may put nothing in: the argument
+    arrives at the tool as `[{}, {}]` or `[]` and the call "succeeds". Measured 2026-10-05, per
+    connection and model family (runner/tests/test_relay_free_form_objects.py has the table): an
+    empty `properties` lost the contents with OpenAI models through Vercel's gateway and through
+    OpenRouter, and with kimi-k3 through Vercel and TokenRouter; adding `additionalProperties:
+    true` beside it saved Vercel and not OpenRouter; and the node WITHOUT the key was intact in
+    every cell, eleven families on two aggregators, OpenRouter, and OpenAI, Azure and Google
+    directly. An empty `properties` says nothing a missing one does not, so it goes, for every
+    model: a test by gateway or by family would repair the cells measured and leave the next one.
+
+    The root `parameters` node keeps its shape: `{"type": "object", "properties": {}}` there is a
+    tool that takes no arguments, and validators want the key on the root. A body with no such
+    node comes back as the same object."""
+    if not _EMPTY_PROPERTIES.search(body) or b'"tools"' not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+        return body
+    changed = False
+    for tool in doc["tools"]:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(fn, dict):
+            changed = _drop_empty_properties(fn.get("parameters"), True) or changed
+    return json.dumps(doc, separators=(",", ":")).encode() if changed else body
+
+
 def _image_in_tool_result_refused(code: int, data: bytes) -> bool:
     """Whether a provider's refusal is about an image it was handed (see _tool_images_as_text)."""
     low = data.lower()
@@ -4131,6 +4202,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             _body_model = ""
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
+            body = _with_free_form_objects(body)     # before the Gemini normaliser below, which has its own rules
             if flags.get("stream_usage"):
                 body = _request_stream_usage(body)
             if flags.get("rename_max_tokens"):
