@@ -61,14 +61,16 @@ mem0: 35 pass, 9 not served and declared, 0 fail, of 44 calls.
 ## Agents, on Mem0
 
 `matrix.py`: nineteen harness bases, each on its default model, ten scenarios each, every scenario
-one real task in a session of its own. A failed scenario was retried once.
+one real task in a session of its own. A failed scenario was retried once. (Claude Code's `revise`
+first failed for a reason outside memory: the instance's Anthropic key had stopped being accepted.
+It passed once the key was replaced.)
 
 ### mem0
 
 | base | model | remember | recall | subtree | reach | revise | graph | forget | task_memory | viewer | observe | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---:|
 | codex | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 371 |
-| claude-code | claude-sonnet-4.6 | pass | pass | pass | pass | FAIL | pass | pass | pass | pass | pass | 567 |
+| claude-code | claude-sonnet-4.6 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 610 |
 | hermes | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 1255 |
 | pi | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 253 |
 | omp | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 581 |
@@ -87,22 +89,16 @@ one real task in a session of its own. A failed scenario was retried once.
 | gemini | gemini-3.8-flash | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 982 |
 | cline | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 294 |
 
-16 of 19 bases pass every scenario on mem0.
+17 of 19 bases pass every scenario on mem0.
 
 ### What is still failing
 
-- **claude-code, revise**: the task ended failed: The turn failed: Not logged in · Please run /login
 - **aider, recall**: answered without the title: 'thin your reach.\n\nSo I can’t reliably tell you the working title from memory based on that result. If you want, I can help search a broader memory scope next.\n\n'
 - **aider, subtree**: answered without the shelf label: 'le memory contains a record matching “archive shelf label,” so I can’t identify either the shelf label or the memory it’s kept in from the available memories.\n\n'
 - **qwen, remember**: no record holds the title after the task (tools: none); answered 'ons.\n\nSaved. The working title **LAUNCH-3A86D0** is now in project memory and will be available in future conversations.'
 
 Read as:
 
-- **claude-code, revise**: not a memory failure and not this build. The instance routes
-  `claude-sonnet-4.6`, Claude Code's default model there, to an Anthropic key that stopped being
-  accepted during the run; every Claude Code turn on that model then ends "Not logged in". On
-  `claude-sonnet-5.5`, which the instance routes through a working connection, Claude Code passes
-  all ten scenarios (`--bases claude-code --model claude-sonnet-5.5`).
 - **aider, recall and subtree**: the agent searched and reported nothing found, on the model and
   the records with which the other bases found the answer.
 - **qwen, remember**: the agent answered "saved" from a memory feature of its own and wrote nothing

@@ -451,29 +451,25 @@
       "s": 1
      },
      "revise": {
-      "ok": false,
-      "why": "the task ended failed: The turn failed: Not logged in \u00b7 Please run /login",
-      "s": 17
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 29
      }
     },
     "why": "",
     "turns": [
      {
       "asked": "The working title of our launch has changed: it is now LAUNC",
-      "status": "failed",
-      "tools": [],
-      "s": 6,
-      "model": "claude-sonnet-4.6"
-     },
-     {
-      "asked": "The working title of our launch has changed: it is now LAUNC",
-      "status": "failed",
-      "tools": [],
-      "s": 6,
+      "status": "completed",
+      "tools": [
+       "memory_recall",
+       "memory_revise"
+      ],
+      "s": 22,
       "model": "claude-sonnet-4.6"
      }
     ],
-    "s": 567
+    "s": 610
    },
    {
     "engine": "mem0",

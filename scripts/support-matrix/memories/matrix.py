@@ -485,7 +485,9 @@ def main() -> int:
     done = dict(prior)
 
     def save():
-        rows = [done[k] for k in ((e["id"], b) for e, b in cells) if k in done]
+        # every cell on record, this run's or an earlier one's: a run of one base must not drop the others
+        order = [(e["id"], b) for e, b in cells]
+        rows = [done[k] for k in list(prior) + [k for k in order if k not in prior] if k in done]
         if a.out:
             with open(a.out, "w") as f:
                 json.dump({"meta": meta, "scenarios": wanted, "rows": rows}, f, indent=1)
