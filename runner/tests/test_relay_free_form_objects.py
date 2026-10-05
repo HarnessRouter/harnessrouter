@@ -71,6 +71,24 @@ def test_the_responses_shape_is_repaired_as_well_and_other_tool_types_are_left_a
     assert tools[1]["parameters"]["properties"]["x"] == {"type": "object", "properties": {}}   # not a function tool
 
 
+def test_function_tools_inside_a_namespace_and_inside_the_conversation_are_repaired():
+    """Codex groups a server's MCP tools in a namespace and adds the empty `properties` itself; a
+    tool search's answer carries definitions as an item of the conversation. Both are function
+    tools one level down from where the first two shapes keep them."""
+    free = {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object", "properties": {}}}}}
+    body = json.dumps({"model": "m", "tools": [
+        {"type": "namespace", "name": "mcp__probe", "description": "probe", "tools": [
+            {"type": "function", "name": "insert_rows", "strict": False, "parameters": json.loads(json.dumps(free))}]},
+        {"type": "tool_search"}],
+        "input": [{"type": "message", "role": "user", "content": "hi"},
+                  {"type": "tool_search_output", "tools": [
+                      {"type": "function", "name": "insert_rows", "parameters": json.loads(json.dumps(free))}]}]}).encode()
+    doc = json.loads(_with_free_form_objects(body))
+    assert doc["tools"][0]["tools"][0]["parameters"]["properties"]["rows"]["items"] == {"type": "object"}
+    assert doc["input"][1]["tools"][0]["parameters"]["properties"]["rows"]["items"] == {"type": "object"}
+    assert doc["tools"][1] == {"type": "tool_search"} and doc["input"][0]["content"] == "hi"
+
+
 def test_the_root_of_a_tool_that_takes_no_arguments_keeps_its_shape():
     """`parameters: {"type": "object", "properties": {}}` is how a tool with no arguments is written,
     and several validators want `properties` on the root. Only nested nodes are touched."""

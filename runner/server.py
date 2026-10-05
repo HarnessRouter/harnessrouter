@@ -3417,17 +3417,31 @@ def _with_free_form_objects(body: bytes) -> bytes:
         doc = json.loads(body)
     except (ValueError, UnicodeDecodeError):
         return body
-    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
+    if not isinstance(doc, dict):
         return body
-    changed = False
-    for tool in doc["tools"]:
-        if not isinstance(tool, dict):
-            continue
-        fn = tool.get("function")
-        if isinstance(fn, dict):
-            changed = _drop_empty_properties(fn.get("parameters"), True) or changed
-        elif tool.get("type") == "function":
-            changed = _drop_empty_properties(tool.get("parameters"), True) or changed
+
+    def _tools(tools) -> bool:
+        changed = False
+        for tool in tools if isinstance(tools, list) else []:
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function")
+            if isinstance(fn, dict):
+                changed = _drop_empty_properties(fn.get("parameters"), True) or changed
+            elif tool.get("type") == "function":
+                changed = _drop_empty_properties(tool.get("parameters"), True) or changed
+            # A namespace groups function tools one level down: Codex sends a server's MCP tools as
+            # {"type": "namespace", "name": "mcp__<server>", "tools": [{"type": "function", …}]} for
+            # a model it does not defer tools for, and adds the empty `properties` itself (captured
+            # on the hosted service, 2026-10-05; emptied through Vercel as sent, intact repaired).
+            changed = _tools(tool.get("tools")) or changed
+        return changed
+
+    changed = _tools(doc.get("tools"))
+    # ...and a tool search's answer carries definitions inside the conversation's own items.
+    for item in doc.get("input") if isinstance(doc.get("input"), list) else []:
+        if isinstance(item, dict):
+            changed = _tools(item.get("tools")) or changed
     return json.dumps(doc, separators=(",", ":")).encode() if changed else body
 
 
