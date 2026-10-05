@@ -230,6 +230,50 @@ def test_the_three_signals_and_what_a_provider_did_not_do(people, tree):
     assert r.status_code == 422
 
 
+def test_entities_and_relationships_are_records_and_references_in_one_graph(people, tree):
+    ada, ben = people
+    acme = f"/v1/memories/{tree['acme']}"
+    mk = lambda url, **b: ada.post(url + "/records", json=b).json()   # noqa: E731
+    dana = mk(acme, type="entity", content="Dana Okafor", attributes={"labels": ["person"]})
+    quil = mk(acme, type="entity", content="Quillon Freight", attributes={"labels": ["company"]})
+    boss = mk(f"/v1/memories/{tree['private']}", type="entity", content="The board member Dana reports to")
+    assert dana["type"] == "entity" and dana["content"] == [{"type": "text", "text": "Dana Okafor"}]
+    # a relationship with something to say is a fact that names its subject and its object
+    job = mk(acme, type="fact", content="Dana Okafor is head of procurement at Quillon Freight.",
+             attributes={"predicate": "works_at"},
+             references=[{"rel": "subject", "record_id": dana["id"]}, {"rel": "object", "record_id": quil["id"]}])
+    mk(acme, type="fact", content="Dana reports to a board member.", attributes={"predicate": "reports_to"},
+       references=[{"rel": "subject", "record_id": dana["id"]},
+                   {"rel": "object", "memory_id": tree["private"], "record_id": boss["id"]}])
+    g = ada.post(acme + "/graph", json={"around": dana["id"], "hops": 1}).json()
+    assert g["object"] == "memory.graph" and g["truncated"] is False
+    ids = {n["record"]["id"]: n for n in g["nodes"]}
+    assert dana["id"] in ids and job["id"] in ids and quil["id"] not in ids          # one hop: the facts about Dana
+    assert g["nodes"][0]["record"]["id"] == dana["id"] and ids[job["id"]]["memory"] == {"id": tree["acme"], "name": "Acme"}
+    edge = lambda g, rel, to: [e for e in g["edges"] if e.get("rel") == rel and e["to"]["record_id"] == to]   # noqa: E731
+    assert edge(g, "subject", dana["id"])[0]["from"] == {"memory_id": tree["acme"], "record_id": job["id"]}
+    # two hops reach the other end of each relationship, across memories for one who may read both
+    g2 = ada.post(acme + "/graph", json={"around": dana["id"], "hops": 2}).json()
+    ids2 = {n["record"]["id"]: n["memory"]["id"] for n in g2["nodes"]}
+    assert ids2[quil["id"]] == tree["acme"] and ids2[boss["id"]] == tree["private"]
+    assert edge(g2, "object", quil["id"]) and edge(g2, "object", boss["id"])[0]["available"] is True
+    assert {n["record"]["type"] for n in ada.post(acme + "/graph", json={"around": dana["id"], "hops": 2, "types": ["entity"]}).json()["nodes"]} == {"entity"}
+    # the whole memory, no start: its records and what they point at
+    whole = ada.post(acme + "/graph", json={}).json()
+    assert {dana["id"], quil["id"], job["id"]} <= {n["record"]["id"] for n in whole["nodes"]}
+    # Ben reads Sales and below, not the restricted memory: the edge says it leads somewhere he
+    # cannot read, and neither the node nor what it is called is there
+    ada.post(f"/v1/memories/{tree['sales']}/grants", json={"principal": "member:ben@example.com", "privileges": ["read"]})
+    gb = ben.post(acme + "/graph", json={"around": dana["id"], "hops": 2}).json()
+    assert boss["id"] not in {n["record"]["id"] for n in gb["nodes"]} and "board member Dana reports to" not in str(gb)
+    hidden = [e for e in gb["edges"] if e["to"]["record_id"] == boss["id"]]
+    assert hidden == [{"from": hidden[0]["from"], "to": {"memory_id": tree["private"], "record_id": boss["id"]}, "available": False}]
+    assert ada.post(acme + "/graph", json={"around": "nope"}).status_code == 404
+    assert ada.post(acme + "/graph", json={"hops": 9}).status_code == 422
+    caps = next(p for p in ada.get("/v1/memories/providers").json()["data"] if p["id"] == "fixture")
+    assert caps["graph"] == {"entities": "stated"}
+
+
 def test_nothing_is_overwritten(people, tree):
     ada, _ = people
     base = f"/v1/memories/{tree['acme']}/records/{tree['fact']}"
@@ -308,7 +352,7 @@ def test_a_named_query_and_a_free_one_stay_inside_the_memory(people, tree):
 def test_an_extension_type_carries_its_own_operations_under_the_memorys_access(people, tree):
     ada, ben = people
     types = ada.get("/v1/memories/types").json()["data"]
-    assert [t["type"] for t in types if t.get("core")] == ["episode", "fact", "note", "procedure", "link"]
+    assert [t["type"] for t in types if t.get("core")] == ["episode", "fact", "note", "procedure", "link", "entity"]
     ext = next(t for t in types if t["type"] == "x.fixture.counter")
     assert {o["name"]: o["requires"] for o in ext["operations"]} == {"increment": "write", "peek": "read"}
     c = ada.post(f"/v1/memories/{tree['company']}/records",

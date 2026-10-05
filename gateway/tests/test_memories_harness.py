@@ -96,7 +96,7 @@ def test_an_agent_is_granted_like_a_person_and_the_harness_keeps_two_settings(cl
 def test_the_agent_is_offered_tools_and_starts_where_it_was_granted(client, world):
     tok = _tok(world["hid"])
     names = [t["name"] for t in _rpc(client, tok, "tools/list")["tools"]]
-    assert names == ["memory_list", "memory_recall", "memory_get", "memory_remember", "memory_revise",
+    assert names == ["memory_list", "memory_recall", "memory_graph", "memory_get", "memory_remember", "memory_revise",
                      "memory_forget", "memory_run_query", "memory_operate", "memory_query"]
     start, err = _call(client, tok, "memory_list")
     assert not err and [(m["name"], m["default"]) for m in start["memories"]] == [("Support", False), ("Agent notes", True)]

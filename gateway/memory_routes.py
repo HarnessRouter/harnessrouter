@@ -294,6 +294,24 @@ async def recall(mid: str, request: Request) -> dict:
     return await _answer(org, m, pr, res, {str(x["id"]): x for x in reach})
 
 
+@router.post("/v1/memories/{mid}/graph")
+@guarded
+async def graph(mid: str, request: Request) -> dict:
+    """The records of a memory as one graph: nodes are records (entities among them, where the
+    provider keeps any), edges are their references."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "read")
+    b = await _json(request)
+    hops = b.get("hops", 1)
+    if not isinstance(hops, int) or isinstance(hops, bool) or not 0 <= hops <= 3:
+        raise _uhp_error(422, "memory_invalid", "`hops` is 0 to 3: how many references away from the start.", "hops")
+    types = b.get("types")
+    if types is not None and (not isinstance(types, list) or not all(isinstance(t, str) for t in types)):
+        raise _uhp_error(422, "memory_invalid", "`types` is a list of record types.", "types")
+    return {"object": "memory.graph", **await mp.graph(org, m, pr, around=str(b.get("around") or ""), hops=hops,
+                                                       types=types or None, limit=b.get("limit") or 200)}
+
+
 @router.get("/v1/memories/{mid}/records")
 @guarded
 async def list_records(mid: str, request: Request, type: str = "", as_of: str = "", include: str = "active",

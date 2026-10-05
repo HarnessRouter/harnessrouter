@@ -42,7 +42,7 @@ class FixtureProvider(Provider):
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": True, "consolidate": "runs",
                 "queries": {"named": True, "free": {"languages": ["fixture-filter"], "write": False}},
-                "types": True,
+                "types": True, "graph": {"entities": "stated"},
                 # it keeps the reference of any file; the bytes stay with the server's file store
                 "content": {"media": ["*/*"], "bytes": "referenced", "describes": []}}
 

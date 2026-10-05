@@ -37,6 +37,12 @@ _TOOLS = [
            "types": {"type": "array", "items": {"type": "string"}},
            "depth": {"type": "integer", "description": "levels below to search; leave out for all of them"},
            "limit": {"type": "integer"}}, ["memory"]),
+    _tool("memory_graph",
+          "What is connected to a record: the records it points at and the ones that point at it, `hops` steps away "
+          "(1 by default, 3 at most). People, companies and things are records of type `entity`; a `fact` that names a "
+          "`subject` and an `object` is the relationship between two of them. Leave `record` out for the whole memory.",
+          {"memory": _MEM, "record": {"type": "string"}, "hops": {"type": "integer"},
+           "types": {"type": "array", "items": {"type": "string"}}}, ["memory"]),
     _tool("memory_get", "Read one record, with its history when `history` is true.",
           {"memory": _MEM, "record": {"type": "string"}, "history": {"type": "boolean"}}, ["memory", "record"]),
     _tool("memory_remember",
@@ -141,6 +147,12 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
                                        "score": x.get("score"), "why": x.get("why")} for x in res.get("results") or []],
                           **await mp.neighbours(org, m, pr), "degraded": res.get("degraded") or [],
                           "abstain": bool(res.get("abstain"))}), False
+        if name == "memory_graph":
+            m, _ = await mp.need(org, mid, pr, "read")
+            hops = args.get("hops") if isinstance(args.get("hops"), int) and 0 <= args["hops"] <= 3 else 1
+            g = await mp.graph(org, m, pr, around=str(args.get("record") or ""), hops=hops, types=args.get("types") or None, limit=60)
+            return _text({"nodes": [{"record": _slim(n["record"]), "memory": n["memory"]} for n in g["nodes"]],
+                          "edges": g["edges"], "truncated": g["truncated"], "degraded": g["degraded"]}), False
         if name == "memory_get":
             m, _ = await mp.need(org, mid, pr, "read")
             prov = await mp.provider_of(m)

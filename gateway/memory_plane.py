@@ -26,7 +26,14 @@ import time
 import uuid
 
 PRIVILEGES = ("read", "write", "create", "delete")
-CORE_TYPES = ("episode", "fact", "note", "procedure", "link")
+CORE_TYPES = ("episode", "fact", "note", "procedure", "link", "entity")
+# The graph is not a second structure: a record is a node and a reference is an edge. An entity
+# (a person, a company, a thing records are about) is a record like any other, and a relationship
+# with something to say (who, since when, on whose word) is a `fact` that references its `subject`
+# and its `object`. These are the reference names with a defined meaning; any other is carried.
+REFERENCE_RELS = ("derived_from", "part_of", "about", "subject", "object")
+GRAPH_SCAN = 2000         # records read to answer one graph; past it the answer says it was cut
+GRAPH_NODES = 500
 _MID = re.compile(r"hmem_[0-9a-f]{32}")
 _NAME_MAX, _DESC_MAX = 120, 2000
 
@@ -459,6 +466,89 @@ async def recall(org: str, memories: list[dict], req: dict) -> dict:
     results.sort(key=lambda x: -(x.get("score") or 0))
     return {"results": results[: int(req.get("limit") or 8)], "degraded": degraded,
             "abstain": bool(abstains) and all(abstains)}
+
+
+async def graph(org: str, memory: dict, principals: list[str], *, around: str = "", hops: int = 1,
+                types: list[str] | None = None, limit: int = 200) -> dict:
+    """The records of a memory as a graph: nodes are records, edges are their references. With
+    `around`, the neighbourhood of one record, `hops` references away in either direction; without
+    it, the records of this memory and what they point at. Records are looked for in the memory and
+    below it, as a search does; a reference may lead into any memory, and its target is a node only
+    when the caller may read it. Nothing here is a provider's own structure: the same answer comes
+    from any provider that keeps records and references."""
+    reach, cut = await reach_below(org, memory, principals)
+    names = {str(m["id"]): str(m.get("name") or "") for m in reach}
+    recs: dict[tuple[str, str], dict] = {}
+    degraded: list[str] = [f"subtree:capped_at_{RECALL_MAX_MEMORIES}_memories"] if cut else []
+    for m in reach:
+        prov, cursor, mid = await provider_of(m), "", str(m["id"])
+        while len(recs) < GRAPH_SCAN:
+            page = await prov.list(mid, {"types": None, "as_of": None, "include": "active", "limit": 200, "cursor": cursor})
+            for r in page.get("records") or []:
+                recs[(mid, str(r["id"]))] = r
+            cursor = page.get("next") or ""
+            if not cursor:
+                break
+        if len(recs) >= GRAPH_SCAN:
+            degraded.append(f"records:capped_at_{GRAPH_SCAN}")
+            break
+    own = str(memory["id"])
+    edges = [((mid, rid), (str(x.get("memory_id") or mid), str(x.get("record_id") or "")), str(x.get("rel") or "related"))
+             for (mid, rid), r in recs.items() for x in r.get("references") or [] if x.get("record_id")]
+    if around:
+        start = [k for k in recs if k[1] == around and k[0] == own] or [k for k in recs if k[1] == around]
+        if not start:
+            raise MemoryError(404, "memory_record_not_found", "No such record in this memory.", "around")
+        frontier = {start[0]}
+    else:
+        frontier = {k for k in recs if k[0] == own}
+    keep, readable = set(frontier), dict.fromkeys(names, True)
+
+    async def may_read(mid: str) -> bool:
+        if mid not in readable:
+            t = await _load(org, mid)
+            readable[mid] = bool(t) and "read" in await effective(org, t, principals)
+            if readable[mid]:
+                names[mid] = str(t.get("name") or "")
+        return readable[mid]
+
+    for _ in range(max(0, min(int(hops), 3))):
+        nxt = set()
+        for a, b, _rel in edges:
+            for here, there in ((a, b), (b, a)):
+                if here in frontier and there not in keep:
+                    nxt.add(there)
+        got = set()
+        for k in nxt:
+            if k not in recs and await may_read(k[0]):       # a target outside what was scanned
+                t = await _load(org, k[0])
+                r = await (await provider_of(t)).get(k[0], k[1])
+                if r:
+                    recs[k] = r
+                    edges += [(k, (str(x.get("memory_id") or k[0]), str(x.get("record_id") or "")), str(x.get("rel") or "related"))
+                              for x in r.get("references") or [] if x.get("record_id")]
+            if k in recs:
+                got.add(k)
+        keep |= got
+        frontier = got
+    if types:
+        keep = {k for k in keep if recs[k].get("type") in types}
+    ordered = sorted(keep, key=lambda k: (k != (own, around), k[0] != own, str((recs[k].get("time") or {}).get("written_at") or ""), k[1]))
+    limit = max(1, min(int(limit or 200), GRAPH_NODES))
+    truncated = len(ordered) > limit
+    shown = set(ordered[:limit])
+    seen: dict = {}
+    nodes = [{"record": await present(org, k[0], recs[k], principals, seen), "memory": {"id": k[0], "name": names.get(k[0], "")}}
+             for k in ordered[:limit]]
+    out_edges = []
+    for a, b, rel in edges:
+        if a not in shown:
+            continue
+        if b in shown:
+            out_edges.append({"from": {"memory_id": a[0], "record_id": a[1]}, "to": {"memory_id": b[0], "record_id": b[1]}, "rel": rel, "available": True})
+        elif not await may_read(b[0]):                       # the caller may not read where it leads: said, and nothing more
+            out_edges.append({"from": {"memory_id": a[0], "record_id": a[1]}, "to": {"memory_id": b[0], "record_id": b[1]}, "available": False})
+    return {"nodes": nodes, "edges": out_edges, "truncated": truncated, "degraded": degraded}
 
 
 async def roots(org: str, principals: list[str]) -> list[dict]:
