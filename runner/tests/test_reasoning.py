@@ -343,3 +343,43 @@ def test_the_providers_count_of_thinking_tokens_is_read_in_every_shape_and_apart
     # the usage that prices a turn carries what it carried before
     assert rs._usage_fields(chat["usage"]) == {"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 0}
     assert rs._usage_fields(google["usageMetadata"]) == {"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 0}
+
+
+def test_a_streamed_calls_usage_is_on_the_route_before_the_client_has_the_bytes():
+    """The provider's last events pass long before it closes the stream. A client that is done at
+    `[DONE]` (CheetahClaws's in-process driver) read the route's totals before its own call was on
+    them, and its turn came back with no usage."""
+    release = threading.Event()
+
+    class Up(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["content-length"]))
+            self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+            for chunk in (b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+                          b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":9,'
+                          b'"completion_tokens_details":{"reasoning_tokens":7}}}\n\n', b'data: [DONE]\n\n'):
+                self.wfile.write(chunk); self.wfile.flush()
+            release.wait(10)                                   # the provider has not closed the stream yet
+
+        def log_message(self, *a):
+            pass
+
+    up = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Up)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    relay, tok = rs._hermes_relay_route(f"http://127.0.0.1:{up.server_port}/v1", "sk-real")
+    conn = http.client.HTTPConnection(relay.removeprefix("http://").removesuffix("/v1"), timeout=10)
+    try:
+        conn.request("POST", "/v1/chat/completions", body=json.dumps({"model": "m", "stream": True, "messages": []}),
+                     headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
+        resp = conn.getresponse()
+        seen = b""
+        while b"[DONE]" not in seen:
+            seen += resp.read1(65536)
+        flags = rs._HERMES_RELAY["routes"][tok][2]             # what a client done at [DONE] reads
+        assert flags["usage"] == {"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 0}
+        assert flags["reasoning_tokens"] == 7
+        release.set()
+        resp.read()
+        assert flags["usage"]["output_tokens"] == 9 and flags["reasoning_tokens"] == 7     # counted once
+    finally:
+        release.set(); conn.close(); up.shutdown(); rs._HERMES_RELAY["routes"].pop(tok, None)

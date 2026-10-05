@@ -4159,6 +4159,30 @@ def _thinking_add(flags: dict, count: int | None) -> None:
         flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + count
 
 
+def _stream_fold(flags: dict, call_usage: dict, call_thinking: int | None, folded: dict) -> None:
+    """Bring the route's totals up to what a streamed call has said SO FAR, before its bytes go on to
+    the client. `folded` is what this call has already contributed (a call's usage arrives over
+    several events, later values replacing earlier ones), so each figure is counted once.
+
+    The totals used to be updated when the stream ended, which is when the provider closes it, not
+    when its last event passes: a client that is done at `[DONE]` read the route before its own call
+    was on it. CheetahClaws's in-process driver is such a client, and its turns came back with no
+    usage at all (the thinking column on a candidate, 2026-10-05: the relay had read 329 output
+    tokens and 312 thinking tokens for a call whose turn recorded none)."""
+    if call_usage:
+        total = flags.setdefault("usage", {})
+        for k, v in call_usage.items():
+            delta = int(v) - int(folded.get(k, 0))
+            if delta or k not in total:          # a zero is still a figure the provider gave
+                total[k] = int(total.get(k, 0)) + delta
+            folded[k] = int(v)
+    if call_thinking is not None:
+        delta = call_thinking - int(folded.get("_thinking", 0))
+        if delta or "_thinking" not in folded:
+            flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + delta
+            folded["_thinking"] = call_thinking
+
+
 def _usage_add(flags: dict, call_usage: dict) -> None:
     """Fold one call's usage into the route's running total: a turn is many provider calls."""
     if not call_usage:
@@ -4620,6 +4644,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
             call_thinking: int | None = None   # ...and about thinking tokens, the last figure given
+            folded: dict = {}       # what of the two is already on the route's totals (_stream_fold)
 
             def _stopped(why: str) -> None:
                 # The answer began and then stopped: the provider went silent past the socket's
@@ -4640,8 +4665,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         "message": msg, "type": "upstream_unavailable",
                         "code": "upstream_unavailable"}}) + "\n\n"
                 call_usage.update(_usage_in_sse_line(pending.strip()))
-                _usage_add(flags, call_usage)
-                _thinking_add(flags, call_thinking)
+                _stream_fold(flags, call_usage, call_thinking, folded)
                 try:
                     raw = ev.encode()
                     self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
@@ -4710,6 +4734,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                             sigs[cid] = sig
                 if out_lines is not None:
                     chunk = b"".join(out_lines)
+                _stream_fold(flags, call_usage, call_thinking, folded)   # on the route before the client has it
                 if chunk:
                     self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                     self.wfile.flush()
@@ -4719,9 +4744,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     _stopped(f"no data for {HR_RELAY_UPSTREAM_TIMEOUT_S:g} s, only keep-alive lines")
                     return
             call_usage.update(_usage_in_sse_line(pending.strip()))
-            _usage_add(flags, call_usage)
             seen_thinking = _thinking_in_sse_line(pending.strip())
-            _thinking_add(flags, seen_thinking if seen_thinking is not None else call_thinking)
+            _stream_fold(flags, call_usage, seen_thinking if seen_thinking is not None else call_thinking, folded)
             if flags.get("usage_no_nulls") and pending:
                 tail_bytes = _usage_without_nulls(pending)      # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
