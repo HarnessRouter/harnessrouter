@@ -932,8 +932,8 @@ paths:
     post:
       tags: [Memories]
       operationId: recallMemory
-      summary: "Retrieve from one memory by meaning, words and fields"
-      description: "Needs `read`. Acts on this memory alone; the answer names its parent and children."
+      summary: "Search a memory and what is below it by meaning, words and fields"
+      description: "Needs `read`. Covers this memory and every descendant the caller may read, never an ancestor; each result names the memory it is in, and the answer names the parent and children of the memory asked."
       requestBody:
         required: true
         content:
@@ -2817,7 +2817,7 @@ components:
         types: { type: array, items: { type: string } }
         as_of: { type: [string, 'null'] }
         include: { type: string, enum: [active, all] }
-        depth: { type: integer, minimum: 0 }
+        depth: { type: [integer, 'null'], minimum: 0, description: 'Levels below to search: 0 is this memory alone. Left out, the whole readable subtree.' }
         limit: { type: integer, minimum: 1, maximum: 100 }
     MemoryRecall:
       type: object
@@ -2827,14 +2827,21 @@ components:
           type: array
           items:
             type: object
-            required: [record]
+            required: [record, memory]
             properties:
               record: { $ref: '#/components/schemas/MemoryRecord' }
+              memory:
+                type: object
+                description: The memory this result is in, the one asked or one below it.
+                required: [id]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
               score: { type: [number, 'null'] }
               why: { type: array, items: { type: string } }
         parent: { $ref: '#/components/schemas/MemoryNeighbour' }
         children: { type: array, items: { $ref: '#/components/schemas/MemoryNeighbour' } }
-        degraded: { type: array, items: { type: string }, description: What the request asked for and the provider did not do. }
+        degraded: { type: array, items: { type: string }, description: What the request asked for and was not done. }
         abstain: { type: boolean, description: True when the provider judges that nothing it returned answers the question. }
       additionalProperties: true
     MemoryErase:

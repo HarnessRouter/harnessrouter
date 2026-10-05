@@ -29,6 +29,15 @@ its own folders) could meet only with a second id space and a lookup between the
 remains the prefix of a server that mints its own ids. Schema: the pattern is gone from `Memory.id`,
 the path parameter and a harness's entry. Suite `2026.10.4.post2`: ME-01 no longer asserts the prefix.
 
+**Third patch of 2026-10-04, same version.** `recall` searches the memory **and everything below it
+the caller may read**; the morning's text had it act on one memory. A search is how a caller finds
+where something is kept, so each result now carries `memory` (`id`, `name`): the place to walk
+from. It never searches an ancestor. `depth` narrows it (`0` is the memory alone; it used to widen,
+from a default of one memory). A server MAY cap the memories one question covers and says so in
+`degraded`. `list`, `get`, `history` and the queries still act on one memory. The provider
+capability `recall.max_depth` is gone: the subtree is the server's to compose. Schema:
+`MemoryRecall.results[].memory` is required. Suite `2026.10.4.post3`: ME-03 rewritten.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,

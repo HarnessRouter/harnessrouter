@@ -74,7 +74,7 @@ MCP             the tools an agent holds         how an agent calls it in a turn
 |---|---|---|---|
 | `id` | string | server | Opaque to a client. A server that mints its own uses the `hmem_` prefix ([Architecture §3](architecture.md#3-object-model)); a server whose memories are a tree it already has keeps that tree's ids |
 | `name` | string | client | Human-readable |
-| `description` | string | client | What this memory holds, in a sentence or two. An agent reads it to decide whether to look inside ([§6.1](#61-reading-is-a-walk)), so it is content, not decoration |
+| `description` | string | client | What this memory holds, in a sentence or two. An agent reads it to decide whether to look inside ([§6.1](#61-search-finds-the-place-then-the-agent-walks)), so it is content, not decoration |
 | `parent_id` | string or null | client | The containing memory; `null` on a root |
 | `ancestors` | array | server | The ids from the root down to the parent, as far up as the caller may see. Placement only: reading a memory never reads an ancestor's records |
 | `restricted` | boolean | client | When `true`, grants on ancestors stop here ([§3.2](#32-the-cutoff)) |
@@ -250,7 +250,7 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
 | `POST /v1/memories/{id}/observe` | **observe**: append episodes; the provider decides what to derive from them |
 | `GET /v1/memories/{id}/jobs/{job}` | What an `observe` that answered `202` has written since |
 | `POST /v1/memories/{id}/records` | **remember**: write one record as stated |
-| `POST /v1/memories/{id}/recall` | **recall**: retrieve from this memory ([§6](#6-recall)) |
+| `POST /v1/memories/{id}/recall` | **recall**: search this memory and what is below it ([§6](#6-recall)) |
 | `GET /v1/memories/{id}/records` | List the records, paginated; accepts `type`, `include` and `as_of` |
 | `GET /v1/memories/{id}/records/{rid}` | One record; accepts `as_of` |
 | `GET /v1/memories/{id}/records/{rid}/history` | **history**: every version of a record, oldest first, each with its writer and time |
@@ -301,21 +301,35 @@ A provider declares how much of this it keeps, for content and for structure sep
 
 ## 6. Recall
 
-### 6.1 Reading is a walk
+### 6.1 Search finds the place, then the agent walks
 
-`recall`, `list` and `get` act on the one memory named in the path. They read neither its
-descendants nor its ancestors. A response carries where the caller can go from here: the memory's
-`parent` and its direct `children`, each with its `name`, `description` and counts, and only those
-the caller may read. An agent chooses where to look next, up or down, and reads there. The tree is
-walked in both directions by the agent's own decisions, never by the server on its behalf.
+A question is asked of a memory **and of everything below it that the caller may read**. That is
+what a search is for: the caller does not yet know where the answer is kept, so it asks high in the
+tree and learns where to look.
 
-A caller that wants several levels below at once passes `depth`; a server MAY cap it and MUST
-report a cap it applied in `degraded`.
+Each result therefore names the memory it is in. That memory is a starting point: the agent goes
+there and reads around what it found, lists it, asks again inside it, or moves to its parent or its
+children. The response also carries where the caller can go from the memory it asked: the `parent`
+and the direct `children`, each with its `name`, `description` and counts, and only those the
+caller may read.
 
-> **Why not search the whole subtree by default?**
-> A subtree can hold one node per customer. A read that fans out across all of them is slow, costs
-> in proportion to data the question never needed, and returns results the caller cannot place. An
-> agent that reads a node's description and then decides is doing what a person does with folders.
+Four rules bound this:
+
+- **Down, never up.** `recall` searches the memory and its descendants. It never searches an
+  ancestor. An agent that wants to look higher asks the parent, by its own next call.
+- **Only what the caller may read.** Each descendant is judged on its own
+  ([§3](#3-access)): a branch behind a cutoff the caller is not let through is not searched, and a
+  memory inside such a branch that the caller does hold a grant on is. The server decides this
+  before the provider is asked; a provider is never asked to search a memory the caller may not
+  read.
+- **`depth` narrows it.** `depth: 0` searches the memory alone, `1` adds its children, and so on.
+  Left out, the whole subtree is searched.
+- **A server MAY cap how many memories one question covers**, and MUST say so in `degraded` when it
+  did (`"subtree:capped_at_200_memories"`). The caller then asks lower in the tree.
+
+Everything else acts on **one** memory: `list`, `get`, `history`, the named and free queries
+([§6.4](#64-named-queries), [§6.5](#65-free-queries)) read the memory named in the path and nothing
+else. Finding is wide; reading is exact.
 
 ### 6.2 The request
 
@@ -327,6 +341,7 @@ report a cap it applied in `degraded`.
   "types": ["fact", "note"],
   "as_of": null,
   "include": "active",
+  "depth": null,
   "limit": 8
 }
 ```
@@ -346,6 +361,7 @@ Any one may be given alone. Given together, the provider fuses them into one ran
   "results": [
     { "record": { "id": "hrec_…", "type": "fact", "content": [ … ],
                   "trust": "untrusted" },
+      "memory": { "id": "hmem_…", "name": "Acme" },
       "score": 0.91, "why": ["query", "filters"] }
   ],
   "parent": { "id": "hmem_…", "name": "Company", "description": "…",
@@ -359,9 +375,11 @@ Any one may be given alone. Given together, the provider fuses them into one ran
 }
 ```
 
+- `memory` names the memory each result is in: the one asked, or one below it. It is where the
+  caller goes next.
 - `why` names the signals that produced each result.
-- `degraded` lists what the request asked for and the provider did not do (`"text:not_supported"`,
-  `"depth:capped_at_2"`). A server MUST NOT ignore part of a request silently.
+- `degraded` lists what the request asked for and was not done (`"text:not_supported"`,
+  `"subtree:capped_at_200_memories"`). A server MUST NOT ignore part of a request silently.
 - `parent` is absent on a root, and equally absent when the caller may not read the parent: the two
   cases look the same.
 - `abstain` is `true` when the provider judges that nothing it returned answers the question. A
@@ -585,8 +603,7 @@ GET /v1/memories/providers
   "isolation": "container",
   "derivation": "background",
   "observe": { "keeps_episodes": true, "answers": "records" },
-  "recall": { "signals": ["query", "text", "filters"], "abstain": true,
-              "max_depth": 3 },
+  "recall": { "signals": ["query", "text", "filters"], "abstain": true },
   "history": { "content": "versions", "structure": "versions" },
   "revise": "native", "forget": "native",
   "erase": { "unreachable": "reported" },
@@ -649,8 +666,9 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
   another agent, for another person. A server MUST present recalled content to the agent as data,
   fenced from instructions, and MUST carry `written_by` with it.
 - **The agent chooses its path, never its reach.** An agent may walk up and down the tree from the
-  memories its harness attaches. What it can reach is every memory the harness holds a privilege
-  on, no more, checked by the server on every call. A harness that should see one branch and
+  memories its harness attaches, and a search covers what is below the memory it asks. What it can
+  reach either way is every memory the harness holds a privilege on, no more, checked by the server
+  on every call and for every memory a search covers. A harness that should see one branch and
   nothing above it is granted that branch and nothing above it.
 - **Provenance is stamped, not supplied.** `written_by` and `written_at` come from the authenticated
   caller and the server's clock.
@@ -663,8 +681,7 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
 
 The suite's `memories` checks (ME-01 onward) run against a server that reports the capability and
 has a provider connected, and drive this chapter through the public surface on that provider: the
-tree and its listing, a stated record and its stamped writer, recall on one memory with the parent
-and children it names, each signal against the provider's own capability document (a signal the
+tree and its listing, a stated record and its stamped writer, a question asked of a parent finding a record below it and naming where it is, never one above, each signal against the provider's own capability document (a signal the
 provider lacks must be reported in `degraded`, never ignored), revision and history, a record's id
 refused through a memory it is not in, forgetting and erasing, moving and deleting. The suite runs
 with one credential, so what one principal may not read of another's is not yet checked by it.

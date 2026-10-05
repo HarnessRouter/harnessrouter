@@ -160,7 +160,7 @@ for another person. Three properties follow, and none can be left to the agent.
   had read a hostile page. A server MUST present recalled content to an agent as data, fenced from
   instructions, with who wrote it ([Memories §13](memories.md#13-security)).
 - **Reach is the harness's grants, on every call.** An agent may walk the tree from where it was
-  attached; what it can reach is decided by the server from grants, not by what the agent asks
+  attached, and a search covers what is below the memory it asks; what it can reach is decided by the server from grants, not by what the agent asks
   for, and a memory it may not read is answered exactly as one that does not exist.
 - **A provider's credential never reaches a sandbox.** It belongs to whoever connected the provider
   and is used by the server at the moment of a call ([§1](#1-credentials)).

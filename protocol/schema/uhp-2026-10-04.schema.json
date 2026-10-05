@@ -2613,8 +2613,12 @@
           ]
         },
         "depth": {
-          "type": "integer",
-          "minimum": 0
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Levels below to search: 0 is this memory alone. Left out, the whole readable subtree."
         },
         "limit": {
           "type": "integer",
@@ -2636,11 +2640,27 @@
           "items": {
             "type": "object",
             "required": [
-              "record"
+              "record",
+              "memory"
             ],
             "properties": {
               "record": {
                 "$ref": "#/$defs/MemoryRecord"
+              },
+              "memory": {
+                "type": "object",
+                "description": "The memory this result is in, the one asked or one below it.",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
               },
               "score": {
                 "type": [
@@ -2671,7 +2691,7 @@
           "items": {
             "type": "string"
           },
-          "description": "What the request asked for and the provider did not do."
+          "description": "What the request asked for and was not done."
         },
         "abstain": {
           "type": "boolean",

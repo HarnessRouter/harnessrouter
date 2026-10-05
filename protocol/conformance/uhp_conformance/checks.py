@@ -2060,25 +2060,41 @@ def me02(ctx):
     return f"{rec['id']} written by {rec.get('written_by')}"
 
 
-@check("ME-03", "Recall acts on one memory and says where the caller can go from there", "full",
-       f"{SPEC}/memories.md#61-reading-is-a-walk")
+@check("ME-03", "A question covers the memory and what is below it, names where each answer is, and never looks above", "full",
+       f"{SPEC}/memories.md#61-search-finds-the-place-then-the-agent-walks")
 def me03(ctx):
     prov = _memories_supported(ctx)
     rec, root, child = _memory_fact(ctx), ctx.state["memory_root"], ctx.state["memory_child"]
     signals = (prov.get("recall") or {}).get("signals") or []
     body = {"query": "when does Quillon Freight renew?"} if "query" in signals else {"text": "Quillon"}
+    hit = lambda res: next((x for x in res.get("results") or [] if (x.get("record") or {}).get("id") == rec["id"]), None)  # noqa: E731
     res = _recall_until(ctx, child["id"], body, rec["id"])
     ctx.validate(res, "MemoryRecall")
-    assert any((x.get("record") or {}).get("id") == rec["id"] for x in res.get("results") or []), (
-        f"the record was not recalled from its own memory with {body}")
+    assert hit(res), f"the record was not recalled from its own memory with {body}"
     assert (res.get("parent") or {}).get("id") == root["id"], "a recall must name the parent the caller may read"
-    up = ctx.client.post(f"/v1/memories/{root['id']}/recall", body=body).json or {}
-    assert not any((x.get("record") or {}).get("id") == rec["id"] for x in up.get("results") or []), (
-        "a recall on the parent returned a record of the child: a read acts on one memory and does not descend")
+    # asked of the parent, the record below is found, and the result says which memory holds it
+    up = _recall_until(ctx, root["id"], body, rec["id"])
+    ctx.validate(up, "MemoryRecall")
+    found = hit(up)
+    assert found, "a question asked of the parent did not find the record in its child: recall covers the subtree"
+    assert (found.get("memory") or {}).get("id") == child["id"], (
+        f"the result names memory {(found.get('memory') or {}).get('id')!r}, the record is in {child['id']!r}")
     kid = next((c for c in up.get("children") or [] if c.get("id") == child["id"]), None)
     assert kid and kid.get("description") == "what is known about each account", (
         "a recall must name the children the caller may read, each with its description")
-    return f"found in {child['id']}, absent from {root['id']}, which names {len(up.get('children') or [])} child"
+    # depth 0 is the memory alone
+    alone = ctx.client.post(f"/v1/memories/{root['id']}/recall", body={**body, "depth": 0}).json or {}
+    assert not hit(alone), "depth 0 returned a record of a child"
+    # and nothing looks above: a record stated in the parent is not found from the child
+    marker = "Vellacourt" + uuid.uuid4().hex[:6]
+    top = ctx.client.post(f"/v1/memories/{root['id']}/records", body={"type": "fact", "content": f"{marker} is the parent's own fact."})
+    assert top.status == 200, f"POST records on the parent answered {top.status}"
+    probe = {"query": f"what is {marker}?"} if "query" in signals else {"text": marker}
+    _recall_until(ctx, root["id"], {**probe, "depth": 0}, top.json["id"])
+    below = ctx.client.post(f"/v1/memories/{child['id']}/recall", body=probe).json or {}
+    assert not any((x.get("record") or {}).get("id") == top.json["id"] for x in below.get("results") or []), (
+        "a recall on the child returned a record of its parent: a question never looks above")
+    return f"found from {root['id']} in {child['id']}; depth 0 and the upward direction hold"
 
 
 @check("ME-04", "What a provider does not do is said, never ignored", "full", f"{SPEC}/memories.md#63-the-response")
@@ -2095,11 +2111,6 @@ def me04(ctx):
         assert said == (sig not in signals), (
             f"the provider declares signals {signals}; a recall by {sig} answered degraded={((r.json or {}).get('degraded'))}")
         notes.append(f"{sig}={'declared' if sig in signals else 'degraded'}")
-    r = ctx.client.post(f"/v1/memories/{child['id']}/recall", body={"query": "renewal", "depth": 99})
-    max_depth = int((prov.get("recall") or {}).get("max_depth") or 0)
-    if max_depth < 99:
-        assert any(str(d).startswith("depth:") for d in ((r.json or {}).get("degraded") or [])), (
-            "a depth the server capped must be reported in degraded")
     r = ctx.client.post(f"/v1/memories/{child['id']}/recall", body={})
     assert r.status == 422, f"a recall with no query, text or filters must be refused; got HTTP {r.status}"
     return ", ".join(notes)
