@@ -38,6 +38,16 @@ from a default of one memory). A server MAY cap the memories one question covers
 capability `recall.max_depth` is gone: the subtree is the server's to compose. Schema:
 `MemoryRecall.results[].memory` is required. Suite `2026.10.4.post3`: ME-03 rewritten.
 
+**Fourth patch of 2026-10-04, same version.** One vocabulary for who acts on a memory. A grant's
+principal was "an opaque typed identifier" whose kinds each server chose, and a record's
+`written_by` named its kinds only by example (`harness`, `consolidator`); two implementations had
+already stamped a person as `member` and as `user`. Now four kinds serve both places: `member`,
+`harness`, `group` (holds grants, never writes) and `provider` (writes, never holds a grant); a
+server's own kind is `x.`-prefixed. `consolidator` is gone: a consolidation's records are written
+by the `provider`, with `consolidation_id` beside it, and a record derived from an observation
+carries `on_behalf_of`. A credential is not a kind. Schema: `MemoryWriter`, and a pattern on a
+grant's `principal`. Suite `2026.10.4.post4`: ME-02 checks the writer's kind.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,

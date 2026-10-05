@@ -98,6 +98,29 @@ caller has no effective privilege, and MUST NOT reveal that one exists.
 
 ## 3. Access
 
+### Who acts on a memory
+
+One vocabulary names everyone who can act on a memory. It is used in two places: a grant names who
+may act, and a record's `written_by` names who did.
+
+| Kind | Who | Holds grants | Writes records |
+|---|---|---|---|
+| `member` | A person | yes | yes |
+| `harness` | An agent, running under that harness | yes | yes |
+| `group` | A set of members the server resolves: a team, a workspace | yes | no, its members do |
+| `provider` | The memory's provider itself: what it derived from an observation, what a consolidation run concluded | no | yes |
+
+A kind of a server's own is `x.`-prefixed (`x.team`). A server MUST NOT use another unprefixed
+kind, and refuses a grant that names one.
+
+The two places write the same identity two ways. In a grant, a **principal** is the string
+`<kind>:<id>`. On a record, the writer is `{ "kind": …, "id": … }`. They name the same thing:
+`written_by.kind` and `written_by.id`, joined by a colon, are the principal a grant would name.
+The `id` is the server's own and opaque to a client.
+
+A credential is not a kind. A request made with an API key acts as the member or the harness the
+key belongs to, and is granted and stamped as that.
+
 ### 3.1 Grants and inheritance
 
 A **grant** gives one principal a set of privileges on one memory. A principal's effective
@@ -115,12 +138,8 @@ privileges on it, an implicit grant that flows down like any other.
 | Request | What it does |
 |---|---|
 | `GET /v1/memories/{id}/grants` | Who holds what on this memory, and on which node each grant sits |
-| `POST /v1/memories/{id}/grants` | Grant a principal privileges: `{ principal, privileges }` |
+| `POST /v1/memories/{id}/grants` | Grant a principal privileges: `{ principal, privileges }`, the principal as `<kind>:<id>` |
 | `DELETE /v1/memories/{id}/grants/{grant_id}` | Revoke one grant |
-
-A **principal** is an opaque typed identifier the server resolves: a harness, a credential, a
-person, a group. The protocol does not define principals beyond that; a server documents the kinds
-it accepts.
 
 ### 3.2 The cutoff
 
@@ -171,7 +190,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
 | `attributes` | Structured fields. Free-form for core types; the type's schema for extension types ([§8](#8-types)) |
 | `version`, `status`, `supersedes` | A change appends a version and closes the one before it ([§5.3](#53-nothing-is-overwritten)). `status` is `active`, `superseded` or `forgotten` |
 | `time` | When it was true in the world (`valid_*`) and when the memory held it (`written_at`, `invalidated_at`). A provider without validity leaves `valid_*` null |
-| `written_by` | Stamped by the server from the authenticated caller. A client cannot supply it |
+| `written_by` | Who wrote it, `{ kind, id }` in the vocabulary of [§3](#who-acts-on-a-memory), stamped by the server from the authenticated caller; a client cannot supply it. When the provider wrote it, two more fields say why: `on_behalf_of`, the principal whose observation it was derived from, and `consolidation_id`, the run that concluded it ([§9.2](#92-consolidation-runs)) |
 | `references` | Other records this one points at ([§4.2](#42-references)) |
 | `trust` | Always `untrusted` on a read: what a memory returns is data, never instructions ([§13](#13-security)) |
 
@@ -562,15 +581,16 @@ trusted. A provider that consolidates through the protocol exposes each pass as 
   "changes": { "created": 31, "superseded": 6, "forgotten": 2 },
   "usage": { "input_tokens": 182000, "output_tokens": 9100 },
   "budget": { "limit": 250000, "unit": "tokens", "exhausted": false },
-  "written_by": { "kind": "consolidator", "id": "native" },
+  "written_by": { "kind": "provider", "id": "native" },
   "error": ""
 }
 ```
 
 - `status` is `queued`, `running`, `completed`, `stopped` (the budget ran out; what was done stays
   done and the next run resumes after `read.through`) or `failed`.
-- Every record a run writes carries the run's `written_by`, so a reader can tell what a person or
-  an agent stated from what consolidation concluded.
+- Every record a run writes carries the run's `written_by` and the run's id beside it
+  (`"consolidation_id": "hcon_5d2e…"`), so a reader can tell what a person or an agent stated from
+  what consolidation concluded, and which run to revert.
 - `revert` appends: each record the run superseded or forgot becomes current again as a new
   version, and each record it created is forgotten. History keeps both the run and its reversal.
 - A provider declares `consolidate` as `runs` (this section), `trigger` (it can be started and
