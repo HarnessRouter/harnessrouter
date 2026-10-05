@@ -9,6 +9,8 @@ of thinking tokens. The judge is the provider's figure, never what the agent say
   applied  each level asked is recorded with the level the model was given
   off      `none` spends no thinking tokens, where the model has `none`
   order    the low level spends fewer thinking tokens than the high one
+  effect   where output tokens stand in for a missing count, low spends at least half again what
+           none does: without it, a level that is recorded and never reaches the model passes by noise
 
 Where a provider reports no thinking count for the model (Anthropic through some doors), output tokens
 stand in, since thinking is billed as output, and the row says so.
@@ -98,6 +100,14 @@ def judge(levels: list[str], turns: list[dict]) -> tuple[str, list[str]]:
         return sum(int(t[key] or 0) for t in by.get(lv, []))
     if "none" in levels and counted and total("none") != 0:
         findings.append(f"none: {total('none')} thinking tokens")
+    # With no thinking count, output tokens stand in, and "low is below high" alone passes by noise
+    # when a level was recorded and never reached the model (a broker that removed the thinking
+    # controls: none 2,184, low 2,309, high 2,417 output tokens over three runs, 2026-10-06). A level
+    # that reached the model spends well over what none does: the low level must be at least half
+    # again the none level.
+    if "none" in levels and "low" in levels and not counted and total("low") < 1.5 * total("none"):
+        findings.append(f"effect: low {total('low')} is not half again none {total('none')} ({key}); "
+                        f"the level may be recorded and not reaching the model")
     low, high = ("low" if "low" in levels else ""), ("high" if "high" in levels else "")
     if low and high and not total(low) < total(high):
         findings.append(f"order: {low} {total(low)} is not below {high} {total(high)} ({key})")

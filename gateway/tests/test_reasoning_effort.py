@@ -107,3 +107,62 @@ def test_bases_say_which_levels_each_model_has_and_none_where_none_was_measured(
 def test_the_levels_come_from_the_runners_table_not_a_second_one():
     assert gw.reasoning.__file__.replace(os.sep, "/").endswith("runner/reasoning.py")
     assert gw.reasoning.levels_for("openai/gpt-5.4") == ("none", "low", "medium", "high", "xhigh")
+
+
+# ── broker trust: the gateway's own broker sits between the agent and the provider ─────────────
+
+def test_the_per_turn_credential_says_a_level_only_for_a_turn_that_asked_for_one(monkeypatch):
+    monkeypatch.setattr(gw, "INTERNAL_KEY", "k-test")
+    plain = gw._mint_turn_cred("hsess1", "integration:Anthropic")
+    leveled = gw._mint_turn_cred("hsess1", "integration:Anthropic", "low")
+    assert gw._verify_turn_cred(plain) == gw._verify_turn_cred(leveled) == ("hsess1", "integration:Anthropic")
+    assert gw._turn_cred_level(plain) == "" and gw._turn_cred_level(leveled) == "low"
+    # the credential of a turn that asked for nothing is what it always was: three fields
+    import base64
+    body = base64.urlsafe_b64decode(plain[4:].rsplit(".", 1)[0] + "==").decode()
+    assert body.count("|") == 2
+    # the level is under the signature: one written in by hand is no credential at all
+    b64, sig = plain[4:].rsplit(".", 1)
+    forged = "hrt_" + base64.urlsafe_b64encode((body + "|high").encode()).decode().rstrip("=") + "." + sig
+    assert gw._verify_turn_cred(forged) is None and gw._turn_cred_level(forged) == ""
+    assert gw._turn_cred_level("not-a-token") == ""
+
+
+def test_the_broker_keeps_the_thinking_controls_of_a_turn_that_asked_for_a_level():
+    """The broker removes the thinking controls from every Anthropic-shape request, for the model
+    refusals of what Claude Code sends by itself. A level the turn asked for was removed with them:
+    the turn ran at the model's default and its record said the level had been applied (found on the
+    hosted service, 2026-10-05)."""
+    import json
+    sent = {"model": "claude-sonnet-5-5", "max_tokens": 4000, "messages": [],
+            "thinking": {"type": "adaptive"}, "output_config": {"effort": "low", "format": "x"},
+            "context_management": {"edits": []}, "service_tier": "priority"}
+    raw = json.dumps(sent).encode()
+    as_before = json.loads(gw._strip_unsupported(raw, provider="anthropic", byok=True, path="messages"))
+    assert "thinking" not in as_before and "context_management" not in as_before
+    assert as_before["output_config"] == {"format": "x"}
+    kept = gw._strip_unsupported(raw, provider="anthropic", byok=True, path="messages", keep_thinking=True)
+    assert kept is raw                                      # nothing to remove: the same bytes go on
+    # on the platform's key the priced-tier selectors still go, level or no level
+    platform = json.loads(gw._strip_unsupported(raw, provider="anthropic", byok=False, path="messages", keep_thinking=True))
+    assert "service_tier" not in platform and platform["thinking"] == {"type": "adaptive"}
+    assert platform["output_config"] == {"effort": "low", "format": "x"}
+    # the OpenAI shapes never lost their thinking fields and do not now
+    chat = json.dumps({"model": "gpt-5.4", "messages": [], "reasoning_effort": "low",
+                       "providerOptions": {"google": {"thinkingConfig": {"thinkingBudget": 0}}},
+                       "extra_body": {"google": {"thinking_config": {"thinking_level": "low"}}}}).encode()
+    assert gw._strip_unsupported(chat, provider="vercel", byok=True, path="chat/completions") is chat
+
+
+def test_in_broker_trust_the_turns_level_rides_its_credential(monkeypatch):
+    monkeypatch.setattr(gw, "SANDBOX_TRUST", "broker")
+    monkeypatch.setattr(gw, "PUBLIC_BASE_URL", "https://hr.example")
+    monkeypatch.setattr(gw, "INTERNAL_KEY", "k-test")
+    conn = {"name": "integration:Anthropic", "backend": "claude", "provider": "anthropic", "api_key": "sk-ant-real"}
+    plain = gw._auth_from_conn(conn, "hsess1")
+    leveled = gw._auth_from_conn(conn, "hsess1", "high")
+    assert plain and leveled and "sk-ant-real" not in str(plain) + str(leveled)
+    assert gw._turn_cred_level(plain["api_key"]) == "" and gw._turn_cred_level(leveled["api_key"]) == "high"
+    src = open(os.path.join(os.path.dirname(__file__), "..", "app.py")).read()
+    assert "sandbox_auth = _auth_from_conn(conn, sid, effort)" in src
+    assert "keep_thinking=bool(_turn_cred_level(_broker_token(request)))" in src

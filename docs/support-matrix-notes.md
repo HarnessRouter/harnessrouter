@@ -2807,3 +2807,58 @@ either way; hermes's first text is its whole answer and its difference here is t
 Not ported, with the reason: the hosted change that lets a turn's record writes run beside the loop
 (each write costs about 0.4 s there; here the store is a local file), and the per-turn timing log
 line that found these.
+
+## The thinking level behind a broker (2026-10-06, 0.30.2)
+
+The hosted service took the thinking level from 0.30.0 and ran the same column against it, and its
+port found what the owner-trust measurement here could not: in broker trust the gateway's own broker
+sits between the agent and the provider, and it removes the thinking controls (`thinking`,
+`context_management`, `output_config.effort`) from every Anthropic-shape request. That rule exists
+for what Claude Code sends by itself, which some model versions refuse. A level the turn had asked
+for was removed with it: the turn ran at the model's default and its record said the level had been
+applied. This tree has the same broker and the same rule.
+
+Fixed the way the hosted service fixed it: the per-turn credential the agent is handed carries the
+level as a fourth field, only when the turn asked for one, and the broker keeps the thinking controls
+of a request that arrives under such a credential. A turn that asked for nothing carries the
+credential it always did and its requests lose the controls as before. On the OpenAI shapes the
+broker never removed anything of the thinking group (`reasoning_effort`, `providerOptions`,
+`extra_body` all pass), which the hosted service pinned in a test and showed live: a Gemini model at
+`none` spent 0 thinking tokens through its broker and TokenRouter.
+
+Measured here in broker trust (a side container with `HR_SANDBOX_TRUST=broker`; the image's
+default is owner trust, where the agent holds the key and no broker is in the way). Claude Code with
+claude-haiku-4.5 through the broker and TokenRouter, output tokens of three runs per level:
+
+| | none | low | high |
+|---|---|---|---|
+| 0.30.1 | 690, 726, 768 | 838, 782, 689 | 931, 774, 712 |
+| with the fix | 730, 538, 824 | 2,277, 2,256, 1,686 | 2,284, 2,754, 3,801 |
+
+On 0.30.1 every turn recorded its level as applied and all nine spent what a turn with no level
+spends. hermes, pi and Codex with gpt-5.4 passed the column in broker trust before and after (their
+level rides `reasoning_effort` through the relay and the broker, which the gateway makes possible by
+naming the route): the first end-to-end run of the level behind this tree's own broker.
+
+The column's judge passed the 0.30.1 row: on output tokens "low below high" held by noise (2,309
+against 2,417). It now also asks, where output tokens stand in for a missing count, that low spend
+at least half again what none does; the 0.30.1 row fails it and every earlier pass still passes.
+
+The hosted column, as that session reported it (`run-column.py` from 915c834, one run per level,
+gpt-5.4 unless said; thinking tokens at none, low, high):
+
+| base | none | low | high | |
+|---|---:|---:|---:|---|
+| hermes | 0 | 62 | 403 | |
+| goose | 0 | 278 | 831 | |
+| cheetahclaws | 0 | 302 | 471 | |
+| kimi | 0 | 224 | 516 | |
+| qwen | 0 | 434 | 779 | |
+| codex | 12 out | 271 out | 501 out | no count: its calls go to the broker without passing a relay there |
+| claude-code, claude-haiku-4.5 | 721 out | 1,964 out | 2,248 out | with the broker keeping the controls |
+| opencode | | | | recorded default at every level on the first image |
+
+7 of 8. opencode, pi and omp talk to the broker directly on the hosted service (they ride the relay
+here for every keyed turn), so the relay never saw their calls; there they now take the relay for a
+turn that asks for a level. That difference between the trees is the hosted one's and is recorded
+here because the column is shared.
