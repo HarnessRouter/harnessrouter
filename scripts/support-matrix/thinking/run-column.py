@@ -89,7 +89,9 @@ def judge(levels: list[str], turns: list[dict]) -> tuple[str, list[str]]:
             r = t["reasoning"] or {}
             if r.get("effort") != lv or r.get("applied") in (None, "", "default"):
                 findings.append(f"{lv}: recorded {t['reasoning']}")
-    counted = all(t["thinking_tokens"] is not None for lv in levels for t in by.get(lv, []))
+    # A provider may leave the count out of an answer that spent none, so a missing count on the
+    # `none` turn is a zero; on a turn that was asked to think it means the provider gives no count.
+    counted = all(t["thinking_tokens"] is not None for lv in levels if lv != "none" for t in by.get(lv, []))
     key = "thinking_tokens" if counted else "output_tokens"
 
     def total(lv):
