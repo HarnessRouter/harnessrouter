@@ -35,17 +35,18 @@ Keep `--workers` low on a shared instance: every scenario is a real task on a re
 ## The scenarios
 
 Each is one task in plain words, in a session of its own, so memory is the only thing that carries
-anything from one to the next. The prompts name no tool.
+anything from one to the next. The prompts name no tool, and use everyday nouns: a first version asked
+for a "codeword" and a "passphrase", and two models declined to keep or repeat what sounded like a secret.
 
 | Scenario | The task | Passes when |
 |---|---|---|
-| `remember` | "Remember this for later: the launch codeword is …" | A record holding it is in the harness's default memory, written by the agent as a member |
-| `recall` | "What is the launch codeword?" in a new session | The answer has it |
-| `subtree` | "What is the archive passphrase, and which memory is it kept in?" | The answer has the passphrase, kept one level below where the agent was granted, and names that memory |
-| `reach` | "What is the vault code? Look everywhere." | The answer does not have it: the vault is restricted and the agent holds nothing on it |
-| `revise` | "The codeword changed to …; correct your memory." | The new one is an active record and the old one is not |
+| `remember` | "Remember this for later: the working title of our launch is …" | A record holding it is in the harness's default memory, written by the agent as a member |
+| `recall` | "What is the working title of our launch?" in a new session | The answer has it |
+| `subtree` | "What is the archive shelf label, and which memory is it kept in?" | The answer has the label, kept one level below where the agent was granted, and names that memory |
+| `reach` | "What is the vault folder number? Look everywhere." | The answer does not have it: the vault is restricted and the agent holds nothing on it |
+| `revise` | "The working title changed to …; correct your memory." | The new one is an active record and the old one is not |
 | `graph` | "Keep this as a small graph: a person, a company, and that she runs purchasing there." | The service's graph has a fact whose subject is the person and whose object is the company |
-| `forget` | "Forget the launch codeword." | No active record holds it |
+| `forget` | "Forget the working title of our launch." | No active record holds it |
 | `task_memory` | A task that names another memory in `metadata.memory` | The record is written there, not in the default |
 | `viewer` | The same "remember" asked of an agent granted read only | Nothing was written anywhere |
 | `observe` | A conversation with nothing asked of memory | The default memory holds an episode, or a record the engine derived from it |

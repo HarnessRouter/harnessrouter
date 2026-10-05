@@ -16,6 +16,7 @@ import {
 import { HarnessLogo } from '@/components/HarnessLogo';
 import { CopyId } from '@/components/CopyId';
 import { SkillEditor, McpModal, readSkillUpload, type McpServer } from '@/components/HarnessEditors';
+import { HarnessMemorySection, MEMORIES_ENTRY_ID } from '@/components/HarnessMemorySection';
 import { fetchTraceWindow, statsFor, p95Of, avgCreditsOf, timeAgo, type TraceCard } from '@/lib/revamp-data';
 // Self-hosted only: publish a custom harness (instructions, model, skills, MCP wiring) to a
 // hosted workspace. Hidden and inert on hosted builds.
@@ -101,7 +102,15 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
   // The plugins binding is an MCP entry on the record (the gateway's own plugs server), but it is
   // the Plugins section's, not a custom server: the Tools section neither lists it (its address is
   // ours, and its switch would be a second one) nor counts it.
-  const ownServers = (draft?.mcpServers || []).map((m, idx) => ({ m, idx })).filter(({ m }) => m.id !== PLUGS_ENTRY_ID);
+  const ownServers = (draft?.mcpServers || []).map((m, idx) => ({ m, idx })).filter(({ m }) => m.id !== PLUGS_ENTRY_ID && m.id !== MEMORIES_ENTRY_ID);
+  // The Memory section's binding is the same kind of entry, written by the service when the agent
+  // is given its first memory. It is carried into the draft AND the saved copy as the service
+  // holds it, so a later Save neither drops it nor counts it as an unsaved change.
+  const syncMemoryBinding = async () => {
+    const entry = (await getCustom(id))?.mcpServers.find((m) => m.id === MEMORIES_ENTRY_ID);
+    const carry = (h: CustomHarness | null) => (h ? { ...h, mcpServers: [...h.mcpServers.filter((m) => m.id !== MEMORIES_ENTRY_ID), ...(entry ? [entry] : [])] } : h);
+    setSaved(carry); setDraft(carry);
+  };
   const togglePlug = async (type: string) => {
     if (!id) return;
     const have = included?.plugs || [];
@@ -391,6 +400,9 @@ export function HarnessSettings({ id, embedded = false, onNavigate }: {
               </div>
             </div>
           </section>
+
+          {/* What the agent was granted, applied as it is changed: none of it is in the draft. */}
+          <HarnessMemorySection id={id} builtIn={readOnly} onChanged={() => void syncMemoryBinding().catch(() => { /* the next load reads it */ })} />
 
           {!takesSkills ? (
           <section className="form-section">

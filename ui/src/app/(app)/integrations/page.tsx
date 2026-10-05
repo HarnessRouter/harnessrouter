@@ -18,6 +18,7 @@ import { SkelRows } from '@/components/Skel';
 import { getSession } from '@/lib/auth';
 import { authHeaders } from '@/lib/chat';
 import { PLATFORM_ADMIN_ORGS, SELF_HOSTED } from '@/lib/edition';
+import { listEngines, connectEngine, disconnectEngine, listRoots, type EnginePlug } from '@/lib/memories';
 
 interface ModelRow { canonical: string; provider_id: string }
 interface Integration {
@@ -321,6 +322,8 @@ export default function IntegrationsPage() {
 
           </>
         )}
+
+        <MemoryEngineKeys />
       </div>
 
       {editing && doc && (
@@ -882,6 +885,147 @@ function MediaChainTable({ chain, policy, busy, onChange }: {
         </tbody>
       </table>
       </div>
+    </div>
+  );
+}
+
+/* ── memory engine keys ──────────────────────────────────────────────────────────────────────
+   A memory engine that runs on the workspace's own account at its vendor is one row here, like a
+   model provider: a key, and nothing else. The service tries a key at the vendor the moment it is
+   saved, so a refused one is answered with the vendor's reason, shown under the field. A saved key
+   is never sent back, so the row says only that one is there.
+
+   Removing a key deletes nothing at the vendor; the memories kept there are out of reach until a
+   key is added again, and the confirm says how many that is. */
+const ENGINE_NAME: Record<string, string> = { mem0: 'Mem0' };
+/** A row as the service answers it: `attention` is its own sentence for a key the vendor refused
+ *  (the key is stored all the same, and the engine waits for one that works). */
+type Engine = EnginePlug & { attention?: string };
+
+function MemoryEngineKeys() {
+  const [engines, setEngines] = useState<Engine[] | null>(null);
+  // How many memories each engine keeps, counted from the tree's roots; null while unknown, so
+  // no figure is shown rather than a wrong one.
+  const [uses, setUses] = useState<Record<string, number> | null>(null);
+  const [err, setErr] = useState('');
+  const [adding, setAdding] = useState<string | null>(null);
+  const [key, setKey] = useState('');
+  const [keyErr, setKeyErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<Engine | null>(null);
+
+  const reload = useCallback(() => {
+    listEngines().then(setEngines)
+      .catch((e) => { setEngines([]); setErr(e instanceof Error ? e.message : 'The memory engines could not be read.'); });
+    listRoots().then((roots) => {
+      const n: Record<string, number> = {};
+      roots.forEach((m) => { n[m.provider] = (n[m.provider] || 0) + 1; });
+      setUses(n);
+    }).catch(() => setUses(null));
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+
+  // Only the engines that take a key belong on this page.
+  const rows = (engines || []).filter((e) => e.secrets_needed.length > 0);
+  if (!rows.length && !err) return null;
+  const nameOf = (e: Engine) => ENGINE_NAME[e.type] || e.label;
+  const hasKey = (e: Engine) => e.secrets_set.length > 0;
+  const usedBy = (e: Engine) => (uses ? (uses[e.type] || 0) : null);
+  const close = () => { setAdding(null); setKey(''); setKeyErr(''); };
+
+  async function save(e: Engine) {
+    if (!key.trim() || busy) return;
+    setBusy(true); setKeyErr('');
+    try {
+      const now: Engine = await connectEngine(e.type, key.trim());
+      // A refused key is not an error of the call: the row comes back waiting for a key, with the
+      // reason. The field stays open on it so another can be tried.
+      if (now.status === 'needs_auth') { setKey(''); setKeyErr(now.attention || `${nameOf(e)} refused the key. Try another.`); }
+      else close();
+      reload();
+    }
+    catch (x) { setKeyErr(x instanceof Error ? x.message : 'The key was not saved. Try again.'); }
+    finally { setBusy(false); }
+  }
+  async function remove(e: Engine) {
+    setBusy(true); setErr('');
+    try { await disconnectEngine(e.type); setRemoving(null); reload(); }
+    catch (x) { setErr(x instanceof Error ? x.message : 'The key was not removed. Try again.'); setRemoving(null); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="itg-section">
+      <div className="itg-section-head">
+        <div><h2>Memory engine</h2>
+          <p>With a key, an engine&rsquo;s memories are kept in your own account there, and that engine bills you directly.</p></div>
+      </div>
+      {err && <div className="notice"><iconify-icon icon="tabler:alert-triangle"></iconify-icon><div><strong>Something went wrong</strong>{err}</div></div>}
+      {rows.length > 0 && (
+        <div className="table-wrap">
+          <table className="itg-table itg-engine-table">
+            <thead><tr><th>Name</th><th>Key</th><th aria-label="Actions"></th></tr></thead>
+            <tbody>
+              {rows.map((e) => {
+                const n = usedBy(e);
+                return [
+                  <tr key={e.type}>
+                    <td><strong>{nameOf(e)}</strong>
+                      <div className="itg-models">{hasKey(e) && n !== null
+                        ? (n === 0 ? 'No memory uses this key.' : `Used by ${n} ${n === 1 ? 'memory' : 'memories'}`)
+                        : !hasKey(e) ? `With a key, ${nameOf(e)} memories are kept in your ${nameOf(e)} account and ${nameOf(e)} bills you.` : ''}</div></td>
+                    <td>
+                      {e.status === 'connected' && <span className="status healthy">Key added</span>}
+                      {e.status === 'needs_auth' && <span className="status warning itg-engine-status">{e.attention || (hasKey(e) ? 'Key refused, replace it' : 'No key')}</span>}
+                      {e.status === 'disabled' && <span className="status neutral">Turned off</span>}
+                      {e.status === 'missing' && <span className="status neutral">No key</span>}
+                    </td>
+                    <td className="itg-row-actions itg-engine-actions">
+                      <button className="button" type="button" disabled={busy}
+                        onClick={() => (adding === e.type ? close() : (setAdding(e.type), setKey(''), setKeyErr('')))}>
+                        {adding === e.type ? 'Cancel' : hasKey(e) ? 'Replace key' : 'Add key'}</button>
+                      {hasKey(e) && <button className="button danger-ghost" type="button" disabled={busy} onClick={() => setRemoving(e)}>Remove</button>}
+                    </td>
+                  </tr>,
+                  adding === e.type && (
+                    <tr key={e.type + ':add'}><td colSpan={3}>
+                      <form className="itg-engine-add" onSubmit={(ev) => { ev.preventDefault(); void save(e); }}>
+                        <div className="field"><label htmlFor={`eng-${e.type}`}>{nameOf(e)} API key</label>
+                          <input id={`eng-${e.type}`} type="password" autoComplete="off" autoFocus value={key} placeholder="Paste your key"
+                            aria-describedby={`eng-${e.type}-help`} onChange={(ev) => setKey(ev.target.value)} /></div>
+                        <button className="button primary" type="submit" disabled={busy || !key.trim()}>{busy ? 'Saving…' : 'Save'}</button>
+                      </form>
+                      {keyErr
+                        ? <p className="field-help itg-engine-refused" id={`eng-${e.type}-help`} role="alert">{keyErr}</p>
+                        : <p className="field-help" id={`eng-${e.type}-help`}>{hasKey(e) ? 'The new key takes the place of the one saved. ' : ''}Stored write-only and sent with each request. We never read it back.</p>}
+                    </td></tr>
+                  ),
+                ];
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {removing && (
+        <div className="modal-backdrop" onClick={() => busy || setRemoving(null)}>
+          <section className="modal" role="alertdialog" aria-modal="true" aria-labelledby="engRemoveTitle" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header"><div><h2 id="engRemoveTitle">Remove your {nameOf(removing)} key?</h2>
+              <p>{(() => {
+                const n = usedBy(removing);
+                if (n === 0) return 'No memory uses this key.';
+                const who = n === null ? `Memories kept in your ${nameOf(removing)} account` : n === 1 ? '1 memory uses this key. It is' : `${n} memories use this key. They are`;
+                return n === null
+                  ? `${who} become unavailable until you add a key again. Nothing in them is deleted.`
+                  : `${who} kept in your ${nameOf(removing)} account and ${n === 1 ? 'becomes' : 'become'} unavailable until you add a key again. Nothing in ${n === 1 ? 'it' : 'them'} is deleted.`;
+              })()}</p></div></div>
+            <div className="modal-actions" style={{ padding: '0 22px 20px' }}>
+              <button className="button" type="button" onClick={() => setRemoving(null)} disabled={busy}>Cancel</button>
+              <button className="button danger" type="button" disabled={busy} onClick={() => void remove(removing)}>{busy ? 'Removing…' : 'Remove key'}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

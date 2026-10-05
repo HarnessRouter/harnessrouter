@@ -314,14 +314,16 @@ class Mem0(mp.Provider):
             if e.get("event") != "ADD" and e.get("old_memory") == e.get("new_memory"):
                 continue                    # a change of metadata or expiry, not of what the record says
             vt, vb = _split(e.get("new_memory") or "", bool(head["title"]))
-            versions.append({**head, "title": vt, "content": [{"type": "text", "text": vb}] if vb else [], "version": len(versions) + 1,
+            # mem0 keeps what each version said, not its fields: the reason belongs to the head alone
+            versions.append({**head, "attributes": {k: v for k, v in head["attributes"].items() if k != "revision_reason"},
+                             "title": vt, "content": [{"type": "text", "text": vb}] if vb else [], "version": len(versions) + 1,
                              "status": "superseded", "supersedes": len(versions) or None,
                              "time": {**head["time"], "written_at": _utc(e.get("updated_at")), "invalidated_at": None}})
         if not versions:
             return [head]
         for a, b in zip(versions, versions[1:]):
             a["time"]["invalidated_at"] = b["time"]["written_at"]
-        versions[-1].update(status=head["status"])
+        versions[-1].update(status=head["status"], attributes=head["attributes"])
         versions[-1]["time"]["invalidated_at"] = head["time"]["invalidated_at"]
         return versions
 
