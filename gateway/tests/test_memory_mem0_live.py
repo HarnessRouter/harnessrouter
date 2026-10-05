@@ -58,9 +58,17 @@ def test_a_refused_key_is_found_out_at_connect():
     with TestClient(gw.app) as client:
         other = {**ADA, "x-harness-workspace": "ws-badkey"}
         r = client.put("/v1/plugs/mem0", headers=other, json={"secrets": {"api_key": "m0-not-a-real-key"}})
-        assert r.status_code == 200 and r.json()["status"] == "needs_auth" and "refused the key" in r.json()["attention"]
+        assert r.status_code == 422 and r.json()["error"]["code"] == "memory_invalid" and "refused the key" in r.json()["error"]["message"]
         r = client.post("/v1/memories", headers=other, json={"provider": "mem0", "name": "x"})
         assert r.status_code == 503 and r.json()["error"]["code"] == "memory_unavailable"
+        # a refused key never replaces a working one: the workspace that is connected stays connected
+        assert client.put("/v1/plugs/mem0", headers=ADA, json={"secrets": {"api_key": KEY}}).json()["status"] == "connected"
+        assert client.put("/v1/plugs/mem0", headers=ADA, json={"secrets": {"api_key": "m0-not-a-real-key"}}).status_code == 422
+        row = client.get("/v1/plugs?kind=memory", headers=ADA).json()["plugs"][0]
+        assert row["status"] == "connected"
+        made = client.post("/v1/memories", headers=ADA, json={"provider": "mem0", "name": "still reachable (live test)"})
+        assert made.status_code == 200, made.text
+        client.delete(f"/v1/memories/{made.json()['id']}", headers=ADA)
 
 
 def test_the_provider_says_what_it_is(c, tree):
