@@ -888,7 +888,7 @@ def test_a_harness_with_the_browser_tells_its_agent_to_use_it():
     instructions, and nothing when it does not (Codex opened a page with curl while the card
     stayed empty, hr-test 2026-09-27)."""
     assert gw._agent_doc_with_plugs("", []) == ""
-    assert gw._agent_doc_with_plugs("Be brief.", ["github"]) == "Be brief."
+    assert gw._agent_doc_with_plugs("Be brief.", ["a-plug-with-no-section"]) == "Be brief."   # github has its own since 2026-10-04
     doc = gw._agent_doc_with_plugs("Be brief.\n", ["browser"])
     assert doc.startswith("Be brief.\n\n## Browser\n") and "browser_navigate" in doc and "curl" in doc
     assert gw._agent_doc_with_plugs("", ["browser"]) == gw._BROWSER_GUIDE
