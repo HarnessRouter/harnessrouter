@@ -202,24 +202,28 @@ def _done(t: dict) -> str:
 
 # ── scenarios: each returns (ok, why); `why` is said on a pass too when it is worth reading ────
 def s_remember(c: Cell):
-    """The agent keeps something it was told, in the memory it writes by default, as itself."""
+    """The agent keeps something it was told, in a memory it may write, as itself."""
     t = c.ask(f"Please remember this for later conversations: the working title of our launch is {c.word['launch']}.")
     if _done(t):
         return False, _done(t)
-    got = c.wait(lambda: [r for r in c.holding("notes", c.word["launch"]) if (r.get("written_by") or {}).get("id") == c.hid])
+
+    def kept():
+        return [(m, r) for m in ("notes", "client") for r in c.holding(m, c.word["launch"]) if (r.get("written_by") or {}).get("id") == c.hid]
+    got = c.wait(kept)
     if not got:
-        elsewhere = [m for m in ("root", "archive", "client") if c.holding(m, c.word["launch"])]
-        return False, ("the agent wrote it in " + ", ".join(elsewhere) + ", not in its default memory" if elsewhere else
-                       f"no record holds the title after the task (tools: {', '.join(t['tools']) or 'none'}); answered {t['answer'][-120:]!r}")
-    w = got[0].get("written_by") or {}
+        return False, f"no record holds the title after the task (tools: {', '.join(t['tools']) or 'none'}); answered {t['answer'][-120:]!r}"
+    where, rec = got[0]
+    w = rec.get("written_by") or {}
     if (w.get("kind"), w.get("type")) != ("member", "agent"):
         return False, f"the record's writer is {w}, expected the agent as a member"
-    return True, ""
+    # Which of the memories it may write is the agent's choice; the default is where a write goes
+    # when it names none.
+    return True, ("" if where == "notes" else "kept in the client memory, by the agent's choice")
 
 
 def s_recall(c: Cell):
     """A later conversation, sharing nothing with the first, answers from the memory."""
-    if not c.holding("notes", c.word["launch"]):
+    if not (c.holding("notes", c.word["launch"]) or c.holding("client", c.word["launch"])):
         c.remember("notes", type="fact", title=f"The working title of our launch is {c.word['launch']}")
         c.wait(lambda: c.holding("notes", c.word["launch"]))
     t = c.ask("What is the working title of our launch? You were told in an earlier conversation.")

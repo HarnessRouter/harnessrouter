@@ -205,7 +205,6 @@ export function MemoryGraph({ memory, type, canEdit, rev, recId, onOpen, onAdded
     }).filter((x): x is NonNullable<typeof x> => x !== null);
   }, [model, s, recId]);
 
-  const total = memory.records?.count;
   const hint = connect && !connect.to ? (connect.from ? 'Now pick the entity it relates to' : 'Pick the first entity') : null;
   const canRelate = Boolean(model && model.entities >= 2);
   return (
@@ -297,7 +296,8 @@ export function MemoryGraph({ memory, type, canEdit, rev, recId, onOpen, onAdded
             <button type="button" aria-label="Fit to view" onClick={() => setZoom(Math.max(0.4, Math.min(1.6, fit)))}><Ico d={ICON.fit} size={13} sw={1.5} /></button>
           </div>
           <div className="mem-g-foot">
-            {`${data?.nodes.length ?? 0} of ${typeof total === 'number' ? total : '—'} records`}{data?.truncated ? ' · not all are drawn' : ''}
+            {/* the graph covers this memory and what is below it, so its count is its own, not the memory's */}
+            {`${data?.nodes.length ?? 0} ${data?.nodes.length === 1 ? 'record' : 'records'}`}{data?.truncated ? ', not all are drawn' : ''}
           </div>
         </>
       )}
