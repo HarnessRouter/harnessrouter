@@ -94,7 +94,7 @@ Model  ───┘              └──▶ Container ──▶ File, File, �
   part of a container: artifacts come from the working directory, the environment is what the
   working directory reads ([Environments](environments.md)).
 - A **memory** is a place that outlasts every session: a node in a tree, holding records, with access
-  granted per node and inherited downward. A harness names the memories its agent starts from; it is
+  granted per node and inherited downward. An agent is granted memories as a person is; a memory is
   never part of a session or a container ([Memories](memories.md)).
 
 > **Why is the session implicit?**

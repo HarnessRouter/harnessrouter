@@ -28,7 +28,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `input` | string \| item[] | yes | The work. A bare string is shorthand for one user message. See §2. |
 | `model` | string | no | Canonical model id. Omitted means the harness's default. |
-| `metadata` | object | no | Client metadata. `harness_id` selects the configured harness (§1.2). `memory` names one more memory this task works with, on a server with the `memories` capability ([Memories §9](memories.md#9-attaching-memories-to-a-harness)). |
+| `metadata` | object | no | Client metadata. `harness_id` selects the configured harness (§1.2). `memory` names one more memory this task works with, on a server with the `memories` capability ([Memories §9](memories.md#9-an-agent-and-its-memories)). |
 | `stream` | boolean | no | `true` streams Server-Sent Events; default `false` returns one JSON object. |
 | `previous_response_id` | string | no | Continue the session that produced that response. See [Sessions](sessions.md). |
 | `instructions` | string | no | Additional system guidance for this task only. |

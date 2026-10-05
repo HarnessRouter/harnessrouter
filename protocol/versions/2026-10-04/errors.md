@@ -84,7 +84,7 @@ Rules:
 | `memory_not_found` | 404 | No such memory, or one the caller holds no privilege on: the two are one answer ([Memories §12](memories.md#12-errors)). |
 | `memory_forbidden` | 403 | The caller sees the memory and lacks the privilege the operation needs. |
 | `memory_record_not_found` | 404 | No such record in this memory. |
-| `memories_not_attached` | 404 | The harness has no memories attached. |
+| `memories_not_attached` | 404 | The agent holds no memory: nothing was granted to it. |
 | `memory_invalid` | 422 | A parent that would make a cycle, two default entries, a record with no content, a query whose parameters do not match. |
 | `memory_unsupported` | 422 | An operation the memory's provider does not implement at all. A partial answer is reported in `degraded`, not as this. |
 | `memory_busy` | 409 | A move or a delete while a consolidation runs. |

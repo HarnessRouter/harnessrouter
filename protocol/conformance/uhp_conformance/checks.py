@@ -2058,8 +2058,9 @@ def me02(ctx):
     got = ctx.client.get(f"/v1/memories/{rec['memory_id']}/records/{rec['id']}").json or {}
     assert got.get("id") == rec["id"] and got.get("content") == rec["content"], "the record does not read back by its id"
     w = rec.get("written_by") or {}
-    assert w.get("kind") in ("member", "harness") or str(w.get("kind") or "").startswith("x."), (
-        f"a stated record's writer is a member, a harness or an x.-prefixed kind of the server's own; got {w.get('kind')!r}")
+    assert w.get("kind") == "member" or str(w.get("kind") or "").startswith("x."), (
+        f"a stated record's writer is a member (a person or an agent) or an x.-prefixed kind of the server's own; got {w.get('kind')!r}")
+    assert w.get("type") in (None, "human", "agent"), f"a member's type is human or agent; got {w.get('type')!r}"
     assert w.get("id"), "written_by carries the id of who wrote the record"
     return f"{rec['id']} written by {rec.get('written_by')}"
 
