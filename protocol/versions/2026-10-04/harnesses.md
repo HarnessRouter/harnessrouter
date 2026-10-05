@@ -65,9 +65,9 @@ Returns one harness object, or `404` with `code: "harness_not_found"`.
 | `timeoutSeconds` | integer \| null | no | Default wall-clock budget |
 | `createdAt` | integer | yes | Unix milliseconds |
 
-The memories a harness's agent starts from are attached at a route of their own,
-`PUT /v1/harnesses/{id}/memories`, because attaching one is granting the harness access to it
-([Memories §9](memories.md#9-attaching-memories-to-a-harness)); they are not a field of this object.
+The memories a harness's agent reaches are not a field of this object. The agent is a member and
+is granted on the memory, like a person; `/v1/harnesses/{id}/memories` reads what it was granted
+and keeps two settings ([Memories §9](memories.md#9-an-agent-and-its-memories)).
 
 `base` values are not enumerated by this specification. A server MAY support bases this document has
 never heard of, and a client MUST treat `base` as an opaque string — anything else means the

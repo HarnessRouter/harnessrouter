@@ -2182,8 +2182,8 @@
         },
         "principal": {
           "type": "string",
-          "pattern": "^(member|harness|group|x\\.[a-z0-9_.-]+):.+",
-          "description": "Who holds the grant, `<kind>:<id>`: `member`, `harness`, `group`, or a kind of the server's own, `x.`-prefixed."
+          "pattern": "^(member|group|x\\.[a-z0-9_.-]+):.+",
+          "description": "Who holds the grant, `<kind>:<id>`: a `member` (a person or an agent), a `group`, or a kind of the server's own, `x.`-prefixed."
         },
         "privileges": {
           "type": "array",
@@ -2583,10 +2583,18 @@
       "properties": {
         "kind": {
           "type": "string",
-          "pattern": "^(member|harness|provider|x\\.[a-z0-9_.-]+)$"
+          "pattern": "^(member|provider|x\\.[a-z0-9_.-]+)$"
         },
         "id": {
           "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "human",
+            "agent"
+          ],
+          "description": "For a member: a person or an agent. No rule depends on it."
         },
         "on_behalf_of": {
           "type": "string",
@@ -3135,41 +3143,79 @@
         }
       }
     },
-    "HarnessMemoryEntry": {
+    "HarnessMemorySettings": {
       "type": "object",
-      "required": [
-        "memory_id"
-      ],
       "properties": {
-        "memory_id": {
-          "type": "string"
+        "default_memory_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where an unaddressed remember goes and where turns are recorded. A memory the agent may write."
         },
-        "access": {
-          "type": "string",
-          "enum": [
-            "read",
-            "write"
-          ]
-        },
-        "default": {
+        "observe": {
           "type": "boolean",
-          "description": "Where observe and an unaddressed remember go: one entry at most, and one the agent writes."
+          "description": "Record each finished turn in the default memory. On by default."
         }
       }
     },
     "HarnessMemories": {
       "type": "object",
+      "required": [
+        "principal",
+        "data"
+      ],
       "properties": {
-        "memories": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/HarnessMemoryEntry"
-          }
+        "object": {
+          "type": "string",
+          "const": "harness.memories"
+        },
+        "principal": {
+          "type": "string",
+          "description": "Who this harness's agent is to the access model, `member:<id>`. A grant names it."
+        },
+        "default_memory_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observe": {
+          "type": "boolean"
         },
         "data": {
           "type": "array",
+          "description": "Every memory the agent holds a grant on, highest in the tree first. Read off the grants.",
           "items": {
-            "$ref": "#/$defs/HarnessMemoryEntry"
+            "type": "object",
+            "required": [
+              "id",
+              "privileges"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "privileges": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "create",
+                    "delete"
+                  ]
+                }
+              },
+              "default": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": true
           }
         }
       }

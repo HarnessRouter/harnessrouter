@@ -1167,7 +1167,7 @@ paths:
     get:
       tags: [Memories]
       operationId: listHarnessMemories
-      summary: "The memories a harness is attached to"
+      summary: "What a harness's agent was granted, and the harness's two memory settings"
       description: "Capability `memories`."
       responses:
         '200':
@@ -1178,14 +1178,14 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     put:
       tags: [Memories]
-      operationId: attachHarnessMemories
-      summary: "Attach memories to a harness"
-      description: "Attaching is granting. An entry the harness does not hold is granted when the caller may change the grants of that memory, and refused otherwise. An empty list detaches."
+      operationId: setHarnessMemories
+      summary: "Set where the agent writes by default and whether its turns are recorded"
+      description: "Access is not set here: an agent is a member and is granted on the memory."
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/HarnessMemories' }
+            schema: { $ref: '#/components/schemas/HarnessMemorySettings' }
       responses:
         '200':
           description: OK
@@ -2694,7 +2694,7 @@ components:
         id: { type: string }
         object: { type: string, const: memory.grant }
         memory_id: { type: string }
-        principal: { type: string, pattern: '^(member|harness|group|x\.[a-z0-9_.-]+):.+', description: 'Who holds the grant, `<kind>:<id>`: `member`, `harness`, `group`, or a kind of the server''s own, `x.`-prefixed.' }
+        principal: { type: string, pattern: '^(member|group|x\.[a-z0-9_.-]+):.+', description: 'Who holds the grant, `<kind>:<id>`: a `member` (a person or an agent), a `group`, or a kind of the server''s own, `x.`-prefixed.' }
         privileges: { type: array, items: { $ref: '#/components/schemas/MemoryPrivilege' } }
         inherited: { type: boolean, description: True when the grant sits on an ancestor. }
     MemoryGrantCreate:
@@ -2809,8 +2809,9 @@ components:
       description: 'Who wrote a record, stamped by the server from the authenticated caller. `kind` and `id` joined by a colon are the principal a grant would name.'
       required: [kind, id]
       properties:
-        kind: { type: string, pattern: '^(member|harness|provider|x\.[a-z0-9_.-]+)$' }
+        kind: { type: string, pattern: '^(member|provider|x\.[a-z0-9_.-]+)$' }
         id: { type: string }
+        type: { type: string, enum: [human, agent], description: 'For a member: a person or an agent. No rule depends on it.' }
         on_behalf_of: { type: string, description: 'When the provider wrote it: the principal whose observation it was derived from.' }
         consolidation_id: { type: string, description: 'When the provider wrote it: the consolidation run that concluded it.' }
       additionalProperties: true
@@ -2991,15 +2992,28 @@ components:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/MemoryType' } }
-    HarnessMemoryEntry:
+    HarnessMemorySettings:
       type: object
-      required: [memory_id]
       properties:
-        memory_id: { type: string }
-        access: { type: string, enum: [read, write] }
-        default: { type: boolean, description: 'Where observe and an unaddressed remember go: one entry at most, and one the agent writes.' }
+        default_memory_id: { type: [string, 'null'], description: 'Where an unaddressed remember goes and where turns are recorded. A memory the agent may write.' }
+        observe: { type: boolean, description: 'Record each finished turn in the default memory. On by default.' }
     HarnessMemories:
       type: object
+      required: [principal, data]
       properties:
-        memories: { type: array, items: { $ref: '#/components/schemas/HarnessMemoryEntry' } }
-        data: { type: array, items: { $ref: '#/components/schemas/HarnessMemoryEntry' } }
+        object: { type: string, const: harness.memories }
+        principal: { type: string, description: 'Who this harness''s agent is to the access model, `member:<id>`. A grant names it.' }
+        default_memory_id: { type: [string, 'null'] }
+        observe: { type: boolean }
+        data:
+          type: array
+          description: Every memory the agent holds a grant on, highest in the tree first. Read off the grants.
+          items:
+            type: object
+            required: [id, privileges]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              privileges: { type: array, items: { type: string, enum: [read, write, create, delete] } }
+              default: { type: boolean }
+            additionalProperties: true

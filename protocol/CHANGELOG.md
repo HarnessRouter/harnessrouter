@@ -48,6 +48,16 @@ by the `provider`, with `consolidation_id` beside it, and a record derived from 
 carries `on_behalf_of`. A credential is not a kind. Schema: `MemoryWriter`, and a pattern on a
 grant's `principal`. Suite `2026.10.4.post4`: ME-02 checks the writer's kind.
 
+**Fifth patch of 2026-10-04, same version.** A person and an agent are the same kind, and access
+has one mechanism. The fourth patch listed `member` (a person) and `harness` (an agent) as two
+kinds; they are one, `member`, and which of the two a member is, is its `type` (`human`, `agent`),
+a property no rule depends on. With that, a harness no longer carries a list of attached memories
+with an `access` that narrowed a grant: an agent reaches what it was granted, on the memory, as a
+person does. `/v1/harnesses/{id}/memories` reads the agent's principal and what it was granted, and
+sets two things: `default_memory_id` and `observe`. An agent joins a group only when someone adds
+it. Kinds are now `member`, `group` and, for a writer only, `provider`. Schema: `HarnessMemories`
+reshaped, `HarnessMemorySettings` added, `HarnessMemoryEntry` removed. Suite `2026.10.4.post5`.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,

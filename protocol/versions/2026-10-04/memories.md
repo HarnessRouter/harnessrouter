@@ -16,9 +16,9 @@ procedure. Memories are arranged in a tree, the way folders are, so one memory c
 company knows and another, beneath it, what is known about one customer. Access is granted per
 memory, and a memory's children inherit it.
 
-A harness is attached to the memories its agent should start from. During a task the agent searches
-them and adds to them with tools. What it may read and where it may write is decided by the server,
-from what the harness was granted, and never by the agent itself.
+An agent is given access to memories the way a person is. During a task it searches them and adds
+to them with tools. What it may read and where it may write is decided by the server, from what
+the agent was granted, and never by the agent itself.
 
 This chapter is the Harness Memories sub-protocol. It is optional: a server advertises it with the
 `memories` capability, and a server that does not implement it is conformant at every class.
@@ -105,21 +105,27 @@ may act, and a record's `written_by` names who did.
 
 | Kind | Who | Holds grants | Writes records |
 |---|---|---|---|
-| `member` | A person | yes | yes |
-| `harness` | An agent, running under that harness | yes | yes |
+| `member` | Anyone who acts: a person or an agent | yes | yes |
 | `group` | A set of members the server resolves: a team, a workspace | yes | no, its members do |
 | `provider` | The memory's provider itself: what it derived from an observation, what a consolidation run concluded | no | yes |
+
+**A person and an agent are the same kind.** Both are members, granted the same way, checked the
+same way, and able to belong to the same groups. Which of the two a member is, is a property of
+the member, `type`: `human` or `agent`. It is carried for a reader who wants to know, and no rule
+of this chapter depends on it. An agent belongs to a group when someone adds it, as a person does;
+a server MUST NOT place an agent in a group on its own.
 
 A kind of a server's own is `x.`-prefixed (`x.team`). A server MUST NOT use another unprefixed
 kind, and refuses a grant that names one.
 
 The two places write the same identity two ways. In a grant, a **principal** is the string
-`<kind>:<id>`. On a record, the writer is `{ "kind": …, "id": … }`. They name the same thing:
+`<kind>:<id>`. On a record, the writer is `{ "kind": …, "id": …, "type": … }`. They name the same thing:
 `written_by.kind` and `written_by.id`, joined by a colon, are the principal a grant would name.
 The `id` is the server's own and opaque to a client.
 
-A credential is not a kind. A request made with an API key acts as the member or the harness the
-key belongs to, and is granted and stamped as that.
+A credential is not a kind, and neither is a harness. A request made with an API key acts as the
+member the key belongs to. A harness is a configuration; its agent is a member, and a server says
+which one ([§9](#9-an-agent-and-its-memories)).
 
 ### 3.1 Grants and inheritance
 
@@ -175,7 +181,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
     "valid_from": "2026-09-30T00:00:00Z", "valid_to": null,
     "written_at": "2026-10-01T17:02:11Z", "invalidated_at": null
   },
-  "written_by": { "kind": "harness", "id": "chrn_41c0" },
+  "written_by": { "kind": "member", "id": "chrn_41c0", "type": "agent" },
   "references": [
     { "rel": "derived_from", "memory_id": "hmem_…", "record_id": "hrec_…" }
   ],
@@ -505,45 +511,57 @@ Each operation states the privilege it needs and is offered to an agent as a too
 no limit on type names (beyond the `x.` prefix for types it does not define), fields or operations.
 A provider that registers none reports `types: false` and answers the listing with the core types.
 
-## 9. Attaching memories to a harness
+## 9. An agent and its memories
 
-A harness names the memories it works with:
+An agent is a member ([§3](#who-acts-on-a-memory)). It reaches the memories it was granted, and it
+is granted where everyone is: on the memory, with `POST /v1/memories/{id}/grants`. There is no
+second list of what an agent may use, and nothing on a harness widens or narrows what its agent
+was granted.
+
+A harness adds two settings of its own:
 
 | Request | What it does |
 |---|---|
-| `PUT /v1/harnesses/{id}/memories` | Replace the list of attached memories; an empty list detaches them all |
-| `GET /v1/harnesses/{id}/memories` | The memories this harness is attached to |
+| `GET /v1/harnesses/{id}/memories` | The agent's principal, the memories it was granted with its privileges on each, and the two settings |
+| `PUT /v1/harnesses/{id}/memories` | Set `default_memory_id` and `observe` |
 
 ```json
-{ "memories": [
-    { "memory_id": "hmem_0a1b…", "access": "read" },
-    { "memory_id": "hmem_7c1e…", "access": "write", "default": true }
-] }
+{
+  "object": "harness.memories",
+  "principal": "member:chrn_41c0",
+  "default_memory_id": "hmem_7c1e…",
+  "observe": true,
+  "data": [
+    { "id": "hmem_0a1b…", "name": "Support",
+      "privileges": ["read"], "default": false },
+    { "id": "hmem_7c1e…", "name": "Agent notes",
+      "privileges": ["read", "write"], "default": true }
+  ]
+}
 ```
 
-- Attaching is granting. Access has one source, the grants ([§3](#3-access)): an entry the
-  harness already holds is attached as it is; one it does not hold is granted by the same call when
-  the caller may change that memory's grants (`delete`), and refused otherwise, when the harness is
-  written and not at run time. Detaching removes a starting point and leaves the grant, which is
-  revoked where grants are.
-- `access` narrows; it never widens. `read` on a memory the harness may also write gives the agent
-  read tools only, on that memory and on whatever it walks to from it.
-- One entry MAY be marked `default`: where `observe` and an unaddressed `remember` go.
-- A task MAY name one more memory in `metadata.memory` on the request, where `harness_id` and
+- `principal` is who this harness's agent is to the access model. A grant names it; a record the
+  agent writes is stamped with it.
+- `data` is read off the grants, never stored on the harness: every memory the agent holds a grant
+  on, highest in the tree first. It is where the agent starts. From each it reaches everything
+  below, and nothing above that it was not granted.
+- `default_memory_id` is where an unaddressed `remember` goes and where turns are recorded. It MUST
+  be a memory the agent may write; a server refuses one it may not, with `memory_invalid`.
+- `observe`, on by default, records each finished turn in the default memory as an episode.
+- A task MAY name a memory in `metadata.memory` on the request, where `harness_id` and
   `environment` already travel ([Tasks §1.2](tasks.md#12-selecting-the-harness)): the memory of
-  the person this task is for, say. It is added to the harness's for the session the task starts,
-  it is where that session writes by default when the harness may write it, and it is checked
-  against the harness's privileges exactly as an attached memory is: a task naming a memory the
-  harness holds nothing on is refused with `memory_not_found` before it starts. A memory is always
-  named by its id. The server does not derive a node from anything else in a request, and creating
-  a person's memory is the caller's act, done before the task with `POST /v1/memories`.
+  the person this task is for, say. It is the default for the session that task starts. It grants
+  nothing: a task naming a memory the agent holds nothing on is refused with `memory_not_found`
+  before it starts. A memory is always named by its id. The server does not derive a node from
+  anything else in a request, and creating a person's memory, and letting the agent into it, is
+  the caller's act, done before the task.
 
 ### 9.1 What a session does
 
 | Moment | Called by | What happens |
 |---|---|---|
-| **Prime** | server, at session start and after the conversation is compacted | The server reads what the provider marks as always-relevant in each attached memory and places it, with each memory's `name`, `description` and children, in the agent's instructions |
-| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, `memory_run_query` for the named queries a memory lists, `memory_operate` for a type's operations, and `memory_query` where a provider offers free queries. Write tools are offered only to a harness attached somewhere to write. The attached memories are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as the harness's own privileges reach. The server checks every step |
+| **Prime** | server, at session start and after the conversation is compacted | The server reads what the provider marks as always-relevant in each memory the agent was granted and places it, with each memory's `name`, `description` and children, in the agent's instructions |
+| **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, `memory_run_query` for the named queries a memory lists, `memory_operate` for a type's operations, and `memory_query` where a provider offers free queries. Write tools are offered only to an agent that holds `write` somewhere. The memories it was granted are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as its own privileges reach. The server checks every step |
 | **Observe** | server, when a turn ends | The turn (what was asked, what was answered, which tools ran) is sent to the default memory as episodes. No model is involved on the server's side |
 | **Consolidate** | server, on a schedule or when idle | The server asks the provider to do its background work. What that is belongs to the provider |
 
@@ -554,8 +572,8 @@ the cost is visible even where it is not set by the client.
 Priming is not repeated every turn. Instructions that change every turn defeat prompt caching, and
 retrieval during a turn is what the tools are for.
 
-A server MUST tell the person who attaches a memory whose provider is outside the server that every
-turn will be sent to it.
+A server MUST tell the person who sets a default memory whose provider is outside the server that
+every turn will be sent to it.
 
 ### 9.2 Consolidation runs
 
@@ -663,7 +681,7 @@ the differences are said, and three rules keep it honest:
 ```
 
 A server that reports `memories: true` implements [§2](#2-the-memory-object) to [§6.3](#63-the-response)
-and [§9](#9-attaching-memories-to-a-harness). Named and free queries, types, the media a record's content may carry, snapshots, consolidation runs and erase are
+and [§9](#9-an-agent-and-its-memories). Named and free queries, types, the media a record's content may carry, snapshots, consolidation runs and erase are
 reported per provider ([§10.2](#102-the-capability-document)). A server that does not implement the
 chapter reports `false` or omits it and answers its endpoints with `404`.
 
@@ -674,8 +692,8 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
 | `memory_not_found` | 404 | No such memory, or one the caller may not see |
 | `memory_forbidden` | 403 | The caller sees the memory and lacks the privilege the operation needs |
 | `memory_record_not_found` | 404 | No such record in this memory, including a record of another memory asked for through this one |
-| `memories_not_attached` | 404 | The harness has no memories attached |
-| `memory_invalid` | 422 | A parent that would make a cycle; a default on two entries; a query whose params do not match |
+| `memories_not_attached` | 404 | The agent holds no memory: nothing was granted to it |
+| `memory_invalid` | 422 | A parent that would make a cycle; a default memory the agent may not write; a query whose params do not match |
 | `memory_unsupported` | 422 | An operation the memory's provider does not implement at all (a partial answer is `degraded`, not this) |
 | `memory_busy` | 409 | A move or a delete while a consolidation runs |
 | `memory_unavailable` | 502 or 503 | The provider did not answer, or is not connected |
@@ -686,10 +704,12 @@ chapter reports `false` or omits it and answers its endpoints with `404`.
   another agent, for another person. A server MUST present recalled content to the agent as data,
   fenced from instructions, and MUST carry `written_by` with it.
 - **The agent chooses its path, never its reach.** An agent may walk up and down the tree from the
-  memories its harness attaches, and a search covers what is below the memory it asks. What it can
-  reach either way is every memory the harness holds a privilege on, no more, checked by the server
-  on every call and for every memory a search covers. A harness that should see one branch and
+  memories it was granted, and a search covers what is below the memory it asks. What it can
+  reach either way is every memory it holds a privilege on, no more, checked by the server
+  on every call and for every memory a search covers. An agent that should see one branch and
   nothing above it is granted that branch and nothing above it.
+- **An agent is granted on purpose.** It starts with nothing, and joins a group only when someone
+  adds it. Equal standing with a person does not mean an agent inherits what people share.
 - **Provenance is stamped, not supplied.** `written_by` and `written_at` come from the authenticated
   caller and the server's clock.
 - **Unknown is indistinguishable from forbidden** on reads of memories and of reference targets.
