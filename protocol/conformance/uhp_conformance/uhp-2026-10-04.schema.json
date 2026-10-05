@@ -2269,7 +2269,12 @@
         },
         "type": {
           "type": "string",
-          "description": "episode, fact, note, procedure, link, or an extension type."
+          "description": "episode, fact, note, procedure, link, entity, or an extension type."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "One line that names the record. Optional; a search matches it with the content."
         },
         "content": {
           "type": "array",
