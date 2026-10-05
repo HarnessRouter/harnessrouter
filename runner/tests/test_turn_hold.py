@@ -110,3 +110,46 @@ def test_a_hermes_failure_is_not_explained_by_the_clis_closing_session_line():
     assert "exit code 0" in text and "277 s" in text
     said = ["Error: provider returned 400: context length exceeded", "session_id: 20261005_135032_0fb4fd"]
     assert _hermes_error_text(said, 1, 3.0) == "Error: provider returned 400: context length exceeded"
+
+
+def test_what_a_cli_rebuilds_for_itself_is_not_saved_with_the_workspace(tmp_path):
+    """Saved with the workspace, these were most of what a turn's end waited for: omp's two native
+    binaries were a 183 MB archive and 10 s after every turn (the hosted service, 2026-10-05)."""
+    for p in ("./.harness/home/.omp/natives", "./.harness/home/.codex/.tmp", "./.harness/home/.cache/pkg"):
+        assert p in server.CHECKPOINT_EXCLUDE
+    # with the image's own tar (GNU; bsdtar reads an exclude pattern differently) the folders are
+    # left out while their neighbours, the conversation state a resume needs, are kept
+    import shutil
+    import subprocess
+    tar = next((t for t in ("gtar", "tar") if shutil.which(t)
+                and b"GNU tar" in subprocess.run([t, "--version"], capture_output=True).stdout), None)
+    if not tar:
+        return
+    for rel in (".harness/home/.omp/natives/18.1.13/pi_natives.node", ".harness/home/.omp/agent/agent.db",
+                ".harness/home/.codex/.tmp/plugins/README.md", ".harness/home/.codex/sessions/a.jsonl",
+                ".harness/home/.cache/pkg/abc/lib.so", ".harness/home/.cache/opencode/models.json", "notes.md"):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x")
+    excl = [f"--exclude={p}" for p in server.CHECKPOINT_EXCLUDE]
+    made = subprocess.run([tar, "-cf", "-", *excl, "-C", str(tmp_path), "."], capture_output=True, check=True)
+    listed = subprocess.run([tar, "-tf", "-"], input=made.stdout, capture_output=True, check=True).stdout.decode()
+    for gone in ("natives", ".codex/.tmp", ".cache/pkg"):
+        assert gone not in listed, gone
+    for kept in (".omp/agent/agent.db", ".codex/sessions/a.jsonl", ".cache/opencode/models.json", "notes.md"):
+        assert kept in listed, kept
+
+
+def test_the_cli_home_is_out_of_the_workspaces_own_history_so_the_tar_is_the_only_place(tmp_path):
+    """On the hosted service the same binaries had a second copy in .git/objects, which the tar also
+    carries. Here the whole CLI home has been ignored by the workspace's repository since #193."""
+    import subprocess
+    ws = str(tmp_path)
+    for rel in (".harness/home/.omp/natives/18.1.13/pi_natives.node", ".harness/home/.cache/pkg/abc/lib.so", "notes.md"):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x")
+    server._git_ensure(ws)
+    subprocess.run(["git", "-C", ws, "add", "-A"], check=True, env={**os.environ, **server._GIT_ENV})
+    tracked = subprocess.run(["git", "-C", ws, "ls-files"], capture_output=True, check=True).stdout.decode()
+    assert "notes.md" in tracked and ".harness/home" not in tracked

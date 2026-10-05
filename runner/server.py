@@ -528,10 +528,21 @@ def _reap_spool() -> None:
 # the working tree AND the conversation — that's what makes `--resume` work on any sandbox.
 HARNESS_STATE = ".harness"
 # Paths never persisted in a checkpoint (secrets + regenerated/scratch). Relative to /workspace.
+# What a CLI unpacks or fetches for itself and makes again when it is missing. Saved with the
+# workspace, these were most of what a turn's end waited for (measured on the hosted service,
+# 2026-10-05): omp's two native binaries (352 MB on disk, a 183 MB archive and 10 s after EVERY turn
+# of a three-line chat), Codex's plugin catalogue and the unpacked packages of the DeepSeek Harness.
+# Each was deleted inside a live session there and the next turn completed with it rebuilt: omp about
+# 3 s, the other two with no visible cost. NOT here: opencode's npm cache, whose rebuild cost a turn
+# 20 s. The CLI home is already out of the workspace's own git history (see _git_ensure), so the tar
+# is the one place these travelled.
+_REBUILT_CACHES = (".harness/home/.omp/natives", ".harness/home/.codex/.tmp", ".harness/home/.cache/pkg")
+
 # .git history travels in the tarball, so these must be git-ignored too (see _git_ensure).
 # Persist conversation transcripts ($HOME -> .harness/home: ~/.claude/projects, ~/.codex/sessions)
 # so --resume survives sandbox recycling — but NEVER persist credentials inside them.
-CHECKPOINT_EXCLUDE = ["./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.json",
+CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
+                      "./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.json",
                       "./.harness/claude/.credentials.json",
                       "./.harness/home/.claude/.credentials.json",
                       "./.harness/home/.codex/auth.json",
