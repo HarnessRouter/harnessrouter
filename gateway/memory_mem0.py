@@ -145,7 +145,7 @@ class Mem0(mp.Provider):
             refs = []
         writer = {"kind": meta.get(_RESERVED + "writer_kind") or "provider", "id": meta.get(_RESERVED + "writer_id") or "mem0"}
         if meta.get(_RESERVED + "observed_by"):
-            writer = {"kind": "provider", "id": "mem0", "observed_by": meta[_RESERVED + "observed_by"]}
+            writer = {"kind": "provider", "id": "mem0", "on_behalf_of": meta[_RESERVED + "observed_by"]}
         return {"id": str(item["id"]), "type": meta.get(_RESERVED + "type") or "fact",
                 "content": [{"type": "text", "text": item["memory"]}] if item.get("memory") else [],
                 "attributes": {k: v for k, v in meta.items() if not str(k).startswith(_RESERVED)},

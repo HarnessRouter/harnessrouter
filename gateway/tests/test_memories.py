@@ -117,6 +117,26 @@ def test_a_grant_flows_down_and_the_caller_enters_where_it_was_granted(people, t
     assert [(x["memory_id"], x["inherited"]) for x in rows] == [(tree["sales"], True)]
 
 
+def test_who_acts_on_a_memory_is_one_vocabulary(people, tree):
+    ada, _ = people
+    url = f"/v1/memories/{tree['acme']}/grants"
+    # a grant is held by a person, an agent or a set of people; a server's own kind is x.-prefixed
+    for who in ("member:cy@example.com", "harness:chrn_1", "group:sales", "x.team:blue"):
+        g = ada.post(url, json={"principal": who, "privileges": ["read"]})
+        assert g.status_code == 200, (who, g.text)
+        ada.delete(f"{url}/{g.json()['id']}")
+    # a provider writes but holds no grant, and a kind nobody defined is refused, not stored
+    for who in ("provider:mem0", "user:cy@example.com", "workspace:w1", "key:k1", "nobody"):
+        r = ada.post(url, json={"principal": who, "privileges": ["read"]})
+        assert r.status_code == 422 and _code(r) == "memory_invalid", who
+    # the writer of a record is the same identity a grant would name
+    rec = ada.post(f"/v1/memories/{tree['acme']}/records", json={"type": "note", "content": "who wrote this"}).json()
+    w = rec["written_by"]
+    assert w == {"kind": "member", "id": "ada@example.com"}
+    assert ada.post(url, json={"principal": f"{w['kind']}:{w['id']}", "privileges": ["read"]}).status_code == 200
+    ada.delete(f"/v1/memories/{tree['acme']}/records/{rec['id']}")
+
+
 def test_a_restricted_memory_stops_what_flows_from_above(people, tree):
     ada, ben = people
     g = ada.post(f"/v1/memories/{tree['company']}/grants",
@@ -310,9 +330,9 @@ def test_a_consolidation_is_a_run_one_can_read_bound_and_revert(people, tree):
     run = ada.post(base + "/consolidations", json={"budget": {"limit": 2}}).json()
     assert run["object"] == "memory.consolidation" and run["status"] == "stopped"
     assert run["budget"]["exhausted"] is True and run["changes"]["created"] == 2 and run["read"]["episodes"] == 2
-    assert run["written_by"] == {"kind": "consolidator", "id": "fixture"}
+    assert run["written_by"] == {"kind": "provider", "id": "fixture"}
     changes = ada.get(base + f"/consolidations/{run['id']}/changes").json()["data"]
-    assert len(changes) == 2 and all(c["record"]["written_by"]["kind"] == "consolidator" for c in changes)
+    assert len(changes) == 2 and all(c["record"]["written_by"] == {"kind": "provider", "id": "fixture", "consolidation_id": run["id"]} for c in changes)
     nxt = ada.post(base + "/consolidations", json={}).json()          # resumes after what was read
     assert nxt["status"] == "completed" and nxt["changes"]["created"] == 1
     assert [r["id"] for r in ada.get(base + "/consolidations").json()["data"]] == [nxt["id"], run["id"]]

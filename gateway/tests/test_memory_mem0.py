@@ -205,7 +205,7 @@ def test_observe_is_a_job_whose_records_are_the_facts_mem0_derived(world):
     assert r.status_code == 202 and r.json()["data"] == []
     job = c.get(f"/v1/memories/{a}/jobs/{r.json()['job']['id']}", headers=ADA).json()
     assert job["status"] == "completed" and [x["content"][0]["text"] for x in job["data"]] == ["User said: I moved to Austin", "User said: My dog is Max"]
-    assert all(x["written_by"] == {"kind": "provider", "id": "mem0", "observed_by": "member:ada@example.com"} for x in job["data"])
+    assert all(x["written_by"] == {"kind": "provider", "id": "mem0", "on_behalf_of": "member:ada@example.com"} for x in job["data"])
     assert c.get(f"/v1/memories/{b}/jobs/{r.json()['job']['id']}", headers=ADA).status_code == 404
 
 

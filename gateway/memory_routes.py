@@ -31,12 +31,12 @@ def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None) -
 
 
 def principals_of(p: dict) -> list[str]:
-    """Who a caller is to the access model: the person, and the workspace it acts in."""
+    """Who a caller is to the access model: the person, and the group that is the workspace it acts in."""
     out = []
     if p.get("member"):
         out.append(f"member:{p['member']}")
     if p.get("workspace"):
-        out.append(f"workspace:{p['workspace']}")
+        out.append(f"group:{p['workspace']}")
     return out
 
 
