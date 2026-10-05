@@ -274,7 +274,7 @@ export function MemoryGraph({ memory, type, canEdit, rev, recId, onOpen, onAdded
         <div className="mem-g-hint" role="status"><span>{hint}</span><button type="button" onClick={() => setConnect(null)}>Cancel</button></div>
       )}
       {connect && from && to && (
-        <div className="mem-g-rel" role="dialog" aria-label="How are they related">
+        <div className="mem-g-rel" role="group" aria-label="Relate two entities">
           <div className="mem-g-rel-who"><b>{labelOf(from)}</b> … <b>{labelOf(to)}</b></div>
           <input autoFocus value={pred} onChange={(e) => setPred(e.target.value)} aria-label="How are they related" placeholder="is head of procurement at"
             onKeyDown={(e) => { if (e.key === 'Escape') setConnect(null); if (e.key === 'Enter') void saveRel(); }} />
