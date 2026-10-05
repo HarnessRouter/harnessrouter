@@ -494,9 +494,11 @@ async def children(org: str, mid: str, principals: list[str]) -> list[dict]:
 
 # ── grants ────────────────────────────────────────────────────────────────────────────────────
 # One vocabulary for who acts on a memory, in a grant (`<kind>:<id>`) and on a record's writer
-# (`{kind, id}`): a person, an agent, a set of people, the provider itself. Anything else is `x.`.
-ACTOR_KINDS = ("member", "harness", "group", "provider")
-_PRINCIPAL = re.compile(r"(member|harness|group|x\.[a-z0-9_.-]+):[A-Za-z0-9_.@:+\-]{1,160}")
+# (`{kind, id}`). A member is anyone who acts: a person or an agent, equal before the access model;
+# which of the two is a property of the member (`type`), never a kind. A group is a set of members.
+# The provider is the engine itself, which writes and holds no grant. Anything else is `x.`.
+ACTOR_KINDS = ("member", "group", "provider")
+_PRINCIPAL = re.compile(r"(member|group|x\.[a-z0-9_.-]+):[A-Za-z0-9_.@:+\-]{1,160}")
 
 
 async def grants(org: str, mid: str, principals: list[str]) -> list[dict]:
@@ -518,7 +520,7 @@ async def grant(org: str, mid: str, principals: list[str], principal: str, privi
     principal = str(principal or "").strip()
     privs = [p for p in PRIVILEGES if p in (privileges or [])]
     if not _PRINCIPAL.fullmatch(principal):
-        raise MemoryError(422, "memory_invalid", "A principal is `<kind>:<id>`: member, harness or group (a provider holds no grant).", "principal")
+        raise MemoryError(422, "memory_invalid", "A principal is `<kind>:<id>`: a member (a person or an agent) or a group.", "principal")
     if not privs:
         raise MemoryError(422, "memory_invalid", "Name at least one of read, write, create, delete.", "privileges")
     for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
@@ -532,6 +534,20 @@ async def grant(org: str, mid: str, principals: list[str], principal: str, privi
                                             "created_at": _now_ms(), "deleted": "0"}, raise_on_fail=True)
     return {"id": gid, "object": "memory.grant", "memory_id": mid, "principal": principal,
             "privileges": privs, "inherited": False}
+
+
+async def granted(org: str, principal: str) -> list[tuple[dict, list[str]]]:
+    """Every memory this principal holds a grant ON (not merely below one), with what it may do
+    there, highest in the tree first. It is where a member was let in: the same answer for a person
+    and for an agent, and the only source of what an agent's harness shows as its memories."""
+    res = []
+    for g in await GRAPH.find("MemoryGrant", {"org": org, "principal": principal}):
+        if str(g.get("deleted") or "0") == "1":
+            continue
+        m = await _load(org, str(g.get("memory_id") or ""))
+        if m:
+            res.append((len(await _chain(org, m)), str(m.get("name") or "").casefold(), m, await effective(org, m, [principal])))
+    return [(m, privs) for _, _, m, privs in sorted(res, key=lambda x: (x[0], x[1], str(x[2]["id"]))) if privs]
 
 
 async def revoke(org: str, mid: str, principals: list[str], gid: str) -> None:
@@ -561,9 +577,10 @@ async def present(org: str, mid: str, record: dict, principals: list[str], _seen
     return r
 
 
-def writer_of(member: str, harness: str = "") -> dict:
-    """Stamped here from the authenticated caller; a client's own `written_by` is never read."""
-    return {"kind": "harness", "id": harness} if harness else {"kind": "member", "id": member}
+def writer_of(member: str, agent: bool = False) -> dict:
+    """Stamped here from the authenticated caller; a client's own `written_by` is never read. A
+    person and an agent are both members; `type` says which, for a reader who wants to know."""
+    return {"kind": "member", "id": member, "type": "agent" if agent else "human"}
 
 
 def parts_of(content, *, empty_ok: bool = False) -> list[dict]:

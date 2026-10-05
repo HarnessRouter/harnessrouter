@@ -120,19 +120,19 @@ def test_a_grant_flows_down_and_the_caller_enters_where_it_was_granted(people, t
 def test_who_acts_on_a_memory_is_one_vocabulary(people, tree):
     ada, _ = people
     url = f"/v1/memories/{tree['acme']}/grants"
-    # a grant is held by a person, an agent or a set of people; a server's own kind is x.-prefixed
-    for who in ("member:cy@example.com", "harness:chrn_1", "group:sales", "x.team:blue"):
+    # a grant is held by a member (a person or an agent, the same kind) or a group; a server's own kind is x.-prefixed
+    for who in ("member:cy@example.com", "member:chrn_1", "group:sales", "x.team:blue"):
         g = ada.post(url, json={"principal": who, "privileges": ["read"]})
         assert g.status_code == 200, (who, g.text)
         ada.delete(f"{url}/{g.json()['id']}")
     # a provider writes but holds no grant, and a kind nobody defined is refused, not stored
-    for who in ("provider:mem0", "user:cy@example.com", "workspace:w1", "key:k1", "nobody"):
+    for who in ("provider:mem0", "harness:chrn_1", "user:cy@example.com", "workspace:w1", "key:k1", "nobody"):
         r = ada.post(url, json={"principal": who, "privileges": ["read"]})
         assert r.status_code == 422 and _code(r) == "memory_invalid", who
     # the writer of a record is the same identity a grant would name
     rec = ada.post(f"/v1/memories/{tree['acme']}/records", json={"type": "note", "content": "who wrote this"}).json()
     w = rec["written_by"]
-    assert w == {"kind": "member", "id": "ada@example.com"}
+    assert w == {"kind": "member", "id": "ada@example.com", "type": "human"}
     assert ada.post(url, json={"principal": f"{w['kind']}:{w['id']}", "privileges": ["read"]}).status_code == 200
     ada.delete(f"/v1/memories/{tree['acme']}/records/{rec['id']}")
 
@@ -162,7 +162,7 @@ def test_the_two_ways_to_write_and_a_writer_the_client_cannot_supply(people, tre
         "references": [{"rel": "derived_from", "record_id": eps[0]["id"]}]})
     fact = r.json()
     assert fact["object"] == "memory.record" and fact["version"] == 1 and fact["status"] == "active"
-    assert fact["written_by"] == {"kind": "member", "id": "ada@example.com"} and fact["trust"] == "untrusted"
+    assert fact["written_by"] == {"kind": "member", "id": "ada@example.com", "type": "human"} and fact["trust"] == "untrusted"
     assert fact["references"] == [{"rel": "derived_from", "record_id": eps[0]["id"],
                                    "memory_id": tree["acme"], "available": True}]
     tree["fact"], tree["episode"] = fact["id"], eps[0]["id"]

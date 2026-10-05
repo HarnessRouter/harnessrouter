@@ -1,5 +1,5 @@
 """The tools an agent holds over its harness's memories, served by the gateway's `memories` MCP
-server. The agent is the principal `harness:<id>`: every call goes through memory_plane's one access
+server. The agent is the principal `member:<harness id>`: every call goes through memory_plane's one access
 check, so what the agent can reach is what its harness was granted and nothing a prompt can widen.
 
 The attached memories are where the agent starts. From each it may walk to the parent and the
@@ -72,8 +72,8 @@ def _free_languages() -> list[str]:
 
 
 def tool_list(entries: list[dict]) -> list[dict]:
-    """What this harness's agent is offered: the write tools only when it was attached somewhere to
-    write, the free query only when a connected provider runs one."""
+    """What this agent is offered: the write tools only when it holds `write` somewhere, the free
+    query only when a connected provider runs one."""
     tools = [t for t in _TOOLS if not t["write"] or _can_write(entries)]
     langs = _free_languages()
     if langs:
@@ -97,8 +97,8 @@ def _slim(record: dict) -> dict:
 
 async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -> tuple[str, bool]:
     """One tool call as the harness. Returns (text for the agent, is_error)."""
-    pr = [f"harness:{hid}"]
-    writer = mp.writer_of("", harness=hid)
+    pr = [f"member:{hid}"]
+    writer = mp.writer_of(hid, agent=True)
     try:
         if name == "memory_list" and not args.get("memory"):
             out = []
@@ -108,7 +108,7 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
                 if m and privs:
                     o = await mp.out(org, m, pr, privs)
                     out.append({**mp._brief(o), "default": bool(e.get("default"))})
-            return _text({"attached": out}), False
+            return _text({"memories": out}), False
 
         mid = str(args.get("memory") or "")
         if not mid and name == "memory_remember":
@@ -116,7 +116,7 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
             if not mid:
                 return "This agent has no default memory to write to: name the memory.", True
         if name in ("memory_remember", "memory_revise", "memory_forget") and not _can_write(entries):
-            return "This agent was attached to read its memories, not to write them.", True
+            return "This agent may read its memories, not write them.", True
 
         if name == "memory_list":
             m, privs = await mp.need(org, mid, pr, "read")
@@ -205,7 +205,7 @@ async def call(org: str, hid: str, entries: list[dict], name: str, args: dict) -
 async def doc_section(org: str, hid: str, entries: list[dict]) -> tuple[str, dict]:
     """The Memory section of the agent's instructions, and what was primed per memory in tokens.
     How much a provider returns is the provider's decision; the size is reported, not hidden."""
-    pr, lines, primed = [f"harness:{hid}"], [], {}
+    pr, lines, primed = [f"member:{hid}"], [], {}
     for e in entries:
         m = await mp._load(org, str(e.get("memory_id") or ""))
         if not m or "read" not in await mp.effective(org, m, pr):

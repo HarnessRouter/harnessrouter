@@ -76,7 +76,7 @@ def test_remember_recall_revise_history_and_as_of(c, tree):
         "attributes": {"account": "acme"}}).json()
     assert fact["status"] == "active" and fact["version"] == 1 and fact["memory_id"] == acme
     assert fact["content"] == [{"type": "text", "text": "Acme renews in March and wants the annual discount kept."}]
-    assert fact["written_by"] == {"kind": "member", "id": "ada@example.com"} and fact["attributes"] == {"account": "acme"}
+    assert fact["written_by"] == {"kind": "member", "id": "ada@example.com", "type": "human"} and fact["attributes"] == {"account": "acme"}
     tree["fact"], t1 = fact["id"], fact["time"]["written_at"]
     time.sleep(2)                                              # mem0 indexes a moment after it stores
 
@@ -159,9 +159,10 @@ def test_forget_closes_and_erase_says_what_mem0_still_holds(c, tree):
 
 def test_an_agent_holds_a_mem0_memory_as_tools(c, tree):
     hid = c.post("/v1/harnesses", headers=ADA, json={"name": "Seller", "base": "claude-code"}).json()["id"]
-    r = c.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"memories": [
-        {"memory_id": tree["team"], "access": "read"}, {"memory_id": tree["acme"], "access": "write", "default": True}]})
-    assert r.status_code == 200, r.text
+    for mid, privs in ((tree["team"], ["read"]), (tree["acme"], ["read", "write"])):   # granted as a person would be
+        assert c.post(f"/v1/memories/{mid}/grants", headers=ADA, json={"principal": f"member:{hid}", "privileges": privs}).status_code == 200
+    r = c.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"default_memory_id": tree["acme"]})
+    assert r.status_code == 200 and r.json()["default_memory_id"] == tree["acme"], r.text
     sid = "sess_" + os.urandom(6).hex()
     asyncio.run(gw._vg_upsert("HarnessSession", sid, {"tenant": ORG, "status": "idle", "turn_status": "idle", "harness_id": hid}))
     tok = gw._mint_hosted_cred(hid, sid, gw._hosted_secret_key(hid, "mcp.memories"))
@@ -175,7 +176,7 @@ def test_an_agent_holds_a_mem0_memory_as_tools(c, tree):
                                        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]]
     assert "memory_recall" in names and "memory_remember" in names and "memory_query" not in names   # mem0 runs no free query
     text, err = call("memory_remember", content="Acme's procurement contact is Lee.")
-    assert not err and json.loads(text)["remembered"]["written_by"] == {"kind": "harness", "id": hid}
+    assert not err and json.loads(text)["remembered"]["written_by"] == {"kind": "member", "id": hid, "type": "agent"}
     for _ in range(10):                                        # mem0 indexes a moment after it stores
         time.sleep(2)
         text, err = call("memory_recall", memory=tree["acme"], query="who is the procurement contact at Acme?")

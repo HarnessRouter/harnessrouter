@@ -1,6 +1,7 @@
-"""A harness and its memories: attaching is granting, the agent acts as `harness:<id>` through the
-gateway's `memories` MCP server, walks the tree one memory at a time in both directions, and a
-finished turn is observed into the memory it writes by default."""
+"""An agent is a member. What a harness's agent reaches is what `member:<harness id>` was granted,
+on the memory, the way a person is granted; the harness keeps two settings (where the agent writes
+by default, whether its turns are recorded). The agent acts through the gateway's `memories` MCP
+server, and a finished turn is observed into the memory it writes by default."""
 from __future__ import annotations
 
 import asyncio
@@ -61,34 +62,44 @@ def _call(client, tok, name, **args):
     return (json.loads(text) if not res["isError"] else text), res["isError"]
 
 
-def test_attaching_is_granting_and_only_one_who_may_grant_can_attach(client, world):
+def _grant(client, mid, hid, privs, who=ADA):
+    return client.post(f"/v1/memories/{mid}/grants", headers=who, json={"principal": f"member:{hid}", "privileges": privs})
+
+
+def test_an_agent_is_granted_like_a_person_and_the_harness_keeps_two_settings(client, world):
     hid = world["hid"]
-    # Ben holds nothing on these memories: he cannot attach them to anything
-    r = client.put(f"/v1/harnesses/{hid}/memories", headers=BEN,
-                   json={"memories": [{"memory_id": world["team"], "access": "read"}]})
-    assert r.status_code == 404 and r.json()["error"]["code"] == "memory_not_found"
-    r = client.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"memories": [
-        {"memory_id": world["team"], "access": "read"},
-        {"memory_id": world["notes"], "access": "write", "default": True}]})
-    assert r.status_code == 200, r.text
-    grants = {(g["memory_id"], g["principal"]): g["privileges"]
-              for mid in (world["team"], world["notes"])
-              for g in client.get(f"/v1/memories/{mid}/grants", headers=ADA).json()["data"]}
-    assert grants[(world["team"], f"harness:{hid}")] == ["read"]
-    assert grants[(world["notes"], f"harness:{hid}")] == ["read", "write"]
-    assert [e["memory_id"] for e in client.get(f"/v1/harnesses/{hid}/memories", headers=ADA).json()["data"]] == [world["team"], world["notes"]]
-    for bad in ([{"memory_id": world["team"], "access": "read", "default": True}],
-                [{"memory_id": world["team"]}, {"memory_id": world["team"]}]):
-        assert client.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"memories": bad}).status_code == 422
+    url = f"/v1/harnesses/{hid}/memories"
+    # nothing granted: the agent holds nothing, and has no memory tools
+    start = client.get(url, headers=ADA).json()
+    assert start["principal"] == f"member:{hid}" and start["data"] == [] and start["default_memory_id"] is None
+    assert asyncio.run(gw._harness_memories(hid, ORG, asyncio.run(gw._harness_vertex(hid)))) == []
+    # Ben holds nothing on these memories: he cannot let anyone in, an agent included
+    assert _grant(client, world["team"], hid, ["read"], who=BEN).status_code == 404
+    assert _grant(client, world["team"], hid, ["read"]).status_code == 200
+    assert _grant(client, world["notes"], hid, ["read", "write"]).status_code == 200
+    got = client.get(url, headers=ADA).json()
+    assert [(m["name"], m["privileges"], m["default"]) for m in got["data"]] == [
+        ("Support", ["read"], False), ("Agent notes", ["read", "write"], False)]
+    assert got["observe"] is True
+    # the default is a memory the agent may write, and one the caller can see
+    assert client.put(url, headers=ADA, json={"default_memory_id": world["team"]}).status_code == 422
+    assert client.put(url, headers=BEN, json={"default_memory_id": world["notes"]}).status_code == 404
+    assert client.put(url, headers=ADA, json={"observe": "yes"}).status_code == 422
+    r = client.put(url, headers=ADA, json={"default_memory_id": world["notes"]})
+    assert r.status_code == 200 and r.json()["default_memory_id"] == world["notes"]
+    assert [m["default"] for m in r.json()["data"]] == [False, True]
+    # there is no attach list and no narrowing: an old-shaped body sets nothing
+    client.put(url, headers=ADA, json={"memories": [{"memory_id": world["company"], "access": "write"}]})
+    assert [m["name"] for m in client.get(url, headers=ADA).json()["data"]] == ["Support", "Agent notes"]
 
 
-def test_the_agent_is_offered_tools_and_starts_at_what_was_attached(client, world):
+def test_the_agent_is_offered_tools_and_starts_where_it_was_granted(client, world):
     tok = _tok(world["hid"])
     names = [t["name"] for t in _rpc(client, tok, "tools/list")["tools"]]
     assert names == ["memory_list", "memory_recall", "memory_get", "memory_remember", "memory_revise",
                      "memory_forget", "memory_run_query", "memory_operate", "memory_query"]
     start, err = _call(client, tok, "memory_list")
-    assert not err and [(m["name"], m["default"]) for m in start["attached"]] == [("Support", False), ("Agent notes", True)]
+    assert not err and [(m["name"], m["default"]) for m in start["memories"]] == [("Support", False), ("Agent notes", True)]
 
 
 def test_the_agent_walks_up_and_down_and_its_reach_ends_where_the_grants_do(client, world):
@@ -99,7 +110,7 @@ def test_the_agent_walks_up_and_down_and_its_reach_ends_where_the_grants_do(clie
     assert err and out == "There is no such memory within your reach."
     # granted one level up, the same walk now continues, and the restricted branch stays out of sight
     client.post(f"/v1/memories/{world['company']}/grants", headers=ADA,
-                json={"principal": f"harness:{world['hid']}", "privileges": ["read"]})
+                json={"principal": f"member:{world['hid']}", "privileges": ["read"]})
     here, _ = _call(client, tok, "memory_list", memory=world["team"])
     assert here["parent"]["id"] == world["company"]
     top, _ = _call(client, tok, "memory_list", memory=world["company"])
@@ -111,11 +122,11 @@ def test_the_agent_walks_up_and_down_and_its_reach_ends_where_the_grants_do(clie
     assert err and "Runway" not in str(out)
 
 
-def test_the_agent_writes_as_the_harness_and_only_where_it_may(client, world):
+def test_the_agent_writes_as_a_member_and_only_where_it_may(client, world):
     tok = _tok(world["hid"])
     made, err = _call(client, tok, "memory_remember", content="Customers ask about refunds most on Mondays.")
     assert not err and made["remembered"]["memory_id"] == world["notes"]
-    assert made["remembered"]["written_by"] == {"kind": "harness", "id": world["hid"]}
+    assert made["remembered"]["written_by"] == {"kind": "member", "id": world["hid"], "type": "agent"}
     rid = made["remembered"]["id"]
     out, err = _call(client, tok, "memory_remember", memory=world["team"], content="x")
     assert err and "write" in out                                   # read there, not write
@@ -129,14 +140,16 @@ def test_the_agent_writes_as_the_harness_and_only_where_it_may(client, world):
     assert not err and [r["id"] for r in free["results"]] == [rid]
 
 
-def test_a_harness_attached_to_read_is_offered_no_write_tool(client, world):
+def test_an_agent_granted_read_is_offered_no_write_tool_and_a_revoked_grant_ends_its_reach(client, world):
     hid = client.post("/v1/harnesses", headers=ADA, json={"name": "Reader", "base": "claude-code"}).json()["id"]
-    client.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"memories": [{"memory_id": world["team"], "access": "read"}]})
+    g = _grant(client, world["team"], hid, ["read"]).json()
     names = [t["name"] for t in _rpc(client, _tok(hid), "tools/list")["tools"]]
     assert "memory_remember" not in names and "memory_forget" not in names and "memory_recall" in names
-    # detaching leaves nothing to call
-    client.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"memories": []})
+    # one mechanism: the grant is removed where it was given, and nothing is left on the harness
+    client.delete(f"/v1/memories/{world['team']}/grants/{g['id']}", headers=ADA)
     assert client.get(f"/v1/harnesses/{hid}/memories", headers=ADA).json()["data"] == []
+    out, err = _call(client, _tok(hid), "memory_recall", memory=world["team"], query="refunds")
+    assert err and out == "There is no such memory within your reach."
 
 
 def test_the_memory_section_names_the_start_points_and_reports_what_was_primed(client, world):
@@ -158,7 +171,12 @@ def test_a_finished_turn_is_observed_into_the_default_memory(client, world):
     assert len(eps) == 1 and eps[0]["content"] == [
         {"type": "text", "text": "Can I get a refund after 40 days?", "role": "user"},
         {"type": "text", "text": "No: refunds are allowed within 30 days.", "role": "assistant"}]
-    assert eps[0]["written_by"] == {"kind": "harness", "id": hid} and eps[0]["attributes"]["session_id"] == "sess_x"
+    assert eps[0]["written_by"] == {"kind": "member", "id": hid, "type": "agent"} and eps[0]["attributes"]["session_id"] == "sess_x"
+    # recording conversations is a setting of the harness, and off means off
+    client.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"observe": False})
+    asyncio.run(gw._memories_observe(ORG, hid, "sess_y", asyncio.run(gw._harness_vertex(hid)), {"user_text": "And after 50?", "model": "m"}, "No."))
+    assert len(client.get(f"/v1/memories/{world['notes']}/records?type=episode", headers=ADA).json()["data"]) == 1
+    client.put(f"/v1/harnesses/{hid}/memories", headers=ADA, json={"observe": True})
 
 
 def test_the_observed_answer_includes_the_message_still_open_when_the_turn_returns():
@@ -182,7 +200,7 @@ def test_a_task_names_one_more_memory_and_the_session_writes_there(client, world
     with pytest.raises(Exception) as refused:                      # restricted, and the harness holds nothing on it
         asyncio.run(gw._task_memory_for_turn(ORG, hid, body))
     assert refused.value.status_code == 404 and refused.value.detail["code"] == "memory_not_found"
-    client.post(f"/v1/memories/{person}/grants", headers=ADA, json={"principal": f"harness:{hid}", "privileges": ["read", "write"]})
+    client.post(f"/v1/memories/{person}/grants", headers=ADA, json={"principal": f"member:{hid}", "privileges": ["read", "write"]})
     assert asyncio.run(gw._task_memory_for_turn(ORG, hid, body)) == person
     assert asyncio.run(gw._task_memory_for_turn(ORG, hid, SimpleNamespace(metadata={}))) == ""
     sid = "sess_" + os.urandom(6).hex()
@@ -190,10 +208,10 @@ def test_a_task_names_one_more_memory_and_the_session_writes_there(client, world
                                                       "harness_id": hid, "memory": person}))
     hv = asyncio.run(gw._harness_vertex(hid))
     entries = asyncio.run(gw._harness_memories(hid, ORG, hv, sid=sid))
-    assert [(e["memory_id"], e["default"]) for e in entries] == [(world["team"], False), (world["notes"], False), (person, True)]
+    assert {(e["memory_id"], e["default"]) for e in entries} == {(world["company"], False), (world["team"], False), (world["notes"], False), (person, True)}
     tok = gw._mint_hosted_cred(hid, sid, gw._hosted_secret_key(hid, "mcp.memories"))
     made, err = _call(client, tok, "memory_remember", content="Dana prefers a call over email.")
     assert not err and made["remembered"]["memory_id"] == person
-    # another session of the same harness does not carry it
-    other = [e["memory_id"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv, sid="sess_none"))]
-    assert person not in other
+    # another session of the same agent reaches it too (it was granted), and writes where the harness says
+    other = {e["memory_id"]: e["default"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv, sid="sess_none"))}
+    assert other[person] is False and other[world["notes"]] is True

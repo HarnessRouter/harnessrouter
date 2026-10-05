@@ -127,6 +127,8 @@ class Mem0(mp.Provider):
         m[_RESERVED + "type"] = record.get("type") or "fact"
         m[_RESERVED + "version"] = version
         m[_RESERVED + "writer_kind"], m[_RESERVED + "writer_id"] = writer.get("kind") or "", writer.get("id") or ""
+        if writer.get("type"):
+            m[_RESERVED + "writer_type"] = writer["type"]
         if record.get("references"):
             m[_RESERVED + "refs"] = json.dumps(record["references"], separators=(",", ":"))
         for k in ("valid_from", "valid_to"):
@@ -144,6 +146,8 @@ class Mem0(mp.Provider):
         except ValueError:
             refs = []
         writer = {"kind": meta.get(_RESERVED + "writer_kind") or "provider", "id": meta.get(_RESERVED + "writer_id") or "mem0"}
+        if meta.get(_RESERVED + "writer_type"):
+            writer["type"] = meta[_RESERVED + "writer_type"]
         if meta.get(_RESERVED + "observed_by"):
             writer = {"kind": "provider", "id": "mem0", "on_behalf_of": meta[_RESERVED + "observed_by"]}
         return {"id": str(item["id"]), "type": meta.get(_RESERVED + "type") or "fact",
