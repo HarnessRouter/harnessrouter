@@ -2486,3 +2486,102 @@ minimax x llama-3.3-70b's first artifact turn (it passed on the retest); a displ
 with a kept session. The withheld-tool claim of custom-harness is still judged on a tool the fixture
 never asks for (review of #362), so it cannot fail; the env-stamp oracle described under the minimax
 and kilo sections is the judge to move it to.
+
+## A list of free-form objects reached the tool empty (2026-10-05, 0.29.3 and 0.29.4)
+
+Reported from the hosted service: an agent asked a tool to insert rows and the tool received
+`[{}, {}]` or `[]`. The rows were in the model's plan and gone from its tool call.
+
+**The mechanism.** One tool whose argument is a list of objects, the model asked to pass two
+specific rows, one call per cell, the item's schema written four ways:
+
+| `items` | what the tool received |
+|---|---|
+| `{"type":"object"}` | the rows, in every cell |
+| `{"type":"object","properties":{}}` | `[{}, {}]` from OpenAI models through Vercel and through OpenRouter; `[]` from kimi-k3 through Vercel and through TokenRouter |
+| `{"type":"object","properties":{},"additionalProperties":true}` | `[{}, {}]` from OpenAI models through OpenRouter; the rows elsewhere |
+| `{"type":"object","additionalProperties":true}` | the rows, in every cell |
+
+The cells were eleven model families on Vercel and on TokenRouter, OpenAI models on OpenRouter, and
+OpenAI, Azure and Google AI Studio directly. A tool's author writes the first row. hermes, opencode,
+kilo and goose add the empty `properties` to every object node themselves, and Codex does for an MCP
+tool. With the key present a route may hand the model an object it can put nothing in; without it
+none did.
+
+**The repair (0.29.3, #394).** The relay drops an empty `properties` from every nested object node of
+a function tool's schema, for every model, and leaves the root `parameters` node as it is. A function
+tool sits in four places, and the repair walks all of them: `tools[].function.parameters` (Chat
+Completions), `tools[].parameters` (the Responses API), the `tools` of a `{"type":"namespace"}` entry
+(Codex groups a server's MCP tools that way), and the `tools` of an item in `input` (a tool search's
+answer). The first candidate covered the first place alone and left gpt-5.4 on Vercel at 14 of 17:
+with an OpenAI model on an aggregator, hermes (`codex_responses`), opencode and kilo
+(`@ai-sdk/openai`) speak the Responses API. hermes on an OpenRouter connection also called
+OpenRouter directly, with the connection's key in its environment; it takes a relay route now, like
+hermes's other connections.
+
+**The judge.** The plugin matrix has a `rows` column (`plugins/run-matrix.py --mode rows`): the
+fixture's second tool answers `PLUGIN_ROWS_OK` only when both rows arrive with their fields and says
+what it received otherwise. The tool is the judge; an agent's own record of its call is not (one base
+writes arguments through a file, and an answer can be cut short).
+
+**Measured**, every base that lists the model, through hr-test's side container:
+
+| model, connection | 0.29.2 | candidates of 0.29.3 |
+|---|---|---|
+| gpt-5.4, Vercel | 14 of 17: hermes, opencode, kilo | 17 of 17 |
+| gpt-5.4, OpenRouter | 16 of 17: hermes | 17 of 17 |
+| kimi-k3, TokenRouter | 14 of 16: hermes, goose | 15 of 16 |
+
+The remaining miss is aider with kimi-k3 answering with the model's reasoning and calling nothing,
+about one turn in three, before and after (#395). On the last candidate: the plugin matrix's five
+columns on six bases at their default models, 30 of 30, and hermes on OpenRouter through the console,
+four models by five scenarios, 20 of 20.
+
+**Codex (0.29.4).** 0.29.3 did not reach Codex: it was handed the connection's base and key and never
+passed through the relay. Codex 0.154.0 with gpt-6-luna, two runs per connection: the rows on
+TokenRouter, OpenRouter, OpenAI and Azure; `[{}]` and `[{}, {}]` on Vercel, and the same there with
+gpt-6.1-sol. gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5.6-sol and gpt-6-astra passed on Vercel. For
+gpt-5.4 the hosted service captured why: Codex sends `{"type":"tool_search"}` and no MCP schema in
+the first request, so there is no empty `properties` to act on. That the other four pass for the
+same reason is inferred, not captured. Now every Codex
+connection that is not OpenAI's own or Azure's takes a relay route. The route keeps the connection's
+base exactly as stored, since Codex called `<base>/responses` whatever the base looked like; the CLI
+gets a loopback URL and a placeholder, so the connection's key is out of its environment; and the
+account fingerprint that decides whether a resumed history is replayed as content is still taken from
+the connection, because a route is new on every turn.
+
+With the route, Codex on Vercel: gpt-6-luna three of three, gpt-6.1-sol two of two, gpt-6-sol one of
+one, and on the built candidate gpt-6-luna twice and gpt-6.1-sol once.
+
+**Codex's columns with the route** (the branch's runner in a side container, through the console, one
+worker):
+
+| connection | models | scenarios passed | what did not |
+|---|---|---|---|
+| Vercel | 12 | 58 of 59 | gpt-5.6-luna's recall after a recycle |
+| TokenRouter | 12 | 57 of 59 | gpt-5.4's switch into gpt-6.1-sol; one artifact turn on gpt-5.4 |
+| OpenRouter | 3 | 15 of 15 | |
+| a custom Responses endpoint | 2 | 8 of 8 | |
+| OpenAI direct (route unchanged) | 2 | 10 of 10 | |
+| Azure (route unchanged) | 2 | 10 of 10 | |
+
+gpt-5.3-codex has no switch partner on Vercel or TokenRouter, nor has either model on the custom
+endpoint, so those rows count four scenarios. Each miss was run again with and without the route:
+
+- gpt-5.4's switch into gpt-6.1-sol on TokenRouter is refused with "cannot continue this task's
+  earlier reasoning through this provider" three of three with the route and two of two without it,
+  in the same time (132 to 173 s against 135 and 151 s). It is the condition recorded on 2026-09-10
+  for that route: its upstream accounts cannot open each other's encrypted reasoning. The relay
+  logged the provider's 400 once per turn.
+- The artifact turn on gpt-5.4 that produced no file passed two of two on the retest with the route,
+  and two of two without it.
+- gpt-5.6-luna's recall after a recycle answered the completion phrase three of three with the route
+  and two of three without it: the luna tier's recall recorded under the gpt-6 line.
+
+Also with the route: the family tour (one conversation, 1 of 1), the plugin matrix's five columns,
+the custom harness and the browser column, all on codex. On the built candidate (0.29.4-rc.1): three
+models on Vercel 15 of 15, two on TokenRouter 10 of 10, two on the custom endpoint 8 of 8, the plugin
+columns 5 of 5.
+
+**Not measured.** A Codex turn whose provider stays silent past the relay's wait: the relay ends such a
+call with its reason, as for every other base, and Codex was not driven into that case here.

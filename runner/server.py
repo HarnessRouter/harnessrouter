@@ -2233,6 +2233,18 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         marker.write_text(fp)
     except OSError:
         pass
+    # A connection that is not OpenAI's own or Azure's rides the relay, as it does for every other
+    # base. Codex groups a server's MCP tools in a namespace and adds an empty `properties` to each
+    # object node of their schemas; through Vercel the tool then received empty objects with
+    # gpt-6-luna and gpt-6.1-sol (two of two, 2026-10-05; not with gpt-5.4, whose tool definitions
+    # Codex defers behind a tool search), and the repair lives in the relay
+    # (_with_free_form_objects). The CLI is given a loopback URL and a placeholder, so the
+    # connection's key is no longer in its environment either. OpenAI's own endpoint and Azure's
+    # keep the direct route: both were intact as Codex sends it. The account fingerprint above is
+    # taken from the connection itself, never from the route, which is new on every turn.
+    cli_base, cli_key = base_url, auth.api_key
+    if p == "tokenrouter" and auth.api_key:
+        cli_base, cli_key = _hermes_relay_route(base_url, auth.api_key, exact_base=True)
     # codex only speaks the OpenAI Responses API now — current releases removed
     # `wire_api = "chat"` entirely, so a custom chat-completions endpoint cannot be driven by
     # codex at all (the gateway greys codex out for those integrations). Always the supported
@@ -2240,7 +2252,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     # crash on config load.
     cfg = _CODEX_CONFIG_TMPL.format(
         model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
-        name=spec["name"], base_url=base_url, env_key=spec["env_key"],
+        name=spec["name"], base_url=cli_base, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
     if _codex_namespace_tools_off(auth):
         # Codex enables its multi-agent namespace by default. Most custom Responses endpoints
@@ -2263,7 +2275,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         for alias in _codex_session_provider_ids(cfg_dir):
             if alias == f"hr-{p}" or alias == "openai":     # the current one; a reserved built-in
                 continue
-            cfg += _CODEX_ALIAS_TMPL.format(alias=alias, name=spec["name"], base_url=base_url,
+            cfg += _CODEX_ALIAS_TMPL.format(alias=alias, name=spec["name"], base_url=cli_base,
                                             env_key=spec["env_key"], wire_api=auth.wire_api or "responses")
     if mcp_toml:   # owner-attached MCP servers via Codex's experimental rmcp HTTP client
         cfg += mcp_toml
@@ -2271,8 +2283,8 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     env["CODEX_HOME"] = str(cfg_dir)
     env["TMPDIR"] = str(pathlib.Path(cwd) / "tmp")
     pathlib.Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
-    if auth.api_key:
-        env[spec["env_key"]] = auth.api_key
+    if cli_key:
+        env[spec["env_key"]] = cli_key
     return cfg_dir
 
 
@@ -4796,7 +4808,7 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
                         stream_usage: bool = False, gemini_schemas: bool = False,
-                        usage_no_nulls: bool = False) -> tuple[str, str]:
+                        usage_no_nulls: bool = False, exact_base: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -4805,7 +4817,9 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     for a streamed call's usage when the client does not (_request_stream_usage). `gemini_schemas`
     normalises a gemini model's tool declarations on this route whatever the channel (see
     _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
-    answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls)."""
+    answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
+    `exact_base` joins the client's resource onto the connection's base as stored, for a client that
+    was calling that base directly before it had a route (Codex): the same URL, with the relay between."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -4818,7 +4832,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         # https://api.anthropic.com/chat/completions, a 404 with no body (2026-09-06 support
         # matrix; Anthropic's OpenAI-compatible surface lives under /v1). Bedrock keeps its host
         # (its own path is built in _bedrock_anthropic).
-        _HERMES_RELAY["routes"][tok] = (_relay_base_with_version(base_url), api_key,
+        upstream = (base_url or "").rstrip("/") if exact_base else _relay_base_with_version(base_url)
+        _HERMES_RELAY["routes"][tok] = (upstream, api_key,
                                         {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                                          "stream_usage": bool(stream_usage),
                                          "gemini_schemas": bool(gemini_schemas),
