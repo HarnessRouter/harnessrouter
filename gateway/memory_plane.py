@@ -10,8 +10,9 @@ This process keeps no memory of its own: `PROVIDERS` holds the adapters, and a d
 memories once one of them is connected. Tests register a fixture provider.
 
 Three rules shape everything here:
-  - A read acts on ONE memory. The caller walks to a parent or a child by its own next call; nothing
-    here descends or ascends on its behalf (`depth` is the one opt-in, bounded by the provider).
+  - A question (recall) is asked of a memory and everything below it the caller may read, and each
+    answer names the memory it is in: that is how a caller finds where to start. Everything else
+    (list, get, the queries) acts on ONE memory, and nothing ever looks above: the caller walks.
   - Access is decided here, on every call, from grants. A provider never sees a principal and cannot
     be asked to widen a read.
   - What is not readable does not exist: a memory, a parent, a reference target the caller may not
@@ -103,6 +104,20 @@ class Provider:
 
     async def recall(self, mid: str, req: dict) -> dict:
         self._no("answer recall")
+
+    async def recall_many(self, mids: list[str], req: dict) -> dict:
+        """One question asked of several memories this provider keeps: results in one ranking, each
+        carrying `memory_id`. The default asks each memory in turn; a provider that can search
+        several in one request overrides it."""
+        results, degraded, abstains = [], [], []
+        for mid in mids:
+            res = await self.recall(mid, req)
+            results += [{**x, "memory_id": mid} for x in res.get("results") or []]
+            degraded += [d for d in res.get("degraded") or [] if d not in degraded]
+            abstains.append(bool(res.get("abstain")))
+        results.sort(key=lambda x: -(x.get("score") or 0))
+        return {"results": results[: int(req.get("limit") or 8)], "degraded": degraded,
+                "abstain": bool(abstains) and all(abstains)}
 
     async def get(self, mid: str, rid: str, as_of: str | None = None) -> dict | None:
         self._no("read one record")
@@ -394,6 +409,56 @@ async def delete(org: str, mid: str, principals: list[str]) -> list[str]:
         await GRAPH.upsert("Memory", str(x["id"]), {"deleted": "1", "updated_at": _now_ms()}, raise_on_fail=True)
         gone.append(str(x["id"]))
     return gone
+
+
+# How many memories one recall may search. A subtree can hold a node per customer; past this the
+# answer says it was cut, and the caller narrows by starting lower in the tree.
+RECALL_MAX_MEMORIES = 200
+
+
+async def reach_below(org: str, memory: dict, principals: list[str], depth: int | None = None) -> tuple[list[dict], bool]:
+    """The memory and every descendant these principals may read, nearest first, and whether the
+    list was cut. A descendant is judged on its own: one under a restricted node the caller cannot
+    read is still reached when the caller holds a grant on it, and the node between is never named."""
+    found, frontier, level, cut = [memory], [str(memory["id"])], 0, False
+    while frontier and (depth is None or level < depth):
+        nxt = []
+        for pid in frontier:
+            for k in await GRAPH.find("Memory", {"org": org, "parent_id": pid}):
+                if str(k.get("deleted") or "0") == "1":
+                    continue
+                nxt.append(str(k["id"]))
+                if "read" in await effective(org, k, principals):
+                    if len(found) >= RECALL_MAX_MEMORIES:
+                        cut = True
+                    else:
+                        found.append(k)
+        frontier, level = nxt, level + 1
+    return found, cut
+
+
+async def recall(org: str, memories: list[dict], req: dict) -> dict:
+    """One question over a set of memories the caller may read: grouped by the provider that keeps
+    each, asked once per provider, merged into one ranking. Each result names the memory it is in."""
+    groups: dict[tuple, tuple[Provider, list[str]]] = {}
+    for m in memories:
+        key = (str(m.get("provider") or ""), str(m.get("workspace") or "") or "default")
+        if key not in groups:
+            groups[key] = (await provider_of(m), [])
+        groups[key][1].append(str(m["id"]))
+    results, degraded, abstains = [], [], []
+    asked = [s for s in ("query", "text", "filters") if req.get(s)]
+    for prov, mids in groups.values():
+        signals = (prov.capabilities().get("recall") or {}).get("signals") or []
+        res = await prov.recall_many(mids, req)
+        results += res.get("results") or []
+        for d in (res.get("degraded") or []) + [f"{s}:not_supported" for s in asked if s not in signals]:
+            if d not in degraded:
+                degraded.append(d)
+        abstains.append(bool(res.get("abstain")))
+    results.sort(key=lambda x: -(x.get("score") or 0))
+    return {"results": results[: int(req.get("limit") or 8)], "degraded": degraded,
+            "abstain": bool(abstains) and all(abstains)}
 
 
 async def roots(org: str, principals: list[str]) -> list[dict]:

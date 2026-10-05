@@ -37,7 +37,7 @@ class FixtureProvider(Provider):
 
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "container", "derivation": "background",
-                "recall": {"signals": ["query", "text", "filters"], "abstain": True, "max_depth": 0},
+                "recall": {"signals": ["query", "text", "filters"], "abstain": True},
                 "history": {"content": "versions", "structure": "none"},
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": True, "consolidate": "runs",
@@ -191,8 +191,6 @@ class FixtureProvider(Provider):
 
     async def recall(self, mid, req):
         degraded = []
-        if int(req.get("depth") or 0) > 0:
-            degraded.append("depth:capped_at_0")
         q, tx = _words(req.get("query") or ""), _words(req.get("text") or "")
         scored = []
         for r in self._select(mid, req):

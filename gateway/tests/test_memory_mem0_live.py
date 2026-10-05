@@ -84,7 +84,7 @@ def test_remember_recall_revise_history_and_as_of(c, tree):
     assert hit["results"][0]["record"]["id"] == fact["id"] and "query" in hit["results"][0]["why"]
     assert hit["abstain"] is False and hit["parent"]["id"] == tree["team"]
     # one memory: the parent holds none of it
-    assert c.post(f"/v1/memories/{tree['team']}/recall", headers=ADA, json={"query": "when does Acme renew?"}).json()["results"] == []
+    assert c.post(f"/v1/memories/{tree['team']}/recall", headers=ADA, json={"query": "when does Acme renew?", "depth": 0}).json()["results"] == []
     # words alone, and a field
     assert [x["record"]["id"] for x in c.post(f"/v1/memories/{acme}/recall", headers=ADA, json={"text": "discount"}).json()["results"]] == [fact["id"]]
     f = c.post(f"/v1/memories/{acme}/recall", headers=ADA, json={
@@ -103,6 +103,22 @@ def test_remember_recall_revise_history_and_as_of(c, tree):
     assert [(h["version"], h["status"]) for h in hist] == [(1, "superseded"), (2, "active")]
     assert "March" in hist[0]["content"][0]["text"] and "April" in hist[1]["content"][0]["text"]
     assert "March" in c.get(f"/v1/memories/{acme}/records/{fact['id']}", headers=ADA, params={"as_of": hist[0]["time"]["written_at"]}).json()["content"][0]["text"]
+
+
+def test_a_question_asked_of_the_parent_finds_the_child_and_names_it(c, tree):
+    c.post(f"/v1/memories/{tree['team']}/records", headers=ADA, json={"type": "fact", "content": "The sales kickoff is in Lisbon in May."})
+    for _ in range(20):
+        r = c.post(f"/v1/memories/{tree['team']}/recall", headers=ADA, json={"query": "renewal month and kickoff city"}).json()
+        where = {x["memory"]["id"] for x in r["results"]}
+        if where == {tree["team"], tree["acme"]}:
+            break
+        time.sleep(2)
+    assert where == {tree["team"], tree["acme"]}, r
+    assert all(x["memory"]["name"].endswith("(live test)") for x in r["results"])
+    alone = c.post(f"/v1/memories/{tree['team']}/recall", headers=ADA, json={"query": "renewal month and kickoff city", "depth": 0}).json()
+    assert {x["memory"]["id"] for x in alone["results"]} == {tree["team"]}
+    up = c.post(f"/v1/memories/{tree['acme']}/recall", headers=ADA, json={"query": "kickoff city"}).json()
+    assert tree["team"] not in {x["memory"]["id"] for x in up["results"]}          # never looks above
 
 
 def test_a_record_of_one_memory_cannot_be_read_through_another(c, tree):
