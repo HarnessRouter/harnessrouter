@@ -43,6 +43,7 @@ Yjs sidecar layer on next.
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import http.client
 import http.server
@@ -76,6 +77,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 import environments   # the read-only project layer a turn may name (runner/environments.py)
+import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
 
 app = FastAPI(title="harness-runner")
 
@@ -1928,6 +1930,20 @@ def _claude_thinking_env(model: str) -> dict:
     env = {"CLAUDE_CODE_EFFORT_LEVEL": "auto"}
     if _CLAUDE_NO_THINKING.search(model or ""):
         env["MAX_THINKING_TOKENS"] = "0"
+    # A level the turn asked for (runner/reasoning.py has the levels and the measurements). The CLI
+    # has two switches and each model takes one of them: a token budget for the model that refuses
+    # an effort (haiku-4.5), an effort for the rest, and a budget of zero for "none" on any.
+    thinking = _TURN_THINKING.get()
+    level = reasoning.nearest(thinking["asked"], reasoning.levels_for(model)) if thinking else ""
+    if level == "none":
+        env["MAX_THINKING_TOKENS"] = "0"
+    elif level and re.search(r"haiku-4", model or "", re.I):
+        env["MAX_THINKING_TOKENS"] = str(reasoning._BUDGET.get(level, 1024))
+    elif level:
+        env.pop("MAX_THINKING_TOKENS", None)
+        env["CLAUDE_CODE_EFFORT_LEVEL"] = level
+    if level:
+        thinking["applied"] = level
     return env
 
 
@@ -2201,6 +2217,17 @@ def _codex_insert_top_level(cfg: str, value: str) -> str:
     return head + "\n" + value + sep + tail if sep else cfg + "\n" + value + "\n"
 
 
+def _codex_effort(model: str) -> str:
+    """Codex's `model_reasoning_effort` for this turn: the level the turn asked for, as the model
+    has it, else the instance's default (CODEX_REASONING_EFFORT). Codex writes it into every
+    request itself, so it holds on OpenAI's own endpoint and Azure's, which no relay sees."""
+    thinking = _TURN_THINKING.get()
+    level = reasoning.nearest(thinking["asked"], reasoning.levels_for(model)) if thinking else ""
+    if level:
+        thinking["applied"] = level
+    return level or CODEX_REASONING_EFFORT
+
+
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
                        env: dict, mcp_toml: str = "", resume: bool = False,
                        tools_disabled: list[str] | None = None) -> "pathlib.Path":
@@ -2251,7 +2278,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     # "responses" value; a custom-endpoint turn against chat-only would 404 clearly rather than
     # crash on config load.
     cfg = _CODEX_CONFIG_TMPL.format(
-        model=model, provider=f"hr-{p}", effort=CODEX_REASONING_EFFORT, ctx=CODEX_CONTEXT_WINDOW,
+        model=model, provider=f"hr-{p}", effort=_codex_effort(model), ctx=CODEX_CONTEXT_WINDOW,
         name=spec["name"], base_url=cli_base, env_key=spec["env_key"],
         wire_api=auth.wire_api or "responses")
     if _codex_namespace_tools_off(auth):
@@ -2464,6 +2491,12 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     # a loopback relay URL and a placeholder key — the credential never enters its environment.
     env["HR_DSH_BASE_URL"] = base
     env["HR_DSH_API_KEY"] = auth.api_key or ""
+    # The turn's thinking level: the driver's relay writes it into each call with the same function
+    # this relay uses (runner/reasoning.py), so what is recorded here is what it will apply.
+    thinking = _TURN_THINKING.get()
+    if thinking:
+        env["HR_DSH_REASONING_EFFORT"] = thinking["asked"]
+        thinking["applied"] = reasoning.level_on(reasoning.route_of(base), model, thinking["asked"])
     # The driver's own relay waits on the provider as long as this one does (dsh_driver._upstream_wait).
     env["HR_RELAY_UPSTREAM_TIMEOUT_S"] = f"{HR_RELAY_UPSTREAM_TIMEOUT_S:g}"
     # No system_prompt in the job: harness instructions land in AGENTS.md (dsh reads it via
@@ -3136,6 +3169,19 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
 # turn (a few dozen bytes per turn, process lifetime — the sandbox recycles long before this
 # matters).
 _HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock()}
+# The thinking level of the turn being built: {"asked": level, "applied": ""} while /turn runs a
+# backend's builder, None for a turn that asked for none. Every route registered meanwhile carries
+# the level, and a backend whose calls never pass the relay (Claude Code, Codex on OpenAI's own
+# endpoint) writes what it set into "applied". A context variable, so two turns being built at once
+# never read each other's.
+_TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_thinking", default=None)
+
+
+def _turn_effort() -> dict:
+    """The route flag that carries the turn's level, {} for a turn that asked for none: such a
+    turn's routes are what they were before a level existed."""
+    t = _TURN_THINKING.get()
+    return {"effort": t["asked"]} if t and t.get("asked") else {}
 
 
 def _with_anthropic_cache(body: bytes) -> bytes:
@@ -4023,13 +4069,21 @@ def _usage_fields(u) -> dict:
         except (TypeError, ValueError):
             return 0
 
+    def thought(details) -> dict:
+        # the provider's own count of what it spent thinking, where it gives one (it is part of the
+        # output count on OpenAI's shapes; Anthropic gives none)
+        if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
+            return {"reasoning_tokens": n(details["reasoning_tokens"])}
+        return {}
+
     if "prompt_tokens" in u or "completion_tokens" in u:
         det = u.get("prompt_tokens_details")
         cached = n(det.get("cached_tokens")) if isinstance(det, dict) else 0
         return {"input_tokens": max(n(u.get("prompt_tokens")) - cached, 0),
-                "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached}
+                "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached,
+                **thought(u.get("completion_tokens_details"))}
     if "input_tokens" in u or "output_tokens" in u:
-        out = {}
+        out = thought(u.get("output_tokens_details"))
         for src, dst in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
                          ("cache_read_input_tokens", "cache_read_tokens"),
                          ("cache_creation_input_tokens", "cache_write_tokens")):
@@ -4039,7 +4093,8 @@ def _usage_fields(u) -> dict:
     if "promptTokenCount" in u or "candidatesTokenCount" in u:
         cached = n(u.get("cachedContentTokenCount"))
         return {"input_tokens": max(n(u.get("promptTokenCount")) - cached, 0),
-                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached}
+                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached,
+                **({"reasoning_tokens": n(u["thoughtsTokenCount"])} if u.get("thoughtsTokenCount") is not None else {})}
     return {}
 
 
@@ -4152,6 +4207,33 @@ def _fill_relay_usage(ev: dict, env: dict) -> None:
     cached = ("cache_read_tokens", "cache_write_tokens")
     if not own or (any(relay.get(k) for k in cached) and not any((own or {}).get(k) for k in cached)):
         ev["usage"] = relay
+
+
+def _stamp_thinking(ev: dict, env: dict, rec: dict) -> None:
+    """What the turn asked for and what was applied, on its result, with the provider's own count of
+    thinking tokens where it gave one. Nothing is added to a turn that asked for no level.
+
+    Applied is read off the turn's route first (what the relay actually wrote into the calls of the
+    turn's own model, "" when the model or the route has no measured setting or the provider refused
+    it), then from what a backend that never passes the relay set for its CLI. "default" says nothing
+    was applied and the model ran as it does without a level."""
+    relay = _relay_usage(env)
+    if relay.get("reasoning_tokens") is not None and isinstance(ev.get("usage"), dict):
+        ev["usage"].setdefault("reasoning_tokens", relay["reasoning_tokens"])
+    asked = rec.get("reasoning")
+    if not isinstance(asked, dict) or not asked.get("asked"):
+        return
+    applied = str(asked.get("applied") or "")
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            seen = (route[2] or {}).get("effort_applied") if route else None
+            if isinstance(seen, dict) and seen:
+                model = str(rec.get("model") or "")
+                mine = [lv for m, lv in seen.items() if m == model or reasoning.bare(m) == reasoning.bare(model)]
+                applied = (mine or list(seen.values()))[-1] or ""
+                break
+    ev["reasoning"] = {"effort": asked["asked"], "applied": applied or "default"}
 
 
 def _relay_usage(env: dict) -> dict:
@@ -4285,6 +4367,21 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             if fixed != body:
                 body = fixed
                 headers["content-length"] = str(len(body))
+        # The thinking level the turn asked for, written the way this route and this model take it
+        # (runner/reasoning.py). Last of the body's changes, so it is what the provider reads. A
+        # turn that asked for none never reaches here: its body leaves as the client wrote it.
+        plain = None            # the body without the level, kept while the level is on trial
+        effort_model = str(flags.get("model") or "") if flags.get("google_native") else str(_body_model)
+        if (flags.get("effort") and body is not None and self.command == "POST"
+                and not flags.get(f"effort_refused:{effort_model}")):
+            shape = reasoning.shape_of(tail)
+            if shape:
+                leveled, applied = reasoning.apply(body, shape, base, flags["effort"], model=effort_model)
+                flags.setdefault("effort_applied", {})[effort_model] = applied
+                if applied:
+                    plain, body = body, leveled
+                    headers["content-length"] = str(len(body))
+        effort_back = False     # the level was taken out after a refusal; a success now means it was the cause
         resp = None
         tried_slim = False
         dropped_once = False
@@ -4293,12 +4390,27 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                                          method=self.command, headers=headers)
             try:
                 resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
+                if effort_back:
+                    # the provider took the call without the level: not offered again for this model
+                    flags[f"effort_refused:{effort_model}"] = True
+                    flags.setdefault("effort_applied", {})[effort_model] = ""
+                    print(f"[relay] provider refused the thinking level {flags.get('effort')!r} for "
+                          f"model={effort_model}; the call went at the model's default", flush=True)
                 if attempt > 0 and tried_slim:
                     # the blind no-stream_options retry is part of what made this route work
                     flags["drop_stream_options"] = True
                 break
             except urllib.error.HTTPError as e:
                 data = e.read()
+                if plain is not None and attempt < 2 and e.code in (400, 422):
+                    # A level must never be what fails a call. The body goes again as the client
+                    # wrote it; if that is answered, the level was the cause and is dropped for this
+                    # model (above); if it is refused too, the cause is elsewhere and the repairs
+                    # below see the client's own body, as they would have without a level.
+                    body, plain, effort_back = plain, None, True
+                    headers["content-length"] = str(len(body))
+                    continue
+                effort_back = False
                 renamed = _rename_max_tokens(body) if body is not None else None
                 if (attempt < 2 and e.code == 400 and b"max_completion_tokens" in data
                         and renamed is not None and renamed != body):
@@ -4802,13 +4914,15 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
         _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
-                                        {"google_native": True, "model": model, "native_model": native_model})
+                                        {"google_native": True, "model": model, "native_model": native_model,
+                                         **_turn_effort()})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
                         stream_usage: bool = False, gemini_schemas: bool = False,
-                        usage_no_nulls: bool = False, exact_base: bool = False) -> tuple[str, str]:
+                        usage_no_nulls: bool = False, exact_base: bool = False,
+                        aux: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -4819,7 +4933,9 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
     answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
-    was calling that base directly before it had a route (Codex): the same URL, with the relay between."""
+    was calling that base directly before it had a route (Codex): the same URL, with the relay between.
+    `aux` marks a route for a helper model (hermes's image questions): the turn's thinking level is
+    the main model's and stays off it."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -4837,7 +4953,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                                         {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                                          "stream_usage": bool(stream_usage),
                                          "gemini_schemas": bool(gemini_schemas),
-                                         "usage_no_nulls": bool(usage_no_nulls)})
+                                         "usage_no_nulls": bool(usage_no_nulls),
+                                         **({} if aux else _turn_effort())})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -4887,7 +5004,7 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         vision: dict = {"provider": vp, "model": str(vision_auth["model"])}
         vkey, vbase = vision_auth.get("api_key") or "", vision_auth.get("base_url") or ""
         if vp == "openai-api" and vkey and vbase:
-            vbase, vkey = _hermes_relay_route(vbase, vkey)
+            vbase, vkey = _hermes_relay_route(vbase, vkey, aux=True)
         if vbase:
             vision["base_url"] = vbase
         if vkey:
@@ -8712,6 +8829,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                         ev["model"] = served
                 if ev.get("type") == "result":
                     _fill_relay_usage(ev, env)
+                    _stamp_thinking(ev, env, rec)
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -8741,6 +8859,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     ev["model"] = served
             if ev.get("type") == "result":
                 _fill_relay_usage(ev, env)
+                _stamp_thinking(ev, env, rec)
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
@@ -9058,8 +9177,10 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         res_txt = state["final"]
     else:
         res_txt = "\n\n".join(x for x in (state["final"].strip(), err_txt) if x)[:4000] or err_txt
-    append({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
-            "result": res_txt, "usage": usage})   # surface the error in the trace
+    ev = {"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+          "result": res_txt, "usage": usage}      # surface the error in the trace
+    _stamp_thinking(ev, env, rec)
+    append(ev)
     rec["result"] = state["final"]
     rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
                      else "done" if ok else "failed")
@@ -9355,6 +9476,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     if served:
         ev["model"] = served
     _fill_relay_usage(ev, env)
+    _stamp_thinking(ev, env, rec)
     append(ev)
     rec["exit_code"] = rc
     rec["result"] = final
@@ -9747,6 +9869,7 @@ class TurnReq(BaseModel):
     vision_auth: dict | None = None        # hermes: {provider, model, base_url, api_key} for its image questions
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
     environment: dict | None = None        # {id, slug, entry}: the project layer at /env/<slug>, read-only (environments.py)
+    reasoning_effort: str | None = None    # how much the model thinks this turn: one of reasoning.LEVELS; unset = the model's default
 
 
 @app.post("/turn")
@@ -9827,6 +9950,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # The harness's own variables under the runner's, so nothing a caller names shadows the
     # runner's credentials or paths; the platform's HR_ names come after and win (below).
     env = {**_caller_env(req.env), **_child_env()}
+    # The thinking level, for whatever the builder below registers or configures. Set for every
+    # turn, so a turn that asked for none also clears what an earlier one left in this context.
+    effort = str(req.reasoning_effort or "").strip().lower()
+    turn_thinking = {"asked": effort, "applied": ""} if effort in reasoning.LEVELS else None
+    _TURN_THINKING.set(turn_thinking)
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can
     # only carry one credential. The imagegen skill's wrapper reads these and passes them to the
@@ -10035,6 +10163,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                     "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
         _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
                            "backend": backend, "model": model, "started": time.time(),
+                           "reasoning": turn_thinking,
                            # the values the record may not carry (see get_turn)
                            "secrets": _turn_secrets(_caller_env(req.env), req.env_secret)}
         if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
