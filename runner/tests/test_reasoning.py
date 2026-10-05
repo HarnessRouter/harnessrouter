@@ -168,7 +168,7 @@ class _Upstream:
     def route(self, asked, monkeypatch):
         """A route to this provider for a turn that asked for `asked`, measured as OpenRouter is."""
         monkeypatch.setattr(reasoning, "route_of", lambda base: "openrouter")
-        token = rs._TURN_THINKING.set({"asked": asked, "applied": ""} if asked else None)
+        token = rs._TURN_THINKING.set({"asked": asked, "applied": "", "routes": []})
         try:
             relay, tok = rs._hermes_relay_route(f"http://127.0.0.1:{self.srv.server_port}/v1", "sk-real")
         finally:
@@ -248,30 +248,46 @@ def test_a_refusal_that_is_not_about_the_level_is_the_clients_to_see_and_blames_
 # ── the turn's record, and the backends whose calls never pass the relay ──────────────────────
 
 def _thinking(asked):
-    return rs._TURN_THINKING.set({"asked": asked, "applied": ""})
+    return rs._TURN_THINKING.set({"asked": asked, "applied": "", "routes": []})
 
 
 def test_the_result_says_what_was_asked_and_what_was_applied():
-    tok = "hr-relay-test-stamp"
-    rs._HERMES_RELAY["routes"][tok] = ("https://x/v1", "k", {
-        "effort": "minimal", "effort_applied": {"aux/model": "", "openai/gpt-5.4": "low"},
-        "usage": {"input_tokens": 1, "output_tokens": 9}, "reasoning_tokens": 7})
+    """Read off the routes the turn registered, wherever the backend keeps its placeholder: pi and
+    omp write theirs into a file, and a lookup through the turn's environment recorded "default"
+    for a level that had been applied (the thinking column on a candidate, 2026-10-05)."""
+    flags = {"effort": "minimal", "effort_applied": {"aux/model": "", "openai/gpt-5.4": "low"},
+             "usage": {"input_tokens": 1, "output_tokens": 9}, "reasoning_tokens": 7}
+    rec = {"model": "openai/gpt-5.4", "reasoning": {"asked": "minimal", "applied": "", "routes": [flags]}}
+    ev = {"type": "result", "usage": {"input_tokens": 1, "output_tokens": 9}}
+    rs._stamp_thinking(ev, rec)
+    assert ev["reasoning"] == {"effort": "minimal", "applied": "low"} and ev["usage"]["reasoning_tokens"] == 7
+    # nothing was applied (an unmeasured model, or a refusal): the record says so
+    flags["effort_applied"] = {"openai/gpt-5.4": ""}
+    ev = {"type": "result"}
+    rs._stamp_thinking(ev, rec)
+    assert ev["reasoning"] == {"effort": "minimal", "applied": "default"}
+    # a backend that set its own CLI, with no route at all
+    ev = {"type": "result"}
+    rs._stamp_thinking(ev, {"model": "claude-haiku-4-5", "reasoning": {"asked": "high", "applied": "high", "routes": []}})
+    assert ev == {"type": "result", "reasoning": {"effort": "high", "applied": "high"}}
+    # a turn that asked for no level says nothing about one, and still carries the provider's count
+    ev = {"type": "result"}
+    rs._stamp_thinking(ev, {"model": "openai/gpt-5.4", "reasoning": {"asked": "", "applied": "", "routes": [flags]}})
+    assert ev == {"type": "result", "usage": {"reasoning_tokens": 7}}
+
+
+def test_a_turns_routes_are_remembered_without_its_environment():
+    token = _thinking("low")
+    tok = aux = ""
     try:
-        ev = {"type": "result", "usage": {"input_tokens": 1, "output_tokens": 9}}
-        rs._stamp_thinking(ev, {"K": tok}, {"model": "openai/gpt-5.4", "reasoning": {"asked": "minimal", "applied": ""}})
-        assert ev["reasoning"] == {"effort": "minimal", "applied": "low"}
-        assert ev["usage"]["reasoning_tokens"] == 7
-        # nothing was applied (an unmeasured model, or a refusal): the record says so
-        rs._HERMES_RELAY["routes"][tok][2]["effort_applied"] = {"openai/gpt-5.4": ""}
-        ev = {"type": "result"}
-        rs._stamp_thinking(ev, {"K": tok}, {"model": "openai/gpt-5.4", "reasoning": {"asked": "high", "applied": ""}})
-        assert ev["reasoning"] == {"effort": "high", "applied": "default"}
-        # a turn that asked for no level says nothing about one
-        ev = {"type": "result"}
-        rs._stamp_thinking(ev, {"K": tok}, {"model": "openai/gpt-5.4", "reasoning": None})
-        assert "reasoning" not in ev
+        _, tok = rs._hermes_relay_route("https://ai-gateway.vercel.sh/v1", "sk-real")
+        _, aux = rs._hermes_relay_route("https://ai-gateway.vercel.sh/v1", "sk-real", aux=True)
+        routes = rs._TURN_THINKING.get()["routes"]
+        assert len(routes) == 1 and routes[0] is rs._HERMES_RELAY["routes"][tok][2] and routes[0]["effort"] == "low"
+        assert "effort" not in rs._HERMES_RELAY["routes"][aux][2]          # a helper model's route
     finally:
-        rs._HERMES_RELAY["routes"].pop(tok, None)
+        rs._TURN_THINKING.reset(token)
+        rs._HERMES_RELAY["routes"].pop(tok, None); rs._HERMES_RELAY["routes"].pop(aux, None)
 
 
 def test_claude_code_gets_its_own_switch_by_model():
@@ -288,7 +304,7 @@ def test_claude_code_gets_its_own_switch_by_model():
         assert rs._claude_thinking_env("claude-sonnet-5-5")["MAX_THINKING_TOKENS"] == "0"
     finally:
         rs._TURN_THINKING.reset(token)
-    token = rs._TURN_THINKING.set(None)
+    token = _thinking("")
     try:                                                                # no level asked: as before
         assert rs._claude_thinking_env("claude-sonnet-5-5") == {"CLAUDE_CODE_EFFORT_LEVEL": "auto"}
         assert rs._claude_thinking_env("claude-opus-4-8") == {"CLAUDE_CODE_EFFORT_LEVEL": "auto", "MAX_THINKING_TOKENS": "0"}
@@ -298,7 +314,7 @@ def test_claude_code_gets_its_own_switch_by_model():
 
 def test_codex_writes_the_level_into_its_own_config(tmp_path):
     def cfg(model, asked):
-        token = rs._TURN_THINKING.set({"asked": asked, "applied": ""} if asked else None)
+        token = rs._TURN_THINKING.set({"asked": asked, "applied": "", "routes": []})
         try:
             home = tmp_path / f"{model}-{asked or 'unset'}"
             home.mkdir()
