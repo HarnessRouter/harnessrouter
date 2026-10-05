@@ -89,7 +89,7 @@ class Mem0(mp.Provider):
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "enforced_filter", "derivation": "write_time",
                 "observe": {"keeps_episodes": False, "answers": "job"},
-                "recall": {"signals": ["query", "text", "filters"], "abstain": False, "max_depth": 0,
+                "recall": {"signals": ["query", "text", "filters"], "abstain": False,
                            "filters": {"native": ["eq on type and attributes.*", "gte/lte/gt/lt on time.written_at"],
                                        "applied_after_ranking": "every other filter"}},
                 "history": {"content": "versions", "structure": "none"}, "as_of": "one record",
@@ -305,10 +305,13 @@ class Mem0(mp.Provider):
         versions[-1]["time"]["invalidated_at"] = head["time"]["invalidated_at"]
         return versions
 
-    def _filters(self, mid: str, req: dict, degraded: list[str]) -> tuple[dict, list]:
-        """(what mem0 is asked, what is left to apply here). The memory's id is always the first
-        clause: nothing a caller sends can remove it."""
-        clauses, later = [{"user_id": mid}], []
+    def _filters(self, mid, req: dict, degraded: list[str]) -> tuple[dict, list]:
+        """(what mem0 is asked, what is left to apply here). The memory's id (or the ids, for a
+        question asked of several memories) is always the first clause: nothing a caller sends can
+        remove it."""
+        scope = {"user_id": mid} if isinstance(mid, str) else \
+            ({"user_id": mid[0]} if len(mid) == 1 else {"OR": [{"user_id": x} for x in mid]})
+        clauses, later = [scope], []
         types = [t for t in (req.get("types") or []) if t]
         if len(types) == 1:
             clauses.append({"metadata": {_RESERVED + "type": types[0]}})
@@ -349,17 +352,24 @@ class Mem0(mp.Provider):
         return {"records": rows, "next": str(page + 1) if doc.get("next") else None}
 
     async def recall(self, mid, req):
+        res = await self.recall_many([mid], req)
+        return res
+
+    async def recall_many(self, mids, req):
+        """mem0 searches several scopes in one request (an OR of user_ids, measured), so a subtree
+        is one call, and each hit says which memory it is in."""
+        mid = list(mids)
         degraded: list[str] = []
         if req.get("as_of"):
             degraded.append("as_of:not_supported")
-        if int(req.get("depth") or 0) > 0:
-            degraded.append("depth:capped_at_0")
         query, text = str(req.get("query") or "").strip(), str(req.get("text") or "").strip()
         flt, later = self._filters(mid, req, degraded)
         limit = int(req.get("limit") or 8)
         if not query and not text:           # fields alone: mem0 has no ranking to do, so this is a listing
-            rows = (await self.list(mid, {**req, "as_of": None, "limit": limit}))["records"]
-            return {"results": [{"record": x, "score": 1.0, "why": ["filters"]} for x in rows],
+            r = await self._call("POST", "/v3/memories/", params={"page": 1, "page_size": limit}, body={"filters": flt})
+            rows = [(i, self._out(i)) for i in ((r.json() or {}).get("results") or [] if r.status_code == 200 else [])]
+            return {"results": [{"record": x, "memory_id": str(i.get("user_id") or ""), "score": 1.0, "why": ["filters"]}
+                                for i, x in rows if all(mp.matches(x, f) for f in later)],
                     "degraded": degraded, "abstain": False}
         if query and text:
             degraded.append("text:searched_with_the_query")       # one fused search, not two signals
@@ -376,5 +386,7 @@ class Mem0(mp.Provider):
             why = [w for w, on in (("query", query and float(parts.get("semantic") or 0) > 0),
                                    ("text", float(parts.get("bm25") or 0) > 0),
                                    ("filters", bool(req.get("filters")))) if on]
-            results.append({"record": rec, "score": item.get("score"), "why": why})
+            if str(item.get("user_id") or "") not in mid:
+                continue                    # not one of the memories asked: never returned, whatever mem0 said
+            results.append({"record": rec, "memory_id": str(item["user_id"]), "score": item.get("score"), "why": why})
         return {"results": results[:limit], "degraded": degraded, "abstain": False}

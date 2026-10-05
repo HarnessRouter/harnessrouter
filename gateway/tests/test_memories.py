@@ -148,20 +148,52 @@ def test_the_two_ways_to_write_and_a_writer_the_client_cannot_supply(people, tre
     tree["fact"], tree["episode"] = fact["id"], eps[0]["id"]
 
 
-def test_recall_acts_on_one_memory_and_says_where_the_caller_can_go(people, tree):
+def test_a_question_searches_the_subtree_and_each_answer_names_where_it_is(people, tree):
     ada, ben = people
     r = ada.post(f"/v1/memories/{tree['acme']}/recall", json={"query": "when does Acme renew?"}).json()
     assert r["results"][0]["record"]["content"][0]["text"].startswith(("Acme renews", "Dana from Acme"))
     assert r["results"][0]["why"] == ["query"] and r["abstain"] is False and r["degraded"] == []
+    assert r["results"][0]["memory"] == {"id": tree["acme"], "name": "Acme"}
     assert r["parent"]["id"] == tree["sales"] and r["children"] == []
-    # one memory: the parent holds none of the child's records
-    up = ada.post(f"/v1/memories/{tree['sales']}/recall", json={"query": "when does Acme renew?"}).json()
-    assert up["results"] == [] and up["abstain"] is True
-    assert [c["id"] for c in up["children"]] == [tree["acme"]] and up["parent"]["id"] == tree["company"]
-    assert up["children"][0]["description"] == "Everything about the Acme account."
+    # asked two levels up, the same records are found, and each says which memory holds it: the
+    # place to walk from
+    top = ada.post(f"/v1/memories/{tree['company']}/recall", json={"query": "when does Acme renew?"}).json()
+    assert top["abstain"] is False and {x["memory"]["id"] for x in top["results"]} == {tree["acme"]}
+    assert {c["id"] for c in top["children"]} == {tree["sales"], tree["private"]}
+    # depth bounds how far below: 0 is this memory alone, 1 its children
+    alone = ada.post(f"/v1/memories/{tree['company']}/recall", json={"query": "when does Acme renew?", "depth": 0}).json()
+    assert alone["results"] == [] and alone["abstain"] is True
+    one = ada.post(f"/v1/memories/{tree['company']}/recall", json={"query": "when does Acme renew?", "depth": 1}).json()
+    assert one["results"] == []
+    assert ada.post(f"/v1/memories/{tree['sales']}/recall", json={"query": "when does Acme renew?", "depth": 1}).json()["results"]
+    assert ada.post(f"/v1/memories/{tree['sales']}/recall", json={"query": "x", "depth": -1}).status_code == 422
+    # it never looks up: a child does not find what its parent holds
+    ada.post(f"/v1/memories/{tree['sales']}/records", json={"type": "fact", "content": "The sales kickoff is in Lisbon."})
+    assert ada.post(f"/v1/memories/{tree['acme']}/recall", json={"text": "Lisbon"}).json()["results"] == []
     # Ben reads Sales and below: his walk up ends where his reach does, and looks like a root
     b = ben.post(f"/v1/memories/{tree['sales']}/recall", json={"text": "pricing"}).json()
     assert "parent" not in b and [c["id"] for c in b["children"]] == [tree["acme"]]
+
+
+def test_a_question_never_searches_what_the_caller_may_not_read(people, tree):
+    ada, ben = people
+    ada.post(f"/v1/memories/{tree['private']}/records", json={"type": "note", "content": "Zanzibar offsite budget is secret."})
+    deep = ada.post("/v1/memories", json={"name": "Shared corner", "parent_id": tree["private"]}).json()
+    ada.post(f"/v1/memories/{deep['id']}/records", json={"type": "note", "content": "Zanzibar flights are booked."})
+    g = ada.post(f"/v1/memories/{tree['company']}/grants",
+                 json={"principal": "member:ben@example.com", "privileges": ["read"]}).json()
+    ask = lambda who: who.post(f"/v1/memories/{tree['company']}/recall", json={"text": "Zanzibar"}).json()   # noqa: E731
+    assert {x["memory"]["id"] for x in ask(ada)["results"]} == {tree["private"], deep["id"]}
+    assert ask(ben)["results"] == []                    # the restricted branch is not searched for him
+    # a grant on a node inside the branch: that node is searched, the one between is not and is not named
+    g2 = ada.post(f"/v1/memories/{deep['id']}/grants",
+                  json={"principal": "member:ben@example.com", "privileges": ["read"]}).json()
+    got = ask(ben)["results"]
+    assert [x["memory"] for x in got] == [{"id": deep["id"], "name": "Shared corner"}]
+    assert tree["private"] not in str(ask(ben))
+    ada.delete(f"/v1/memories/{deep['id']}/grants/{g2['id']}")
+    ada.delete(f"/v1/memories/{tree['company']}/grants/{g['id']}")
+    ada.delete(f"/v1/memories/{deep['id']}")
 
 
 def test_the_three_signals_and_what_a_provider_did_not_do(people, tree):
@@ -173,7 +205,7 @@ def test_the_three_signals_and_what_a_provider_did_not_do(people, tree):
     both = rec(query="when acme renews", text="march", types=["fact"])
     assert [x["record"]["id"] for x in both["results"]] == [tree["fact"]] and both["results"][0]["why"] == ["text", "query"]
     assert rec(query="what is the weather on Mars")["abstain"] is True
-    assert rec(query="renew", depth=3)["degraded"] == ["depth:capped_at_0"]
+    assert rec(query="renew", depth=3)["degraded"] == []
     r = ada.post(f"/v1/memories/{tree['acme']}/recall", json={})
     assert r.status_code == 422
 

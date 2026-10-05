@@ -34,9 +34,12 @@ class Mem0Stub:
     def _item(self, m):
         return {k: m[k] for k in ("id", "memory", "user_id", "metadata", "created_at", "updated_at", "expiration_date")}
 
-    def _scope(self, flt) -> tuple[str, list[dict]]:
+    def _scope(self, flt) -> tuple[set, list[dict]]:
+        """The scope is the first clause: one user_id, or an OR of them (several scopes in one request)."""
         clauses = flt.get("AND") if "AND" in flt else [flt]
-        return next(c["user_id"] for c in clauses if "user_id" in c), [c for c in clauses if "user_id" not in c]
+        first = clauses[0]
+        users = {first["user_id"]} if "user_id" in first else {x["user_id"] for x in first["OR"]}
+        return users, clauses[1:]
 
     def _keep(self, m, clauses) -> bool:
         for c in clauses:
@@ -79,7 +82,7 @@ class Mem0Stub:
         if path in ("/v3/memories/search/", "/v3/memories/"):
             try:
                 user, clauses = self._scope(body["filters"])
-                rows = [m for m in self.mem.values() if m["user_id"] == user and self._keep(m, clauses)
+                rows = [m for m in self.mem.values() if m["user_id"] in user and self._keep(m, clauses)
                         and (body.get("show_expired") or not m["expiration_date"])]
             except ValueError as e:
                 return httpx.Response(400, json={"error": str(e)})
@@ -158,6 +161,26 @@ def test_every_search_and_listing_carries_the_memorys_id_and_nothing_can_remove_
         assert call.status_code == 404 and call.json()["error"]["code"] == "memory_record_not_found"
     assert c.post(f"/v1/memories/{a}/erase", headers=ADA, json={"record_ids": [rb["id"]]}).json()["erased"] == []
     assert c.get(f"/v1/memories/{b}/records/{rb['id']}", headers=ADA).json()["content"] == [{"type": "text", "text": "Beta ships on Monday."}]
+
+
+def test_a_subtree_is_one_request_to_mem0_and_each_hit_says_which_memory_holds_it(world):
+    c, stub, a, b = world
+    kid = c.post("/v1/memories", headers=ADA, json={"name": "Below A", "parent_id": a}).json()["id"]
+    c.post(f"/v1/memories/{a}/records", headers=ADA, json={"type": "fact", "content": "Gamma ships on Tuesday."})
+    c.post(f"/v1/memories/{kid}/records", headers=ADA, json={"type": "fact", "content": "Delta ships on Wednesday."})
+    c.post(f"/v1/memories/{b}/records", headers=ADA, json={"type": "fact", "content": "Epsilon ships on Thursday."})
+    stub.calls.clear()
+    got = c.post(f"/v1/memories/{a}/recall", headers=ADA, json={"query": "ships on Wednesday", "types": ["fact"]}).json()
+    where = {x["record"]["content"][0]["text"].split()[0]: x["memory"]["id"] for x in got["results"]}
+    assert where["Gamma"] == a and where["Delta"] == kid and "Epsilon" not in where
+    assert got["results"][0]["memory"] == {"id": kid, "name": "Below A"}
+    searches = [body["filters"] for _, path, body in stub.calls if path == "/v3/memories/search/"]
+    assert len(searches) == 1 and searches[0]["AND"][0] == {"OR": [{"user_id": a}, {"user_id": kid}]}
+    # fields alone over the subtree is one listing, scoped the same way
+    stub.calls.clear()
+    only = c.post(f"/v1/memories/{a}/recall", headers=ADA, json={"filters": {"field": "type", "op": "eq", "value": "fact"}, "depth": 0}).json()
+    assert {x["memory"]["id"] for x in only["results"]} == {a}
+    c.delete(f"/v1/memories/{kid}", headers=ADA)
 
 
 def test_what_the_gateway_stamped_survives_the_round_trip_and_the_key_never_does(world):

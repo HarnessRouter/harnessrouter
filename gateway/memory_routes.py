@@ -83,12 +83,17 @@ async def _records_out(org, mid, records, pr) -> list[dict]:
     return [await mp.present(org, mid, r, pr, seen) for r in records]
 
 
-async def _answer(org, m, pr, res: dict) -> dict:
-    """A recall-shaped answer: the provider's results presented to this reader, and where the
-    reader can go from here."""
+async def _answer(org, m, pr, res: dict, places: dict | None = None) -> dict:
+    """A recall-shaped answer: the results presented to this reader, each with the memory it is
+    in (the place to walk from), and where the reader can go from the memory that was asked."""
     seen: dict = {}
-    results = [{"record": await mp.present(org, m["id"], x["record"], pr, seen),
-                "score": x.get("score"), "why": x.get("why") or []} for x in res.get("results") or []]
+    places = places or {str(m["id"]): m}
+    results = []
+    for x in res.get("results") or []:
+        mid = str(x.get("memory_id") or m["id"])
+        results.append({"record": await mp.present(org, mid, x["record"], pr, seen),
+                        "memory": {"id": mid, "name": (places.get(mid) or {}).get("name") or ""},
+                        "score": x.get("score"), "why": x.get("why") or []})
     return {"object": "memory.recall", "results": results, **await mp.neighbours(org, m, pr),
             "degraded": res.get("degraded") or [], "abstain": bool(res.get("abstain"))}
 
@@ -270,16 +275,18 @@ async def recall(mid: str, request: Request) -> dict:
     b = await _json(request)
     if not (b.get("query") or b.get("text") or b.get("filters")):
         raise _uhp_error(422, "memory_invalid", "Give a query, text or filters.")
-    req = {k: b.get(k) for k in ("query", "text", "filters", "types", "as_of", "include", "depth")}
+    req = {k: b.get(k) for k in ("query", "text", "filters", "types", "as_of", "include")}
     req["limit"] = max(1, min(int(b.get("limit") or 8), 100))
-    prov = await mp.provider_of(m)
-    signals = (prov.capabilities().get("recall") or {}).get("signals") or []
-    asked = [s for s in ("query", "text", "filters") if req.get(s)]
-    res = await prov.recall(mid, req)
-    # what was asked for and the provider does not do is said, whatever the adapter remembered to say
-    res["degraded"] = list(dict.fromkeys((res.get("degraded") or []) +
-                                         [f"{s}:not_supported" for s in asked if s not in signals]))
-    return await _answer(org, m, pr, res)
+    depth = b.get("depth")
+    if depth is not None and (not isinstance(depth, int) or isinstance(depth, bool) or depth < 0):
+        raise _uhp_error(422, "memory_invalid", "`depth` is a whole number of levels below this memory; 0 is this memory alone.", "depth")
+    # A question is asked of the whole subtree the caller may read: that is how a caller finds where
+    # to start. What it reads back names the memory each answer is in.
+    reach, cut = await mp.reach_below(org, m, pr, depth)
+    res = await mp.recall(org, reach, req)
+    if cut:
+        res["degraded"].append(f"subtree:capped_at_{mp.RECALL_MAX_MEMORIES}_memories")
+    return await _answer(org, m, pr, res, {str(x["id"]): x for x in reach})
 
 
 @router.get("/v1/memories/{mid}/records")
