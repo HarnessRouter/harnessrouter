@@ -2826,6 +2826,24 @@ broker never removed anything of the thinking group (`reasoning_effort`, `provid
 `extra_body` all pass), which the hosted service pinned in a test and showed live: a Gemini model at
 `none` spent 0 thinking tokens through its broker and TokenRouter.
 
+Measured here in broker trust (a side container with `HR_SANDBOX_TRUST=broker`; the image's
+default is owner trust, where the agent holds the key and no broker is in the way). Claude Code with
+claude-haiku-4.5 through the broker and TokenRouter, output tokens of three runs per level:
+
+| | none | low | high |
+|---|---|---|---|
+| 0.30.1 | 690, 726, 768 | 838, 782, 689 | 931, 774, 712 |
+| with the fix | 730, 538, 824 | 2,277, 2,256, 1,686 | 2,284, 2,754, 3,801 |
+
+On 0.30.1 every turn recorded its level as applied and all nine spent what a turn with no level
+spends. hermes, pi and Codex with gpt-5.4 passed the column in broker trust before and after (their
+level rides `reasoning_effort` through the relay and the broker, which the gateway makes possible by
+naming the route): the first end-to-end run of the level behind this tree's own broker.
+
+The column's judge passed the 0.30.1 row: on output tokens "low below high" held by noise (2,309
+against 2,417). It now also asks, where output tokens stand in for a missing count, that low spend
+at least half again what none does; the 0.30.1 row fails it and every earlier pass still passes.
+
 The hosted column, as that session reported it (`run-column.py` from 915c834, one run per level,
 gpt-5.4 unless said; thinking tokens at none, low, high):
 
