@@ -256,6 +256,9 @@ between its two entities, labelled with the fact's text or its `attributes.predi
 relationship with nothing to say, such as a section belonging to its document, is a bare reference
 and needs no record of its own.
 
+A record names at most one `subject` and at most one `object`. A statement about two subjects is
+two records; a server refuses a record that names a second of either with `memory_invalid`.
+
 A provider keeps the entities and relationships it has and no more
 ([§10.2](#102-the-capability-document)). One that keeps none still has a graph: its records and
 the references between them.
