@@ -2,11 +2,15 @@
 """Prove the plugin path on every harness base, directly. No workflow, no fan out.
 
 For each base it creates a harness carrying the fixture package, runs one real task, checks the
-answer for the probe token, and deletes the harness. Two modes:
+answer for the probe token, and deletes the harness. Five modes:
 
   skills   the package carries only its Skill; every base must load it
   mcp      the package also declares a stdio MCP server; every base must call its tool (since
            #180/#182 every base takes a stdio server; pi's adapter and dsh's client spawn it)
+  rows     the same stdio server's second tool takes a list of free-form objects and answers its
+           token only when both rows arrive with their fields; otherwise it says what it received
+           (#394: some bases add an empty `properties` to the item's schema and some routes then
+           hand the tool [{}, {}]). Run it with --model on each connection that serves the model
   sse      the package declares an SSE server (a public probe); codex, dsh and goose reach it
            through the runner's bridge (#185), every other base natively
   http     the package declares a streamable-HTTP server (the same probe's /mcp end)
