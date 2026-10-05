@@ -17,13 +17,15 @@ _uhp_error = None
 
 
 _file_bytes = None          # app.py's reader of an uploaded file's bytes, bound by install()
+_on_grant = None            # app.py's hook after a grant is written, bound by install()
 
 
-def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None) -> None:
+def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None) -> None:
     """Bind the gateway's principal resolver, error envelope, graph backing and file store, and
-    mount the routes."""
-    global _principal, _uhp_error, _file_bytes
-    _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes = principal, uhp_error, graph, file_meta, file_bytes
+    mount the routes. `on_grant(org, principal)` runs after a grant is written: the gateway uses
+    it to give an agent that was just let into its first memory the tools to use it."""
+    global _principal, _uhp_error, _file_bytes, _on_grant
+    _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes, _on_grant = principal, uhp_error, graph, file_meta, file_bytes, on_grant
     if os.environ.get("HR_MEMORY_FIXTURE") == "1" and "fixture" not in mp.PROVIDERS:
         import memory_fixture
         mp.PROVIDERS["fixture"] = memory_fixture.FixtureProvider()
@@ -178,7 +180,10 @@ async def list_grants(mid: str, request: Request) -> dict:
 async def add_grant(mid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     b = await _json(request)
-    return await mp.grant(org, mid, pr, b.get("principal"), b.get("privileges") or [], member)
+    g = await mp.grant(org, mid, pr, b.get("principal"), b.get("privileges") or [], member)
+    if _on_grant:
+        await _on_grant(org, g["principal"])
+    return g
 
 
 @router.delete("/v1/memories/{mid}/grants/{gid}")

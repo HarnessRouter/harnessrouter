@@ -190,7 +190,7 @@ def test_what_the_gateway_stamped_survives_the_round_trip_and_the_key_never_does
         "attributes": {"hr_writer_id": "forged", "team": "x"},
         "references": [{"rel": "derived_from", "record_id": "some-id"}], "time": {"valid_from": "2026-01-01"}})
     rec = r.json()
-    assert rec["type"] == "procedure" and rec["written_by"] == {"kind": "member", "id": "ada@example.com"}
+    assert rec["type"] == "procedure" and rec["written_by"] == {"kind": "member", "id": "ada@example.com", "type": "human"}
     assert rec["attributes"] == {"team": "x"} and rec["time"]["valid_from"] == "2026-01-01"
     assert rec["references"][0]["record_id"] == "some-id"
     assert rec["content"] == [{"type": "text", "text": "Ask.\nConfirm."}]        # mem0 keeps one text per memory
