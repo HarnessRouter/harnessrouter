@@ -2182,7 +2182,8 @@
         },
         "principal": {
           "type": "string",
-          "description": "A typed identifier, `<kind>:<id>`; the kinds a server accepts are its own."
+          "pattern": "^(member|harness|group|x\\.[a-z0-9_.-]+):.+",
+          "description": "Who holds the grant, `<kind>:<id>`: `member`, `harness`, `group`, or a kind of the server's own, `x.`-prefixed."
         },
         "privileges": {
           "type": "array",
@@ -2329,9 +2330,7 @@
           }
         },
         "written_by": {
-          "type": "object",
-          "additionalProperties": true,
-          "description": "Stamped by the server from the authenticated caller."
+          "$ref": "#/$defs/MemoryWriter"
         },
         "references": {
           "type": "array",
@@ -2573,6 +2572,32 @@
           }
         }
       }
+    },
+    "MemoryWriter": {
+      "type": "object",
+      "description": "Who wrote a record, stamped by the server from the authenticated caller. `kind` and `id` joined by a colon are the principal a grant would name.",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "pattern": "^(member|harness|provider|x\\.[a-z0-9_.-]+)$"
+        },
+        "id": {
+          "type": "string"
+        },
+        "on_behalf_of": {
+          "type": "string",
+          "description": "When the provider wrote it: the principal whose observation it was derived from."
+        },
+        "consolidation_id": {
+          "type": "string",
+          "description": "When the provider wrote it: the consolidation run that concluded it."
+        }
+      },
+      "additionalProperties": true
     },
     "MemoryFilter": {
       "type": "object",
@@ -2935,8 +2960,7 @@
           "additionalProperties": true
         },
         "written_by": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/MemoryWriter"
         },
         "error": {
           "type": "string"
