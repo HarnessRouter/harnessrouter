@@ -2709,6 +2709,28 @@ tokens, where the turn has no thinking count: goose's and the DeepSeek Harness d
 give the relay one, and Anthropic gives none. On Gemini the provider left the count out of the answer
 that spent none (605 output tokens against 13 at the other levels: the answer written out).
 
+Claude Code's row is the weakest judge in the table and is read that way. Anthropic gives no thinking
+count, the level reaches the model as a budget (a ceiling, not a target) and the answer is written
+out at length, so one sample per level can cross: on Anthropic's own endpoint, three samples per level
+gave 791, 810 and 622 output tokens at none, 2,402, 1,700 and 2,128 at low, and 5,195, 2,838 and
+1,863 at high. Off is unmistakable; low below high holds on the sums (6,230 against 9,896) and not on
+every pair. The row above is the first run, through TokenRouter.
+
+**The same build, checked through the console and the API** (the candidate's image with the branch's
+runner and gateway, the day's last code):
+
+- The Thinking control on a harness's settings page, at 1440, 1024, 768 and 390 wide: in view, no
+  sideways scroll. Its options are the model's own (gpt-5.4: Model default, Off, Low, Medium, High,
+  Extra high; gpt-6.1-sol: the same without Off). Saved, reopened, still High. A level kept from
+  another model stays selected and the form says its tasks get the nearest one.
+- A task on that harness with no level of its own: `{"effort": "high", "applied": "high"}`, 15
+  thinking tokens. The same task asking for `none` itself: applied none. A value that is not a level:
+  400 "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh".
+- hermes with gpt-5.4, asked to write a 9,000 word file as its first action: completed after 619 s
+  with 13,340 output tokens, where 0.29.4 stopped it at 93 s.
+- CheetahClaws: 4 of 4 plain turns carry their usage.
+- A task sent with `backend: "claude-code"` completes, as with `backend: "claude"`.
+
 What "no level" means differs by base on the same model, which the column shows for the first time:
 gpt-5.4 does not think unless asked, and eleven bases leave it so; Codex asks for medium itself (its
 own config default), OpenHands asks for high for every model, and hermes, opencode and kilo ask for
