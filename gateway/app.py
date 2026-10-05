@@ -54,6 +54,7 @@ import sql_plane             # the read-only SQL data plane (gate, row cap, intr
 import memory_routes        # the Harness Memories sub-protocol (tree, access, provider seam)
 import memory_plane
 import memory_tools
+import memory_local
 import memory_mem0
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 
@@ -7728,7 +7729,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # marks as always relevant. Its size is recorded on the turn, per memory, in tokens.
     if task_memory:
         await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
-    _mem_section, _mem_primed = await memory_tools.doc_section(org, harness_id, await _harness_memories(harness_id, org, hv, sid=sid))
+    _mem_section, _mem_primed = await memory_tools.doc_section(
+        memory_local.Local(org, harness_id, await _harness_memories(harness_id, org, hv, sid=sid)))
     if _mem_section:
         agent_doc = (agent_doc + "\n\n" + _mem_section).strip()
         rec["memories"] = {"primed_tokens": _mem_primed}
@@ -16493,11 +16495,11 @@ async def memories_mcp(request: Request):
         return _jsonrpc_result(rid, _tool_text("No memories are attached to this agent. Ask the person to attach "
                                                "them; you cannot attach them yourself.", True))
     entries = await _harness_memories(hid, org, v, sid=sid)       # the harness's, and the one this session's task named
+    seam = memory_local.Local(org, hid, entries)      # the tools speak through a seam; here it is this gateway's own plane
     if method == "tools/list":
-        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(entries)})
+        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.languages())})
     args = params.get("arguments") or {}
-    text, is_error = await memory_tools.call(org, hid, entries, str(params.get("name") or ""),
-                                             args if isinstance(args, dict) else {})
+    text, is_error = await memory_tools.call(seam, str(params.get("name") or ""), args if isinstance(args, dict) else {})
     return _jsonrpc_result(rid, _tool_text(text, is_error))
 
 
