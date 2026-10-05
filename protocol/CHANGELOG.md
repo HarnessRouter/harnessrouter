@@ -84,6 +84,16 @@ The graph read without `around` starts from the records of the memory **and of w
 the scope a search has; the sixth patch's text said the memory alone, which returned nothing for a
 memory whose records are all kept in its children.
 
+A record names at most one `subject` and at most one `object`; a second of either is refused with
+`memory_invalid` (422). Stated because two implementations had to agree on it: the reference
+gateway kept such a record and a graph engine refused it.
+
+Two things the first server built from this chapter by another team read differently from the
+reference gateway, both the chapter's fault, both now said once: `supersedes` is the NUMBER of the
+version a version replaced (the example showed a record id, and the schema allowed either); and a
+reference the reader may not follow is `{ record_id, available: false }` with no `memory_id` (the
+chapter returned the memory's id, which tells the reader that the memory exists).
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,

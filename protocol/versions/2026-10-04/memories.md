@@ -182,7 +182,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
   "attributes": { "account": "acme" },
   "version": 2,
   "status": "active",
-  "supersedes": "hrec_11aa22bb33cc44dd55ee66ff77889900",
+  "supersedes": 1,
   "time": {
     "valid_from": "2026-09-30T00:00:00Z", "valid_to": null,
     "written_at": "2026-10-01T17:02:11Z", "invalidated_at": null
@@ -201,7 +201,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
 | `title` | One line that names the record: a document's heading, an entity's name, a fact's statement. Optional, at most 300 characters. A search matches it with the content. A record without one is named by how its content begins |
 | `content` | What the record says: an ordered list of parts, text and files ([§4.3](#43-content)). MAY be empty when the record has a title: a fact is often one sentence |
 | `attributes` | Structured fields. Free-form for core types; the type's schema for extension types ([§8](#8-types)) |
-| `version`, `status`, `supersedes` | A change appends a version and closes the one before it ([§5.3](#53-nothing-is-overwritten)). `status` is `active`, `superseded` or `forgotten` |
+| `version`, `status`, `supersedes` | A change appends a version and closes the one before it ([§5.3](#53-nothing-is-overwritten)). `version` counts from 1 and `supersedes` is the number of the version this one replaced, null on the first; a record keeps its `id` across versions. `status` is `active`, `superseded` or `forgotten` |
 | `time` | When it was true in the world (`valid_*`) and when the memory held it (`written_at`, `invalidated_at`). A provider without validity leaves `valid_*` null |
 | `written_by` | Who wrote it, `{ kind, id }` in the vocabulary of [§3](#who-acts-on-a-memory), stamped by the server from the authenticated caller; a client cannot supply it. When the provider wrote it, two more fields say why: `on_behalf_of`, the principal whose observation it was derived from, and `consolidation_id`, the run that concluded it ([§9.2](#92-consolidation-runs)) |
 | `references` | Other records this one points at ([§4.2](#42-references)) |
@@ -229,8 +229,11 @@ A reference names a record by `memory_id` and `record_id`. The two ends need not
 memory, or with the same provider.
 
 - A reference is resolved when it is **read**, with the reader's privileges. A reader without `read`
-  on the target memory receives `{ "memory_id", "record_id", "available": false }` and nothing
-  else.
+  on the target memory receives `{ "record_id", "available": false }` and nothing else: not what
+  the reference means, and not the id of the memory it leads into, since naming that memory would
+  say that it exists.
+- A reviser sets the references it can see. One it was shown as unavailable it can neither restate
+  nor remove: a server keeps it as it was through a revision by that caller.
 - Writing a reference does not require `read` on its target. A record promoted from a private
   memory into a shared one keeps its source, and only those who may read the source can follow it.
 
@@ -255,6 +258,9 @@ its own `derived_from` to the conversation it came from. A client MAY draw such 
 between its two entities, labelled with the fact's text or its `attributes.predicate`. A
 relationship with nothing to say, such as a section belonging to its document, is a bare reference
 and needs no record of its own.
+
+A record names at most one `subject` and at most one `object`. A statement about two subjects is
+two records; a server refuses a record that names a second of either with `memory_invalid`.
 
 A provider keeps the entities and relationships it has and no more
 ([§10.2](#102-the-capability-document)). One that keeps none still has a graph: its records and
@@ -527,7 +533,7 @@ draws them or an agent that asks what something is connected to.
       "to":   { "memory_id": "hmem_55d1…", "record_id": "hrec_dana…" },
       "rel": "subject", "available": true },
     { "from": { "memory_id": "hmem_55d1…", "record_id": "hrec_job…" },
-      "to":   { "memory_id": "hmem_9f02…", "record_id": "hrec_77a1…" },
+      "to":   { "record_id": "hrec_77a1…" },
       "available": false }
   ],
   "truncated": false,
@@ -539,7 +545,8 @@ draws them or an agent that asks what something is connected to.
   `from` the record that holds it, `to` the record it names.
 - Records are looked for in this memory and in what is below it that the caller may read, as a
   search does. An edge may lead into any memory. Its target is a node only when the caller may
-  read it; otherwise the edge is returned with `"available": false` and without its `rel`, and the
+  read it; otherwise the edge is returned with `"available": false`, without its `rel` and without the
+  memory its target is in, and the
   target is not a node. This is the rule of [§4.2](#42-references), unchanged.
 - `truncated` is `true` when there were more nodes than `limit`. `degraded` says what was cut
   short, as a search's does.
