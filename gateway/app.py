@@ -1016,10 +1016,14 @@ def _calibration_env(hv: dict | None, org: str, sid: str, timeout_s: int | None)
             "HR_CALIBRATION_TOKEN": _mint_calibration_token(sid, org, inner, ttl)}
 
 
-def _mint_turn_cred(sid: str, conn_name: str) -> str:
-    """Per-turn credential: sid.conn.exp.hmac — resolvable back to exactly one connection."""
+def _mint_turn_cred(sid: str, conn_name: str, level: str = "") -> str:
+    """Per-turn credential: sid.conn.exp.hmac — resolvable back to exactly one connection.
+
+    A fourth field names the thinking level the turn asked for, and is there only when it asked for
+    one: the broker keeps such a turn's thinking controls (see _strip_unsupported) and reads that
+    from the credential itself. A turn that asked for none carries the credential it always did."""
     exp = str(int(time.time()) + _BROKER_TTL_S)
-    body = f"{sid}|{conn_name}|{exp}"
+    body = f"{sid}|{conn_name}|{exp}" + (f"|{level}" if level else "")
     sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
     return f"hrt_{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
 
@@ -1031,13 +1035,25 @@ def _verify_turn_cred(tok: str) -> tuple[str, str] | None:
     try:
         b64, sig = tok[4:].rsplit(".", 1)
         body = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode()
-        sid, conn_name, exp = body.split("|")
+        sid, conn_name, exp = body.split("|")[:3]
     except Exception:  # noqa: BLE001 — malformed token is simply invalid
         return None
     good = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, good) or int(exp) < int(time.time()):
         return None
     return sid, conn_name
+
+
+def _turn_cred_level(tok: str) -> str:
+    """The thinking level a valid per-turn credential says its turn asked for, "" for none."""
+    if not _verify_turn_cred(tok):
+        return ""
+    try:
+        b64 = tok[4:].rsplit(".", 1)[0]
+        parts = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode().split("|")
+    except Exception:  # noqa: BLE001
+        return ""
+    return parts[3] if len(parts) > 3 and parts[3] in reasoning.LEVELS else ""
 
 
 # Every field in _AUTH_FIELDS that carries a credential. Removal is driven off THIS list, not off
@@ -1050,7 +1066,7 @@ _SECRET_AUTH_FIELDS = ("api_key", "aws_access_key_id", "aws_secret_access_key",
 SANDBOX_TRUST = os.environ.get("HR_SANDBOX_TRUST", "").strip().lower()
 
 
-def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
+def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     """What the SANDBOX is allowed to see, or None if it cannot be given anything safely.
 
     The sandbox runs the customer's agent with real bash and network egress, so a provider
@@ -1101,7 +1117,7 @@ def _auth_from_conn(conn: dict, sid: str = "") -> dict | None:
         print(f"[broker] refusing to build sandbox auth for provider={provider!r}: {log_reason}",
               flush=True)
         return None
-    out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""))
+    out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""), effort)
     out["base_url"] = f"{_sandbox_broker_origin()}/v1/llm"
     return out
 
@@ -3497,7 +3513,11 @@ _BROKER_HOP = ("host", "content-length", "connection", "keep-alive", "transfer-e
 #   rejects `output_config.effort` and `thinking.adaptive`; `context_management`'s only strategy
 #   is defined in terms of thinking, so it goes with it. These are model-version rejections, the
 #   same on the org's own key as on the platform's, so they are stripped for every provider that
-#   carries the Anthropic shape (Anthropic, Bedrock, TokenRouter, Vercel, LLMTR).
+#   carries the Anthropic shape (Anthropic, Bedrock, TokenRouter, Vercel, LLMTR). EXCEPT for a
+#   turn that ASKED for a thinking level (`reasoning.effort`, or the harness's): its controls were
+#   written for the model it runs on, by the relay or by the CLI's own switch (runner/reasoning.py),
+#   and removing them here ran the turn at the model's default while its record said the level had
+#   been applied (found on the hosted service, 2026-10-05).
 # * OpenAI-shape requests (`responses`, `responses/*`, `chat/completions`): nothing of the
 #   thinking group. `reasoning` carries Codex's effort and, on `responses/compact`, the
 #   `reasoning.context = all_turns` the compaction needs; TokenRouter and OpenRouter both take
@@ -3511,7 +3531,8 @@ _ANTHROPIC_THINKING_FIELDS = ("thinking", "context_management")
 _TIER_FIELDS = ("service_tier", "speed", "provider")
 
 
-def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path: str = "") -> bytes:
+def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path: str = "",
+                       keep_thinking: bool = False) -> bytes:
     """Remove what this request must not carry (see the rule above). Returns the body unchanged
     if it is not JSON — the broker must stay a dumb pipe for anything it does not positively
     understand."""
@@ -3525,14 +3546,15 @@ def _strip_unsupported(body: bytes, provider: str = "", byok: bool = False, path
         return body
     changed = False
     anthropic_shape = (path or "").strip("/").startswith("messages")
-    fields: tuple[str, ...] = _ANTHROPIC_THINKING_FIELDS if anthropic_shape else ()
+    strip_thinking = anthropic_shape and not keep_thinking
+    fields: tuple[str, ...] = _ANTHROPIC_THINKING_FIELDS if strip_thinking else ()
     if not byok:
         fields += _TIER_FIELDS
     for f in fields:
         if f in doc:
             doc.pop(f)
             changed = True
-    if anthropic_shape:
+    if strip_thinking:
         # `output_config` carries more than effort; drop only that key, and the object with it
         # if nothing else remains, so a provider never sees an empty container it may reject.
         oc = doc.get("output_config")
@@ -3990,7 +4012,8 @@ async def llm_broker(path: str, request: Request):
     else:
         headers["authorization"] = f"Bearer {key}"
 
-    body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix)
+    body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix,
+                              keep_thinking=bool(_turn_cred_level(_broker_token(request))))
     if provider == "google":
         body = _google_with_signatures(body, sid)
     if provider in _STRICT_GEMINI_CHANNELS and "gemini" in _body_model_name(body).lower():
@@ -7607,7 +7630,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 rec["tried"].append({"connection": name, "error": why})
                 continue
             conn = _chain_wired(conn, backend)
-        sandbox_auth = _auth_from_conn(conn, sid)
+        sandbox_auth = _auth_from_conn(conn, sid, effort)
         if sandbox_auth is None:
             # Refusing beats running: the only alternative is handing the sandbox a real provider
             # key. The chain moves on, and a fully unbrokerable chain fails the turn loudly.

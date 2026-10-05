@@ -27,6 +27,6 @@ def test_the_sandbox_auth_carries_that_origin(monkeypatch):
     monkeypatch.setattr(gw, "PUBLIC_BASE_URL", "https://console.example")
     monkeypatch.setattr(gw, "_pool_is_local", lambda: True)
     monkeypatch.setattr(gw, "SANDBOX_TRUST", "")
-    monkeypatch.setattr(gw, "_mint_turn_cred", lambda sid, name: "hrt_x")
+    monkeypatch.setattr(gw, "_mint_turn_cred", lambda sid, name, *level: "hrt_x")
     out = gw._auth_from_conn({"provider": "anthropic", "api_key": "sk-ant-real", "name": "Anthropic"}, "sid1")
     assert out["base_url"] == "http://127.0.0.1:8080/v1/llm" and out["api_key"] == "hrt_x" and "sk-ant-real" not in str(out)
