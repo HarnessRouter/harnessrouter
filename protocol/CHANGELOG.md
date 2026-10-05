@@ -58,6 +58,18 @@ sets two things: `default_memory_id` and `observe`. An agent joins a group only 
 it. Kinds are now `member`, `group` and, for a writer only, `provider`. Schema: `HarnessMemories`
 reshaped, `HarnessMemorySettings` added, `HarnessMemoryEntry` removed. Suite `2026.10.4.post5`.
 
+**Sixth patch of 2026-10-04, same version.** One graph. Entities and the relationships between
+them are not a second structure beside records: an entity is a record (new core type `entity`), a
+reference is an edge, and a relationship with something to say is a `fact` that references its
+`subject` and its `object`, so it has a writer, a time, a history and a source like any record.
+Five reference names are defined (`derived_from`, `part_of`, `about`, `subject`, `object`). One
+read, `POST /v1/memories/{id}/graph`, returns records as nodes and references as edges around a
+record or for a memory, the same for every provider; a provider declares where its entities come
+from in `graph.entities` (`derived`, `stated`, `none`). Also: an agent's membership of a group
+follows the rule a person's does (the fifth patch forbade a server to place an agent in a group on
+its own, which is not equal standing where every new person joins one). Schema: `MemoryGraph`,
+`MemoryGraphRequest`, `MemoryRecordRef`. Suite `2026.10.4.post6`: ME-10.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,

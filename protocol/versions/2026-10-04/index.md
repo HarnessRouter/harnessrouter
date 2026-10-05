@@ -81,6 +81,7 @@ the [protocol README](../../README.md).
 | `GET` | `/v1/memories/{id}/records/{rid}/content/{index}` | Full, capability `memories` | [Memories](memories.md) |
 | `POST` | `/v1/memories/{id}/records/{rid}/operations/{name}` | Full, capability `memories` | [Memories](memories.md) |
 | `POST` | `/v1/memories/{id}/recall` | Full, capability `memories` | [Memories](memories.md) |
+| `POST` | `/v1/memories/{id}/graph` | Full, capability `memories` | [Memories](memories.md) |
 | `POST` | `/v1/memories/{id}/erase` | Full, capability `memories` | [Memories](memories.md) |
 | `GET` | `/v1/memories/{id}/queries` | Full, capability `memories` | [Memories](memories.md) |
 | `PUT` `POST` | `/v1/memories/{id}/queries/{name}` | Full, capability `memories` | [Memories](memories.md) |

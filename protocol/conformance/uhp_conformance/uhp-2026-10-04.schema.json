@@ -2733,6 +2733,125 @@
       },
       "additionalProperties": true
     },
+    "MemoryGraphRequest": {
+      "type": "object",
+      "properties": {
+        "around": {
+          "type": "string",
+          "description": "A record to start from. Left out, every record of this memory."
+        },
+        "hops": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "References away from the start, in either direction. Default 1."
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "MemoryRecordRef": {
+      "type": "object",
+      "required": [
+        "memory_id",
+        "record_id"
+      ],
+      "properties": {
+        "memory_id": {
+          "type": "string"
+        },
+        "record_id": {
+          "type": "string"
+        }
+      }
+    },
+    "MemoryGraph": {
+      "type": "object",
+      "required": [
+        "nodes",
+        "edges",
+        "truncated"
+      ],
+      "properties": {
+        "object": {
+          "type": "string",
+          "const": "memory.graph"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "record",
+              "memory"
+            ],
+            "properties": {
+              "record": {
+                "$ref": "#/$defs/MemoryRecord"
+              },
+              "memory": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "from",
+              "to",
+              "available"
+            ],
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/MemoryRecordRef"
+              },
+              "to": {
+                "$ref": "#/$defs/MemoryRecordRef"
+              },
+              "rel": {
+                "type": "string",
+                "description": "What the reference means. Absent when the target is not readable by the caller."
+              },
+              "available": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "degraded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
     "MemoryErase": {
       "type": "object",
       "required": [
@@ -3040,6 +3159,21 @@
         },
         "queries": {
           "type": "object",
+          "additionalProperties": true
+        },
+        "graph": {
+          "type": "object",
+          "properties": {
+            "entities": {
+              "type": "string",
+              "enum": [
+                "derived",
+                "stated",
+                "none"
+              ],
+              "description": "Where a memory's entities come from on this provider."
+            }
+          },
           "additionalProperties": true
         },
         "content": {

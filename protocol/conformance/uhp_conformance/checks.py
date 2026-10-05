@@ -2244,6 +2244,49 @@ def me09(ctx):
     return "text parts in order; a png kept with its description and read back byte for byte"
 
 
+@check("ME-10", "Entities and relationships are records and references, read as one graph", "full",
+       f"{SPEC}/memories.md#66-the-graph")
+def me10(ctx):
+    prov = _memories_supported(ctx)
+    child = _memory_child(ctx)
+    if ((prov.get("graph") or {}).get("entities") or "none") == "none":
+        raise Skip("this provider keeps no record of type entity (graph.entities is none)")
+    base = f"/v1/memories/{child['id']}"
+
+    def mk(**body):
+        r = ctx.client.post(base + "/records", body=body)
+        assert r.status == 200, f"POST records ({body.get('type')}) returned HTTP {r.status}: {r.text[:200]}"
+        return r.json or {}
+    tag = uuid.uuid4().hex[:6]
+    a = mk(type="entity", content=f"Ines Varga {tag}")
+    b = mk(type="entity", content=f"Harlow Mills {tag}")
+    assert a.get("type") == "entity", f"an entity is a core record type; it read back as {a.get('type')!r}"
+    f = mk(type="fact", content=f"Ines Varga {tag} runs purchasing at Harlow Mills {tag}.", attributes={"predicate": "works_at"},
+           references=[{"rel": "subject", "record_id": a["id"]}, {"rel": "object", "record_id": b["id"]}])
+    deadline, g = time.time() + 40, {}
+    while True:
+        r = ctx.client.post(base + "/graph", body={"around": a["id"], "hops": 2})
+        assert r.status == 200, f"POST graph returned HTTP {r.status}: {r.text[:200]}"
+        g = r.json or {}
+        if {a["id"], b["id"], f["id"]} <= {(n.get("record") or {}).get("id") for n in g.get("nodes") or []} or time.time() > deadline:
+            break
+        time.sleep(2)
+    ctx.validate(g, "MemoryGraph")
+    ids = {(n.get("record") or {}).get("id"): n for n in g.get("nodes") or []}
+    assert {a["id"], b["id"], f["id"]} <= set(ids), "two hops from an entity must reach the fact about it and the entity at its other end"
+    assert (ids[b["id"]].get("memory") or {}).get("id") == child["id"], "a node names the memory its record is in"
+
+    def edge(rel, to):
+        return any(e.get("rel") == rel and (e.get("from") or {}).get("record_id") == f["id"]
+                   and (e.get("to") or {}).get("record_id") == to and e.get("available") is True for e in g.get("edges") or [])
+    assert edge("subject", a["id"]) and edge("object", b["id"]), (
+        "the fact's references must be edges from the fact to its subject and to its object")
+    one = ctx.client.post(base + "/graph", body={"around": a["id"], "hops": 1}).json or {}
+    assert b["id"] not in {(n.get("record") or {}).get("id") for n in one.get("nodes") or []}, (
+        "one hop from the subject reached the object: the fact between them is a node, one hop away")
+    return f"{len(g.get('nodes') or [])} nodes, {len(g.get('edges') or [])} edges around {a['id']} on entities={prov['graph']['entities']}"
+
+
 @check("ME-08", "A memory moves with its subtree, and deleting it takes the subtree", "full",
        f"{SPEC}/memories.md#2-the-memory-object")
 def me08(ctx):
