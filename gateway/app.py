@@ -3361,6 +3361,8 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             # services. That is the lesson of 2026-07-25, and it is a property of first-party
             # servers rather than of databases. What the sandbox holds is a capability scoped to
             # this harness, this session and the record this entry's auth names, and it expires.
+            if _hosted_server_name(s) == _MEMORIES_SERVER and not _memories_go_with(v, org):
+                continue            # another organization runs this harness: the run, not the owner's memory
             key = _vault_key(s.get("auth"))
             if not key.startswith(_HOSTED_SECRET_PREFIX):
                 print(f"[mcp] '{s.get('name')}' on {harness_id} points here but names no record "
@@ -16309,6 +16311,19 @@ _MEMORIES_SERVER = "memories"
 _MEMORIES_ENTRY = {"name": "memories", "id": "mcp.memories"}
 
 
+def _memories_go_with(hv: dict | None, org: str) -> bool:
+    """Whether a turn run in `org` on this harness is given the agent's memories. ONLY when the
+    harness is that organization's own.
+
+    Another organization may run a harness it holds the id of (the id is the run capability, and
+    the owner pays for the run). What it must not get with the run is the owner's memory: the agent
+    reads and writes what its owner's organization knows, and whoever drives the agent can have it
+    recite that, or write into it. So the tools are not minted for such a turn, the tool server
+    refuses a credential whose session is another organization's, and the instructions, the task's
+    memory and the recording of the turn all read this one rule: no side can answer differently."""
+    return bool(hv) and bool(org) and str(hv.get("org") or "") == org
+
+
 def _agent(hid: str) -> str:
     """Who a harness's agent is to the access model: a member, like the people it works beside.
     Here its member id is the harness's own id."""
@@ -16318,7 +16333,7 @@ def _agent(hid: str) -> str:
 async def _memories_settings(hid: str, org: str, hv: dict | None) -> dict | None:
     """The harness's memory settings (where its agent writes by default, whether its turns are
     recorded), or None when it has no memories server or the server is switched off."""
-    if not hid or not hv:
+    if not hid or not _memories_go_with(hv, org):
         return None
     try:
         await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(hv), entry_id=_MEMORIES_ENTRY["id"], check_enabled=True)
@@ -16364,7 +16379,7 @@ async def _task_memory_for_turn(org: str, hid: str, body) -> str:
     mid = str((getattr(body, "metadata", None) or {}).get("memory") or "").strip()
     if not mid:
         return ""
-    m = await memory_plane._load(org, mid) if hid else None
+    m = await memory_plane._load(org, mid) if hid and _memories_go_with(await _harness_vertex(hid), org) else None
     if not m or "read" not in await memory_plane.effective(org, m, [_agent(hid)]):
         raise uhp_error(404, "memory_not_found", "No memory with that id.", "metadata.memory")
     return mid
@@ -16488,6 +16503,10 @@ async def memories_mcp(request: Request):
         v = None
     org = str((v or {}).get("org") or "")
     try:
+        # the session this credential was minted for is the turn: it must be one of the harness's
+        # own organization (_memories_go_with), whatever minted the credential
+        if not _memories_go_with(v, str(((await _vertex_get(sid)) or {}).get("tenant") or "")):
+            raise HTTPException(404, "not this organization's agent")
         await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(v), key=key, check_enabled=True)
     except HTTPException:
         if method == "tools/list":

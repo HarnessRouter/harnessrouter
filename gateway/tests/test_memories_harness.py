@@ -231,3 +231,41 @@ def test_a_task_names_one_more_memory_and_the_session_writes_there(client, world
     # another session of the same agent reaches it too (it was granted), and writes where the harness says
     other = {e["memory_id"]: e["default"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv, sid="sess_none"))}
     assert other[person] is False and other[world["notes"]] is True
+
+
+def test_another_organization_running_the_harness_gets_the_run_and_not_the_owners_memory(client, world):
+    """A harness id is a run capability: another organization may start a task on it. What must not
+    go with that run is the agent's memory, on any side: the tools, the instructions, the task's
+    memory, the recording."""
+    from types import SimpleNamespace
+    other = "memoutsider"
+    eve = {**ADA, "x-harness-org": other, "x-harness-member": "eve@example.com"}
+    hid = client.post("/v1/harnesses", headers=ADA, json={"name": "Shared helper", "base": "claude-code"}).json()["id"]
+    assert _grant(client, world["company"], hid, ["read", "write"]).status_code == 200
+    hv = asyncio.run(gw._harness_vertex(hid))
+    names = lambda org: [m["name"] for m in asyncio.run(gw._harness_plugins(hid, org, hv=hv, sid="sess_x"))[0]]   # noqa: E731
+    # its own organization's turn is handed the memories server; another organization's is not
+    assert "memories" in names(ORG) and "memories" not in names(other)
+
+    def tok(org):
+        sid = "sess_" + os.urandom(6).hex()
+        asyncio.run(gw._vg_upsert("HarnessSession", sid, {"tenant": org, "status": "idle", "turn_status": "idle", "harness_id": hid}))
+        return gw._mint_hosted_cred(hid, sid, gw._hosted_secret_key(hid, "mcp.memories"))
+    # and a credential for another organization's session, however it came to exist, opens nothing
+    assert [t["name"] for t in _rpc(client, tok(ORG), "tools/list")["tools"]][:2] == ["memory_list", "memory_recall"]
+    theirs = tok(other)
+    assert _rpc(client, theirs, "tools/list")["tools"] == []
+    said, err = _call(client, theirs, "memory_recall", memory=world["company"], query="refunds")
+    assert err and "Refunds" not in said
+    # the other organization cannot bring the agent a memory of its own either: nothing of the agent's
+    # memory is resolved outside the organization the harness belongs to
+    memory_plane.PROVIDERS.setdefault("fixture", memory_fixture.FixtureProvider())
+    mine = client.post("/v1/memories", headers=eve, json={"provider": "fixture", "name": "Outsider notes"}).json()["id"]
+    assert client.post(f"/v1/memories/{mine}/grants", headers=eve, json={"principal": f"member:{hid}", "privileges": ["read", "write"]}).status_code == 200
+    assert asyncio.run(gw._harness_memories(hid, other, hv)) == []
+    assert asyncio.run(memory_tools.doc_section(memory_local.Local(other, hid, []))) == ("", {})
+    with pytest.raises(Exception) as refused:
+        asyncio.run(gw._task_memory_for_turn(other, hid, SimpleNamespace(metadata={"memory": mine})))
+    assert refused.value.status_code == 404 and refused.value.detail["code"] == "memory_not_found"
+    # in its own organization everything is as before
+    assert [e["memory_id"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv))] == [world["company"]]
