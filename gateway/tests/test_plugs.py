@@ -232,7 +232,11 @@ def test_attach_refusals(client, world, monkeypatch):
     assert r.status_code == 400
     # a harness outside a named workspace has no company to bind
     bare = _harness(client, {"x-harness-workspace": ""})
+    # ...and it is not this workspace's to touch at all: a harness with no workspace belongs to the
+    # Default Workspace, so a caller narrowed to another one is told there is no such harness
     r = _post(client, f"/v1/harnesses/{bare}/servers/plugs", {"plugs": ["github"]})
+    assert r.status_code == 404 and r.json()["error"]["code"] == "harness_not_found"
+    r = _post(client, f"/v1/harnesses/{bare}/servers/plugs", {"plugs": ["github"]}, {"x-harness-workspace": ""})
     assert r.status_code == 400 and r.json()["error"]["code"] == "workspace_required"
     assert _post(client, f"/v1/harnesses/{hid}/servers/plugs", {"plugs": ["github"]}).status_code == 200
 
