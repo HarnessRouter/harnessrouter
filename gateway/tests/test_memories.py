@@ -117,6 +117,22 @@ def test_a_grant_flows_down_and_the_caller_enters_where_it_was_granted(people, t
     assert [(x["memory_id"], x["inherited"]) for x in rows] == [(tree["sales"], True)]
 
 
+def test_what_a_caller_was_given_is_where_it_was_let_in_and_where_it_may_do_something_else(people, tree):
+    ada, ben = people
+    grant = lambda mid, privs: ada.post(f"/v1/memories/{mid}/grants", json={"principal": "member:ben@example.com", "privileges": privs})  # noqa: E731
+    given = lambda who: [(m["id"], m["privileges"]) for m in who.get("/v1/memories?granted=true").json()["data"]]  # noqa: E731
+    grant(tree["sales"], ["read"])
+    grant(tree["acme"], ["read"])                        # says nothing new: he reads Acme through Sales already
+    assert given(ben) == [(tree["sales"], ["read"])]
+    grant(tree["acme"], ["read", "write"])
+    # he still ENTERS at Sales alone, and the plain listing says only that...
+    assert [m["id"] for m in ben.get("/v1/memories").json()["data"]] == [tree["sales"]]
+    # ...so where he may write is asked for: highest first, each with what he may do there
+    assert given(ben) == [(tree["sales"], ["read"]), (tree["acme"], ["read", "write"])]
+    # someone who may do the same everywhere below where they enter was given one place
+    assert given(ada) == [(tree["company"], ["read", "write", "create", "delete"])]
+
+
 def test_who_acts_on_a_memory_is_one_vocabulary(people, tree):
     ada, _ = people
     url = f"/v1/memories/{tree['acme']}/grants"

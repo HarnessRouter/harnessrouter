@@ -626,6 +626,26 @@ async def grant(org: str, mid: str, principals: list[str], principal: str, privi
             "privileges": privs, "inherited": False}
 
 
+async def given(org: str, principals: list[str]) -> list[dict]:
+    """Where a caller was let in, and where it may do something other than on the memory above:
+    every memory it may read whose parent it cannot see, and every memory below those on which its
+    privileges differ from its privileges on the parent. Highest in the tree first. It is asked in
+    terms of what the caller may do, never of how access is stored, so a server that lets someone
+    in by a role and one that keeps a grant per memory give the same answer."""
+    res = []
+    for m in await GRAPH.find("Memory", {"org": org}):
+        if str(m.get("deleted") or "0") == "1":
+            continue
+        privs = await effective(org, m, principals)
+        if not privs:
+            continue
+        p = await _load(org, str(m.get("parent_id") or "")) if m.get("parent_id") else None
+        above = await effective(org, p, principals) if p else []
+        if sorted(above) != sorted(privs):
+            res.append((len(await _chain(org, m)), str(m.get("name") or "").casefold(), str(m["id"]), await out(org, m, principals, privs)))
+    return [o for *_, o in sorted(res, key=lambda x: x[:3])]
+
+
 async def granted(org: str, principal: str) -> list[tuple[dict, list[str]]]:
     """Every memory this principal holds a grant ON (not merely below one), with what it may do
     there, highest in the tree first. It is where a member was let in: the same answer for a person

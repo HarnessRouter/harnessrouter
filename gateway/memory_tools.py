@@ -27,7 +27,12 @@ class Seam(Protocol):
     objects, already presented to this reader (references resolved, trust marked)."""
 
     async def entries(self) -> list[dict]:
-        """Where the agent starts: [{"memory": {id, name, description, records, children}, "write": bool, "default": bool}]."""
+        """The memories the agent was given: [{"memory": {id, name, description, records, children},
+        "write": bool, "default": bool}]. Every memory it was let into, AND every memory below one
+        of those where it may do something else (write, where above it only reads): the answer of
+        `GET /v1/memories?granted=true`, not of the plain listing, which names only where a caller
+        enters the tree. Whether the agent is offered the write tools is read off this list, so a
+        list of entry points alone hides them from an agent that reads a memory and writes below it."""
     async def offers(self) -> dict:
         """What this agent can do here beyond the seven tools every memory has:
         {"files": bool, "queries": bool, "operations": bool, "languages": [str]}. A tool, or an

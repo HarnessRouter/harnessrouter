@@ -156,8 +156,10 @@ async def create_memory(request: Request) -> dict:
 
 @router.get("/v1/memories")
 @guarded
-async def list_memories(request: Request, parent: str = "", ancestor: str = "") -> dict:
+async def list_memories(request: Request, parent: str = "", ancestor: str = "", granted: bool = False) -> dict:
     org, _, _, pr = await _who(request)
+    if granted:
+        return {"object": "list", "data": await mp.given(org, pr)}
     if ancestor:
         m, _ = await mp.need(org, ancestor, pr, "read")
         data = []
