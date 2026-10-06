@@ -2863,6 +2863,19 @@ here for every keyed turn), so the relay never saw their calls; there they now t
 turn that asks for a level. That difference between the trees is the hosted one's and is recorded
 here because the column is shared.
 
+With that change the hosted session ran the column again and reported 11 of 11, these rows among
+them (thinking tokens at none, low, high):
+
+| base | none | low | high | |
+|---|---:|---:|---:|---|
+| pi | 0 | 243 | 516 | |
+| omp | 0 | 252 | 456 | |
+| opencode | 0 | 272 | 804 | |
+| codex | 12 out | 233 out | 530 out | output tokens, as above |
+
+Not run on the hosted service at the time of writing: the Gemini CLI base, and most bases at more
+than one model.
+
 ## How long a thinking model says nothing, and the relay's wait (2026-10-06, 0.31.0)
 
 The relay ends a model call that sends no event for `HR_RELAY_UPSTREAM_TIMEOUT_S`. The default was

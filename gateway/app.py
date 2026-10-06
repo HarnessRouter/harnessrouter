@@ -4056,6 +4056,10 @@ async def _entra_token(conn: dict) -> str:
         except (TypeError, ValueError):
             life = 3000.0
         _entra_tokens[k] = (token, time.time() + life)
+        # One line per sign-in (about one an hour per connection): what an operator looks for when a
+        # task says Entra refused it or a long task fails an hour in. The application's id is not a
+        # secret; nothing of the secret or the token is written.
+        print(f"[entra] signed in as application ••••{client[-4:]}; asking again in {int(life)} s", flush=True)
         return token
 
 

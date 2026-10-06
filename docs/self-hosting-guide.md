@@ -371,6 +371,42 @@ offers you providers that work.
 </details>
 
 <details>
+<summary>An Azure connection without an API key (Microsoft Entra)</summary>
+
+For an organization that issues no API keys for its Azure resources. The connection is an application
+in your own Entra directory, and tasks sign in as that application.
+
+Register it once and give it a role on the resource it may call:
+
+```bash
+APP=$(az ad app create --display-name "HarnessRouter models" --sign-in-audience AzureADMyOrg --query appId -o tsv)
+az ad sp create --id "$APP" >/dev/null
+RESOURCE=$(az cognitiveservices account show -g <resource group> -n <resource name> --query id -o tsv)
+az role assignment create --assignee "$APP" --role "Cognitive Services OpenAI User" --scope "$RESOURCE"
+az ad app credential reset --id "$APP" --append --display-name harnessrouter --years 1 --query password -o tsv
+```
+
+The last line prints the client secret once. On the **Integrations** page add an **Azure OpenAI**
+connection, set **Sign in with** to **Microsoft Entra**, and enter the endpoint URL, the directory
+(tenant) ID, the application (client) ID and the client secret. A role assignment can take a few
+minutes to take effect.
+
+What happens on a task: the gateway asks Microsoft Entra for a token as the application, keeps it
+until shortly before it expires, and presents it on each model call in place of an API key. The agent
+holds neither the secret nor the token. That is true even though this image hands an API key
+connection straight to the agent (`HR_SANDBOX_TRUST=owner`): a token lives for about an hour and a
+task can run for longer, so a connection of this kind always goes through the gateway, which asks
+again as the token ages.
+
+When the sign-in is refused, the task fails with Entra's own reason, for example
+`Microsoft Entra refused this connection's sign-in: AADSTS90002: Tenant '...' not found`. A directory
+or application ID that is not a GUID, or a missing secret, is refused when you save.
+
+A sovereign cloud sets `HR_ENTRA_AUTHORITY` (default `https://login.microsoftonline.com`).
+
+</details>
+
+<details>
 <summary>What a backend with nothing connected says</summary>
 
 Forthcoming about it, which is what you get if you skip this step entirely:
@@ -907,6 +943,7 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume, so a restart doesn't discard work in flight. |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HR_RELAY_UPSTREAM_TIMEOUT_S` | `180` | How long one model call may go without sending anything before the turn is told the provider did not answer. Raise it (it was 600 before 0.31.0) if you run models that think for minutes without streaming: a few do at their highest thinking level. |
+| `HR_ENTRA_AUTHORITY` | `https://login.microsoftonline.com` | Where an Azure connection that signs in with Microsoft Entra asks for its token. A sovereign cloud names its own. |
 | `HARNESS_RESP_HOLD_S` | `3` | How long the gateway lets the runner hold a request for a turn's events. `0` asks every 1.2 s as before 0.30.1. |
 | `HARNESS_INTERNAL_KEY` | generated | Per-container; never leaves the process tree. |
 

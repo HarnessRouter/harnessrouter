@@ -66,6 +66,15 @@ def test_the_token_is_asked_for_once_and_kept_until_shortly_before_it_expires(mo
                     "scope": "https://cognitiveservices.azure.com/.default"}
 
 
+def test_a_sign_in_leaves_one_log_line_with_the_applications_id_and_nothing_secret(monkeypatch, capsys):
+    monkeypatch.setattr(gw, "_client", lambda: _Entra([_Resp(200, {"access_token": "tok-LOGGED", "expires_in": 3599})]))
+    for _ in range(3):
+        asyncio.run(gw._entra_token(CONN))
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("[entra]")]
+    assert lines == [f"[entra] signed in as application ••••{CLIENT[-4:]}; asking again in 3299 s"]
+    assert "tok-LOGGED" not in lines[0] and CONN["client_secret"] not in lines[0]
+
+
 def test_two_calls_at_once_ask_entra_once(monkeypatch):
     entra = _Entra([_Resp(200, {"access_token": "tok-1", "expires_in": 3600})])
     monkeypatch.setattr(gw, "_client", lambda: entra)
