@@ -3093,3 +3093,31 @@ Candidate `0.31.3-rc.1` in a side container on the test VM, on a copy of an inst
 | No media tools, no image credential (pi) | present | ran the skill and answered "CANNOT image generation not configured" |
 
 The image credential was removed by switching the instance's image models off on the Integrations document. Not reproduced here: the agent giving up in front of a working media tool. That was seen on the hosted service with a pi agent; Claude Code on this harness chose the media tool either way. What is shown here is that the skill is no longer offered in that state. Claude Code tasks complete, and all plugin checks pass on Claude Code, Codex and pi (the skill checks among them).
+
+
+## Hermes: a refusal from a tool is not its server failing (2026-10-06, 0.31.4)
+
+`hermes-agent` 0.19.0 keeps a circuit breaker per MCP server and bumps it on every error answer,
+including one a live server gave on purpose: a tool result marked `isError`, "no such document".
+Three in a row open the breaker, and for 60 s every tool of that server is refused with "MCP server
+... is unreachable after 3 consecutive failures". On the hosted service an agent that had read three
+wrong ids could then not use any tool of that server and told its person the service was down.
+
+The patch (`runner/patches/hermes_mcp_breaker.py`, the hosted one) marks the error answers that came
+from the server's own tool result and resets the breaker for those. Hermes is installed on an
+instance's first start, not in the image, so the entrypoint applies it to the installed copy on every
+start, which also repairs a volume installed before it existed.
+
+A small tool server was run inside the side container, with one tool that refuses on purpose (`get_document` of an id that does not exist is an error answer) and one that always answers (`list_documents`). One Hermes task with gpt-5.4: four refused `get_document` calls, then `list_documents`.
+
+| The instance | What `list_documents` returned |
+|---|---|
+| Published 0.31.3 | "MCP server 'company' is unreachable after 3 consecutive failures. Auto-retry available in ~50s." The server was up and answering. |
+| Candidate `0.31.4-rc.1`, started on the volume 0.31.3 had installed Hermes into | `["doc-1"]` |
+| Candidate, on a fresh volume (Hermes installed on that first start) | `["doc-1"]` |
+
+On both candidate starts the log has one line, "Hermes: a tool's own error answer no longer counts against its MCP server", and Hermes's module holds the two marks. A restart applied nothing again and logged nothing. A plain Hermes task completes. An instance started without Hermes starts, logs nothing about it, and passes the usual checks (pi and Claude Code tasks, all plugin checks on Claude Code, Codex and pi).
+
+The patch was run against the real `hermes-agent` 0.19.0 file: it changes two places and the result compiles (the test for this needs the file at hand and is skipped in CI, since Hermes is not in the image).
+
+Not shown live: a server that cannot be reached still opening the breaker. When the tool server was stopped mid-task Hermes dropped its tools ("Unknown tool") before the breaker came into it. That half is covered by the test of the patched check, where an error that did not come from a tool's own answer still counts.
