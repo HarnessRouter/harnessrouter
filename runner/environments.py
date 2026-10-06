@@ -851,9 +851,21 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
         rec["files"], rec["bytes"] = _size(dst)
         rec["status"], rec["finished_at"], rec["stage"] = "ready", int(time.time()), ""
         log.append(f"ready: {rec['files']} files, {len(rec['packages'])} packages, {int(time.time()) - started}s")
-        _write_record(dst, rec)
         if activate:
-            activate_version(env_id, n, slug)
+            # The record is the build's last word, so what the build promised is in place before it
+            # says ready. It used to be written first: a reader that waited for "ready" and started
+            # a turn at once found no active version in between (issue #401; a CI run met it on a
+            # slow disk, 2026-10-05). If the last steps fail, the active version is what it was.
+            was = active_version(env_id)
+            try:
+                _point_active(env_id, n)
+                ensure_mount(env_id, slug)
+                _write_record(dst, rec)
+            except Exception:
+                _point_active(env_id, was)
+                raise
+        else:
+            _write_record(dst, rec)
     except Exception as e:  # noqa: BLE001 — the record IS the report; nothing else sees this thread
         rec["status"], rec["finished_at"], rec["error"], rec["stage"] = "failed", int(time.time()), str(e)[:500], ""
         log.append(f"failed: {e}")
@@ -882,17 +894,25 @@ def start_build(env_id: str, n: int, slug: str, activate: bool = True, spec: dic
     return {"version": n, "status": "building"}
 
 
-def activate_version(env_id: str, n: int, slug: str) -> dict:
-    dst = version_dir(env_id, n)
-    rec = build_record(env_id, n)
-    if not dst.is_dir() or not rec or rec.get("status") != "ready":
-        raise HTTPException(409, f"version {n} is not a finished build")
+def _point_active(env_id: str, n: int | None) -> None:
+    """Make version n the environment's active one; None leaves it with none."""
     link = active_link(env_id)
+    if n is None:
+        link.unlink(missing_ok=True)
+        return
     tmp = link.with_name("active.tmp")
     if tmp.is_symlink() or tmp.exists():
         tmp.unlink()
     os.symlink(os.path.join("versions", str(n)), tmp)
     os.replace(tmp, link)                      # atomic: a session mid-turn sees the old or the new, never neither
+
+
+def activate_version(env_id: str, n: int, slug: str) -> dict:
+    dst = version_dir(env_id, n)
+    rec = build_record(env_id, n)
+    if not dst.is_dir() or not rec or rec.get("status") != "ready":
+        raise HTTPException(409, f"version {n} is not a finished build")
+    _point_active(env_id, n)
     ensure_mount(env_id, slug)
     return {"version": n, "status": "ready", "path": mount_path(slug)}
 
