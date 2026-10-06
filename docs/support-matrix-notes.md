@@ -2951,6 +2951,13 @@ for OpenAI's chat calls alone, and chose the old wait for everything. Neither fi
 fields above are recorded for whoever wants a shorter wait later. One sample per cell unless said,
 and how long a model thinks on one problem varies widely (the same Claude call took 29 s and 211 s).
 
+The same problem as a real task on the 0.31.1 candidate (pi, gemini-3.1-pro-preview through
+TokenRouter, thinking level high). With the wait set to 180 s, as 0.31.0 shipped it: the relay cut the
+model call four times, 183 s apart, pi retried each time, and the task failed after 737 s with "the
+provider did not answer". At the default, five runs: all five completed, after 28, 125, 179, 212 and
+494 s, with no cut; gpt-5.5 at xhigh straight at OpenAI completed after 128 s. So the shorter wait did
+not end a slow task sooner: it turned a task that finishes into one that fails four waits later.
+
 ## An Azure connection that signs in with Microsoft Entra (2026-10-06, 0.31.0)
 
 For an organization that issues no API keys for its Azure resources: the connection is an application
