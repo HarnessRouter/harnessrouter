@@ -4057,8 +4057,10 @@ async def _entra_token(conn: dict) -> str:
         token = str((doc or {}).get("access_token") or "")
         if r.status_code != 200 or not token:
             # Entra's own code and first sentence (AADSTS7000215: Invalid client secret provided...)
-            # are what the person fixing the connection needs; neither carries the secret.
-            why = str((doc or {}).get("error_description") or (doc or {}).get("error") or f"HTTP {r.status_code}").split("\r\n")[0].split("\n")[0][:300]
+            # are what the person fixing the connection needs; neither carries the secret. Its
+            # trace and correlation ids follow on new lines or, for some codes, on the same one.
+            why = re.split(r"\s*(?:\r?\n|Trace ID:)", str((doc or {}).get("error_description") or (doc or {}).get("error")
+                                                         or f"HTTP {r.status_code}"), maxsplit=1)[0][:300]
             if r.status_code in (400, 401, 403):
                 # A directory, application or secret Entra does not accept is this connection's own
                 # credentials being wrong: the same thing as a provider refusing an API key, and

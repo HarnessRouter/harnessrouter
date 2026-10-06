@@ -95,6 +95,13 @@ def test_a_refused_sign_in_says_what_entra_said_and_never_the_secret(monkeypatch
     assert e.value.detail.startswith("Microsoft Entra refused this connection's sign-in: ")
     assert "Trace ID" not in e.value.detail and "s3cret-value" not in e.value.detail
     assert not gw._entra_tokens                       # a refusal is not remembered: the next call asks again
+    # an unknown directory's description carries its trace id on the same line (seen 2026-10-06)
+    monkeypatch.setattr(gw, "_client", lambda: _Entra([_Resp(400, {"error": "invalid_request", "error_description":
+        "AADSTS90002: Tenant 'x' not found. Check with your subscription administrator. Trace ID: 62635bf8 Correlation ID: 9a"})]))
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(gw._entra_token(CONN))
+    assert e.value.status_code == 401
+    assert e.value.detail == "Microsoft Entra refused this connection's sign-in: AADSTS90002: Tenant 'x' not found. Check with your subscription administrator."
 
 
 def test_entra_failing_is_not_a_refusal_of_the_connection(monkeypatch):
