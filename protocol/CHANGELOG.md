@@ -104,6 +104,16 @@ A file someone kept is NOT such a record: its title and its line are its writer'
 it is revised and forgotten like any other; forgetting it takes the file out of reads, erasing it
 removes the bytes. Schema: `MemoryRecord.follows`, optional.
 
+**What a caller was given (`GET /v1/memories?granted=true`), found by the second server.** The
+listing without `parent` says where a caller enters the tree, and nothing said where below that it
+may do more. A server that ran an agent whose memories another server kept built the agent's tools
+from the entry listing, and an agent that read a memory and wrote one of its children was offered
+no tool to write with. `granted=true` lists every memory the caller may read whose parent it
+cannot see, and every memory below those on which what it may do differs from the parent, with
+its privileges on each. It is stated in what the caller may do, not in how access is kept, so a
+server that lets a member in by a role answers it as one that keeps a grant per memory does. §9
+names it as what an agent's tools are built from. Conformance: ME-01 asks it.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,
