@@ -205,6 +205,7 @@ A record is one thing a memory holds. Its `id` is the provider's and opaque to a
 | `time` | When it was true in the world (`valid_*`) and when the memory held it (`written_at`, `invalidated_at`). A provider without validity leaves `valid_*` null |
 | `written_by` | Who wrote it, `{ kind, id }` in the vocabulary of [§3](#who-acts-on-a-memory), stamped by the server from the authenticated caller; a client cannot supply it. When the provider wrote it, two more fields say why: `on_behalf_of`, the principal whose observation it was derived from, and `consolidation_id`, the run that concluded it ([§9.2](#92-consolidation-runs)) |
 | `references` | Other records this one points at ([§4.2](#42-references)) |
+| `follows` | Present only on a record the server derives from a source it keeps outside the memory: `{ kind, id, name }` of that source. Such a record is not revised or forgotten through the memory ([§5.4](#54-records-that-follow-a-source)) |
 | `trust` | Always `untrusted` on a read: what a memory returns is data, never instructions ([§13](#13-security)) |
 
 ### 4.1 Types
@@ -364,6 +365,26 @@ copies nothing; reading `as_of` a snapshot's time is the same read.
 
 A provider declares how much of this it keeps, for content and for structure separately:
 `versions` (every version), `snapshots` (only between named points), or `none`.
+
+### 5.4 Records that follow a source
+
+A server may keep something outside the memory and show it in the memory as records: a document
+people write in an editor, shown as one record for each of its sections. Such a record carries
+`follows`, which names where it comes from:
+
+```json
+"follows": { "kind": "document", "id": "doc_41c0…", "name": "Engineering guide" }
+```
+
+It changes when its source changes, by the server's own hand. It is not revised or forgotten
+through the memory, because the next change of its source would undo that. A server refuses
+`revise` and `forget` on it with `memory_unsupported`, in words that say where the source is
+changed, and a client offers neither on a record that carries `follows`. In every other way it is
+a record like any other: it is read, recalled and referenced, and its versions are kept as the
+provider declares.
+
+A file someone kept is not such a record. Its title and the line that says what the file shows are
+its writer's own statement, so it is revised and forgotten like any record ([§7](#7-files)).
 
 ## 6. Recall
 
@@ -559,6 +580,10 @@ A file enters a memory as a part of a record's content ([§4.3](#43-content)): u
 [Files](files.md) says, named in the part by its id, and read back at the part's own address. A
 revision whose content names other files is a new version of the record; the earlier version keeps
 naming the files it had, for as long as the provider keeps history and the server keeps the files.
+
+Forgetting a record that holds a file closes it like any other: the file leaves every read that
+does not ask for history, and is still there for one that does. `erase` removes the bytes too, and
+names a copy it could not remove in `unreachable`.
 
 `content.bytes` in the provider's capability document says where the bytes live: `kept` when the
 provider stores them itself, `referenced` when it keeps the reference and the bytes stay with the
