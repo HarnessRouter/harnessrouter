@@ -825,8 +825,18 @@ def _pool_token() -> str:
 # unset in prod it no-oped, leaving /v1/traces and the connection/policy writers OPEN. Every
 # route now authenticates via _principal (API key / internal trust + verified JWT) or
 # _internal_only — auth that fails closed.)
-def _internal_only(x_harness_internal: str = Header(default="")) -> dict:
-    if not INTERNAL_KEY or x_harness_internal != INTERNAL_KEY:
+def _internal_only(request: Request, x_harness_internal: str = Header(default="")) -> dict:
+    # A service (a script, a scheduler, the operator's own console session on a self-hosted box)
+    # calls these routes with the key and nothing else. A request that also carries a bearer is a
+    # person's or an API key's, relayed: a console proxy that is not in self-hosted mode attaches
+    # the key to every request that has a bearer, before anything verifies it, so with a junk bearer
+    # anyone could reach these routes and rewrite any organization's connections and routing
+    # (reported privately, GHSA-p6cq-54cg-8mpv; found live on the hosted service and closed there
+    # the same way, 2026-10-06). Routes for a person or a key resolve the full principal
+    # (_principal, _owned_org); these never take one.
+    if request.headers.get("authorization"):
+        raise HTTPException(401, "internal key required")
+    if not INTERNAL_KEY or not hmac.compare_digest(x_harness_internal.encode(), INTERNAL_KEY.encode()):
         raise HTTPException(401, "internal key required")
     return {"internal": True}
 
