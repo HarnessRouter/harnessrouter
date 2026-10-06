@@ -2036,6 +2036,16 @@ def me01(ctx):
         f"whoever creates a memory holds all four privileges on it; got {root.get('privileges')!r}")
     kids = (ctx.client.get(f"/v1/memories?parent={root['id']}").json or {}).get("data") or []
     assert [k.get("id") for k in kids] == [child["id"]], f"the listing of a parent is its direct children; got {[k.get('id') for k in kids]}"
+    # what the caller was given: the memory it made is there with what it may do, and the child,
+    # where it may do exactly the same, is not (nothing changes there)
+    r = ctx.client.get("/v1/memories?granted=true")
+    given = {g.get("id"): g for g in (r.json or {}).get("data") or []} if r.status == 200 else None
+    assert given is not None, f"GET /v1/memories?granted=true must answer the list of what the caller was given; got HTTP {r.status}"
+    if set(child.get("privileges") or []) == set(root.get("privileges") or []):
+        assert child["id"] not in given, "a memory on which the caller may do what it may do on its parent is not one it was given"
+    if not root.get("parent_id"):
+        assert root["id"] in given and set(given[root["id"]].get("privileges") or []) == set(root.get("privileges") or []), (
+            f"a memory the caller enters at must be among what it was given, with its privileges there; got {sorted(given)[:5]}")
     r = ctx.client.get("/v1/memories/" + "uhp-conformance-no-such-memory-" + uuid.uuid4().hex)
     assert r.status == 404 and ((r.json or {}).get("error") or {}).get("code") == "memory_not_found", (
         f"an unknown memory must answer 404 memory_not_found; got HTTP {r.status}")

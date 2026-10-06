@@ -2343,6 +2343,24 @@
             "$ref": "#/$defs/MemoryReference"
           }
         },
+        "follows": {
+          "type": "object",
+          "description": "Present only on a record the server derives from a source it keeps outside the memory (a section of a document). Such a record is not revised or forgotten through the memory.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "description": "What the source is, in a word: `document`."
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string",
+              "description": "What a person calls the source."
+            }
+          },
+          "additionalProperties": true
+        },
         "trust": {
           "type": "string",
           "const": "untrusted"
