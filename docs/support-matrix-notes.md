@@ -2916,3 +2916,84 @@ answers are cut off as "the provider did not answer". Richard chose 180 s for bo
 and this default with these numbers in front of him. An operator who runs such models at such levels
 on such routes raises the variable; the bases that speak the Responses API to OpenAI models (Codex,
 hermes, opencode, kilo) were not exposed in any cell.
+
+## An Azure connection that signs in with Microsoft Entra (2026-10-06, 0.31.0)
+
+For an organization that issues no API keys for its Azure resources: the connection is an application
+in the organization's own Entra directory (tenant ID, client ID, client secret), and the gateway's
+broker asks Entra for a token by the client-credentials grant and presents it as the bearer where a
+key connection sends `api-key`. Built on the hosted service and taken from there with its tests.
+
+What this tree adds is one rule. In owner trust, the image's default, a connection's key is handed
+to the agent. This connection has no key to hand, only a secret that buys a token good for about an
+hour, and a turn may run for six. So a connection of this kind goes through the gateway's broker in
+every trust mode, and the broker asks again as the token ages.
+
+Measured on the release's candidates in side containers on the test VM, in owner trust, with a test
+application in our own directory holding the "Cognitive Services OpenAI User" role on one Azure
+OpenAI resource and one Foundry resource:
+
+- **Four bases completed on the Entra connection**: pi and goose and hermes with gpt-5.4-mini, Codex
+  with gpt-5.4, each served by that connection. The gateway signed in once for all four
+  (`[entra] signed in as application ••••1234; asking again in 3299 s`, one line per sign-in).
+- **The agent holds neither the secret nor a token.** Checked while a pi turn was running a shell
+  command: none of the container's processes (the agent's and its shell's among them, read with the
+  rights to read every process's environment and command line) and none of 5,995 workspace files
+  held the client secret or an access token for Azure. The secret itself is not readable as text
+  anywhere on the data volume.
+- **The sign-in is renewed inside a running turn.** A token is good for 3,599 s and the gateway asks
+  again 300 s before that. One pi turn with gpt-5.4 was started 119 s before a sign-in was due for
+  renewal and ran six 85 s shell commands, one model call after each: 04:40:39 to 04:49:17 UTC. The
+  sign-in it began on was made at 03:47:37 (due again at 04:42:36, dead at 04:47:36). Its first two
+  model calls went out on that token; the third, at 04:43:32, made the gateway sign in again (the
+  log's line is at 04:43:32.7); the last two came after the first token's own expiry. The turn
+  completed with six tool calls and the six times. Before that, with the instance idle for an hour
+  and forty minutes past a token's expiry, the next turn signed in again by itself and completed.
+- **No role on the resource**: the same application pointed at a resource it has no role on. Azure's
+  own 401 reaches the turn: `Your azure connection was refused: ... {"code":"PermissionDenied",
+  "message":"The principal ... lacks the required data action
+  Microsoft.CognitiveServices/accounts/OpenAI/responses/write ..."}`.
+- **A directory Entra does not know**: the turn fails in 2 s on pi with `Your azure connection was
+  refused: ... Microsoft Entra refused this connection's sign-in: AADSTS90002: Tenant '...' not
+  found. ...`. Nothing is remembered of a refusal: the next call asks again.
+- **A key connection is untouched**: pi and Codex on the same Azure resource by API key completed,
+  handed the key as before.
+- **The form** on the Integrations page at 1440, 1024, 768 and 390 wide: "Sign in with" offers API
+  key and Microsoft Entra, the fields change to the directory ID, the application ID and the client
+  secret, a directory written as a name is refused with the field's own label, a saved connection
+  comes back with the secret masked and no key.
+
+Two defects came out of the measuring and are fixed in the release, here and on the hosted service:
+
+1. A sign-in Entra refuses came back from the broker as a 502. Codex reconnected five times before
+   giving up (28 s), and a 502 is not a refusal to the gateway, so the turn was free to try its next
+   connection, which is what the refused-key rule exists to prevent. A sign-in Entra answers with
+   400, 401 or 403 is now a 401 from the broker, as a refused API key is. Codex still makes its
+   reconnect attempts on a 401, as it does on a refused key, and now fails in 8 s. Entra throttling
+   or failing stays a 502.
+2. The turn said "Your azure key was refused" on a connection that has no key. It says "connection".
+
+Not measured here:
+
+- **A completed turn on a Foundry resource.** This tree's catalog has no model that the one Foundry
+  resource we could use has deployed, and only a custom connection may name a model outside the
+  catalog. What was observed is the next thing down: a catalog model asked of that resource came back
+  `404 DeploymentNotFound`, not a refusal, so the resource accepted the application's token. The
+  hosted service completed a pi turn on that resource through the same code.
+- A sovereign cloud (`HR_ENTRA_AUTHORITY`), and a client secret that expires or is rotated while a
+  turn runs.
+
+## A build said ready before its version was active (2026-10-06, 0.31.0)
+
+Issue #401: `test_the_turn_gets_the_path_the_variables_and_the_instructions` failed once in CI with
+"409: the environment has no built version" and passed on the rerun. It was not a flake. A build
+wrote its record as `ready` and made the version active in the next statement, and the record is what
+every reader waits on: the test, the console's build view, a script polling the API. A turn started
+in between was refused. On a normal disk the window is too short to meet; a slow CI disk met it.
+
+The version is now made active, and its mount made, before the record is written, and if any of the
+three steps fails the active version goes back to what it was (a failed build never becomes active,
+as before). A test asks the question at the instant the ready record is written and fails on the old
+order. On the candidate: an environment with a pip, an npm and an apt package built in 9 s, a turn
+started in the same instant its record read ready completed using the environment's package, and the
+environments column passed on pi, Codex and Claude Code, 9 of 9 tasks.
