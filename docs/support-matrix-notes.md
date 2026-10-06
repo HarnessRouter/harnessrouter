@@ -3038,3 +3038,33 @@ as before). A test asks the question at the instant the ready record is written 
 order. On the candidate: an environment with a pip, an npm and an apt package built in 9 s, a turn
 started in the same instant its record read ready completed using the environment's package, and the
 environments column passed on pi, Codex and Claude Code, 9 of 9 tasks.
+
+## Who may run a harness (2026-10-06, 0.31.2)
+
+Until this release the harness id alone was what ran a harness: a comment in the code called it
+"the run capability", written for a marketplace in which callers run a harness and its owner pays.
+Anyone who knew an id (console links carry it) could start a task on the harness, with the owner's
+connected plugs and database, on the owner's connections. Richard's rule, made on the hosted service
+first and the same here: "a harness can run by id and workspace's API key".
+
+The caller's organization must be the harness's; a caller narrowed to a workspace runs that
+workspace's harnesses, a harness from before workspaces counting as the Default Workspace's; a key
+for the whole organization runs any of its harnesses; a built-in base has no owner. The refusal is
+`404 harness_not_found`, what every other route answers for a harness that is not the caller's. It
+is the same test the harness list already applied, so what a key lists, it runs, and a harness made
+with a key is stamped with that key's workspace, so what a key makes, it runs.
+
+Candidate `0.31.2-rc.1` in a side container on the test VM, on a copy of an instance with 77 harnesses (36 stamped with the Default Workspace, 41 from before workspaces). Keys were minted for two workspaces and for the whole organization, and a harness was made with workspace one's key:
+
+| Caller | Result |
+|---|---|
+| Workspace one's key, its own harness | completed |
+| Workspace two's key, that harness | `404 harness_not_found`, and the harness is not in its list |
+| A key for the whole organization | completed |
+| Workspace two's key, a built-in base | completed |
+| Another organization (the gateway's internal door, another organization named) | `404 harness_not_found`, also when it names the right workspace |
+| The console in workspace one | completed |
+| The console in workspace two, and in the Default Workspace | `404 harness_not_found` |
+| The Default Workspace's key, a harness made before workspaces | completed |
+
+Through the console itself (Playwright): a harness created and run on pi, with its skill, script and tool policy. Claude Code tasks complete, and all plugin checks pass on Claude Code, Codex and pi, each of which makes its own harness and runs it.
