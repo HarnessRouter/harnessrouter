@@ -98,6 +98,30 @@ def strip_edit_blocks(text: str) -> str:
     return _strip_shell_blocks(_EDIT_BLOCK.sub("", text or "")).strip()
 
 
+NO_ANSWER = "The model wrote only its reasoning; there was no answer this turn."
+
+
+def _after_answer_banner(display: str) -> str:
+    """The answer half of aider's display string, or the statement that the model wrote none.
+
+    This is the fallback when `partial_response_content` is empty, and `remove_reasoning_content`
+    cannot serve it: that helper looks for `<tag>`/`</tag>`, and `replace_reasoning_tags` has
+    already rewritten them into the `► **THINKING**` / `► **ANSWER**` furniture (reasoning_tags.py:8-11)
+    that the reader then saw as the answer. MEASURED on kimi-k3, about one aider turn in three
+    returned reasoning and no content at all (#395), so the furniture is what came back. Everything
+    after aider's own ANSWER banner IS the answer; when nothing follows, the model wrote none and
+    this says so rather than quoting the banner. A display string with no banner at all is some other
+    call site off the send path and still reports what it passed, as it did before this helper.
+    """
+    try:
+        from aider.reasoning_tags import REASONING_END
+    except Exception:
+        return display
+    if REASONING_END not in display:
+        return display
+    return display.split(REASONING_END)[-1].strip() or NO_ANSWER
+
+
 def is_text_file(path: str, sniff: int = 65536) -> bool:
     """Whether aider could read this file as text. aider adds a file the model names and reads it
     as UTF-8; a binary one (a .pptx the model was asked to restyle, 2026-09-19 on hr-test) fails
@@ -211,8 +235,10 @@ def _install(coder, gate: _Gate) -> None:
                                             coder.reasoning_tag_name)
         except Exception:
             body = ""
+        # An empty content field is the only case aider's decorated display string may be shown for;
+        # it goes through the banner's own marker rather than being handed over whole (#395).
         gate.error_after_output = False
-        _emit("text", {"text": strip_edit_blocks(body or str(message))})
+        _emit("text", {"text": strip_edit_blocks(body or _after_answer_banner(str(message)))})
         return orig_assistant(message, pretty)
 
     def tool_error(message="", strip=True):
