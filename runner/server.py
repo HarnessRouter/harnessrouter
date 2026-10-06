@@ -4958,17 +4958,23 @@ def _adapt_custom_auth(auth):
 # request and then goes silent is indistinguishable from a working turn: the cap fires first and the
 # turn is cancelled with no served model, no tool call and no reason.
 #
-# The default is 180 s since 2026-10-06 (it was 600 s), the hosted service's value and Richard's
-# decision for both, made with this cost in front of him: a model that thinks without sending
-# anything is cut off. Measured that day, one hard problem at each model's highest level, streamed:
-# on most routes thinking arrives as events and the longest gap was seconds (13 of 16 cells, 0.7 to
-# 61 s), but three cells sent nothing for over 200 s before answering: gpt-5.5 and gemini-3.1-pro
-# on Chat Completions through TokenRouter (201 s and 205 s, not one byte), and claude-opus-5.5
-# through Vercel (211 s of keep-alive lines). Those end here as a timeout the turn reports. What the
-# shorter wait buys is the other case measured the same hour: a call that never answered at all in
-# 1,200 s now ends in three minutes. An operator who runs such models at such levels raises
-# HR_RELAY_UPSTREAM_TIMEOUT_S. A value that is not a positive number is ignored.
-_RELAY_WAIT_DEFAULT_S = 180.0
+# The default is the 600 s this relay has always waited, far under MAX_TURN_SECONDS, because a model
+# that thinks without sending anything is an answer on its way and not a failure. It was 180 s for
+# one release (0.31.0) and went back the same day, 2026-10-06, both on Richard's decision, once the
+# silence had been measured route by route (one hard problem at each model's highest level, streamed,
+# each call watched for 430 s; the table is in docs/support-matrix-notes.md):
+#   - OpenAI's Chat Completions API sends nothing at all while a reasoning model thinks. gpt-5.5 sent
+#     no event in 430 s in 5 of 5 calls: direct, on Azure, and through TokenRouter, where even the
+#     status line waits for the first token. No request field changes it. Most bases speak this API.
+#   - Gemini 3.1 pro is silent on Google's own endpoint (141 s) and through TokenRouter (187 to 234 s).
+#   - Claude Opus 5.5 through Vercel sent 211 s of keep-alive lines and no event.
+# On those routes a call that is thinking and a call that is stuck look the same on the wire, so no
+# short wait tells them apart; the same hour a call that never answered at all in 1,200 s was seen,
+# and it holds a turn for this long. An instance whose own cap is shorter sets this lower: the
+# support-matrix suite caps a turn at 600 s, so the instance it measures runs with
+# HR_RELAY_UPSTREAM_TIMEOUT_S=180 (seven of fourteen tour families were "not settled in 600s" on
+# 2026-09-29 with the two equal). A value that is not a positive number is ignored.
+_RELAY_WAIT_DEFAULT_S = 600.0
 
 
 def _relay_upstream_timeout() -> float:
