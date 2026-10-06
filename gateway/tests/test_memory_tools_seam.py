@@ -68,6 +68,14 @@ def test_only_what_can_be_served_is_listed():
     assert _names(Fake({"operations": True, "languages": ["cypher"]})) == SEVEN + ["memory_operate", "memory_query"]
 
 
+def test_narrowing_by_type_says_what_the_types_are_and_that_a_kept_file_is_a_note():
+    seam = Fake()
+    tools = {t["name"]: t for t in mt.tool_list(asyncio.run(seam.entries()), asyncio.run(seam.offers()))}
+    for name in ("memory_recall", "memory_graph"):
+        said = tools[name]["inputSchema"]["properties"]["types"]["description"]
+        assert said.startswith("Leave this out") and "entity" in said and "file that was kept, is a note" in said
+
+
 def test_the_file_argument_is_offered_only_where_a_file_can_be_kept():
     def remember(seam):
         return next(t for t in mt.tool_list(asyncio.run(seam.entries()), asyncio.run(seam.offers())) if t["name"] == "memory_remember")

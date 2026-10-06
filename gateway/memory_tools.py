@@ -65,6 +65,14 @@ TEXT_CAP = 60_000          # the most text one tool result carries back to the a
 _MEM = {"type": "string", "description": "A memory id: one you were given, or one a previous answer named as a parent or child."}
 
 
+# A model that is looking for something narrows by type when it is offered the argument bare, and
+# narrows wrongly: one looking for an image asked for ["entity", "fact", "file"], then for
+# ["entity", "fact"], and found nothing, since a kept file is a note.
+_TYPES = {"type": "array", "items": {"type": "string"},
+          "description": "Leave this out: every kind of record is then searched. Give it only to keep to some kinds, by "
+                         "name: episode, fact, note, procedure, link, entity. A document, and a file that was kept, is a note."}
+
+
 def _tool(name, description, props, required=(), write=False, needs=""):
     """`needs` names what a place must offer for the tool to be listed there (Seam.offers)."""
     return {"name": name, "description": description, "write": write, "needs": needs,
@@ -84,7 +92,7 @@ _TOOLS = [
           "`abstain: true` means nothing here holds an answer; say so rather than guessing.",
           {"memory": _MEM, "query": {"type": "string"}, "text": {"type": "string"},
            "filters": {"type": "object", "description": '{"field": "attributes.account", "op": "eq", "value": "acme"}; ops eq, in, gte, lte, contains; combine with {"and": [...]}'},
-           "types": {"type": "array", "items": {"type": "string"}},
+           "types": _TYPES,
            "depth": {"type": "integer", "description": "levels below to search; leave out for all of them"},
            "limit": {"type": "integer"}}, ["memory"]),
     _tool("memory_graph",
@@ -92,7 +100,7 @@ _TOOLS = [
           "(1 by default, 3 at most). People, companies and things are records of type `entity`; a `fact` that names a "
           "`subject` and an `object` is the relationship between two of them. Leave `record` out for the whole memory.",
           {"memory": _MEM, "record": {"type": "string"}, "hops": {"type": "integer"},
-           "types": {"type": "array", "items": {"type": "string"}}}, ["memory"]),
+           "types": _TYPES}, ["memory"]),
     _tool("memory_get", "Read one record, with its history when `history` is true.",
           {"memory": _MEM, "record": {"type": "string"}, "history": {"type": "boolean"}}, ["memory", "record"]),
     _tool("memory_remember",
