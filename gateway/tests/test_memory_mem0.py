@@ -216,7 +216,8 @@ def test_forget_is_mem0s_expiry_and_erase_names_what_it_still_serves(world):
     hist = c.get(f"/v1/memories/{a}/records/{rid}/history", headers=ADA).json()["data"]
     assert [(h["version"], h["status"], h["content"][0]["text"]) for h in hist] == [(1, "superseded", "Gamma is cancelled."), (2, "active", "Gamma is postponed.")]
     assert c.delete(f"/v1/memories/{a}/records/{rid}", headers=ADA).json()["status"] == "forgotten"
-    assert stub.mem[rid]["expiration_date"] < "2026-10-05" and rid in stub.mem           # closed, still stored
+    # closed (an expiry before today, by the adapter's own clock), still stored
+    assert stub.mem[rid]["expiration_date"] < memory_mem0._today().isoformat() and rid in stub.mem
     assert rid not in [x["record"]["id"] for x in c.post(f"/v1/memories/{a}/recall", headers=ADA, json={"query": "Gamma"}).json()["results"]]
     out = c.post(f"/v1/memories/{a}/erase", headers=ADA, json={"record_ids": [rid]}).json()
     assert out["erased"] == [rid] and out["unreachable"] == [rid] and rid not in stub.mem and stub.hist[rid]

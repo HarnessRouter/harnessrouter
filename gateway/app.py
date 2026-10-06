@@ -10758,7 +10758,7 @@ _HOSTED_NOT_CONNECTED = {
     "database": ("database_not_connected", _NOT_CONNECTED),
     "media": ("media_not_connected", "No media tools are connected to this agent yet."),
     "plugs": ("plugs_not_connected", "No plugins are connected to this agent yet."),
-    "memories": ("memories_not_attached", "No memories are attached to this agent yet."),
+    "memories": ("memories_not_attached", "This agent holds no memory yet."),
 }
 
 
@@ -16492,12 +16492,12 @@ async def memories_mcp(request: Request):
     except HTTPException:
         if method == "tools/list":
             return _jsonrpc_result(rid, {"tools": []})
-        return _jsonrpc_result(rid, _tool_text("No memories are attached to this agent. Ask the person to attach "
-                                               "them; you cannot attach them yourself.", True))
+        return _jsonrpc_result(rid, _tool_text("This agent holds no memory yet. Someone who manages a memory can share "
+                                               "it with this agent; you cannot do that yourself.", True))
     entries = await _harness_memories(hid, org, v, sid=sid)       # the harness's, and the one this session's task named
     seam = memory_local.Local(org, hid, entries)      # the tools speak through a seam; here it is this gateway's own plane
     if method == "tools/list":
-        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.languages())})
+        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers())})
     args = params.get("arguments") or {}
     text, is_error = await memory_tools.call(seam, str(params.get("name") or ""), args if isinstance(args, dict) else {})
     return _jsonrpc_result(rid, _tool_text(text, is_error))

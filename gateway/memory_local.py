@@ -30,11 +30,27 @@ class Local:
                             "write": e.get("access") == "write", "default": bool(e.get("default"))})
         return out
 
-    async def languages(self) -> list[str]:
-        out: list[str] = []
-        for p in mp.PROVIDERS.values():
-            out += [x for x in ((p.capabilities().get("queries") or {}).get("free") or {}).get("languages", []) if x not in out]
-        return out
+    async def offers(self) -> dict:
+        """From the engines of the memories this agent holds: a memory below one of them uses the
+        same engine, so these are all it can meet."""
+        caps = []
+        for e in self._entries:
+            m = await mp._load(self.org, str(e.get("memory_id") or ""))
+            p = mp.PROVIDERS.get(str((m or {}).get("provider") or ""))
+            if p is not None and p.capabilities() not in caps:
+                caps.append(p.capabilities())
+        langs: list[str] = []
+        for c in caps:
+            langs += [x for x in ((c.get("queries") or {}).get("free") or {}).get("languages", []) if x not in langs]
+        return {"files": False,          # see keep_file
+                "queries": any((c.get("queries") or {}).get("named") for c in caps),
+                "operations": any(c.get("types") for c in caps), "languages": langs}
+
+    async def keep_file(self, mid, file, record):
+        # This gateway does not yet turn a media item or a workspace file an agent names into a
+        # file of its own store, so the argument is not offered here (offers) and a call that
+        # carries it anyway is refused in words.
+        raise Refused("memory_unsupported", "A file cannot be kept in memory here. Keep what it says, in words.")
 
     async def memory(self, mid):
         async def go():
