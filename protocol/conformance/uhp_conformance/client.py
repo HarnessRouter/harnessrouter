@@ -31,6 +31,13 @@ class Result:
         except Exception:  # noqa: BLE001
             return None
 
+    @property
+    def text(self) -> str:
+        """The body as text, for a failure message that quotes what the server said. Never raises,
+        for the same reason `json` does not: this string is built inside an assert's message, so an
+        exception here would surface as ERROR — a bug in the suite — and bury the server's defect."""
+        return self.body.decode("utf-8", "replace")
+
     def header(self, name: str) -> str:
         return self.headers.get(name.lower(), "")
 
