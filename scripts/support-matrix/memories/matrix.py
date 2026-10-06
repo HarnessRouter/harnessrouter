@@ -227,6 +227,13 @@ class Cell:
     def holding(self, mem: str, word: str, include: str = "active") -> list[dict]:
         return [r for r in self.records(mem, include) if word.lower() in self.said(r).lower()]
 
+    def kept(self, word: str) -> list[tuple[str, dict]]:
+        """(memory, record) for every active record that says `word`, in the memories the agent may
+        write. Which of them it keeps something in is its own choice, and where it has no default
+        memory it has to choose, so what it was asked to keep, correct or forget is judged across
+        both and never in one of them."""
+        return [(m, r) for m in ("notes", "client") for r in self.holding(m, word)]
+
     def wait(self, check, seconds: int = SETTLE_S):
         """`check()` until it returns something truthy, or the engine's settling time is up."""
         end, got = time.time() + seconds, None
@@ -282,7 +289,7 @@ def s_remember(c: Cell):
         return False, _done(t)
 
     def kept():
-        return [(m, r) for m in ("notes", "client") for r in c.holding(m, c.word["launch"]) if (r.get("written_by") or {}).get("id") == c.writer]
+        return [(m, r) for m, r in c.kept(c.word["launch"]) if (r.get("written_by") or {}).get("id") == c.writer]
     got = c.wait(kept)
     if not got:
         return False, f"no record holds the title after the task (tools: {', '.join(t['tools']) or 'none'}); answered {t['answer'][-120:]!r}"
@@ -297,9 +304,9 @@ def s_remember(c: Cell):
 
 def s_recall(c: Cell):
     """A later conversation, sharing nothing with the first, answers from the memory."""
-    if not (c.holding("notes", c.word["launch"]) or c.holding("client", c.word["launch"])):
+    if not c.kept(c.word["launch"]):
         c.remember("notes", type="fact", title=f"The working title of our launch is {c.word['launch']}")
-        c.wait(lambda: c.holding("notes", c.word["launch"]))
+        c.wait(lambda: c.kept(c.word["launch"]))
     t = c.ask("What is the working title of our launch? You were told in an earlier conversation.")
     if _done(t):
         return False, _done(t)
@@ -327,9 +334,9 @@ def s_reach(c: Cell):
 
 def s_revise(c: Cell):
     """The agent corrects what it holds; nothing still says the old thing."""
-    if not c.holding("notes", c.word["launch"]):
+    if not c.kept(c.word["launch"]):
         c.remember("notes", type="fact", title=f"The working title of our launch is {c.word['launch']}")
-        c.wait(lambda: c.holding("notes", c.word["launch"]))
+        c.wait(lambda: c.kept(c.word["launch"]))
     t = c.ask(f"The working title of our launch has changed: it is now {c.word['launch2']}, no longer {c.word['launch']}. "
               "Correct what you have in memory so that nothing there still gives the old title.")
     if _done(t):
@@ -337,14 +344,14 @@ def s_revise(c: Cell):
     # A record that gives both ("it changed from A to B") states the change; one that gives the old
     # codeword alone still says the old thing.
     def stale():
-        return [r for r in c.holding("notes", c.word["launch"]) if c.word["launch2"].lower() not in c.said(r).lower()]
-    ok = c.wait(lambda: c.holding("notes", c.word["launch2"]) and not stale())
+        return [r for _, r in c.kept(c.word["launch"]) if c.word["launch2"].lower() not in c.said(r).lower()]
+    ok = c.wait(lambda: c.kept(c.word["launch2"]) and not stale())
     if not ok:
         return False, (f"the new title is in memory and {len(stale())} record(s) still give the old one alone, written by "
                        + ", ".join(sorted({str((r.get('written_by') or {}).get('kind')) for r in stale()}))
-                       if c.holding("notes", c.word["launch2"]) else
+                       if c.kept(c.word["launch2"]) else
                        f"the new title is not in memory (tools: {', '.join(t['tools']) or 'none'})")
-    head = c.holding("notes", c.word["launch2"])[0]
+    head = c.kept(c.word["launch2"])[0][1]
     return True, ("revised in place, version " + str(head.get("version"))) if int(head.get("version") or 1) > 1 else "forgot the old record and wrote a new one"
 
 
@@ -380,14 +387,14 @@ def s_graph(c: Cell):
 
 def s_forget(c: Cell):
     """The agent forgets on request; the record is closed, and no longer found."""
-    word = c.word["launch2"] if c.holding("notes", c.word["launch2"]) else c.word["launch"]
-    if not c.holding("notes", word):
+    word = c.word["launch2"] if c.kept(c.word["launch2"]) else c.word["launch"]
+    if not c.kept(word):
         c.remember("notes", type="fact", title=f"The working title of our launch is {word}")
-        c.wait(lambda: c.holding("notes", word))
+        c.wait(lambda: c.kept(word))
     t = c.ask("Forget the working title of our launch: it must not be in your memory any more.")
     if _done(t):
         return False, _done(t)
-    return (True, "") if c.wait(lambda: not c.holding("notes", word)) else (False, f"the title is still an active record (tools: {', '.join(t['tools']) or 'none'})")
+    return (True, "") if c.wait(lambda: not c.kept(word)) else (False, f"the title is still an active record (tools: {', '.join(t['tools']) or 'none'})")
 
 
 def s_task_memory(c: Cell):

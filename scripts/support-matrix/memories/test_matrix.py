@@ -93,6 +93,18 @@ class Instance:
                 r = self.svc.keep(notes, AGENT, "poster.png" if image else "status.md", "image/png" if image else "text/markdown", data, line)
                 r["made_in"] = sid
             return "Kept."
+        changed = re.search(r"it is now ([A-Z0-9-]+), no longer ([A-Z0-9-]+)", text)
+        if changed:                                   # this agent keeps what it writes in Client, and replaces rather than revises
+            for mid in (notes, self.svc.mem["client"]["id"]):
+                for r in self.svc.rec[mid]:
+                    if changed.group(2) in r["title"]:
+                        r["status"] = "forgotten"
+            self.svc.write(self.svc.mem["client"]["id"], AGENT, title=f"The working title of our launch is {changed.group(1)}")
+            return "Corrected."
+        if text.startswith("Forget the working title"):
+            for r in self.svc.rec[self.svc.mem["client"]["id"]]:
+                r["status"] = "forgotten" if "working title" in r["title"] else r["status"]
+            return "Forgotten."
         if "In an earlier conversation you kept" in text:
             want = "image/" if "kept an image" in text else "text/"
             kept = [p["text"] for r in self.svc.rec[notes] if r["status"] == "active" for p in r["content"]
@@ -156,6 +168,17 @@ def test_an_archive_named_by_the_question_itself_is_refused():
     svc.mem["archive"]["name"] = "Archive"
     with pytest.raises(RuntimeError, match="a name of its own"):
         _cell(svc)
+
+
+def test_what_the_agent_corrects_and_forgets_is_judged_wherever_it_chose_to_keep_it():
+    """An agent with no default memory chooses where it writes. One that answered a correction by
+    closing the old record and writing the new one in its other memory was failed for not having
+    it in Notes, though nothing anywhere still gave the old title."""
+    svc = Service()
+    c, _ = _cell(svc)
+    assert matrix.s_revise(c) == (True, "forgot the old record and wrote a new one")
+    assert [m for m, _ in c.kept(c.word["launch2"])] == ["client"] and c.kept(c.word["launch"]) == []
+    assert matrix.s_forget(c) == (True, "") and c.kept(c.word["launch2"]) == []
 
 
 def test_a_file_the_agent_wrote_is_kept_byte_for_byte_and_found_later():
