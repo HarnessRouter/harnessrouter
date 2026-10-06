@@ -5,7 +5,8 @@
 // text part. Saving a record that exists appends a version, with an optional reason; the Info
 // panel shows who wrote it and every earlier version, any of which can be read or restored. A
 // new record is the same editor, empty, with its type still to choose. What the reader may do
-// comes from the memory's privileges; an episode and a forgotten record are read only.
+// comes from the memory's privileges; an episode, a forgotten record and a record that follows a
+// source kept elsewhere are read only.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   addRecord, eraseRecords, forgetRecord, getHistory, getRecord, labelOf, listRecords, reviseRecord,
@@ -85,7 +86,7 @@ export function RecordEditor({ memory, path, provider, recordId, who, onRecord, 
 
   const canWrite = memory.privileges.includes('write');
   const canDelete = memory.privileges.includes('delete');
-  const editableOf = useCallback((r: MemoryRecord | null) => canWrite && (!r || (r.type !== 'episode' && r.status === 'active')), [canWrite]);
+  const editableOf = useCallback((r: MemoryRecord | null) => canWrite && (!r || (r.type !== 'episode' && r.status === 'active' && !r.follows)), [canWrite]);
   const keepsHistory = provider ? (provider.history?.content ?? 'none') !== 'none' : false;
 
   /** Put a record (or nothing, for a new one) on the page as the saved state. */
@@ -285,7 +286,7 @@ export function RecordEditor({ memory, path, provider, recordId, who, onRecord, 
   const viewBlocks = useMemo(() => (viewing ? recordBlocks(viewing) : []), [viewing]);
   const shown = viewing ? viewBlocks : blocks;
   const label = viewing ? labelOf(viewing) : rec ? labelOf(rec) : '';
-  const status = draft ? 'New record' : !rec ? '' : rec.status === 'forgotten' ? 'Forgotten' : rec.type === 'episode' || !canWrite ? 'Read only'
+  const status = draft ? 'New record' : !rec ? '' : rec.status === 'forgotten' ? 'Forgotten' : rec.follows ? (rec.follows.name ? `Follows ${rec.follows.name}` : 'Follows its source') : rec.type === 'episode' || !canWrite ? 'Read only'
     : viewing ? `Viewing v${viewing.version}` : dirty ? '' : `Saved · v${rec.version}`;
   const showActions = editable && (draft || dirty);
   const options = entities.filter((e) => e.id !== rec?.id && !refs.some((f) => f.record_id === e.id));
@@ -351,7 +352,7 @@ export function RecordEditor({ memory, path, provider, recordId, who, onRecord, 
               <>
                 <div className="mem-pop-scrim" onClick={() => setMore(false)} />
                 <div className="mem-menu is-right" role="menu">
-                  {rec.status === 'active' && canWrite && <button type="button" role="menuitem" onClick={() => { setMore(false); setConfirmErr(''); setConfirm('forget'); }}>Forget record</button>}
+                  {rec.status === 'active' && canWrite && !rec.follows && <button type="button" role="menuitem" onClick={() => { setMore(false); setConfirmErr(''); setConfirm('forget'); }}>Forget record</button>}
                   {canDelete && <button type="button" role="menuitem" className="is-danger" onClick={() => { setMore(false); setConfirmErr(''); setConfirm('erase'); }}>Erase record</button>}
                 </div>
               </>

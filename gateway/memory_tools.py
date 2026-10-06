@@ -106,7 +106,8 @@ _TOOLS = [
                               "record_id": {"type": "string"},
                               "memory_id": {"type": "string", "description": "only when the record is in another memory"}},
                               "required": ["rel", "record_id"]}}}, [], write=True),
-    _tool("memory_revise", "Correct a record. The earlier version is kept in its history; say why.",
+    _tool("memory_revise", "Correct a record. The earlier version is kept in its history; say why. A record that carries `follows` "
+          "comes from a source kept elsewhere (a document) and is changed there, not here.",
           {"memory": _MEM, "record": {"type": "string"}, "title": {"type": "string"}, "content": {"type": "string"},
            "attributes": {"type": "object"}, "reason": {"type": "string"}}, ["memory", "record", "reason"], write=True),
     _tool("memory_forget", "Close a record that is no longer true or wanted. Its history remains.",
@@ -160,7 +161,7 @@ def _text(obj) -> str:
 
 def _slim(record: dict) -> dict:
     """A record as an agent needs it: what it says, where it is, who wrote it and when."""
-    keep = ("id", "memory_id", "type", "title", "content", "attributes", "version", "status", "time", "written_by", "references", "trust")
+    keep = ("id", "memory_id", "type", "title", "content", "attributes", "version", "status", "time", "written_by", "references", "follows", "trust")
     return {k: record[k] for k in keep if k in record and record[k] not in (None, {}, [])}
 
 

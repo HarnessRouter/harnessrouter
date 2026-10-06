@@ -24,6 +24,9 @@ export interface MemoryRecord {
   version: number; status: 'active' | 'superseded' | 'forgotten'; supersedes: number | null;
   time: { valid_from: string | null; valid_to: string | null; written_at: string | null; invalidated_at: string | null };
   written_by: Writer; references: Reference[]; trust: 'untrusted';
+  /** Present only on a record the service derives from a source it keeps elsewhere (a section of a
+   *  document). It changes when its source does, and is not revised or forgotten here. */
+  follows?: { kind?: string; id?: string; name?: string };
 }
 export interface Neighbours { parent?: MemoryBrief; children: MemoryBrief[] }
 export interface RecallResult { record: MemoryRecord; memory: { id: string; name: string }; score: number | null; why: string[] }
