@@ -13,6 +13,7 @@ to any static host.
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import pathlib
@@ -695,6 +696,20 @@ JS = """
 })();
 """
 
+# The page's script, its theme bootstrap and its styles are files the build emits, named by their
+# content, never inline: the site's Content-Security-Policy (protocol/vercel.json) allows scripts and
+# styles from the site itself and nothing written into a page (management #76, 2026-10-06). The theme
+# is read in <head>, before first paint, as it was inline.
+THEME_JS = 'try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}'
+
+
+def _emitted(stem: str, ext: str, text: str) -> str:
+    return f"{stem}.{hashlib.sha256(text.encode()).hexdigest()[:12]}.{ext}"
+
+
+SITE_FILES = {_emitted("site", "css", CSS): CSS, _emitted("site", "js", JS): JS, _emitted("theme", "js", THEME_JS): THEME_JS}
+CSS_FILE, JS_FILE, THEME_FILE = SITE_FILES
+
 
 def render_markdown(text: str):
     md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "attr_list", "sane_lists"])
@@ -772,7 +787,7 @@ def redirect_html(target: str, label: str) -> str:
         f'<link rel="canonical" href="https://{SITE}{target}">'
         f'<meta name="robots" content="noindex,follow">'
         f'<title>{html.escape(label)} · Unified Harness Protocol</title></head>'
-        f'<body style="font-family:system-ui,sans-serif;padding:2rem">'
+        f'<body>'
         f'Redirecting to the <a href="{target}">current specification</a>&hellip;</body></html>')
 
 
@@ -890,8 +905,8 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script>try{{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}}catch(e){{}}</script>
-<style>{CSS}</style>
+<script src="/assets/{THEME_FILE}"></script>
+<link rel="stylesheet" href="/assets/{CSS_FILE}">
 </head>
 <body>
 <header class="top">
@@ -961,7 +976,7 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
   </main>
   {toc}
 </div>
-<script>{JS}</script>
+<script src="/assets/{JS_FILE}"></script>
 </body>
 </html>
 """
@@ -1229,6 +1244,8 @@ def build() -> int:
     # GitHub and on the generated site. Merge them after the site's brand assets, preserving both.
     if (ROOT / "assets").is_dir():
         shutil.copytree(ROOT / "assets", DIST / "assets", dirs_exist_ok=True)
+    for name, text in SITE_FILES.items():
+        (DIST / "assets" / name).write_text(text, encoding="utf-8")
 
     # Last: every link in the finished site must resolve. Runs after schema is in place so links
     # to the machine-readable files are checked against the files that actually shipped.
