@@ -1135,7 +1135,7 @@ install_backends() {
   # Where the runner finds the MCP extension to mount (-e) on pi turns with MCP servers.
   [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ] && export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
   [ -x "$TOOLS/dsh-venv/bin/python" ] && export HR_DSH_PYTHON="$TOOLS/dsh-venv/bin/python"
-  if wanted hermes; then verify_hermes_mcp; fi
+  if wanted hermes; then verify_hermes_mcp; verify_hermes_breaker; fi
 }
 
 # hermes 0.19.0 gates HTTP MCP on importing `streamablehttp_client`, the name the mcp SDK
@@ -1162,6 +1162,30 @@ verify_hermes_bedrock() {
   else
     echo "[harnessrouter] WARNING: Hermes cannot use the bedrock provider — boto3 could not be installed"
   fi
+}
+
+# hermes 0.19.0 counts a tool's own error answer ("no such document") as its MCP server failing:
+# three in a row and every tool of that server is refused for 60 s as "unreachable", so an agent
+# that guessed three ids wrong reports the service down (runner/patches/hermes_mcp_breaker.py).
+# Hermes is installed here, on first start, not in the image, so the patch is applied here too, on
+# every start: a fresh install gets it, and so does a volume installed before it existed. It is
+# idempotent and writes nothing unless the result compiles; a hermes whose source is not the one it
+# was written for is left as it is, with one line saying so. Always returns 0: as the last command
+# of a function under `set -e`, anything else would abort the entrypoint (see the note above).
+verify_hermes_breaker() {
+  [ -x "$TOOLS/venv/bin/python" ] || return 0
+  _hmt=$("$TOOLS/venv/bin/python" -c "import importlib.metadata as m; d = m.distribution('hermes-agent'); print(next(str(d.locate_file(f)) for f in d.files if str(f).endswith('tools/mcp_tool.py')))" 2>/dev/null) || _hmt=""
+  if [ -z "$_hmt" ] || [ ! -f "$_hmt" ]; then
+    echo "[harnessrouter] WARNING: Hermes's MCP module was not found; a tool's own errors may be counted as its server failing"
+    return 0
+  fi
+  _out=$("$TOOLS/venv/bin/python" /app/runner/patches/hermes_mcp_breaker.py "$_hmt" 2>&1) || true
+  case "$_out" in
+    *"already applied"*) : ;;
+    *": applied"*) echo "[harnessrouter] Hermes: a tool's own error answer no longer counts against its MCP server" ;;
+    *) echo "[harnessrouter] WARNING: $_out" ;;
+  esac
+  return 0
 }
 
 verify_hermes_mcp() {
