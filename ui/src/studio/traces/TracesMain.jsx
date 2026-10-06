@@ -4,6 +4,7 @@ import { IconByName } from '@/studio/lib/iconCatalog.jsx';
 import { Markdown } from '@/studio/lib/markdown.jsx';
 import { tracesApi } from './api';
 import { flatten, lanes, fmtK } from './flatten';
+import { minutesAndSeconds } from '@/lib/duration';
 import { useTraces } from './store';
 
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
@@ -21,7 +22,8 @@ const fmtDur = (sec) => {
   const s = Number(sec);
   if (s < 1) return `${Math.round(s * 1000)}ms`;
   if (s < 60) return `${s.toFixed(1)}s`;
-  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  const [m, whole] = minutesAndSeconds(s);
+  return `${m}m ${whole}s`;
 };
 const fmtAgo = (sec) => {
   if (!sec) return '';
