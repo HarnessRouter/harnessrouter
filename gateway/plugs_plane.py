@@ -953,7 +953,9 @@ async def _vc_link(c, f, cfg) -> dict:
 
 @_tool("vercel", "deploy_from_repo", "write",
        "Create a deployment from the linked GitHub repository at a ref, then watch it for up to two minutes. "
-       "Returns the deployment's id, state and url; call get_deployment to keep watching a slow build.",
+       "Returns the deployment's id, state, target and url; call get_deployment to keep watching a slow build. "
+       "Vercel makes a project's FIRST deployment a production one whatever is asked; a preview is what "
+       "the same call gives from the second deployment on.",
        _obj({"ref": _s("Branch, tag or commit; the production branch when omitted"),
              "production": _b("Deploy to production rather than as a preview"),
              "repo": _s("owner/name, when the project is not linked yet")}))
@@ -980,7 +982,16 @@ async def _(c, f, cfg, a):
             break
         await asyncio.sleep(DEPLOY_POLL_S)
         d = await _vc(c, f, cfg, "GET", f"/v13/deployments/{did}")
-    return _deploy_out(d)
+    out = _deploy_out(d)
+    if not a.get("production") and str(d.get("target") or "") == "production":
+        # Seen twice on the hosted service, 2026-10-05, the second time on a branch that is not the
+        # production branch: a project with no deployment yet gets a production one, and an agent
+        # that asked for a preview reported its task blocked. The answer says what happened and
+        # what to do.
+        out["note"] = ("A preview was asked for and Vercel made this a production deployment, as it does for a "
+                       "project's first deployment. It is live on the project's production address. Call "
+                       "deploy_from_repo again with the same ref for a preview.")
+    return out
 
 
 @_tool("vercel", "link_repo", "write", "Link the project to a GitHub repository (owner/name).",

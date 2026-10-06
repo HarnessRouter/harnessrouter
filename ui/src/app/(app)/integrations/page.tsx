@@ -40,6 +40,9 @@ interface ProviderMeta {
   secret: string;
   secret_label: string;
   key_hint?: string;
+  /** The provider can also be reached as an application in the organization's own Microsoft Entra
+   *  directory, in place of a key: the fields that asks for, and the name of its secret. */
+  entra?: { fields: ProviderField[]; secret: string; secret_label: string };
   models: ModelRow[];
   /** For the custom provider: every canonical id a harness can ask for, the choices of its rows. */
   canonicals?: string[];
@@ -370,13 +373,35 @@ export default function IntegrationsPage() {
                   const isCustom = editing.provider === 'custom';
                   // Only what varies by deployment. A provider with a known endpoint never
                   // shows a Base URL field — the server fills it in.
-                  const fields = [...meta.fields,
-                                  { key: meta.secret, label: meta.secret_label,
-                                    placeholder: meta.key_hint }];
+                  // A connection signs in with a key, or, where the provider offers it, as an
+                  // application in the organization's own Microsoft Entra directory.
+                  const entra = meta.entra && editing.config.auth === 'entra' ? meta.entra : null;
+                  const secretKey = entra ? entra.secret : meta.secret;
+                  const fields: ProviderField[] = entra
+                    ? [...meta.fields, ...entra.fields, { key: entra.secret, label: entra.secret_label }]
+                    : [...meta.fields,
+                       { key: meta.secret, label: meta.secret_label,
+                         placeholder: meta.key_hint }];
                   return (
                     <div className="field-stack">
+                      {meta.entra && (
+                        <div className="field">
+                          <label htmlFor="itg-auth">Sign in with</label>
+                          <select id="itg-auth" value={entra ? 'entra' : 'key'}
+                            onChange={(e) => setEditing({
+                              ...editing,
+                              config: { ...editing.config, auth: e.target.value === 'entra' ? 'entra' : '' },
+                            })}>
+                            <option value="key">API key</option>
+                            <option value="entra">Microsoft Entra</option>
+                          </select>
+                          {entra && (
+                            <span className="field-help">Tasks sign in to Microsoft Entra as this application. Give the application a role on your Azure resource.</span>
+                          )}
+                        </div>
+                      )}
                       {fields.map((f) => {
-                        const secret = f.key === meta.secret;
+                        const secret = f.key === secretKey;
                         const saved = secret && editing.config[f.key] === SECRET;
                         // Special rendering for custom provider fields
                         if (isCustom && f.key === 'api_format') {

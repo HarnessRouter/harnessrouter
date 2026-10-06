@@ -138,6 +138,51 @@ def test_a_failed_build_records_why_and_never_becomes_active(store):
     assert e.value.status_code == 409
 
 
+def test_when_the_record_says_ready_the_version_is_already_the_active_one(store, monkeypatch):
+    """The record is what a reader waits on. It was written before the version became active, and a
+    turn started the moment it read "ready" was refused with "the environment has no built version"
+    (issue #401). Asked here at the instant the ready record is written, not after it."""
+    seen = []
+    real = E._write_record
+
+    def spy(dst, rec):
+        if rec.get("status") == "ready":
+            seen.append((E.active_version("henv_o"), E.resolve({"id": "henv_o", "slug": "ordered"})["version"]))
+        real(dst, rec)
+    monkeypatch.setattr(E, "_write_record", spy)
+    E.write_file("henv_o", "setup.sh", b"#!/bin/sh\necho preparing\n")
+    E.start_build("henv_o", 1, "ordered")
+    assert _wait("henv_o", 1)["status"] == "ready"
+    assert seen == [(1, 1)]
+
+
+def test_a_build_whose_last_write_fails_leaves_the_active_version_as_it_was(store, monkeypatch):
+    E.write_file("henv_l", "setup.sh", b"#!/bin/sh\necho preparing\n")
+    E.start_build("henv_l", 1, "last")
+    assert _wait("henv_l", 1)["status"] == "ready" and E.active_version("henv_l") == 1
+    real = E._write_record
+    failed_once = []
+
+    def refuse_ready(dst, rec):
+        if rec.get("status") == "ready" and rec.get("version") == 2 and not failed_once:
+            failed_once.append(1)
+            raise OSError("no space left on device")
+        real(dst, rec)
+    monkeypatch.setattr(E, "_write_record", refuse_ready)
+    E.start_build("henv_l", 2, "last")
+    rec = _wait("henv_l", 2)
+    assert rec["status"] == "failed" and "no space" in rec["error"]
+    assert E.active_version("henv_l") == 1                      # version 1 still serves
+    assert E.resolve({"id": "henv_l", "slug": "last"})["version"] == 1
+    # and a first build that fails the same way leaves the environment with no version at all
+    failed_once.clear()
+    monkeypatch.setattr(E, "_write_record", lambda dst, rec: (_ for _ in ()).throw(OSError("no space left on device"))
+                        if rec.get("status") == "ready" else real(dst, rec))
+    E.write_file("henv_n", "setup.sh", b"#!/bin/sh\necho preparing\n")
+    E.start_build("henv_n", 1, "none")
+    assert _wait("henv_n", 1)["status"] == "failed" and E.active_version("henv_n") is None
+
+
 def test_the_turn_gets_the_path_the_variables_and_the_instructions(store):
     E.write_file("henv_t", "requirements.txt", b"")
     E.write_file("henv_t", "package.json", json.dumps({"name": "p", "version": "1.0.0", "private": True}).encode())

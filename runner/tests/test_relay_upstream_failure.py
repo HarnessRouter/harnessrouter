@@ -198,19 +198,20 @@ def test_a_provider_that_goes_silent_is_reported_as_a_timeout_not_waited_on_fore
     assert up.requests == 1, "a timeout is not retried: the provider may be generating, and billing"
 
 
-def test_the_upstream_wait_is_bounded_below_the_turn_cap_and_no_shorter_than_it_ever_was(monkeypatch):
-    """Under the cap, so a silent provider is reported by the relay rather than discovered by the
-    cap; and not under the 600 s this relay always waited, because a reasoning model answering a
-    non-streaming call is silent for minutes and that is an answer on its way. An instance with a
-    shorter cap of its own (the support-matrix suite's 600 s) sets the variable."""
+def test_the_upstream_wait_is_three_minutes_unless_the_operator_says_otherwise(monkeypatch):
+    """Under the turn cap, so a silent provider is reported by the relay rather than discovered by
+    the cap. 180 s since 2026-10-06, decided with its cost measured: three model and route cells
+    were silent for 201, 205 and 211 s before answering a hard problem at their highest thinking
+    level, and those end as a timeout at this default; a call that never answered at all ends in
+    three minutes instead of ten. An operator who runs such models raises the variable."""
     monkeypatch.delenv("HR_RELAY_UPSTREAM_TIMEOUT_S", raising=False)
-    assert rs._relay_upstream_timeout() == 600
-    assert rs._relay_upstream_timeout() < rs.MAX_TURN_SECONDS
-    monkeypatch.setenv("HR_RELAY_UPSTREAM_TIMEOUT_S", "180")
     assert rs._relay_upstream_timeout() == 180
+    assert rs._relay_upstream_timeout() < rs.MAX_TURN_SECONDS
+    monkeypatch.setenv("HR_RELAY_UPSTREAM_TIMEOUT_S", "600")
+    assert rs._relay_upstream_timeout() == 600
     for junk in ("", "0", "-5", "soon"):
         monkeypatch.setenv("HR_RELAY_UPSTREAM_TIMEOUT_S", junk)
-        assert rs._relay_upstream_timeout() == 600, junk
+        assert rs._relay_upstream_timeout() == 180, junk
 
 
 def test_a_stream_that_stalls_is_not_ended_as_a_complete_answer(monkeypatch):
