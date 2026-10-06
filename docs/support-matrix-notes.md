@@ -2876,7 +2876,7 @@ them (thinking tokens at none, low, high):
 Not run on the hosted service at the time of writing: the Gemini CLI base, and most bases at more
 than one model.
 
-## How long a thinking model says nothing, and the relay's wait (2026-10-06, 0.31.0)
+## How long a thinking model says nothing, and the relay's wait (2026-10-06, 0.31.0 and 0.31.1)
 
 The relay ends a model call that sends no event for `HR_RELAY_UPSTREAM_TIMEOUT_S`. The default was
 600 s and is 180 s from 0.31.0, the value the hosted service runs. Before changing it the cost was
@@ -2916,6 +2916,40 @@ answers are cut off as "the provider did not answer". Richard chose 180 s for bo
 and this default with these numbers in front of him. An operator who runs such models at such levels
 on such routes raises the variable; the bases that speak the Responses API to OpenAI models (Codex,
 hermes, opencode, kilo) were not exposed in any cell.
+
+**The decision was reversed the same day (0.31.1): the default is 600 s again.** Asked to find a way
+to make the three silent cells speak, a second measurement found the silence was not three cells. The
+same problem and levels, each call watched for 430 s, now also straight at the vendors and through
+OpenRouter, and with every request field that might ask a route to show its thinking:
+
+| Chat Completions, longest run with no event | TokenRouter | Vercel | OpenRouter | the vendor itself |
+|---|---:|---:|---:|---:|
+| gpt-5.5, xhigh | over 430 s (3 of 3) | 11 s | 61 s | OpenAI over 430 s; Azure over 430 s |
+| gemini-3.1-pro-preview, high | 187 s, 234 s | 4.5 s | 4.8 s | Google 141 s |
+| claude-opus-5.5, xhigh | | 211 s | 10.6 s | not measured |
+
+- **OpenAI's Chat Completions API sends nothing while a reasoning model thinks**, and that is the
+  API, not a reseller: five calls of five passed 430 s without an event, direct, on Azure and through
+  TokenRouter (where even the status line waits for the first token: headers at 201 s in the first
+  measurement). `stream_options.include_usage` and `include_reasoning` change nothing; `reasoning` is
+  refused as an unknown parameter. On the Responses API the same model sent an event at least every
+  30 s on all three, and about every 13 s with `reasoning.summary: "auto"`.
+- **Gemini** on Google's own endpoint speaks when asked with
+  `extra_body.google.thinking_config.include_thoughts: true` (longest gap 4.6 s), but the thoughts
+  arrive inside `delta.content` as `<thought>...</thought>`, with the answer after the closing tag in
+  the same chunk, so a base would show them as its answer. Through TokenRouter the field does nothing.
+- **Claude Opus 5.5 through Vercel** speaks when asked with `providerOptions.anthropic.thinking:
+  {"type": "adaptive", "display": "summarized"}`: a 255 s think with a longest gap of 6.8 s, in
+  `delta.reasoning` and `reasoning_details`, not in the content. `reasoning: {"enabled": true}` and
+  `include_reasoning` do nothing (195 s and 209 s of keep-alive lines).
+- OpenRouter spoke on all three models, and Vercel on OpenAI's and Google's.
+
+So at 180 s every base that speaks Chat Completions to an OpenAI model was exposed at a high level on
+a hard problem, and that is most bases. On those routes a call that is thinking and a call that is
+stuck look the same on the wire. Richard was offered the two request-field fixes and a longer wait
+for OpenAI's chat calls alone, and chose the old wait for everything. Neither fix was built; the
+fields above are recorded for whoever wants a shorter wait later. One sample per cell unless said,
+and how long a model thinks on one problem varies widely (the same Claude call took 29 s and 211 s).
 
 ## An Azure connection that signs in with Microsoft Entra (2026-10-06, 0.31.0)
 

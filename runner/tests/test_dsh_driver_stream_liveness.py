@@ -108,11 +108,11 @@ def test_keep_alive_lines_alone_end_the_call_with_the_reason(monkeypatch):
     assert b'"code": "upstream_unavailable"' in body and b"no data" in body
 
 
-def test_the_wait_is_the_runners_figure_and_180_without_it(monkeypatch):
+def test_the_wait_is_the_runners_figure_and_600_without_it(monkeypatch):
     monkeypatch.delenv("HR_RELAY_UPSTREAM_TIMEOUT_S", raising=False)
-    assert dsh_driver._upstream_wait() == 180
-    monkeypatch.setenv("HR_RELAY_UPSTREAM_TIMEOUT_S", "600")
     assert dsh_driver._upstream_wait() == 600
+    monkeypatch.setenv("HR_RELAY_UPSTREAM_TIMEOUT_S", "180")
+    assert dsh_driver._upstream_wait() == 180
     for junk in ("", "0", "-1", "soon"):
         monkeypatch.setenv("HR_RELAY_UPSTREAM_TIMEOUT_S", junk)
-        assert dsh_driver._upstream_wait() == 180, junk
+        assert dsh_driver._upstream_wait() == 600, junk

@@ -40,13 +40,13 @@ _effort_refused: set = set()   # models whose provider refused the level on this
 def _upstream_wait() -> float:
     """How long this relay waits on the provider: for the answer to begin, and in a stream for the
     next EVENT. The runner's own figure (HR_RELAY_UPSTREAM_TIMEOUT_S, handed over by _build_dsh),
-    180 s when it is absent or not a positive number (the runner's default; see
-    _relay_upstream_timeout in server.py for what that costs and buys)."""
+    600 s when it is absent or not a positive number (the runner's default; see
+    _relay_upstream_timeout in server.py for why it is not shorter)."""
     try:
-        v = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S") or 180)
+        v = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S") or 600)
     except ValueError:
-        return 180.0
-    return v if v > 0 else 180.0
+        return 600.0
+    return v if v > 0 else 600.0
 
 
 UPSTREAM_WAIT_S = _upstream_wait()
