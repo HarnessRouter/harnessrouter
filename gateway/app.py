@@ -3362,7 +3362,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             # servers rather than of databases. What the sandbox holds is a capability scoped to
             # this harness, this session and the record this entry's auth names, and it expires.
             if _hosted_server_name(s) == _MEMORIES_SERVER and not _memories_go_with(v, org):
-                continue            # another organization runs this harness: the run, not the owner's memory
+                continue            # not the harness's own organization: never the owner's memory (_memories_go_with)
             key = _vault_key(s.get("auth"))
             if not key.startswith(_HOSTED_SECRET_PREFIX):
                 print(f"[mcp] '{s.get('name')}' on {harness_id} points here but names no record "
@@ -16315,12 +16315,14 @@ def _memories_go_with(hv: dict | None, org: str) -> bool:
     """Whether a turn run in `org` on this harness is given the agent's memories. ONLY when the
     harness is that organization's own.
 
-    Another organization may run a harness it holds the id of (the id is the run capability, and
-    the owner pays for the run). What it must not get with the run is the owner's memory: the agent
-    reads and writes what its owner's organization knows, and whoever drives the agent can have it
-    recite that, or write into it. So the tools are not minted for such a turn, the tool server
-    refuses a credential whose session is another organization's, and the instructions, the task's
-    memory and the recording of the turn all read this one rule: no side can answer differently."""
+    Today no other turn exists: a harness runs only for its own organization (_turn_harness_owned).
+    This is the same statement made about MEMORY, where it has to keep holding if runs are ever
+    opened to others again (callers running a harness whose owner pays is where that came from).
+    A run may be shared; what the owner's organization knows may not: the agent reads and writes
+    it, and whoever drives the agent can have it recite that, or write into it. So this is read
+    wherever an agent's memories are resolved, the credential minted for the turn, the tool server
+    behind that credential, the settings the instructions and the recording read, the task's
+    memory, and is not left to the one gate in front of the turn."""
     return bool(hv) and bool(org) and str(hv.get("org") or "") == org
 
 

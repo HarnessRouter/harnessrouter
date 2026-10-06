@@ -234,9 +234,10 @@ def test_a_task_names_one_more_memory_and_the_session_writes_there(client, world
 
 
 def test_another_organization_running_the_harness_gets_the_run_and_not_the_owners_memory(client, world):
-    """A harness id is a run capability: another organization may start a task on it. What must not
-    go with that run is the agent's memory, on any side: the tools, the instructions, the task's
-    memory, the recording."""
+    """An agent's memory belongs to the organization its harness belongs to. A task from another
+    organization is refused before it starts; this is the rule for memory itself, below that gate,
+    so that it holds if runs are ever opened to others: no side that resolves an agent's memories
+    (the tools, the instructions, the task's memory, the recording) answers for another organization."""
     from types import SimpleNamespace
     other = "memoutsider"
     eve = {**ADA, "x-harness-org": other, "x-harness-member": "eve@example.com"}
