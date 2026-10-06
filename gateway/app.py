@@ -3083,6 +3083,26 @@ async def _drain_inflight() -> None:
             pass
 
 
+def _turn_harness_owned(principal: dict, hv: dict | None) -> None:
+    """A harness runs only for the organization that owns it, and for a caller narrowed to a
+    workspace (a workspace's key, the console's workspace) only when it is that workspace's
+    harness. Richard, 2026-10-06: "a harness can run by id and workspace's API key". Until then the
+    harness id alone was the run capability: anyone who knew it (console links carry it) ran the
+    harness with the owner's connected plugs and database, on the owner's connections. The rule was
+    made on the hosted service first, where no product relied on the old one, and is the same here.
+    A key for the whole organization runs any of its harnesses; a harness from before workspaces
+    belongs to the Default Workspace. Answered as not found, as every other route does for a harness
+    that is not the caller's, so the id reveals nothing."""
+    if not hv:
+        return                          # a base id: no record, no owner
+    if str(hv.get("org") or "") != str(principal.get("org") or ""):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    ws = str(principal.get("workspace") or "")
+    default = bool(principal.get("workspace_default")) or ws.endswith("__hr_default")
+    if ws and not _workspace_keep(str(hv.get("workspace") or ""), ws, default):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+
+
 def _turn_harness_check(harness_id: str, hv: dict | None) -> None:
     """A turn addressed to a harness runs on THAT harness or not at all. A deleted one answers the
     same 404 as the read endpoints. An id that names no harness at all used to run as a turn with
@@ -8438,11 +8458,10 @@ async def create_response(body: CreateResponseBody, request: Request):
         raise uhp_error(403, "forbidden", "This credential starts runs on the one harness it drives.",
                         "metadata.harness_id", {"harness_id": _cal.get("inner")})
     hv = await _harness_vertex(harness_id) if harness_id else None
-    # A deleted harness cannot run new turns (same 404 as the read endpoints). Cross-org runs are
-    # ALLOWED — sibling products legitimately run a user's harness under a platform credential, and
-    # the marketplace model is exactly "callers run it, the owner pays infra". Until entitlements
-    # land, the unguessable harness id is the run capability.
+    # A deleted harness cannot run new turns (same 404 as the read endpoints), and a harness runs
+    # only for the organization and workspace that own it: see _turn_harness_owned.
     _turn_harness_check(harness_id, hv)
+    _turn_harness_owned(principal, hv)
     # The project layer this task reads: the request's, else the harness's. Resolved and checked
     # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
     # failed turn.
