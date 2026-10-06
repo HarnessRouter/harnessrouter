@@ -49,6 +49,30 @@ configuration, or user workflow changes; call out compatibility, security, or li
 implications; and check that no credentials, generated dependencies, or unrelated files ride
 along.
 
+### Describing a bug fix
+
+A pull request that fixes a bug is described under these four headings, whether or not an issue
+exists for it:
+
+```markdown
+## The bug
+What goes wrong and how to see it: the version, the steps or the input, and what comes back.
+
+## Expected behavior
+What should happen instead.
+
+## The fix
+What the cause is and what you changed.
+
+## Verification
+The steps you ran and what each one showed, written so a reviewer can repeat them: the test you
+added, the commands, and the result before and after the fix.
+```
+
+A reviewer reads this before the diff and repeats the verification before merging. A test that
+fails without the fix and passes with it is the strongest verification; where a test is not
+possible, say what you ran by hand and what you saw.
+
 ## Development checks
 
 Run the checks that match the area you changed.
