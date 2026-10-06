@@ -4468,6 +4468,8 @@ async def list_traces(request: Request, org: str, limit: int = 20, cursor: str =
     p = await _principal(request)
     if (p.get("org") or "") != org:
         raise HTTPException(403, "trace access is limited to your organization")
+    if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
+        workspace, workspace_default = _key_scope(p), 0
     return await _session_cards(org, limit, cursor, member, harness,
                                 workspace=workspace, ws_default=bool(workspace_default))
 
@@ -4631,12 +4633,72 @@ async def list_sessions(request: Request, limit: int = 20, cursor: str = "",
                                 ws_default=bool(p.get("workspace_default")))
 
 
+def _key_scope(p: dict) -> str:
+    """The one workspace an API key is held to, or "" when the caller is not narrowed. Not narrowed:
+    a person through the console (the workspace it names is a view, not a wall), a key for the
+    whole organization, and a Default Workspace key, which is what an organization's keys were
+    before workspaces existed and keeps that reach (Richard, 2026-10-06; the same function and the
+    same answer on the hosted service)."""
+    if p.get("via") != "api_key":
+        return ""
+    ws = str(p.get("workspace") or "")
+    if not ws or p.get("workspace_default") or ws == f"{p.get('org') or ''}__hr_default":
+        return ""
+    return ws
+
+
+def _scope_keeps(p: dict, item_ws) -> bool:
+    """THE workspace rule, in one place: whether this caller may touch something stamped with
+    `item_ws`. A key held to a workspace (_key_scope) reaches what is stamped with that workspace
+    and nothing else of the organization; what was made before workspaces existed carries no stamp
+    and is the Default Workspace's, so it is not such a key's either. Every other caller reaches
+    everything of its organization.
+
+    The lists always narrowed a workspace's key. The routes that take an id did not: they checked
+    the organization and stopped, so a workspace's key that knew an id read, changed and deleted
+    another workspace's harnesses, sessions and responses, revoked its keys, and could mint itself a
+    key with no workspace at all (reported privately three times). Every route that takes an id now
+    asks here, through _harness_in_reach, _owned_session or _response_in_reach, and a test reads
+    the routes to keep it so."""
+    held = _key_scope(p)
+    return not held or str(item_ws or "") == held
+
+
+async def _harness_in_reach(p: dict, hid: str, *, deleted_ok: bool = False) -> dict:
+    """The harness record behind an id, for this caller, or the same 404 an unknown id gets: its
+    organization's, not deleted, and inside the caller's workspace."""
+    v = await _vertex_get(hid)
+    if (not v or not p.get("org") or str(v.get("org") or "") != str(p.get("org"))
+            or (not deleted_ok and str(v.get("deleted")) in ("1", "true", "True"))
+            or not _scope_keeps(p, v.get("workspace"))):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    return v
+
+
+async def _response_in_reach(p: dict, rec: dict | None) -> bool:
+    """Whether a response of the caller's organization is the caller's to read, cancel or delete.
+    A response belongs to the session that produced it, so the answer is the session's: its
+    workspace for a caller narrowed to one, its harness for a calibration credential. A caller with
+    neither limit is not made to pay for the read."""
+    inner = _calibration_inner(p)
+    if not inner and not _key_scope(p):
+        return True
+    rec = rec or {}
+    sid = str(rec.get("_session_id") or (rec.get("metadata") or {}).get("session_id") or "")
+    v = await _vertex_get(sid) if sid else None
+    if not v or (inner and str(v.get("harness_id") or "") != inner):
+        return False
+    return _scope_keeps(p, v.get("workspace"))
+
+
 async def _owned_session(request: Request, sid: str) -> tuple[str, dict]:
     p = await _principal(request)
     org = p.get("org", "")
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != org or str(v.get("status")) == "deleted":
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    if not _scope_keeps(p, v.get("workspace")):
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")   # another workspace's
     c = p.get("calibration")
     if c and str(v.get("harness_id") or "") != str(c.get("inner") or ""):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")   # not its harness's
@@ -4920,7 +4982,7 @@ async def delete_trace(sid: str, request: Request) -> dict:
     p = await _principal(request)
     org = str(p.get("org") or "")
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != org:
+    if not v or str(v.get("tenant") or "") != org or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     # A tombstoned session may be deleted again. A card of it can outlive the first delete (a
     # follow-up that reached the tombstone rewrote the card as "?", 2026-09-07), and this button
@@ -7558,7 +7620,8 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
 # ── session resolution (previous_response_id → reuse prior session for continuity) ──────
 async def _resp_resolve_session(org: str, member: str, prev: str | None, backend_hint: str,
                                 harness_id: str = "", harness_name: str = "",
-                                session_hint: str = "", workspace: str = "") -> tuple[str, str | None]:
+                                session_hint: str = "", workspace: str = "",
+                                caller: dict | None = None) -> tuple[str, str | None]:
     # Continue an existing conversation by (1) the response-id chain, or (2) an explicit session id.
     # (2) is the robust path: the client always knows which conversation it's in, so a follow-up never
     # forks a new empty session just because previous_response_id was momentarily unavailable.
@@ -7606,6 +7669,9 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
         except Exception as e:  # noqa: BLE001
             raise uhp_error(503, "server_error", "The session could not be read right now. Try again.") from e
         if v and str(v.get("tenant") or "") == org and str(v.get("status") or "") != "deleted":
+            if caller is not None and not _scope_keeps(caller, v.get("workspace")):
+                # another workspace's conversation: the same answer as an id that does not exist
+                raise uhp_error(404, "session_not_found", "No session with that id.")
             return await _continue(sid, v)
         if v:
             # a leaked/stored id of another org's session must not let a caller continue it; nor a
@@ -8135,13 +8201,13 @@ async def _apikey_resolve(tok: str) -> dict | None:
             _touch_apikey(sha)
             return {"org": doc.get("org", ""), "member": doc.get("member", ""),
                     "workspace": doc.get("workspace", "") or "",
-                    "workspace_default": bool(doc.get("workspace_default"))}
+                    "workspace_default": bool(doc.get("workspace_default")), "via": "api_key"}
     v = await _vertex_get(sha)
     if v and v.get("kind") == "harness_api_key" and str(v.get("revoked")) not in ("1", "true", "True"):
         _touch_apikey(sha)
         p = {"org": v.get("org", ""), "member": v.get("member", ""),
              "workspace": v.get("workspace", "") or "",
-             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True")}
+             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True"), "via": "api_key"}
         if control_store.enabled():
             try:
                 # create_only: never overwrite an existing doc — a revoke tombstone may have landed
@@ -8634,7 +8700,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
                                               harness_id=harness_id, harness_name=harness_name,
                                               session_hint=str(meta.get("session_id") or ""),
-                                              workspace=str(principal.get("workspace") or ""))
+                                              workspace=str(principal.get("workspace") or ""),
+                                              caller=principal)
     # Bill the harness OWNER's org (resolved above), not the caller's — stamp it on the in-process
     # session trace so trace-finalize meters usage against the same org the gate admitted. The turn
     # executes + finalizes on THIS replica, so this in-process stamp is authoritative for metering;
@@ -8870,6 +8937,10 @@ async def harness_events(harness_id: str, request: Request):
     org, member = principal.get("org", ""), principal.get("member", "")
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
+    if harness_id not in _BASE_CATALOG:
+        # a harness with a record is listened to by a caller it is in reach of; a built-in base
+        # has no record and no owner, and its stream stays filtered per member as before
+        await _harness_in_reach(principal, harness_id)
     topic = _bus_topic(org, harness_id)
     q: asyncio.Queue = asyncio.Queue(maxsize=_BUS_Q_MAX)
     _bus.setdefault(topic, set()).add(q)
@@ -9054,9 +9125,8 @@ async def get_response(response_id: str, request: Request):
     # so a cross-org id probe can't confirm existence. Legacy records with no _org stay readable.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
-    _inner = _calibration_inner(principal)
-    if _inner and not await _calibration_holds_response(_inner, rec):
-        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # not its harness's
+    if not await _response_in_reach(principal, rec):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # another workspace's, or not its harness's
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
@@ -9179,7 +9249,7 @@ async def delete_response(response_id: str, request: Request):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # V1C02-004: object-level ownership — one org must not delete another's response. 404 (not
     # 403) so a cross-org id probe can't confirm existence. Legacy records with no _org stay owned.
-    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
+    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", "") or not await _response_in_reach(principal, rec):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     rec["_deleted"] = True
     try:
@@ -9291,7 +9361,7 @@ async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
     """Authenticated artifact-by-path: org members open workspace files directly (inline)."""
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return await _serve_workspace_path(sid, path)
 
@@ -9325,7 +9395,7 @@ async def set_session_share(sid: str, request: Request, body: ShareBody | None =
     suite among them)."""
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     if body is None or body.enabled:
         token = str(v.get("share_token") or "") or ("shr" + uuid.uuid4().hex)
@@ -9345,7 +9415,7 @@ async def revoke_session_share(sid: str, request: Request) -> dict:
     was answering 405 while the real revocation hid inside POST {"enabled": false}. Both work."""
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     await _vertex_upsert(sid, {"shared": "0"})
     _SHARE_TOKEN_CACHE.clear()
@@ -9356,7 +9426,7 @@ async def revoke_session_share(sid: str, request: Request) -> dict:
 async def get_session_share(sid: str, request: Request) -> dict:
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return _share_out(str(v.get("shared") or "") == "1", str(v.get("share_token") or ""))
 
@@ -9452,7 +9522,7 @@ async def list_input_items(response_id: str, request: Request, limit: int = 20, 
     rec = await _resp_get(response_id)
     if not rec:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
-    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
+    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", "") or not await _response_in_reach(principal, rec):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # LIVE-B: object-level ownership
     data = list(rec.get("_input") or [])
     if order == "desc":
@@ -9476,9 +9546,8 @@ async def cancel_response(response_id: str, request: Request):
     # so a cross-org probe can't even confirm the id exists.
     if str(rec.get("_org") or "") != org:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
-    _inner = _calibration_inner(principal)
-    if _inner and not await _calibration_holds_response(_inner, rec):
-        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # not its harness's
+    if not await _response_in_reach(principal, rec):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # another workspace's, or not its harness's
     sid = str(rec.get("_session_id") or "")
     # PRIMARY (safe, cross-replica): a durable per-RESPONSE monotonic terminal latch. The turn's
     # own loop checks resp_is_cancelled(its resp_id) at every stage and self-terminates within
@@ -10283,7 +10352,17 @@ class KeyBody(BaseModel):
 
 @app.post("/v1/orgs/{org}/keys")
 async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
+    # A key held to a workspace mints keys for that workspace and no wider, under its own name. The
+    # body used to decide both: a workspace's key asked for a key with no workspace and was handed
+    # one for the whole organization, under any member name it liked (reported privately three
+    # times). A person in the console, and a key that already reaches the organization, choose.
+    held = _key_scope(p)
+    if held:
+        if (body.workspace or "").strip() not in ("", held):
+            raise uhp_error(403, "forbidden", "A key held to one workspace makes keys for that workspace only.", "workspace")
+        body.workspace, body.workspace_default = held, False
+        body.member_id = str(p.get("member") or "")
     tok = "sk-hr-" + uuid.uuid4().hex + uuid.uuid4().hex
     h = _hash_key(tok)
     # Graph FIRST and it must succeed (raise_on_fail): the graph is the source of truth + the
@@ -10311,7 +10390,7 @@ async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
 
 @app.get("/v1/orgs/{org}/keys")
 async def list_keys(org: str, request: Request) -> dict:
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
     try:
         rows = await BACKING.graph.find("HarnessApiKey", {"org": org})
     except Exception:  # noqa: BLE001
@@ -10320,16 +10399,18 @@ async def list_keys(org: str, request: Request) -> dict:
              "revoked": str(x.get("revoked")) in ("1", "true", "True"), "member": x.get("member"),
              "workspace": x.get("workspace") or "", "last_used": x.get("last_used") or "", "tail": x.get("tail") or ""}
             for x in rows]
+    if _key_scope(p):     # a key held to a workspace sees that workspace's keys
+        keys = [k for k in keys if _scope_keeps(p, k["workspace"])]
     return {"keys": keys}
 
 
 @app.delete("/v1/orgs/{org}/keys/{kid}")
 async def revoke_key(org: str, kid: str, request: Request) -> dict:
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
     # V1C02-005: the key must belong to THIS org — otherwise a caller could revoke another org's
     # key by id. Verify org ownership on the vertex before writing the tombstone.
     kv = await _vertex_get(kid)
-    if kv and str(kv.get("org") or "") != org:
+    if kv and (str(kv.get("org") or "") != org or not _scope_keeps(p, kv.get("workspace"))):
         raise HTTPException(404, "key not found")
     # Graph revoke FIRST and it MUST succeed (raise_on_fail): the graph is the backstop the hot
     # read falls to when the store doc expires. A silently-failed graph revoke would let the key
@@ -10822,14 +10903,11 @@ async def _hosted_resolve(server: str, hid: str, org: str, servers: list[dict], 
     return entry, rec
 
 
-async def _harness_for_route(hid: str, org: str) -> dict:
-    """The harness a /servers/{sid} route is addressed to: owned by this org, not deleted, and
-    converted off any earlier shape first — which is the reason this is a helper rather than the
-    three inline lines every other route carries."""
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    return await _mcp_migrate(org, hid, v)
+async def _harness_for_route(hid: str, caller: dict) -> dict:
+    """The harness a /servers/{sid} route is addressed to: in the caller's reach (its organization,
+    its workspace, not deleted) and converted off any earlier shape first."""
+    v = await _harness_in_reach(caller, hid)
+    return await _mcp_migrate(str(caller.get("org") or ""), hid, v)
 
 
 # ── migration: two earlier shapes of "the harness's database" ─────────────────────────────────
@@ -11137,8 +11215,9 @@ async def get_harness_server(hid: str, sid: str, request: Request) -> dict:
     The server that owns the connection is the one that names it, exactly as tools/list is a
     third-party server describing itself. Connection state does not ride a harness read.
     """
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     # WHICH server this is comes from the record, not from a field on the entry and not from the
     # route. One route, because "the server describing itself" is one question — and the entry has
     # nothing on it to branch on, which is the property this whole shape exists to keep.
@@ -11179,8 +11258,9 @@ async def _hosted_resolve_any(hid: str, org: str, servers: list[dict], *,
 @app.post("/v1/harnesses/{hid}/servers/{sid}/query", include_in_schema=False)
 async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Request) -> dict:
     """Run one SELECT — what refreshing a dashboard panel does."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
     want = int(body.max_rows or sql_plane.DEFAULT_MAX_ROWS)
     max_rows = max(1, min(want, sql_plane.DEFAULT_MAX_ROWS))
@@ -11194,8 +11274,9 @@ async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Requ
 async def get_server_schema(hid: str, sid: str, request: Request) -> dict:
     """The shape of the connected database: tables, columns, types — and a few rows per table when
     the person left sample rows on. `sampled` in the response says which they got."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
     try:
         return await sql_plane.introspect(rec["engine"], rec["dsn"],
@@ -13821,8 +13902,9 @@ async def _media_route(hid: str, sid: str, eid: str, request: Request,
     still offers them. The app that owns that screen has to say so and offer the way back, which is
     why the kit renders this 404 as a video that cannot be opened rather than as a bare canvas.
     """
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     if servers:
         # the bytes route only: a screenshot the browser plug stored is the session's media too
         entry, rec0 = await _hosted_resolve_any(hid, org, _mcp_list(v), entry_id=eid)
@@ -14387,10 +14469,12 @@ async def _plug_lookup_local(org: str, workspace: str, plug_type: str) -> tuple[
     return (rec["status"] if rec["status"] in _PLUG_STATUSES else "needs_auth"), rec
 
 
-def _plug_workspace(request: Request) -> str:
-    """The workspace a plug route is about: the console names it; a bare API call means the
-    instance's default workspace, the one the console's own harnesses are in."""
-    return str(request.headers.get("x-harness-workspace") or "default")
+def _plug_workspace(request: Request, caller: dict) -> str:
+    """The workspace a plug route is about. A key held to a workspace gets its own, whatever header
+    it sends (it used to be able to name any workspace there). Any other caller names it: the
+    console always does, and a bare API call means the instance's default workspace, the one the
+    console's own harnesses are in."""
+    return _key_scope(caller) or str(request.headers.get("x-harness-workspace") or "default")
 
 
 class PlugBody(BaseModel):
@@ -14415,8 +14499,9 @@ def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, sta
 async def list_plugs(request: Request) -> dict:
     """The plugin catalog for the caller's workspace: every type this instance serves, with its
     state here (connected, disabled, needs_auth, missing)."""
-    org, _ = await _pub_org_member(request)
-    workspace = _plug_workspace(request)
+    _caller = await _pub_principal(request)
+    org, _ = _caller["org"], _caller.get("member", "")
+    workspace = _plug_workspace(request, _caller)
     out = []
     for t in _PLUG_FORMS:
         status, rec = await _plug_lookup(org, workspace, t)
@@ -14429,14 +14514,15 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
     """Connect a plugin for the caller's workspace, change its settings, or turn it off. A
     credential goes to the instance's secret store, never onto the record; a plug that needs one
     and has none yet reads needs_auth until it is given."""
-    org, _ = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
     if PLUGS_REGISTRY_URL:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
     form = _PLUG_FORMS.get(plug_type)
     if not form:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type",
                         {"supported": sorted(_PLUG_FORMS)})
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     _status, prev = await _plug_lookup_local(org, workspace, plug_type)
     config = dict((prev or {}).get("config") or {})
     for k, v in (body.config or {}).items():
@@ -14569,10 +14655,11 @@ class MicrosoftCompleteBody(BaseModel):
 @app.post("/v1/plugs/microsoft365/microsoft/start")
 async def microsoft_start(body: MicrosoftStartBody, request: Request) -> dict:
     """Where the person goes to sign in with Microsoft for this workspace's application."""
-    org, member = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org, member = _caller["org"], _caller.get("member", "")
     if PLUGS_REGISTRY_URL:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     rec = await _m365_plug(org, workspace)
     config = rec.get("config") or {}
     if plugs_plane.m365_mode({}, config) != "delegated":
@@ -14638,8 +14725,9 @@ async def microsoft_complete(body: MicrosoftCompleteBody, request: Request) -> d
 async def microsoft_signout(request: Request) -> dict:
     """Forget this person's sign-in: their refresh token and their account on the record. With
     nobody signed in a delegated plug waits for a sign-in again."""
-    org, member = await _pub_org_member(request)
-    workspace = _plug_workspace(request)
+    _caller = await _pub_principal(request)
+    org, member = _caller["org"], _caller.get("member", "")
+    workspace = _plug_workspace(request, _caller)
     rec = await _m365_plug(org, workspace)
     config = dict(rec.get("config") or {})
     field = plugs_plane.m365_person_field(member)
@@ -14673,10 +14761,11 @@ async def microsoft_signout(request: Request) -> dict:
 @app.get("/v1/plugs/{plug_type}/attachments")
 async def plug_attachments_public(plug_type: str, request: Request) -> dict:
     """How many of the caller's workspace's harnesses include this plugin, from the bindings."""
-    org, _ = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org, _ = _caller["org"], _caller.get("member", "")
     if plug_type not in _PLUG_FORMS:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     rows = _plugs_harness_rows(org, workspace, await BACKING.graph.find("Harness", {"org": org}))
     attached = []
     for r in rows:
@@ -14705,12 +14794,13 @@ async def delete_plug(plug_type: str, request: Request) -> dict:
     """Remove a plugin from the workspace: the record goes and the credential it kept is deleted
     from the secret store. A harness that includes it keeps its entry and loses the tools on its
     next task; nothing at the service changes, and the workspace can connect it again."""
-    org, _ = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
     if PLUGS_REGISTRY_URL:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
     if plug_type not in _PLUG_FORMS:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     _status, rec = await _plug_lookup_local(org, workspace, plug_type)
     if not rec:
         raise uhp_error(404, "plug_not_connected", f"No {plugs_plane.TYPES[plug_type]} plugin is connected for this workspace.", "plug_type")
@@ -14820,8 +14910,9 @@ async def _plugs_server_out(org: str, entry: dict, rec: dict) -> dict:
 async def attach_plugs(hid: str, body: PlugsBody, request: Request) -> dict:
     """Attach the workspace's plugs to one of the caller's harnesses. Idempotent: attaching again
     replaces the list of plugs and tools and rewrites nothing else."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     plugs = _plugs_types_ok(body.plugs)
     await _plugs_attach(org, hid, v, plugs, _plugs_tools_ok(body.tools, plugs))
     entry, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, _mcp_list(await _vertex_get(hid) or v),
@@ -14833,8 +14924,9 @@ async def attach_plugs(hid: str, body: PlugsBody, request: Request) -> dict:
 async def detach_plugs(hid: str, request: Request) -> dict:
     """Detach them: the entry goes and its binding record is scrubbed. The plugs themselves stay
     connected to the workspace for every other harness."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     cur = _mcp_list(v)
     after = [e for e in cur if str(e.get("id") or "") != _PLUGS_ENTRY["id"]]
     if len(after) == len(cur):
@@ -17314,7 +17406,8 @@ def _workspace_keep(item_ws: str, workspace: str, ws_default: bool) -> bool:
 async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     p = await _owned_org(request, org)
     member = p.get("member") or request.headers.get("x-harness-member", "")
-    workspace = request.headers.get("x-harness-workspace", "")
+    # a key held to a workspace stamps its own, whatever header it sends; any other caller names it
+    workspace = _key_scope(p) or request.headers.get("x-harness-workspace", "")
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
@@ -17338,7 +17431,9 @@ async def list_harnesses(org: str, request: Request,
     vs empty for org keys); GET-by-id never filtered by member anyway. The member prop
     is still recorded on the vertex for attribution. Optional `workspace` narrows to one
     workspace (Space id); `workspace_default=1` lets unstamped legacy records through."""
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
+    if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
+        workspace, workspace_default = _key_scope(p), 0
     rows = await _vg_list_by_org("Harness", org)
     items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
@@ -17350,10 +17445,7 @@ async def list_harnesses(org: str, request: Request,
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}")
 async def get_harness(org: str, hid: str, request: Request) -> dict:
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     return _harness_out(await _mcp_migrate(org, hid, v))
 
 
@@ -17361,10 +17453,7 @@ async def get_harness(org: str, hid: str, request: Request) -> dict:
 async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     """Model-capability view for a harness (internal / console BFF): allowed models, default, and
     the authorized fallback. The console populates its model selector from this."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
                or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
@@ -17375,10 +17464,7 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
 async def get_harness_skill_files(org: str, hid: str, skill_id: str, request: Request) -> dict:
     """Full files of one harness skill, resolving the blob offload — the console uses this to
     hydrate a folder skill for editing (large bundles round-trip as {name, enabled, blob})."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -17394,10 +17480,7 @@ async def get_harness_skill_files(org: str, hid: str, skill_id: str, request: Re
 @app.get("/v1/orgs/{org}/harnesses/{hid}/plugins/{name}/files")
 async def get_harness_plugin_files(org: str, hid: str, name: str, request: Request) -> dict:
     """The complete package of one installed plugin (Plugins §3.1), byte-for-byte."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     pe = _plugin_entry(v, name)
     files = await _plugin_files_of(pe, org)
     if not files:
@@ -17408,20 +17491,15 @@ async def get_harness_plugin_files(org: str, hid: str, name: str, request: Reque
 @app.get("/v1/orgs/{org}/harnesses/{hid}/plugin")
 async def export_harness_plugin(org: str, hid: str, request: Request) -> dict:
     """The harness's own tools and skills as an Agent Plugins package (Plugins §5)."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     return await _harness_export_plugin(await _mcp_migrate(org, hid, v) or v)
 
 
 @app.put("/v1/orgs/{org}/harnesses/{hid}")
 async def update_harness(org: str, hid: str, body: HarnessBody, request: Request) -> dict:
-    await _owned_org(request, org)
+    _caller = await _owned_org(request, org)
     # V1C02-005: bind the mutation to the caller's org — a foreign harness id must not be editable.
-    cur = await _vertex_get(hid)
-    if not cur or str(cur.get("org") or "") != org or str(cur.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    cur = await _harness_in_reach(_caller, hid)
     cur = await _mcp_migrate(org, hid, cur)
     # Harnesses §5.2: id, base and createdAt are immutable. A body naming a different base is
     # refused rather than applied, because applying it would change the behaviour of every
@@ -17447,11 +17525,9 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
 
 @app.delete("/v1/orgs/{org}/harnesses/{hid}")
 async def delete_harness(org: str, hid: str, request: Request) -> dict:
-    await _owned_org(request, org)
+    _caller = await _owned_org(request, org)
     # V1C02-005: only delete a harness that belongs to the caller's org.
-    cur = await _vertex_get(hid)
-    if not cur or str(cur.get("org") or "") != org:
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    cur = await _harness_in_reach(_caller, hid, deleted_ok=True)
     cur = await _mcp_migrate(org, hid, cur)
     await _vg_upsert("Harness", hid, {"deleted": "1"})
     # a deleted agent must not still be holding a database password, and must not still be
@@ -17523,7 +17599,10 @@ class WorkspaceBody(BaseModel):
 
 @app.post("/v1/hr/workspaces")
 async def workspaces_create(body: WorkspaceBody, request: Request) -> dict:
-    org, member = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org, member = _caller["org"], _caller.get("member", "")
+    if _key_scope(_caller):
+        raise uhp_error(403, "forbidden", "A key held to one workspace does not make workspaces.")
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "a workspace needs a name")
@@ -17552,7 +17631,10 @@ async def workspaces_create(body: WorkspaceBody, request: Request) -> dict:
 
 @app.patch("/v1/hr/workspaces/{wid}")
 async def workspaces_update(wid: str, body: WorkspaceBody, request: Request) -> dict:
-    org, _member = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    if _key_scope(_caller) and _key_scope(_caller) != wid:
+        raise uhp_error(403, "forbidden", "A key held to one workspace changes that workspace only.")
     rows = await _workspace_rows(org)
     v = next((r for r in rows if str(r.get("ws_id")) == wid), None)
     if v is None:
@@ -17567,6 +17649,15 @@ async def workspaces_update(wid: str, body: WorkspaceBody, request: Request) -> 
 
 # ── PUBLIC harness CRUD (Bearer sk-hr-... API key; org resolved from the key) ──────────
 # This is what a vibe coder's agent (driven by AGENTS.md) calls — no org id, no internal header.
+async def _pub_principal(request: Request) -> dict:
+    """The caller of a public route, whole: its organization AND the workspace it is narrowed to,
+    which a route that takes an id needs and (org, member) alone left behind."""
+    p = await _principal(request)
+    if not p.get("org"):
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    return p
+
+
 async def _pub_org_member(request: Request) -> tuple[str, str]:
     p = await _principal(request)
     org = p.get("org", "")
@@ -18286,6 +18377,7 @@ class CloudUploadOneBody(BaseModel):
 @app.post("/v1/harnesses/{hid}/upload", include_in_schema=False)
 async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody | None = None) -> dict:
     p = await _principal(request)
+    await _harness_in_reach(p, hid)
     target = await _cloud_pick_target((body.target if body else None))
     records = await _cloud_records()
     res = await _cloud_upload_one(p.get("org", ""), hid, target, records)
@@ -18300,6 +18392,8 @@ async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody 
 async def cloud_upload_status(hid: str, request: Request) -> dict:
     """The chip on the harness page: never uploaded, uploaded, or changed since."""
     p = await _principal(request)
+    if hid not in _BASE_CATALOG:
+        await _harness_in_reach(p, hid)
     records = await _cloud_records()
     per = records.get("harnesses", {}).get(hid) or {}
     if not per:
@@ -18330,10 +18424,9 @@ async def cloud_upload_status_all(request: Request) -> dict:
 
 @app.get("/v1/harnesses/{hid}")
 async def get_harness_public(hid: str, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     return _harness_out(await _mcp_migrate(org, hid, v))
 
 
@@ -18455,10 +18548,9 @@ async def list_models(request: Request) -> dict:
 async def get_harness_models_public(hid: str, request: Request) -> dict:
     """Model-capability view for a harness (public, Bearer): allowed models, default, authorized
     fallback. A request for a model outside this set is replaced by the fallback at run time."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
                or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
@@ -18470,10 +18562,7 @@ async def get_harness_skill_files_public(hid: str, skill_id: str, request: Reque
     """Full files of one skill (public, Bearer), resolving the server-side blob offload — large
     folder bundles round-trip on the harness record as {name, enabled, blob}; this returns the
     real files for editing or verification. `skill_id` matches the entry's id or name."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _pub_principal(request), hid)
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -18489,10 +18578,9 @@ async def get_harness_skill_files_public(hid: str, skill_id: str, request: Reque
 @app.get("/v1/harnesses/{hid}/plugins/{name}/files")
 async def get_harness_plugin_files_public(hid: str, name: str, request: Request) -> dict:
     """UHP Plugins §3.1: the complete package of one installed plugin."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     pe = _plugin_entry(v, name)
     files = await _plugin_files_of(pe, org)
     if not files:
@@ -18503,10 +18591,9 @@ async def get_harness_plugin_files_public(hid: str, name: str, request: Request)
 @app.get("/v1/harnesses/{hid}/plugin")
 async def export_harness_plugin_public(hid: str, request: Request) -> dict:
     """UHP Plugins §5: the harness's own tools and skills as an Agent Plugins package."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     return await _harness_export_plugin(await _mcp_migrate(org, hid, v) or v)
 
 
@@ -18522,10 +18609,9 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
     harness holds (a kit's, or one installed by hand) and every other package stays; the harness's
     next turn runs it. This is `set_config` for a harness whose configuration lives in its package
     (docs/dual-loop.md, Appendix B), and the route a calibration credential publishes through."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     v = await _mcp_migrate(org, hid, v)
     item = {k: getattr(body, k) for k in ("name", "files", "blob") if getattr(body, k)}
     if not item.get("files") and not item.get("blob"):
@@ -18542,10 +18628,9 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
 
 @app.put("/v1/harnesses/{hid}")
 async def update_harness_public(hid: str, body: HarnessBody, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     _p = await _principal(request)
     if _p.get("calibration") and str(body.calibrates or "") != str(v.get("calibrates") or ""):
         raise uhp_error(403, "forbidden", "A calibration credential cannot grant calibration.", "calibrates")
@@ -18568,10 +18653,9 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
 
 @app.delete("/v1/harnesses/{hid}")
 async def delete_harness_public(hid: str, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org:
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid, deleted_ok=True)
     v = await _mcp_migrate(org, hid, v)
     await _vg_upsert("Harness", hid, {"deleted": "1"})
     # a deleted agent must not still be holding a database password, and must not still be

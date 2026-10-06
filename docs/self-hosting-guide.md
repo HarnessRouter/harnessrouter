@@ -988,9 +988,11 @@ variables. It is a setup check, not a technical prerequisite for the API.
 3. Copy the secret shown once. Store it in your product backend's secret store or environment. The examples call this variable `HARNESSROUTER_API_KEY`.
 
 The key is scoped to the selected workspace and can be rotated or revoked on the same page.
-A harness runs with a key of its own workspace: a task that names a harness of another workspace,
-or of another organization, is answered `404 harness_not_found`, the same as an id that does not
-exist. A built-in base (`codex`, `claude-code`, ...) runs with any key.
+A key made in a workspace other than the Default Workspace reaches that workspace and nothing else:
+a harness, a task, a file or a response of another workspace is answered `404`, the same as an id
+that does not exist, and such a key makes new keys for its own workspace only. A key made in the
+Default Workspace, and an organization key (the **Reach** choice when you create a key), reach every
+workspace of the organization. A built-in base (`codex`, `claude-code`, ...) runs with any key.
 It is created in this self-hosted instance and authenticates requests to that CE deployment. It is
 neither a Cloud key, your Console password, nor the model-provider key configured
 in **Integrations**. Never put it in browser-side code or commit it to Git.
