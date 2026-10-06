@@ -109,7 +109,8 @@ class Vendor:
                 assert body["gitSource"] == {"type": "github", "repoId": 42, "ref": "main"}
                 return httpx.Response(200, json={"id": "dpl_1", "url": "site-abc.vercel.app", "readyState": "QUEUED"})
             if path == "/v13/deployments/dpl_1":
-                return httpx.Response(200, json={"id": "dpl_1", "url": "site-abc.vercel.app", "readyState": "READY", "target": "production"})
+                return httpx.Response(200, json={"id": "dpl_1", "url": "site-abc.vercel.app", "readyState": "READY",
+                                                 "target": getattr(self, "target", "production")})
             return httpx.Response(404, json={"error": {"message": f"no mock for {path}"}})
         if host == "acme.insforge.app":
             assert r.headers.get("Authorization") == f"Bearer {INF_KEY}"
@@ -434,6 +435,19 @@ def test_push_files_deploy_and_insert_drive_the_vendors_as_documented(world):
                                                   {"token": VC_TOKEN}, _record("vercel")["config"])))
     assert out["id"] == "dpl_1" and out["readyState"] == "READY"
     assert json.loads(ven.calls[1].content)["target"] == "production"
+    assert "note" not in out                      # production was asked for and given: nothing to say
+    # A project's first deployment is production at Vercel whatever is asked (seen twice on the
+    # hosted service, 2026-10-05): a preview request answered with a production deployment says so
+    # and what to do.
+    out = json.loads(asyncio.run(plugs_plane.call("vercel", "deploy_from_repo", {},
+                                                  {"token": VC_TOKEN}, _record("vercel")["config"])))
+    assert out["target"] == "production" and "first deployment" in out["note"] and "again" in out["note"]
+    ven.target = None                              # the second deployment on: a preview, as asked
+    out = json.loads(asyncio.run(plugs_plane.call("vercel", "deploy_from_repo", {},
+                                                  {"token": VC_TOKEN}, _record("vercel")["config"])))
+    assert "note" not in out and out.get("target") != "production"
+    ven.target = "production"
+    assert "FIRST deployment" in plugs_plane.find("vercel", "deploy_from_repo")["description"]
     out = json.loads(asyncio.run(plugs_plane.call("vercel", "get_project", {}, {"token": VC_TOKEN}, _record("vercel")["config"])))
     assert out["domains"] == ["site.vercel.app"] and out["link"]["repo"] == "site"
 
