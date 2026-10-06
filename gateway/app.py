@@ -1004,6 +1004,29 @@ def _calibration_route_allowed(method: str, path: str, inner: str) -> bool:
     return any(m == method.upper() and re.fullmatch(pat, path) for m, pat in allowed)
 
 
+def _calibration_inner(principal: dict) -> str:
+    """The one harness a calibration credential drives; "" for every other caller."""
+    c = principal.get("calibration")
+    return str(c.get("inner") or "") if c else ""
+
+
+async def _calibration_holds_session(inner: str, sid: str) -> bool:
+    """Whether a session already belongs to the harness a calibration credential drives. The route
+    list above says which doors the credential may knock on; this is what it may touch behind them:
+    a session of that harness, and a response of such a session, and nothing else in the org. A
+    session that names no harness is not its harness's (an ordinary caller's turn may claim a blank
+    one; this credential may not, or a known id would be a way into any unnamed conversation)."""
+    v = await _vertex_get(sid) if sid else None
+    return bool(v) and bool(inner) and str(v.get("harness_id") or "") == inner
+
+
+async def _calibration_holds_response(inner: str, rec: dict | None) -> bool:
+    """...and a response is its harness's when the session that produced it is."""
+    rec = rec or {}
+    sid = str(rec.get("_session_id") or (rec.get("metadata") or {}).get("session_id") or "")
+    return await _calibration_holds_session(inner, sid)
+
+
 def _calibration_env(hv: dict | None, org: str, sid: str, timeout_s: int | None) -> dict | None:
     """What a turn of a harness that drives another one is handed, or None: the platform's own
     API and a credential scoped to the harness it names, good for the turn's wall-clock cap plus
@@ -8422,6 +8445,36 @@ async def create_response(body: CreateResponseBody, request: Request):
         raise HTTPException(400, "no org resolved for this principal")
     meta = body.metadata or {}
     probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
+    # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
+    # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
+    harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
+    if not harness_id and body.previous_response_id:
+        # A continuation belongs to its session's harness. A client that does not repeat harness_id
+        # on a follow-up (the protocol asks only for previous_response_id) used to be routed by the
+        # inherited MODEL NAME, and for a base whose models no chat backend serves that fell to the
+        # default backend: a systemone follow-up asked claude for jev-1.13 (measured 2026-09-19).
+        # The session vertex records the harness the conversation started on; that is the harness.
+        _pr = await _resp_get(body.previous_response_id)
+        _psid = str(((_pr or {}).get("metadata") or {}).get("session_id") or "")
+        _pv = await _vertex_get(_psid) if _psid else None
+        harness_id = str((_pv or {}).get("harness_id") or "")
+    harness_name = str(meta.get("harness_name") or "")
+    # A calibration credential is held to its one harness HERE, before the idempotency replay below
+    # hands back a stored response and before any session is touched: a refusal that comes after a
+    # read or a write is not a refusal. It starts runs on that harness, and continues only a
+    # conversation that is already that harness's. Naming its own harness and another harness's
+    # response or session used to pass (the check looked at the harness id alone), and the turn then
+    # ran in the other conversation's workspace.
+    _cal = principal.get("calibration")
+    if _cal and harness_id != str(_cal.get("inner") or ""):
+        raise uhp_error(403, "forbidden", "This credential starts runs on the one harness it drives.",
+                        "metadata.harness_id", {"harness_id": _cal.get("inner")})
+    if _cal and body.previous_response_id and not await _calibration_holds_response(
+            _calibration_inner(principal), await _resp_get(body.previous_response_id)):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "previous_response_id")
+    if _cal and str(meta.get("session_id") or "") and not await _calibration_holds_session(
+            _calibration_inner(principal), str(meta.get("session_id") or "")):
+        raise uhp_error(404, "session_not_found", "No session with that id.", "metadata.session_id")
     # Request idempotency: the durable control store is the SINGLE authority (create_item = atomic
     # reservation). No in-process/blob/Redis fallback — a keyed request without the store fails
     # closed (503), never runs a divergent degraded path. idem_sha_v/idem_rhash are computed here
@@ -8442,24 +8495,6 @@ async def create_response(body: CreateResponseBody, request: Request):
             if str(existing.get("req_hash") or "") not in ("", idem_rhash):
                 raise HTTPException(409, "Idempotency-Key reused with a different request payload")
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
-    # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
-    # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
-    harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
-    if not harness_id and body.previous_response_id:
-        # A continuation belongs to its session's harness. A client that does not repeat harness_id
-        # on a follow-up (the protocol asks only for previous_response_id) used to be routed by the
-        # inherited MODEL NAME, and for a base whose models no chat backend serves that fell to the
-        # default backend: a systemone follow-up asked claude for jev-1.13 (measured 2026-09-19).
-        # The session vertex records the harness the conversation started on; that is the harness.
-        _pr = await _resp_get(body.previous_response_id)
-        _psid = str(((_pr or {}).get("metadata") or {}).get("session_id") or "")
-        _pv = await _vertex_get(_psid) if _psid else None
-        harness_id = str((_pv or {}).get("harness_id") or "")
-    harness_name = str(meta.get("harness_name") or "")
-    _cal = principal.get("calibration")
-    if _cal and harness_id != str(_cal.get("inner") or ""):
-        raise uhp_error(403, "forbidden", "This credential starts runs on the one harness it drives.",
-                        "metadata.harness_id", {"harness_id": _cal.get("inner")})
     hv = await _harness_vertex(harness_id) if harness_id else None
     # A deleted harness cannot run new turns (same 404 as the read endpoints), and a harness runs
     # only for the organization and workspace that own it: see _turn_harness_owned.
@@ -9019,6 +9054,9 @@ async def get_response(response_id: str, request: Request):
     # so a cross-org id probe can't confirm existence. Legacy records with no _org stay readable.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
+    _inner = _calibration_inner(principal)
+    if _inner and not await _calibration_holds_response(_inner, rec):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # not its harness's
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
@@ -9438,6 +9476,9 @@ async def cancel_response(response_id: str, request: Request):
     # so a cross-org probe can't even confirm the id exists.
     if str(rec.get("_org") or "") != org:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
+    _inner = _calibration_inner(principal)
+    if _inner and not await _calibration_holds_response(_inner, rec):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # not its harness's
     sid = str(rec.get("_session_id") or "")
     # PRIMARY (safe, cross-replica): a durable per-RESPONSE monotonic terminal latch. The turn's
     # own loop checks resp_is_cancelled(its resp_id) at every stage and self-terminates within
@@ -17704,9 +17745,6 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     if db_in and not decl:
         raise uhp_error(400, "connection_not_used",
                         f"The '{kit_id}' kit does not read a database.", "database")
-    # Checked before anything is provisioned: a typo in a connection string should cost the person
-    # a corrected form, not a half-configured Harness to find and fix.
-    checked = await _db_validate(db_in.engine, db_in.connection_string) if db_in else None
 
     # Per workspace (see list_kits): launching in a second workspace makes that workspace its own
     # Harness rather than handing back the first workspace's, which its members could not see.
@@ -17716,6 +17754,19 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                      and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
     want_h = (body_in.harness if body_in else "").strip()
+    # A calibration credential relaunches the kit on the harness it drives and does nothing else
+    # here: the kit must already run on that harness, and it may name no other. Decided NOW, from
+    # what was read, before the connection check below opens a socket and before anything is
+    # written. This check used to sit after the two writes that move a kit to the harness named in
+    # the request, so the credential (which carries no workspace and so sees every harness of the
+    # organization) could name any of them: the answer was 403 and the kit had already been taken
+    # off its harness and put on that one (reported privately, twice).
+    _inner = _calibration_inner(p)
+    if _inner and (str((existing or {}).get("id") or "") != _inner or (want_h and want_h != _inner)):
+        raise uhp_error(403, "forbidden", "This credential relaunches the kit on the harness it drives only.", "harness")
+    # Checked before anything is provisioned: a typo in a connection string should cost the person
+    # a corrected form, not a half-configured Harness to find and fix.
+    checked = await _db_validate(db_in.engine, db_in.connection_string) if db_in else None
     if want_h and want_h != str((existing or {}).get("id") or ""):
         # Run the kit on a Harness the person already has. One kit, one Harness: the previous kit
         # Harness keeps its sessions and its package but is no longer the one the app talks to,
@@ -17733,8 +17784,6 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         await _vg_upsert("Harness", want_h, {"kit": kit_id, "updated_at": now0})
         existing = await _vertex_get(want_h) or {**target, "kit": kit_id}
         print(f"[kits] {kit_id} now runs on {want_h}", flush=True)
-    if p.get("calibration") and str((existing or {}).get("id") or "") != str(p["calibration"].get("inner") or ""):
-        raise uhp_error(403, "forbidden", "This credential relaunches the kit on the harness it drives only.", "harness")
     if decl and not db_in and not existing:
         # Declaring launch.database is what makes it required: every panel this kit builds would
         # have nothing to read, so a launch without a connection is not a partial success.
