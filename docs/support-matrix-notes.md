@@ -2862,3 +2862,44 @@ gpt-5.4 unless said; thinking tokens at none, low, high):
 here for every keyed turn), so the relay never saw their calls; there they now take the relay for a
 turn that asks for a level. That difference between the trees is the hosted one's and is recorded
 here because the column is shared.
+
+## How long a thinking model says nothing, and the relay's wait (2026-10-06, 0.31.0)
+
+The relay ends a model call that sends no event for `HR_RELAY_UPSTREAM_TIMEOUT_S`. The default was
+600 s and is 180 s from 0.31.0, the value the hosted service runs. Before changing it the cost was
+measured, because the old default had been chosen for it: a model that thinks without sending
+anything looks, on the wire, like a provider that has stopped.
+
+One hard three-part counting problem, streamed, at each model's highest thinking level, straight at
+the provider through a connection of hr-test, with the relay's own wait raised to 1,200 s so it could
+not interfere. An event is a `data:` line; a keep-alive comment line is not one, here as in the relay.
+One sample per cell. The longest run with no event:
+
+| model, level | TokenRouter | Vercel |
+|---|---:|---:|
+| gpt-5.5, xhigh, Chat Completions | 201 s | 11 s |
+| gpt-5.5, xhigh, Responses | 30 s | 61 s |
+| gpt-6.1-sol, xhigh | 19 s (Responses) | 15 s (Chat Completions) |
+| gpt-6-sol, xhigh, Chat Completions | no answer in 1,200 s | |
+| gemini-3.1-pro-preview, high | 205 s | 4.5 s |
+| claude-opus-5, xhigh | 35 s | |
+| claude-opus-5.5, xhigh | | 211 s |
+| grok-4.6, xhigh | 13 s | 12 s |
+| deepseek-v4-pro, xhigh | 2 s | |
+| kimi-k3, high | | 0.7 s |
+| qwen3.7-max, high | | 2 s |
+
+Whether thinking shows on the wire is a property of the route and the request shape, not of the
+model. Where a route forwards reasoning as it happens the stream is never quiet for long, and that
+was 13 of the 16 cells. Three were silent for over 200 s and then answered: OpenAI's Chat Completions
+through TokenRouter sends nothing until the first token of the answer (the same model on the
+Responses API, or through Vercel, streams throughout), TokenRouter's Gemini channel likewise, and
+Claude Opus 5.5 through Vercel sent one event and then keep-alive lines for 211 s. One call never
+answered at all.
+
+So the two waits buy different things. At 600 s the three silent answers complete and the call that
+never answers holds its turn for ten minutes. At 180 s that call ends in three minutes and the three
+answers are cut off as "the provider did not answer". Richard chose 180 s for both the hosted service
+and this default with these numbers in front of him. An operator who runs such models at such levels
+on such routes raises the variable; the bases that speak the Responses API to OpenAI models (Codex,
+hermes, opencode, kilo) were not exposed in any cell.

@@ -906,6 +906,8 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HR_SANDBOX_TRUST` | `owner` | You own the box, the agent and the key, so the key is handed over directly rather than brokered. |
 | `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume, so a restart doesn't discard work in flight. |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
+| `HR_RELAY_UPSTREAM_TIMEOUT_S` | `180` | How long one model call may go without sending anything before the turn is told the provider did not answer. Raise it (it was 600 before 0.31.0) if you run models that think for minutes without streaming: a few do at their highest thinking level. |
+| `HARNESS_RESP_HOLD_S` | `3` | How long the gateway lets the runner hold a request for a turn's events. `0` asks every 1.2 s as before 0.30.1. |
 | `HARNESS_INTERNAL_KEY` | generated | Per-container; never leaves the process tree. |
 
 </details>
