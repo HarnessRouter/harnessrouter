@@ -399,8 +399,14 @@ task can run for longer, so a connection of this kind always goes through the ga
 again as the token ages.
 
 When the sign-in is refused, the task fails with Entra's own reason, for example
-`Microsoft Entra refused this connection's sign-in: AADSTS90002: Tenant '...' not found`. A directory
-or application ID that is not a GUID, or a missing secret, is refused when you save.
+`Your azure connection was refused: ... Microsoft Entra refused this connection's sign-in: AADSTS90002: Tenant '...' not found`.
+When the application has no role on the resource, the reason is Azure's:
+`The principal ... lacks the required data action Microsoft.CognitiveServices/accounts/OpenAI/responses/write`.
+A directory or application ID that is not a GUID, or a missing secret, is refused when you save.
+
+The same role serves a Foundry resource (kind `AIServices`); its endpoint is
+`https://<resource>.services.ai.azure.com`. A connection reaches the models deployed on the resource
+under the names this instance knows them by.
 
 A sovereign cloud sets `HR_ENTRA_AUTHORITY` (default `https://login.microsoftonline.com`).
 

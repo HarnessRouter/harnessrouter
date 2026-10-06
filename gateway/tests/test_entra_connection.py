@@ -90,9 +90,33 @@ def test_a_refused_sign_in_says_what_entra_said_and_never_the_secret(monkeypatch
     monkeypatch.setattr(gw, "_client", lambda: entra)
     with pytest.raises(HTTPException) as e:
         asyncio.run(gw._entra_token(CONN))
-    assert e.value.status_code == 502 and "AADSTS7000215" in e.value.detail
+    # 401, as a provider refusing an API key answers: the agent stops and the turn says so
+    assert e.value.status_code == 401 and "AADSTS7000215" in e.value.detail
+    assert e.value.detail.startswith("Microsoft Entra refused this connection's sign-in: ")
     assert "Trace ID" not in e.value.detail and "s3cret-value" not in e.value.detail
     assert not gw._entra_tokens                       # a refusal is not remembered: the next call asks again
+
+
+def test_entra_failing_is_not_a_refusal_of_the_connection(monkeypatch):
+    for status, doc in ((429, {"error": "temporarily_unavailable", "error_description": "AADSTS90055: Too many requests."}),
+                        (503, {}), (200, {"token_type": "Bearer"})):
+        gw._entra_tokens.clear()
+        monkeypatch.setattr(gw, "_client", lambda status=status, doc=doc: _Entra([_Resp(status, doc)]))
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(gw._entra_token(CONN))
+        assert e.value.status_code == 502 and e.value.detail.startswith("Microsoft Entra did not sign this connection in: "), status
+        assert not gw._provider_refused(f"hr API error (502): {e.value.detail}"), status
+
+
+def test_a_turn_refused_on_an_entra_connection_does_not_speak_of_a_key():
+    entra = "hr API error (401): Microsoft Entra refused this connection's sign-in: AADSTS7000215: Invalid client secret provided."
+    role = 'hr API error (401): {"code":"PermissionDenied","message":"The principal lacks the required data action"}'
+    for err in (entra, role):
+        assert gw._provider_refused(err)             # so the turn stops here and does not try another connection
+        said = gw._refusal_message({"provider": "azure", "auth": "entra"}, err)
+        assert said == f"Your azure connection was refused: {err}" and " key " not in said
+    assert gw._refusal_message({"provider": "azure"}, role) == f"Your azure key was refused: {role}"
+    assert gw._refusal_message({"provider": "openai"}, "") == "Your openai key was refused: the provider returned an error"
 
 
 def test_another_secret_or_scope_is_another_token(monkeypatch):

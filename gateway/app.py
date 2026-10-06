@@ -3914,6 +3914,15 @@ def _history_refusal(rec: dict, reason: str) -> str:
             f"produced under another route). Start a new task for {model}{keep}.")
 
 
+def _refusal_message(conn: dict | None, err: str) -> str:
+    """What a turn says when the provider refused the org's own connection. A connection that signs
+    in with Microsoft Entra has no key: what was refused is the application, by Entra (a wrong
+    directory, id or secret) or by the resource (no role on it), and the provider's words say which."""
+    provider = str((conn or {}).get("provider") or "your provider")
+    what = "connection" if str((conn or {}).get("auth") or "").strip().lower() == "entra" else "key"
+    return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
+
+
 def _turn_failure_message(rec: dict) -> str:
     """What a failed turn says: the org's own key's refusal in plain words when that is why, else
     the last connection's reason in words. Never the tried list itself: its JSON, with our
@@ -4050,7 +4059,15 @@ async def _entra_token(conn: dict) -> str:
             # Entra's own code and first sentence (AADSTS7000215: Invalid client secret provided...)
             # are what the person fixing the connection needs; neither carries the secret.
             why = str((doc or {}).get("error_description") or (doc or {}).get("error") or f"HTTP {r.status_code}").split("\r\n")[0].split("\n")[0][:300]
-            raise HTTPException(502, f"Microsoft Entra refused this connection's sign-in: {why}")
+            if r.status_code in (400, 401, 403):
+                # A directory, application or secret Entra does not accept is this connection's own
+                # credentials being wrong: the same thing as a provider refusing an API key, and
+                # answered the same way. On a 502 Codex reconnected five times before giving up and
+                # a turn was free to try its next connection (measured 2026-10-06); on a 401 the
+                # agent stops and the turn says the connection was refused.
+                raise HTTPException(401, f"Microsoft Entra refused this connection's sign-in: {why}")
+            # Entra throttling or failing is not a refusal: a bad gateway, which may pass.
+            raise HTTPException(502, f"Microsoft Entra did not sign this connection in: {why}")
         try:
             life = max(60.0, float(doc.get("expires_in") or 3600) - _ENTRA_EARLY_S)
         except (TypeError, ValueError):
@@ -7972,8 +7989,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             # believed this one worked. On a self-hosted install every key is the operator's own,
             # so the rule is the refusal itself, not which store the key came from. Other failures
             # (a transient error, a timeout) still move on to the next connection.
-            provider = str(conn.get("provider") or "your provider")
-            rec["error_message"] = f"Your {provider} key was refused: {_last_err or 'the provider returned an error'}"
+            rec["error_message"] = _refusal_message(conn, _last_err)
             status = "failed"
             rec["status"] = "failed"
             await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "last_connection": name})
