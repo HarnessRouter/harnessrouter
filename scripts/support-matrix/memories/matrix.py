@@ -272,7 +272,8 @@ class Cell:
         out["model"] = str(d.get("model") or "")
         out["session"] = str((d.get("metadata") or {}).get("session_id") or "")
         out["s"] = int(time.time() - t0)
-        self.turns.append({"asked": text[:60], **{k: out[k] for k in ("status", "tools", "s", "model")}})
+        # the response and its session are kept so a failed cell can be read afterwards, tool call by tool call
+        self.turns.append({"asked": text[:60], "response": rid, **{k: out[k] for k in ("status", "tools", "s", "model", "session")}})
         return out
 
 
