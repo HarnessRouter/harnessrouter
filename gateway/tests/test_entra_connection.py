@@ -103,9 +103,12 @@ def test_what_can_be_saved_as_an_entra_connection():
     ok = {k: v for k, v in CONN.items() if k != "provider"}
     assert gw._entra_config_error("azure", ok) == "" == gw._entra_config_error("azure-foundry", ok)
     assert "Azure" in gw._entra_config_error("openai", ok)
-    assert gw._entra_config_error("azure", {**ok, "client_secret": ""}) == "missing client_secret"
-    assert "GUID" in gw._entra_config_error("azure", {**ok, "tenant_id": "contoso.onmicrosoft.com"})
-    assert "base_url" in gw._entra_config_error("azure", {**ok, "base_url": ""})
+    assert gw._entra_config_error("azure", {**ok, "client_secret": ""}) == "missing the Client secret"
+    assert gw._entra_config_error("azure", {**ok, "client_secret": "", "tenant_id": ""}) == \
+        "missing the Directory (tenant) ID, the Client secret"
+    why = gw._entra_config_error("azure", {**ok, "tenant_id": "contoso.onmicrosoft.com"})
+    assert why.startswith("the Directory (tenant) ID is written as a GUID") and "tenant_id" not in why
+    assert "Endpoint URL" in gw._entra_config_error("azure", {**ok, "base_url": ""})
     assert gw._entra_conn(CONN) and not gw._entra_conn({"provider": "azure", "api_key": "k"}) and not gw._entra_conn(None)
 
 
@@ -186,7 +189,7 @@ def test_saving_takes_a_key_or_entra_and_never_both(monkeypatch):
                                  "config": {**cfg, "client_secret": gw._SECRET_SENTINEL}}],
                   stored=[out["Azure Entra"]])
     assert again["Azure Entra"]["config"]["client_secret"] == "s3cret-value"
-    for bad, why in (({**entra_cfg, "client_secret": ""}, "missing client_secret"),
+    for bad, why in (({**entra_cfg, "client_secret": ""}, "missing the Client secret"),
                      ({**entra_cfg, "tenant_id": "contoso.onmicrosoft.com"}, "GUID"),
                      ({**entra_cfg, "auth": "certificate"}, 'auth is "key" or "entra"')):
         with pytest.raises(HTTPException) as e:
@@ -210,3 +213,6 @@ def test_the_form_is_told_which_provider_offers_entra_and_what_to_ask():
     assert [f["key"] for f in entra["fields"]] == ["tenant_id", "client_id"] and entra["secret"] == "client_secret"
     assert entra["secret"] in gw._INTEGRATION_SECRET_FIELDS
     assert all("entra" not in p for pid, p in by_id.items() if pid != "azure-foundry")
+    # the words a refusal uses are the form's own labels
+    labels = {f["key"]: f["label"] for f in entra["fields"]} | {entra["secret"]: entra["secret_label"]}
+    assert labels == gw._ENTRA_LABELS

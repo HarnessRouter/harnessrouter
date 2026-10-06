@@ -3996,6 +3996,8 @@ _ENTRA_PROVIDERS = ("azure", "azure-foundry")
 _ENTRA_AUTHORITY = os.environ.get("HR_ENTRA_AUTHORITY", "https://login.microsoftonline.com").rstrip("/")
 _ENTRA_SCOPE = "https://cognitiveservices.azure.com/.default"
 _ENTRA_FIELDS = ("tenant_id", "client_id", "client_secret")
+_ENTRA_LABELS = {"tenant_id": "Directory (tenant) ID", "client_id": "Application (client) ID",
+                 "client_secret": "Client secret"}
 _ENTRA_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 _ENTRA_EARLY_S = 300          # a token is replaced this long before Entra would refuse it
 _entra_tokens: dict[str, tuple[str, float]] = {}
@@ -4010,14 +4012,15 @@ def _entra_config_error(provider: str, cfg: dict) -> str:
     """Why an integration's Entra settings cannot be saved, "" when they can."""
     if provider not in _ENTRA_PROVIDERS:
         return "Microsoft Entra sign-in is available for Azure OpenAI and Azure AI Foundry connections"
-    missing = [f for f in _ENTRA_FIELDS if not str(cfg.get(f) or "").strip()]
+    # In the words the form uses, since a person reads this beside the form.
+    missing = [_ENTRA_LABELS[f] for f in _ENTRA_FIELDS if not str(cfg.get(f) or "").strip()]
     if missing:
-        return "missing " + ", ".join(missing)
+        return "missing the " + ", the ".join(missing)
     for f in ("tenant_id", "client_id"):
         if not _ENTRA_ID_RE.match(str(cfg[f]).strip()):
-            return f"{f} is the directory's or the application's id, written as a GUID"
+            return f"the {_ENTRA_LABELS[f]} is written as a GUID, like 00000000-0000-0000-0000-000000000000"
     if not str(cfg.get("base_url") or "").strip():
-        return "missing base_url, the resource's endpoint"
+        return "missing the Endpoint URL of the Azure resource"
     return ""
 
 
