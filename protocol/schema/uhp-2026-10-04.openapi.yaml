@@ -586,6 +586,7 @@ paths:
       parameters:
         - { name: parent, in: query, schema: { type: string } }
         - { name: ancestor, in: query, schema: { type: string } }
+        - { name: granted, in: query, schema: { type: boolean }, description: 'What the caller was given: every memory it may read whose parent it cannot see, and every memory below those on which its privileges differ from its privileges on the parent, highest in the tree first.' }
       tags: [Memories]
       operationId: listMemories
       summary: "The memories a caller may see, one level at a time"

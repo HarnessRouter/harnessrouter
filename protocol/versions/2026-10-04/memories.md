@@ -91,6 +91,7 @@ MCP             the tools an agent holds         how an agent calls it in a turn
 |---|---|
 | `POST /v1/memories` | Create a memory: `name`, `description`, `parent_id`, `restricted`, `provider` |
 | `GET /v1/memories?parent={id}` | The direct children of a memory, paginated. Without `parent`: where the caller enters the tree |
+| `GET /v1/memories?granted=true` | What the caller was given: where it was let in, and where below that it may do something else |
 | `GET /v1/memories/{id}` | One memory |
 | `PUT /v1/memories/{id}` | Rename it, describe it, restrict it, or move it by giving a new `parent_id` |
 | `DELETE /v1/memories/{id}` | Delete the memory, its records and its descendants |
@@ -100,6 +101,16 @@ it holds a privilege on whose parent it cannot see, so a caller granted one bran
 branch. A client that wants a subtree asks level by level, or passes `ancestor={id}` for every
 descendant it may read. A server MUST NOT return a memory on which the
 caller has no effective privilege, and MUST NOT reveal that one exists.
+
+Where a caller enters and what it was given are two questions. A caller that reads a memory and
+writes one of its children enters at the parent, and the listing does not show the child: it is
+one level. `granted=true` answers the second question in one request: every memory the caller may
+read whose parent it cannot see, and every memory below those on which what it may do differs from
+what it may do on the parent, each with the caller's privileges there, highest in the tree first.
+It is stated in what the caller may do and never in how a server keeps access, so the answer is
+the same whether the caller was let in by a grant of its own, through a group, or by a role. A
+client reads from it where the caller may write without walking the tree, and an agent's tools
+are built from it ([§9](#9-an-agent-and-its-memories)).
 
 ## 3. Access
 
@@ -660,7 +671,11 @@ A harness adds two settings of its own:
   agent writes is stamped with it.
 - `data` is read off the grants, never stored on the harness: every memory the agent holds a grant
   on, highest in the tree first. It is where the agent starts. From each it reaches everything
-  below, and nothing above that it was not granted.
+  below, and nothing above that it was not granted. A server that runs the agent and does not
+  keep its memories asks the server that does, as the agent, with `GET /v1/memories?granted=true`
+  ([§2](#2-the-memory-object)). It MUST NOT build an agent's tools from the plain listing, which
+  names only where the agent enters: an agent that reads a memory and writes one below it would
+  be offered nothing to write with.
 - `default_memory_id` is where an unaddressed `remember` goes and where turns are recorded. It MUST
   be a memory the agent may write; a server refuses one it may not, with `memory_invalid`.
 - `observe`, on by default, records each finished turn in the default memory as an episode.
