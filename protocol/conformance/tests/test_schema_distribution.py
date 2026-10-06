@@ -54,6 +54,22 @@ def distributions(tmp_path_factory):
     return {"wheel": next(output.glob("*.whl")), "sdist": next(output.glob("*.tar.gz"))}
 
 
+def test_the_built_distribution_carries_the_version_a_report_prints(distributions):
+    """One version, in the package, read by the build. It was written twice, and for nine revisions
+    only the packaging copy moved: every report of 2026.10.4 to 2026.10.4.post8 named itself
+    2026.9.12.post4. A report is evidence, and evidence names the suite that produced it."""
+    from uhp_conformance import __version__
+    assert distributions["wheel"].name == f"uhp_conformance-{__version__}-py3-none-any.whl"
+    assert distributions["sdist"].name == f"uhp_conformance-{__version__}.tar.gz"
+
+
+def test_the_version_is_written_in_one_place():
+    packaging = (PROJECT / "pyproject.toml").read_text()
+    project = packaging.split("[project]", 1)[1].split("\n[", 1)[0]
+    assert 'dynamic = ["version"]' in project and "\nversion" not in project, project
+    assert 'version = { attr = "uhp_conformance.__version__" }' in packaging
+
+
 @pytest.mark.parametrize("kind", ["wheel", "sdist"])
 def test_installed_distribution_validates_instead_of_skipping(distributions, tmp_path, kind):
     target = tmp_path / "installed"
