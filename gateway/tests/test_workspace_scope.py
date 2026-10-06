@@ -1,9 +1,13 @@
-"""A caller narrowed to a workspace reaches that workspace and nothing else of the organization.
+"""A key held to a workspace reaches that workspace and nothing else of the organization.
 
 The lists always held to this. The routes that take an id checked the organization and stopped, so a
 workspace's key that knew an id read, changed and deleted another workspace's harnesses, sessions
 and responses, and could mint itself a key with no workspace at all (reported privately three times).
 The rule is one function, `_scope_keeps`; the last test reads every route to see that it is asked.
+
+Who is held: an API key of a workspace other than the Default Workspace. Who is not (Richard,
+2026-10-06, the same on the hosted service): a person in the console, a key for the whole
+organization, and a Default Workspace key, which is what a key was before workspaces existed.
 """
 import ast
 import asyncio
@@ -18,9 +22,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import app as gw  # noqa: E402
 
 ORG = "org-a"
-KEY_A = {"org": ORG, "member": "svc-a", "workspace": "space.a", "workspace_default": False, "key": True}
-KEY_DEFAULT = {"org": ORG, "member": "svc-d", "workspace": "default", "workspace_default": True, "key": True}
-KEY_ORG = {"org": ORG, "member": "svc-o", "workspace": "", "workspace_default": False, "key": True}
+KEY_A = {"org": ORG, "member": "svc-a", "workspace": "space.a", "workspace_default": False, "via": "api_key"}
+KEY_DEFAULT = {"org": ORG, "member": "svc-d", "workspace": "default", "workspace_default": True, "via": "api_key"}
+KEY_ORG = {"org": ORG, "member": "svc-o", "workspace": "", "workspace_default": False, "via": "api_key"}
 CONSOLE_A = {"org": ORG, "member": "ana@example.com", "workspace": "space.a", "workspace_default": False}
 
 GRAPH = {
@@ -78,24 +82,26 @@ def _status(coro) -> int:
 # ── the rule ───────────────────────────────────────────────────────────────────────────────────
 
 def test_the_rule():
-    keeps = gw._scope_keeps
+    keeps, held = gw._scope_keeps, gw._key_scope
+    assert held(KEY_A) == "space.a"
     assert keeps(KEY_A, "space.a") and not keeps(KEY_A, "space.b")
     assert not keeps(KEY_A, "") and not keeps(KEY_A, None)            # made before workspaces: the Default Workspace's
-    assert keeps(KEY_DEFAULT, "default") and keeps(KEY_DEFAULT, "") and not keeps(KEY_DEFAULT, "space.a")
-    assert keeps({"org": ORG, "workspace": "org-a__hr_default"}, "")  # a default workspace known by its id
-    assert all(keeps(KEY_ORG, ws) for ws in ("space.a", "space.b", "", None))   # a key for the whole organization
-    assert keeps(CONSOLE_A, "space.a") and not keeps(CONSOLE_A, "space.b")      # the console's workspace is a narrowing too
+    # not held: a Default Workspace key, a key for the whole organization, a person in the console
+    for p in (KEY_DEFAULT, KEY_ORG, CONSOLE_A, {"org": ORG, "workspace": "org-a__hr_default", "via": "api_key"}):
+        assert held(p) == "" and all(keeps(p, ws) for ws in ("space.a", "space.b", "default", "", None)), p
+    assert held({"org": ORG, "workspace": "other__hr_default", "via": "api_key"}) == "other__hr_default"   # another organization's default is not this one's
 
 
 # ── harnesses ──────────────────────────────────────────────────────────────────────────────────
 
-def test_a_harness_is_found_only_inside_the_callers_workspace(world):
+def test_a_harness_is_found_only_inside_a_held_keys_workspace(world):
     reach = lambda p, hid, **k: asyncio.run(gw._harness_in_reach(p, hid, **k))   # noqa: E731
     assert reach(KEY_A, "chrn_a")["id"] == "chrn_a"
     for hid in ("chrn_b", "chrn_old", "chrn_gone", "chrn_x", "chrn_nope"):
         assert _status(gw._harness_in_reach(KEY_A, hid)) == 404, hid
-    assert reach(KEY_DEFAULT, "chrn_old")["id"] == "chrn_old" and _status(gw._harness_in_reach(KEY_DEFAULT, "chrn_a")) == 404
-    assert [reach(KEY_ORG, h)["id"] for h in ("chrn_a", "chrn_b", "chrn_old")] == ["chrn_a", "chrn_b", "chrn_old"]
+    for p in (KEY_DEFAULT, KEY_ORG, CONSOLE_A):                                  # organization reach
+        assert [reach(p, h)["id"] for h in ("chrn_a", "chrn_b", "chrn_old")] == ["chrn_a", "chrn_b", "chrn_old"]
+        assert _status(gw._harness_in_reach(p, "chrn_x")) == 404                 # ...of its own organization
     assert reach(KEY_A, "chrn_gone", deleted_ok=True)["id"] == "chrn_gone"       # deleting again is allowed, in its own workspace
     assert _status(gw._harness_in_reach({"org": "", "workspace": ""}, "chrn_a")) == 404
 
@@ -122,14 +128,13 @@ def test_another_workspaces_harness_is_not_found_on_any_route_and_nothing_is_wri
 
 # ── sessions and responses ─────────────────────────────────────────────────────────────────────
 
-def test_a_session_is_found_only_inside_the_callers_workspace(world, monkeypatch):
+def test_a_session_is_found_only_inside_a_held_keys_workspace(world, monkeypatch):
     _as(monkeypatch, KEY_A)
     assert asyncio.run(gw._owned_session(_Req(), "hsess_a"))[1]["harness_id"] == "chrn_a"
     assert _status(gw._owned_session(_Req(), "hsess_b")) == 404 and _status(gw._owned_session(_Req(), "hsess_old")) == 404
-    _as(monkeypatch, KEY_DEFAULT)
-    assert asyncio.run(gw._owned_session(_Req(), "hsess_old"))[0] == ORG
-    _as(monkeypatch, KEY_ORG)
-    assert asyncio.run(gw._owned_session(_Req(), "hsess_b"))[0] == ORG
+    for p in (KEY_DEFAULT, KEY_ORG, CONSOLE_A):
+        _as(monkeypatch, p)
+        assert [asyncio.run(gw._owned_session(_Req(), s))[0] for s in ("hsess_a", "hsess_b", "hsess_old")] == [ORG] * 3
 
 
 @pytest.mark.parametrize("call", [
@@ -152,7 +157,7 @@ def test_another_workspaces_session_and_its_responses_are_not_found(world, monke
 def test_a_response_is_reached_through_its_session(world):
     reach = lambda p, r: asyncio.run(gw._response_in_reach(p, RESP.get(r)))   # noqa: E731
     assert reach(KEY_A, "resp_a") and not reach(KEY_A, "resp_b") and not reach(KEY_A, "resp_old")
-    assert reach(KEY_DEFAULT, "resp_old") and reach(KEY_ORG, "resp_b")
+    assert all(reach(p, r) for p in (KEY_DEFAULT, KEY_ORG, CONSOLE_A) for r in ("resp_a", "resp_b", "resp_old"))
     assert not asyncio.run(gw._response_in_reach(KEY_A, {"id": "resp_orphan", "_org": ORG}))    # no session: not a narrowed caller's
     assert asyncio.run(gw._response_in_reach(KEY_ORG, {"id": "resp_orphan", "_org": ORG}))
 
@@ -164,6 +169,22 @@ def test_a_conversation_of_another_workspace_is_not_continued(world):
     assert world == []
 
 
+def test_a_caller_with_organization_reach_continues_any_conversation_of_it(world, monkeypatch):
+    seen = []
+
+    async def trace_cursor(tr):
+        seen.append(tr)
+    monkeypatch.setattr(gw, "_recover_trace_cursor", trace_cursor)
+    monkeypatch.setattr(gw, "_prefix_from_vertex", lambda sid, v: f"{ORG}/x_{sid}")
+
+    async def vupsert(sid, props):
+        pass
+    monkeypatch.setattr(gw, "_vertex_upsert", vupsert)
+    for p in (KEY_DEFAULT, KEY_ORG, CONSOLE_A):
+        sid, _resume = asyncio.run(gw._resp_resolve_session(ORG, "m", None, "pi", session_hint="hsess_b", workspace="", caller=p))
+        assert sid == "hsess_b"
+
+
 # ── keys ───────────────────────────────────────────────────────────────────────────────────────
 
 def _mint(monkeypatch, caller, **body):
@@ -171,25 +192,28 @@ def _mint(monkeypatch, caller, **body):
     return asyncio.run(gw.mint_key(ORG, gw.KeyBody(**body), _Req()))
 
 
-def test_a_workspaces_key_mints_keys_for_its_own_workspace_under_its_own_name(world, monkeypatch):
+def test_a_held_key_mints_keys_for_its_own_workspace_under_its_own_name(world, monkeypatch):
     out = _mint(monkeypatch, KEY_A, member_id="attacker@evil", workspace="")
     stored = world[-1][2]
     assert out["workspace"] == "space.a" and stored["workspace"] == "space.a" and stored["member"] == "svc-a"
+    assert stored["workspace_default"] == ""
     assert _status(gw.mint_key(ORG, gw.KeyBody(workspace="space.b"), _Req())) == 403
-    out = _mint(monkeypatch, KEY_DEFAULT)
-    assert world[-1][2]["workspace"] == "default" and world[-1][2]["workspace_default"] == "1"
 
 
-def test_a_key_for_the_whole_organization_and_the_console_mint_as_before(world, monkeypatch):
-    _mint(monkeypatch, KEY_ORG, workspace="space.b", member_id="x")
-    assert world[-1][2]["workspace"] == "space.b" and world[-1][2]["member"] == "svc-o"      # still its own name
-    _mint(monkeypatch, CONSOLE_A, workspace="space.a", member_id="ana@example.com")
-    assert world[-1][2]["workspace"] == "space.a" and world[-1][2]["member"] == "ana@example.com"
-    _mint(monkeypatch, {"org": ORG, "member": "ana@example.com", "workspace": ""}, workspace="space.b", member_id="ana@example.com")
+def test_a_person_and_a_key_with_organization_reach_choose_what_they_mint(world, monkeypatch):
+    # a person in the console makes an organization key on purpose: the body says so, no header trick
+    _mint(monkeypatch, CONSOLE_A, workspace="", member_id="ana@example.com")
+    assert world[-1][2]["workspace"] == "" and world[-1][2]["member"] == "ana@example.com"
+    _mint(monkeypatch, CONSOLE_A, workspace="space.b", member_id="ana@example.com")
     assert world[-1][2]["workspace"] == "space.b"
+    # a Default Workspace key mints a workspace's key for it, and may name whose it is
+    _mint(monkeypatch, KEY_DEFAULT, workspace="space.b", member_id="company-b")
+    assert world[-1][2]["workspace"] == "space.b" and world[-1][2]["member"] == "company-b"
+    _mint(monkeypatch, KEY_ORG, workspace="", member_id="x")
+    assert world[-1][2]["workspace"] == ""
 
 
-def test_a_workspaces_key_revokes_and_lists_its_own_workspaces_keys(world, monkeypatch):
+def test_a_held_key_revokes_and_lists_its_own_workspaces_keys(world, monkeypatch):
     _as(monkeypatch, KEY_A)
     assert _status(gw.revoke_key(ORG, "key_b", _Req())) == 404 and world == []
     assert asyncio.run(gw.revoke_key(ORG, "key_a", _Req()))["revoked"] is True
@@ -199,21 +223,23 @@ def test_a_workspaces_key_revokes_and_lists_its_own_workspaces_keys(world, monke
             return [{"id": "key_a", "workspace": "space.a"}, {"id": "key_b", "workspace": "space.b"}, {"id": "key_o", "workspace": ""}]
     monkeypatch.setattr(gw.BACKING, "graph", _Graph())
     assert [k["id"] for k in asyncio.run(gw.list_keys(ORG, _Req()))["keys"]] == ["key_a"]
-    _as(monkeypatch, KEY_ORG)
-    assert len(asyncio.run(gw.list_keys(ORG, _Req()))["keys"]) == 3
+    for p in (KEY_ORG, KEY_DEFAULT, CONSOLE_A):
+        _as(monkeypatch, p)
+        assert len(asyncio.run(gw.list_keys(ORG, _Req()))["keys"]) == 3
+        assert asyncio.run(gw.revoke_key(ORG, "key_b", _Req()))["revoked"] is True      # a company's key, retired by the organization's
 
 
-def test_a_workspaces_key_does_not_make_or_rename_workspaces(world, monkeypatch):
+def test_a_held_key_does_not_make_or_rename_workspaces(world, monkeypatch):
     _as(monkeypatch, KEY_A)
     assert _status(gw.workspaces_create(gw.WorkspaceBody(name="mine"), _Req())) == 403
     assert _status(gw.workspaces_update("space.b", gw.WorkspaceBody(name="theirs"), _Req())) == 403
 
 
-def test_a_plug_route_is_about_the_callers_workspace_not_a_header():
-    assert gw._plug_workspace(KEY_A) == "space.a" and gw._plug_workspace(KEY_ORG) == "default"
-    src = (pathlib.Path(gw.__file__)).read_text()
-    assert src.count('request.headers.get("x-harness-workspace"') == 0
-    assert src.count('h.get("x-harness-workspace",') == 1         # read once, behind the internal key, in _principal
+def test_a_held_keys_plug_routes_are_about_its_own_workspace_whatever_header_it_sends():
+    named_b = _Req(headers={"x-harness-workspace": "space.b"})
+    assert gw._plug_workspace(named_b, KEY_A) == "space.a"
+    assert gw._plug_workspace(named_b, CONSOLE_A) == "space.b" and gw._plug_workspace(named_b, KEY_DEFAULT) == "space.b"
+    assert gw._plug_workspace(_Req(), KEY_ORG) == "default"
 
 
 # ── every route that takes an id asks ──────────────────────────────────────────────────────────

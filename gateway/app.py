@@ -4468,8 +4468,8 @@ async def list_traces(request: Request, org: str, limit: int = 20, cursor: str =
     p = await _principal(request)
     if (p.get("org") or "") != org:
         raise HTTPException(403, "trace access is limited to your organization")
-    if str(p.get("workspace") or ""):     # a narrowed caller lists its own workspace, whatever it asks for
-        workspace, workspace_default = str(p["workspace"]), int(bool(p.get("workspace_default")))
+    if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
+        workspace, workspace_default = _key_scope(p), 0
     return await _session_cards(org, limit, cursor, member, harness,
                                 workspace=workspace, ws_default=bool(workspace_default))
 
@@ -4633,20 +4633,35 @@ async def list_sessions(request: Request, limit: int = 20, cursor: str = "",
                                 ws_default=bool(p.get("workspace_default")))
 
 
+def _key_scope(p: dict) -> str:
+    """The one workspace an API key is held to, or "" when the caller is not narrowed. Not narrowed:
+    a person through the console (the workspace it names is a view, not a wall), a key for the
+    whole organization, and a Default Workspace key, which is what an organization's keys were
+    before workspaces existed and keeps that reach (Richard, 2026-10-06; the same function and the
+    same answer on the hosted service)."""
+    if p.get("via") != "api_key":
+        return ""
+    ws = str(p.get("workspace") or "")
+    if not ws or p.get("workspace_default") or ws == f"{p.get('org') or ''}__hr_default":
+        return ""
+    return ws
+
+
 def _scope_keeps(p: dict, item_ws) -> bool:
     """THE workspace rule, in one place: whether this caller may touch something stamped with
-    `item_ws`. A caller narrowed to a workspace (a workspace's API key, the console's current
-    workspace) reaches what belongs to that workspace, the Default Workspace also reaching what was
-    made before workspaces existed. A caller with no workspace (a key for the whole organization)
-    reaches everything of its organization.
+    `item_ws`. A key held to a workspace (_key_scope) reaches what is stamped with that workspace
+    and nothing else of the organization; what was made before workspaces existed carries no stamp
+    and is the Default Workspace's, so it is not such a key's either. Every other caller reaches
+    everything of its organization.
 
-    The lists always applied this. The routes that take an id did not: they checked the organization
-    and stopped, so a workspace's key that knew an id read, changed and deleted another workspace's
-    harnesses, sessions and responses, and could mint itself a key with no workspace at all
-    (reported privately three times). Every route that takes an id now asks here, through
-    _harness_in_reach, _owned_session or _response_in_reach, and a test reads the routes to keep it so."""
-    ws = str(p.get("workspace") or "")
-    return _workspace_keep(str(item_ws or ""), ws, bool(p.get("workspace_default")) or ws.endswith("__hr_default"))
+    The lists always narrowed a workspace's key. The routes that take an id did not: they checked
+    the organization and stopped, so a workspace's key that knew an id read, changed and deleted
+    another workspace's harnesses, sessions and responses, revoked its keys, and could mint itself a
+    key with no workspace at all (reported privately three times). Every route that takes an id now
+    asks here, through _harness_in_reach, _owned_session or _response_in_reach, and a test reads
+    the routes to keep it so."""
+    held = _key_scope(p)
+    return not held or str(item_ws or "") == held
 
 
 async def _harness_in_reach(p: dict, hid: str, *, deleted_ok: bool = False) -> dict:
@@ -4666,7 +4681,7 @@ async def _response_in_reach(p: dict, rec: dict | None) -> bool:
     workspace for a caller narrowed to one, its harness for a calibration credential. A caller with
     neither limit is not made to pay for the read."""
     inner = _calibration_inner(p)
-    if not inner and not str(p.get("workspace") or ""):
+    if not inner and not _key_scope(p):
         return True
     rec = rec or {}
     sid = str(rec.get("_session_id") or (rec.get("metadata") or {}).get("session_id") or "")
@@ -8186,13 +8201,13 @@ async def _apikey_resolve(tok: str) -> dict | None:
             _touch_apikey(sha)
             return {"org": doc.get("org", ""), "member": doc.get("member", ""),
                     "workspace": doc.get("workspace", "") or "",
-                    "workspace_default": bool(doc.get("workspace_default")), "key": True}
+                    "workspace_default": bool(doc.get("workspace_default")), "via": "api_key"}
     v = await _vertex_get(sha)
     if v and v.get("kind") == "harness_api_key" and str(v.get("revoked")) not in ("1", "true", "True"):
         _touch_apikey(sha)
         p = {"org": v.get("org", ""), "member": v.get("member", ""),
              "workspace": v.get("workspace", "") or "",
-             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True"), "key": True}
+             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True"), "via": "api_key"}
         if control_store.enabled():
             try:
                 # create_only: never overwrite an existing doc — a revoke tombstone may have landed
@@ -10338,16 +10353,15 @@ class KeyBody(BaseModel):
 @app.post("/v1/orgs/{org}/keys")
 async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
     p = await _owned_org(request, org)
-    # A caller narrowed to a workspace mints keys for that workspace and no wider, and an API key
-    # cannot sign a new key with someone else's name. The body used to decide both: a workspace's
-    # key asked for a key with no workspace and was handed one for the whole organization, under
-    # any member name it liked (reported privately three times).
-    caller_ws = str(p.get("workspace") or "")
-    if caller_ws:
-        if (body.workspace or "").strip() not in ("", caller_ws):
-            raise uhp_error(403, "forbidden", "A key is made for the workspace its maker is in.", "workspace")
-        body.workspace, body.workspace_default = caller_ws, bool(p.get("workspace_default"))
-    if p.get("key"):
+    # A key held to a workspace mints keys for that workspace and no wider, under its own name. The
+    # body used to decide both: a workspace's key asked for a key with no workspace and was handed
+    # one for the whole organization, under any member name it liked (reported privately three
+    # times). A person in the console, and a key that already reaches the organization, choose.
+    held = _key_scope(p)
+    if held:
+        if (body.workspace or "").strip() not in ("", held):
+            raise uhp_error(403, "forbidden", "A key held to one workspace makes keys for that workspace only.", "workspace")
+        body.workspace, body.workspace_default = held, False
         body.member_id = str(p.get("member") or "")
     tok = "sk-hr-" + uuid.uuid4().hex + uuid.uuid4().hex
     h = _hash_key(tok)
@@ -10385,7 +10399,7 @@ async def list_keys(org: str, request: Request) -> dict:
              "revoked": str(x.get("revoked")) in ("1", "true", "True"), "member": x.get("member"),
              "workspace": x.get("workspace") or "", "last_used": x.get("last_used") or "", "tail": x.get("tail") or ""}
             for x in rows]
-    if str(p.get("workspace") or ""):     # a narrowed caller sees its own workspace's keys
+    if _key_scope(p):     # a key held to a workspace sees that workspace's keys
         keys = [k for k in keys if _scope_keeps(p, k["workspace"])]
     return {"keys": keys}
 
@@ -14455,11 +14469,12 @@ async def _plug_lookup_local(org: str, workspace: str, plug_type: str) -> tuple[
     return (rec["status"] if rec["status"] in _PLUG_STATUSES else "needs_auth"), rec
 
 
-def _plug_workspace(caller: dict) -> str:
-    """The workspace a plug route is about: the caller's. For the console that is the workspace it
-    names; for an API key it is the key's own (a header an API caller adds names nothing); a caller
-    with none means the instance's default workspace, the one the console's own harnesses are in."""
-    return str(caller.get("workspace") or "default")
+def _plug_workspace(request: Request, caller: dict) -> str:
+    """The workspace a plug route is about. A key held to a workspace gets its own, whatever header
+    it sends (it used to be able to name any workspace there). Any other caller names it: the
+    console always does, and a bare API call means the instance's default workspace, the one the
+    console's own harnesses are in."""
+    return _key_scope(caller) or str(request.headers.get("x-harness-workspace") or "default")
 
 
 class PlugBody(BaseModel):
@@ -14486,7 +14501,7 @@ async def list_plugs(request: Request) -> dict:
     state here (connected, disabled, needs_auth, missing)."""
     _caller = await _pub_principal(request)
     org, _ = _caller["org"], _caller.get("member", "")
-    workspace = _plug_workspace(_caller)
+    workspace = _plug_workspace(request, _caller)
     out = []
     for t in _PLUG_FORMS:
         status, rec = await _plug_lookup(org, workspace, t)
@@ -14507,7 +14522,7 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
     if not form:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type",
                         {"supported": sorted(_PLUG_FORMS)})
-    workspace = _plug_workspace(_caller)
+    workspace = _plug_workspace(request, _caller)
     _status, prev = await _plug_lookup_local(org, workspace, plug_type)
     config = dict((prev or {}).get("config") or {})
     for k, v in (body.config or {}).items():
@@ -14644,7 +14659,7 @@ async def microsoft_start(body: MicrosoftStartBody, request: Request) -> dict:
     org, member = _caller["org"], _caller.get("member", "")
     if PLUGS_REGISTRY_URL:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
-    workspace = _plug_workspace(_caller)
+    workspace = _plug_workspace(request, _caller)
     rec = await _m365_plug(org, workspace)
     config = rec.get("config") or {}
     if plugs_plane.m365_mode({}, config) != "delegated":
@@ -14712,7 +14727,7 @@ async def microsoft_signout(request: Request) -> dict:
     nobody signed in a delegated plug waits for a sign-in again."""
     _caller = await _pub_principal(request)
     org, member = _caller["org"], _caller.get("member", "")
-    workspace = _plug_workspace(_caller)
+    workspace = _plug_workspace(request, _caller)
     rec = await _m365_plug(org, workspace)
     config = dict(rec.get("config") or {})
     field = plugs_plane.m365_person_field(member)
@@ -14750,7 +14765,7 @@ async def plug_attachments_public(plug_type: str, request: Request) -> dict:
     org, _ = _caller["org"], _caller.get("member", "")
     if plug_type not in _PLUG_FORMS:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
-    workspace = _plug_workspace(_caller)
+    workspace = _plug_workspace(request, _caller)
     rows = _plugs_harness_rows(org, workspace, await BACKING.graph.find("Harness", {"org": org}))
     attached = []
     for r in rows:
@@ -14785,7 +14800,7 @@ async def delete_plug(plug_type: str, request: Request) -> dict:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
     if plug_type not in _PLUG_FORMS:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
-    workspace = _plug_workspace(_caller)
+    workspace = _plug_workspace(request, _caller)
     _status, rec = await _plug_lookup_local(org, workspace, plug_type)
     if not rec:
         raise uhp_error(404, "plug_not_connected", f"No {plugs_plane.TYPES[plug_type]} plugin is connected for this workspace.", "plug_type")
@@ -17391,9 +17406,8 @@ def _workspace_keep(item_ws: str, workspace: str, ws_default: bool) -> bool:
 async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     p = await _owned_org(request, org)
     member = p.get("member") or request.headers.get("x-harness-member", "")
-    # the caller's own workspace: for the console that IS the header, read once in _principal; for an
-    # API key it is the key's, and a header an API caller adds names nothing
-    workspace = str(p.get("workspace") or "")
+    # a key held to a workspace stamps its own, whatever header it sends; any other caller names it
+    workspace = _key_scope(p) or request.headers.get("x-harness-workspace", "")
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
@@ -17418,8 +17432,8 @@ async def list_harnesses(org: str, request: Request,
     is still recorded on the vertex for attribution. Optional `workspace` narrows to one
     workspace (Space id); `workspace_default=1` lets unstamped legacy records through."""
     p = await _owned_org(request, org)
-    if str(p.get("workspace") or ""):     # a narrowed caller lists its own workspace, whatever it asks for
-        workspace, workspace_default = str(p["workspace"]), int(bool(p.get("workspace_default")))
+    if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
+        workspace, workspace_default = _key_scope(p), 0
     rows = await _vg_list_by_org("Harness", org)
     items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
@@ -17587,8 +17601,8 @@ class WorkspaceBody(BaseModel):
 async def workspaces_create(body: WorkspaceBody, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org, member = _caller["org"], _caller.get("member", "")
-    if _caller.get("key") and str(_caller.get("workspace") or ""):
-        raise uhp_error(403, "forbidden", "A key that belongs to one workspace does not make workspaces.")
+    if _key_scope(_caller):
+        raise uhp_error(403, "forbidden", "A key held to one workspace does not make workspaces.")
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "a workspace needs a name")
@@ -17619,8 +17633,8 @@ async def workspaces_create(body: WorkspaceBody, request: Request) -> dict:
 async def workspaces_update(wid: str, body: WorkspaceBody, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org = _caller["org"]
-    if _caller.get("key") and str(_caller.get("workspace") or "") and str(_caller["workspace"]) != wid:
-        raise uhp_error(403, "forbidden", "A key that belongs to one workspace changes that workspace only.")
+    if _key_scope(_caller) and _key_scope(_caller) != wid:
+        raise uhp_error(403, "forbidden", "A key held to one workspace changes that workspace only.")
     rows = await _workspace_rows(org)
     v = next((r for r in rows if str(r.get("ws_id")) == wid), None)
     if v is None:

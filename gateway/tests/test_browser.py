@@ -368,9 +368,7 @@ def _rows(hid: str) -> list[dict]:
 
 def _session_of(hid: str, org: str = ORG) -> str:
     sid = "sess_" + os.urandom(6).hex()
-    # stamped with the workspace it was made in, as the session-create path stamps it
-    asyncio.run(gw._vg_upsert("HarnessSession", sid, {"tenant": org, "status": "idle", "turn_status": "idle", "harness_id": hid,
-                                                       "workspace": WS if org == ORG else ""}))
+    asyncio.run(gw._vg_upsert("HarnessSession", sid, {"tenant": org, "status": "idle", "turn_status": "idle", "harness_id": hid}))
     return sid
 
 
