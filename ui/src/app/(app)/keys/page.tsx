@@ -145,7 +145,7 @@ export default function KeysPage() {
         <div className="ak-head-row">
           <div>
             <h1>API keys</h1>
-            <p className="ak-sub">Create and revoke credentials scoped to {current.name}.</p>
+            <p className="ak-sub">{isDefaultWs ? <>Create and revoke credentials. A key made in {current.name} reaches every workspace of the organization.</> : <>Create and revoke credentials for {current.name}.</>}</p>
           </div>
           <button className="ak-primary" type="button" disabled={!org} onClick={openCreate}>Create API key</button>
         </div>
