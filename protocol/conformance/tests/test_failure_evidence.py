@@ -45,37 +45,121 @@ def _dotted(node: ast.AST) -> str:
     return ".".join(reversed(parts))
 
 
-def _reads_in_scope(func: ast.AST) -> tuple[set[str], set[str]]:
-    """One function's own answer variables and the attributes read straight off them.
+def _is_answer(node: ast.AST, helpers: set[str]) -> bool:
+    """A call that hands back a Result: a client verb, or a helper of the module that returns one."""
+    if not isinstance(node, ast.Call):
+        return False
+    parts = _dotted(node.func).split(".")
+    if len(parts) >= 2 and parts[-1] in RESULT_VERBS and parts[-2] == "client":
+        return True
+    return isinstance(node.func, ast.Name) and node.func.id in helpers
 
+
+def _bound(func: ast.AST, helpers: set[str]) -> set[str]:
+    """The names one function gives an answer to. Gathered over the whole function before any read
+    is looked at: an assignment three blocks deep comes later in a walk than a read one block deep,
+    and a scan that binds as it goes walks past that read."""
+    names = set()
+    for node in ast.walk(func):
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, (ast.AnnAssign, ast.NamedExpr)) else [])
+        if targets and _is_answer(getattr(node, "value", None), helpers):
+            names |= {t.id for t in targets if isinstance(t, ast.Name)}
+    return names
+
+
+def _functions(tree: ast.AST) -> list:
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def _answer_helpers(tree: ast.AST) -> set[str]:
+    """The module's functions that return a Result: one that returns a client call, a name bound
+    to one, or another such helper's answer. Repeated until nothing is added, so a helper that
+    wraps a helper counts."""
+    helpers: set[str] = set()
+    while True:
+        found = set()
+        for func in _functions(tree):
+            if func.name in helpers:
+                continue
+            bound = _bound(func, helpers)
+            for node in ast.walk(func):
+                if isinstance(node, ast.Return) and node.value is not None and (
+                        _is_answer(node.value, helpers)
+                        or (isinstance(node.value, ast.Name) and node.value.id in bound)):
+                    found.add(func.name)
+        if not found:
+            return helpers
+        helpers |= found
+
+
+def _scan(source: str) -> tuple[int, set[str]]:
+    """How many answers the source reads, and every attribute it reads off one.
+
+    Three ways the checks hold an answer, all of them looked at: a name assigned from a client
+    call, a name assigned from a helper that returns one, and no name at all (`client.get(p).json`).
     Scoped per function on purpose: `e` is a Result in one and a dict in the next, and a
     module-wide name set would blame whichever pairing happens to be read later.
     """
-    bound, read = set(), set()
-    for node in ast.walk(func):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            parts = _dotted(node.value.func).split(".")
-            if len(parts) >= 2 and parts[-1] in RESULT_VERBS and parts[-2] == "client":
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        bound.add(target.id)
-        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            if node.value.id in bound:
+    tree = ast.parse(source)
+    helpers = _answer_helpers(tree)
+    answers, read = 0, set()
+    for func in _functions(tree):
+        bound = _bound(func, helpers)
+        answers += len(bound)
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Attribute):
+                continue
+            if isinstance(node.value, ast.Name) and node.value.id in bound:
                 read.add(node.attr)
-    return bound, read
+            elif _is_answer(node.value, helpers):
+                answers += 1
+                read.add(node.attr)
+    return answers, read
+
+
+def _members() -> set[str]:
+    return set(Result.__dataclass_fields__) | {n for n in dir(Result) if not n.startswith("__")}
 
 
 def test_everything_the_checks_read_off_a_result_is_something_a_result_has():
     """A typo in a failure message waits until a server misbehaves to surface, so catch it here."""
-    tree = ast.parse(inspect.getsource(checks))
-    members = set(Result.__dataclass_fields__) | {n for n in dir(Result) if not n.startswith("__")}
-    total, missing = 0, set()
-    for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-        bound, read = _reads_in_scope(func)
-        total += len(bound)
-        missing |= read - members
-    assert total, "the scan bound no client response anywhere, which means it stopped working"
-    assert not missing, f"checks read {sorted(missing)} off a Result, which has only {sorted(members)}"
+    answers, read = _scan(inspect.getsource(checks))
+    assert answers, "the scan found no client response anywhere, which means it stopped working"
+    missing = read - _members()
+    assert not missing, f"checks read {sorted(missing)} off a Result, which has only {sorted(_members())}"
+
+
+@pytest.mark.parametrize("source", [
+    # a name assigned from a client call, the read inside a message that never runs
+    "def c(ctx):\n    r = ctx.client.get('/x')\n    assert r.status == 200, r.txt\n",
+    # the assignment deeper in the function than the read: a scan that binds as it walks misses it
+    "def c(ctx, ps):\n    if ps:\n        for p in ps:\n            r = ctx.client.get(p)\n    return r.txt\n",
+    # the answer comes back from a helper of the module
+    "def _h(ctx):\n    return ctx.client.post('/x')\n\ndef c(ctx):\n    r = _h(ctx)\n    assert r.status == 200, r.txt\n",
+    # ...or from a helper that wraps that helper, or one that returns a name it bound
+    "def _h(ctx):\n    r = ctx.client.post('/x')\n    return r\n\ndef _g(ctx):\n    return _h(ctx)\n\n"
+    "def c(ctx):\n    done = _g(ctx)\n    assert done.status == 200, done.txt\n",
+    # no name at all: the attribute is read straight off the call
+    "def c(ctx):\n    return ctx.client.get('/x').txt\n",
+    "def _h(ctx):\n    return ctx.client.post('/x')\n\ndef c(ctx):\n    return _h(ctx).txt\n",
+    # an annotated assignment and an assignment expression bind like a plain one
+    "def c(ctx):\n    r: object = ctx.client.get('/x')\n    return r.txt\n",
+    "def c(ctx):\n    if (r := ctx.client.get('/x')).status:\n        return r.txt\n",
+], ids=["assigned", "bound-deeper-than-read", "from-a-helper", "helper-of-a-helper", "straight-off-the-call",
+        "straight-off-a-helper", "annotated", "assignment-expression"])
+def test_the_scan_sees_every_way_a_check_holds_an_answer(source):
+    """The scan is only worth its place if a wrong name cannot hide behind how the answer is held."""
+    answers, read = _scan(source)
+    assert answers and "txt" in read, (answers, read)
+    assert "txt" not in _members()
+
+
+def test_the_scan_blames_nothing_that_is_not_an_answer():
+    """A dict's own `get`, and a name that is an answer in one function and a dict in the next."""
+    source = ("def a(ctx):\n    e = ctx.client.get('/x')\n    return e.status\n\n"
+              "def b(d):\n    e = d.get('k')\n    e.items()\n    return d.get('x').keys()\n")
+    assert _scan(source) == (1, {"status"})
 
 
 def _run(check_id: str, base: str):
