@@ -58,6 +58,7 @@ EXCLUDED = {"systemone"}        # chooses among offered actions and has no tools
 TURN_CAP_S = 900
 SETTLE_S = 90                   # an engine may index, or derive, a little after it stores
 ROLES = ("root", "notes", "archive", "client", "vault")
+SUBTREE_ASKS = "What is the archive shelf label, and what is the name of the memory it is kept in?"
 
 
 def _client(base_url: str, api_key: str, workspace: str = ""):
@@ -151,6 +152,9 @@ class Cell:
         self.mem = {k: str(w["memories"][k]) for k in ROLES}
         for k, mid in self.mem.items():
             self.name[k] = str(self._must(self.m("GET", f"/v1/memories/{mid}"), f"read the {k} memory").get("name") or "")
+        if self.name["archive"].lower() in SUBTREE_ASKS.lower():
+            raise RuntimeError(f"the archive memory is named {self.name['archive']!r}, which the question about it already says: "
+                               "an answer could name it without having found it. Give it a name of its own")
         self.hid, self.reader = str(agent["harness_id"]), str(agent.get("reader_harness_id") or "")
         self.writer = str(agent.get("writer") or self.hid)
         self.unserved = {str(k): str(v) for k, v in (w.get("not_served") or {}).items()}
@@ -304,7 +308,7 @@ def s_recall(c: Cell):
 
 def s_subtree(c: Cell):
     """Asked high in the tree, the agent finds what is kept below and says where."""
-    t = c.ask("What is the archive shelf label, and what is the name of the memory it is kept in?")
+    t = c.ask(SUBTREE_ASKS)
     if _done(t):
         return False, _done(t)
     a = t["answer"].lower()

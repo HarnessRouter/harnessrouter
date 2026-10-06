@@ -151,6 +151,13 @@ def test_a_given_world_is_taken_as_it_stands_emptied_and_seeded():
     assert c.records("vault") == [] and [r["id"] for r in c.records("archive")] == [doc["id"]] and inst.deleted == []
 
 
+def test_an_archive_named_by_the_question_itself_is_refused():
+    svc = Service()
+    svc.mem["archive"]["name"] = "Archive"
+    with pytest.raises(RuntimeError, match="a name of its own"):
+        _cell(svc)
+
+
 def test_a_file_the_agent_wrote_is_kept_byte_for_byte_and_found_later():
     svc = Service()
     c, inst = _cell(svc)

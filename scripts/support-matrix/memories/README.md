@@ -58,6 +58,8 @@ python3 memories/matrix.py --base-url $B --api-key "$KEY" --world world.json --o
   keeps them and the name of an environment variable holding a bearer that reads and writes all
   five. The bearer is never in the file. `notes` is the agent's default memory and it writes
   there and in `client`; it reads `root`, which `archive` is below; it holds nothing on `vault`.
+  Give `archive` a name the runner's question does not contain ("Depot 7C", not "Archive"): the
+  agent is asked which memory the archive shelf label is kept in, and must have found the name.
 - **`agents`**: one per base. `writer` is the id the agent's records are stamped with when that
   is not the harness id. `reader_harness_id` is an agent that reads `root` and writes nowhere;
   without one, `viewer` reads `n/a`.
