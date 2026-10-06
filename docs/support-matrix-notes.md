@@ -3068,3 +3068,28 @@ Candidate `0.31.2-rc.1` in a side container on the test VM, on a copy of an inst
 | The Default Workspace's key, a harness made before workspaces | completed |
 
 Through the console itself (Playwright): a harness created and run on pi, with its skill, script and tool policy. Claude Code tasks complete, and all plugin checks pass on Claude Code, Codex and pi, each of which makes its own harness and runs it.
+
+## The built-in image skill in front of the media tools (2026-10-06, 0.31.3)
+
+The built-in `imagegen` skill works only through a turn's image credential. With none its script
+refuses: "image generation is not configured for this Harness. An operator needs to add an integration
+that serves an image model". On the hosted service a pi agent whose harness also carried the media
+tools read the skill first, took the sentence as final and told the person images were unavailable,
+two runs of three, with `media_generate_image` one call away. This tree has the same skill, mounted by
+default, and the same two ways to make an image, resolved from different tables: the skill's credential
+from the image model map, the media tools' providers from the integrations by kind. So a turn can have
+the second without the first: image models switched off, or broker trust without `HR_BROKER_IMAGES`.
+
+On such a turn the built-in is now dropped and suppressed. Where the turn has no other way to make an
+image the skill stays, which is where this tree differs from the hosted one: here the person asking is
+the operator, and the refusal is what says what to add.
+
+Candidate `0.31.3-rc.1` in a side container on the test VM, on a copy of an instance whose Videos kit harness carries the media tools. One request each ("make one image, then say MADE or CANNOT"):
+
+| The turn | The image skill in the session | What the agent did |
+|---|---|---|
+| Media tools, an image credential (Claude Code) | present | made the image with the media tool |
+| Media tools, no image credential (Claude Code) | absent | made the image with the media tool |
+| No media tools, no image credential (pi) | present | ran the skill and answered "CANNOT image generation not configured" |
+
+The image credential was removed by switching the instance's image models off on the Integrations document. Not reproduced here: the agent giving up in front of a working media tool. That was seen on the hosted service with a pi agent; Claude Code on this harness chose the media tool either way. What is shown here is that the skill is no longer offered in that state. Claude Code tasks complete, and all plugin checks pass on Claude Code, Codex and pi (the skill checks among them).

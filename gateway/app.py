@@ -7756,6 +7756,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             await _vertex_upsert(sid, {"models_seen": ",".join(seen + [model_req])})
     # Independent of which chat connection wins below: images are usually a different provider.
     image_auth = await _image_auth(sid, backend)
+    skills, skills_suppressed = _without_shadowing_image_skill(skills, skills_suppressed, image_auth, mcp_servers)
+    if "plugins" in rec:        # the record says what the turn was given, so after that change
+        rec["plugins"].update(skills=[s_.get("name") for s_ in skills], skills_off=skills_suppressed)
     vision_auth = await _vision_auth(sid, backend) if backend == "hermes" else None
     for name, pre in candidates:
         conn, src = (pre, "integration") if pre is not None else await _get_connection(org, name)
@@ -15522,6 +15525,33 @@ def _base_takes_skills(base_id: str) -> bool:
     """Whether skills, built-in or added, mean anything on this base. A base that declares
     `"skills": False` in the catalog (systemone) gets none mounted and none offered."""
     return bool((_BASE_CATALOG.get(str(base_id or "")) or {}).get("skills", True))
+
+
+_IMAGE_SKILL = "imagegen"
+
+
+def _without_shadowing_image_skill(skills: list[dict], suppressed: list[str], image_auth: dict | None,
+                                   mcp_servers: list[dict]) -> tuple[list[dict], list[str]]:
+    """The built-in image skill works only through the turn's image credential (HR_IMAGE_*); with
+    none its script refuses, "image generation is not configured for this Harness". On a harness
+    that also carries the media tools, an agent read the skill first, took that sentence as final
+    and told the person images were unavailable, with media_generate_image one call away (found on
+    the hosted service, a pi agent, two runs of three, 2026-10-06). So on such a turn the built-in
+    is dropped and suppressed: a path that cannot work must not stand in front of one that can.
+
+    Where the turn has no other way to make an image the skill stays, which is where this differs
+    from the hosted service: on a self-hosted instance the person asking is the operator, and the
+    skill's refusal is what says to add an integration that serves an image model. A harness's own
+    skill of that name (files of its own, or a plugin's) is the harness's and stays."""
+    builtin = (_builtin_skills().get(_IMAGE_SKILL) or {}).get("files")
+    media = _HOSTED_MCP_PREFIX + _MEDIA_SERVER
+    if image_auth or not builtin or not any(
+            str(s.get("url") or "").split("?", 1)[0].rstrip("/").endswith(media) for s in mcp_servers or []):
+        return skills, suppressed
+    if any(s.get("name") == _IMAGE_SKILL and (s.get("plugin") or s.get("files") != builtin) for s in skills):
+        return skills, suppressed
+    kept = [s for s in skills if s.get("name") != _IMAGE_SKILL]
+    return kept, (suppressed if _IMAGE_SKILL in suppressed else [*suppressed, _IMAGE_SKILL])
 
 
 def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
