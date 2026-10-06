@@ -94,6 +94,16 @@ version a version replaced (the example showed a record id, and the schema allow
 reference the reader may not follow is `{ record_id, available: false }` with no `memory_id` (the
 chapter returned the memory's id, which tells the reader that the memory exists).
 
+**Records that follow a source (§5.4), found by the second server.** A server that shows a
+document as one record per section cannot let a section be revised or forgotten through the memory:
+the next save of the document would undo it. The chapter had no word for that, so the server's
+refusal was undefined and a kept file was caught by the same refusal. Now: such a record carries
+`follows` (`kind`, `id`, `name` of its source), `revise` and `forget` on it are refused with
+`memory_unsupported` in words that say where the source is changed, and a client offers neither.
+A file someone kept is NOT such a record: its title and its line are its writer's statement, and
+it is revised and forgotten like any other; forgetting it takes the file out of reads, erasing it
+removes the bytes. Schema: `MemoryRecord.follows`, optional.
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,
