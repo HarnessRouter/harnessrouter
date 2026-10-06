@@ -94,10 +94,7 @@ from ADR-0007 of an independent UHP implementation.
 
 - **Specification bugs** — ambiguity, a rule that cannot be implemented, disagreement between the
   spec and the suite: open an issue labelled `spec-bug`. These are treated as defects.
-- **Bugs in the reference implementation or in the conformance suite's code** — GitHub Issues, or,
-  when you have the fix, straight to a pull request described as the repository's
-  [contribution guide](https://github.com/HarnessRouter/harnessrouter/blob/main/CONTRIBUTING.md#bug-fixes-straight-to-a-pull-request)
-  asks: the bug, the expected behavior, the fix, and how it was verified.
+- **Bugs in the reference implementation** — GitHub Issues.
 - **Security vulnerabilities** — private disclosure, not a public issue. See the repository's
   security policy.
 

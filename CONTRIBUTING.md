@@ -18,16 +18,41 @@ routes, and check a change against it rather than against a green turn.
 
 ## Where things go
 
-- A bug you have a fix for: a pull request, with no issue needed first. See
-  [Bug fixes](#bug-fixes-straight-to-a-pull-request).
-- A bug you have found and not fixed, and proposals: GitHub Issues.
+- Proposals and bug reports: GitHub Issues.
 - Discussion: the HarnessRouter Discord community, https://discord.gg/nPcbwqVPb2
 - Security vulnerabilities: privately, per [SECURITY.md](SECURITY.md). Not in a public issue.
 
-## Bug fixes: straight to a pull request
+## Substantial changes: describe before you build
 
-A bug fix does not need an issue first. Open the pull request and make its description the report,
-under these four headings:
+For anything beyond a small fix, open an issue first. Describe the problem you are solving, the
+change you propose, and its expected impact, before writing the implementation. Once a maintainer
+agrees on the direction, either you or a maintainer implements it.
+
+Small, obvious fixes such as typos or a clear bug with an equally clear fix can go straight to a
+pull request.
+
+## Changes to the protocol
+
+The Unified Harness Protocol has a stricter process, because a specification, a reference
+implementation, and a conformance suite have to stay in step. If your change touches the protocol,
+follow [protocol/GOVERNANCE.md](protocol/GOVERNANCE.md): open a UHP Enhancement Proposal (UEP) as
+an issue labelled `uep` with Problem, Proposal, Compatibility, and Alternatives. Maintainers
+respond within 10 working days. An accepted UEP ships as one pull request that updates the
+specification, the schema, the reference implementation, a conformance test, and the changelog
+together.
+
+## Pull requests
+
+Keep each pull request to one problem. Before requesting review: link the issue when one exists;
+add or update tests for behavior changes; update the documentation when the public API, protocol,
+configuration, or user workflow changes; call out compatibility, security, or licensing
+implications; and check that no credentials, generated dependencies, or unrelated files ride
+along.
+
+### Describing a bug fix
+
+A pull request that fixes a bug is described under these four headings, whether or not an issue
+exists for it:
 
 ```markdown
 ## The bug
@@ -44,44 +69,9 @@ The steps you ran and what each one showed, written so a reviewer can repeat the
 added, the commands, and the result before and after the fix.
 ```
 
-A reviewer reads the description before the diff, and repeats the verification before merging. A
-fix whose description is missing one of the four is asked for it before it is reviewed. A test
-that fails without the fix and passes with it is the strongest verification there is; where a test
-is not possible, say what you ran by hand and what you saw.
-
-This covers a defect in the implementation, the conformance suite's code, or the documentation.
-Two kinds of defect keep their own route: a security vulnerability is reported privately, per
-[SECURITY.md](SECURITY.md), and a defect in the specification's text is an issue labelled
-`spec-bug`, per [protocol/GOVERNANCE.md](protocol/GOVERNANCE.md).
-
-## Substantial changes: describe before you build
-
-For anything that changes behavior on purpose (a feature, a new harness, a redesign), open an
-issue first. Describe the problem you are solving, the change you propose, and its expected
-impact, before writing the implementation. Once a maintainer agrees on the direction, either you
-or a maintainer implements it.
-
-A typo or a correction of that size can go straight to a pull request with a line saying what it
-corrects.
-
-## Changes to the protocol
-
-The Unified Harness Protocol has a stricter process, because a specification, a reference
-implementation, and a conformance suite have to stay in step. If your change touches the protocol,
-follow [protocol/GOVERNANCE.md](protocol/GOVERNANCE.md): open a UHP Enhancement Proposal (UEP) as
-an issue labelled `uep` with Problem, Proposal, Compatibility, and Alternatives. Maintainers
-respond within 10 working days. An accepted UEP ships as one pull request that updates the
-specification, the schema, the reference implementation, a conformance test, and the changelog
-together.
-
-## Pull requests
-
-Keep each pull request to one problem. A bug fix is described as
-[above](#bug-fixes-straight-to-a-pull-request). Before requesting review: link the issue when one exists;
-add or update tests for behavior changes; update the documentation when the public API, protocol,
-configuration, or user workflow changes; call out compatibility, security, or licensing
-implications; and check that no credentials, generated dependencies, or unrelated files ride
-along.
+A reviewer reads this before the diff and repeats the verification before merging. A test that
+fails without the fix and passes with it is the strongest verification; where a test is not
+possible, say what you ran by hand and what you saw.
 
 ## Development checks
 
