@@ -32,6 +32,44 @@ running the same command.
 
 Keep `--workers` low on a shared instance: every scenario is a real task on a real agent.
 
+## A world that exists
+
+`matrix.py` builds its own memories and agents through the instance, which needs the instance to
+serve `/v1/memories`. An instance may instead give its agents the memory tools over memories that
+another server keeps. There the runner builds nothing and is told what exists:
+
+```sh
+MATRIX_MEMORIES_BEARER=…  MATRIX_OUTSIDER_BEARER=…  \
+python3 memories/matrix.py --base-url $B --api-key "$KEY" --world world.json --out matrix.json
+```
+
+```json
+{
+  "dedicated": true,
+  "memories": { "base_url": "https://memories.example/api", "bearer_env": "MATRIX_MEMORIES_BEARER",
+                "root": "…", "notes": "…", "archive": "…", "client": "…", "vault": "…" },
+  "agents": [ { "base": "claude-code", "harness_id": "…", "writer": "…", "reader_harness_id": "…" } ],
+  "outsider": { "bearer_env": "MATRIX_OUTSIDER_BEARER" },
+  "not_served": { "task_memory": "a task names no memory on this instance" }
+}
+```
+
+- **`memories`**: the five memories by role, and where the runner reads them: the server that
+  keeps them and the name of an environment variable holding a bearer that reads and writes all
+  five. The bearer is never in the file. `notes` is the agent's default memory and it writes
+  there and in `client`; it reads `root`, which `archive` is below; it holds nothing on `vault`.
+- **`agents`**: one per base. `writer` is the id the agent's records are stamped with when that
+  is not the harness id. `reader_harness_id` is an agent that reads `root` and writes nowhere;
+  without one, `viewer` reads `n/a`.
+- **`outsider`**: a bearer of a member of another organization, on the same server. With it the
+  file scenarios check that neither the record nor its bytes answer to that member.
+- **`not_served`**: scenarios this instance cannot be asked, each with its reason, which is printed.
+- **`dedicated`** must be `true`. The runner forgets every record in the five memories before and
+  after a run (a record that follows a document is left), so they must be the matrix's own. One
+  cell runs at a time, since every agent uses the same five.
+
+The world file names an organization's memories and agents. Keep it out of the repository.
+
 ## The scenarios
 
 Each is one task in plain words, in a session of its own, so memory is the only thing that carries
@@ -50,6 +88,11 @@ for a "codeword" and a "passphrase", and two models declined to keep or repeat w
 | `task_memory` | A task that names another memory in `metadata.memory` | The record is written there, not in the default |
 | `viewer` | The same "remember" asked of an agent granted read only | Nothing was written anywhere |
 | `observe` | A conversation with nothing asked of memory | The default memory holds an episode, or a record the engine derived from it |
+| `asset` | "Generate a small image … then keep the image itself in your memory." | A record the agent wrote holds the image as a file with a line saying what it shows; the bytes read back as an image; they still read with the conversation that made them deleted; a member of another organization gets neither record nor bytes; a new conversation finds it by that line |
+| `document` | "Write a file … containing exactly this line. Then keep the file itself in your memory." | The same, and the bytes kept are the line that was written |
+
+The two file scenarios run where the instance's agents are offered a file to keep: a given world
+unless it says otherwise, or `--files` on a world the runner builds. Elsewhere they read `n/a`.
 
 A scenario an engine cannot serve (no entity records, nothing derived from conversations) reads
 `n/a` from that engine's capability document. A failed scenario is retried once.
@@ -62,3 +105,6 @@ A scenario an engine cannot serve (no entity records, nothing derived from conve
 - **A scenario**: a function `s_name(cell) -> (ok, why)` and one line in `SCENARIOS`. Judge on what
   the service holds afterwards; judge on the answer only when the answer is the point.
 - **A route**: one probe in `interface.py`'s `probes`.
+
+`test_matrix.py` runs the runner against a memory server and an agent written in the test, so a
+change to it is checked without an instance: `python -m pytest scripts/support-matrix/memories`.

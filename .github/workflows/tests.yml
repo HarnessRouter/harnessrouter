@@ -46,6 +46,8 @@ jobs:
       # the benchmark suite's rules are pinned by its tests; they read the gateway's vendor tables
       # from source (scripts/support-matrix/samemodel.py) and need nothing the gateway job lacks
       - run: python -m pytest scripts/benchmark -q
+      # the memories matrix runner against a memory server and an agent written in its own test
+      - run: python -m pytest scripts/support-matrix/memories -q
 
   runner:
     runs-on: ubuntu-latest
