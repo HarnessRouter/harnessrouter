@@ -1098,7 +1098,12 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # exactly that shape: any condition that made brokering fail silently shipped the raw key.
     # Keeping pass-through as its own declared mode means a hosted deployment that leaves the
     # variable unset still fails CLOSED on every broker failure, as before.
-    if SANDBOX_TRUST == "owner":
+    #
+    # One connection is brokered even here: an Azure connection that signs in with Microsoft Entra
+    # (see _entra_token). What it holds is not a key to hand over but an application's secret that
+    # buys a token good for about an hour, and a turn may run for six: the broker asks again when
+    # the token ages, on every call, and the agent never holds the token or the secret.
+    if SANDBOX_TRUST == "owner" and not _entra_conn(conn):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -1111,7 +1116,10 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
         return None
     # Normalised: a connection saved as "TokenRouter" must not skip brokering on a casing mismatch.
     provider = str(conn.get("provider") or "").strip().lower()
-    if provider not in _BROKERABLE_PROVIDERS or not sid or not PUBLIC_BASE_URL:
+    # Where the sandbox reaches the broker: this gateway's own door beside a local runner, else the
+    # public base (see _sandbox_broker_origin). A self-hosted instance has the first without ever
+    # setting the second, and an Entra connection there is brokered all the same.
+    if provider not in _BROKERABLE_PROVIDERS or not sid or not _sandbox_broker_origin():
         log_reason = ("provider not brokerable" if provider not in _BROKERABLE_PROVIDERS
                       else "no session id" if not sid else "HARNESS_PUBLIC_BASE_URL unset")
         print(f"[broker] refusing to build sandbox auth for provider={provider!r}: {log_reason}",
@@ -1165,7 +1173,8 @@ _IMAGE_MODEL_MAP_KEY = "harness-image-model-map"
 # measurement, this is policy, and one must not overwrite the other.
 _MEDIA_POLICY_KEY = "harness-media-policy"
 _IMAGE_MODEL_MAP_PREV_KEY = "harness-image-model-map.prev"
-_INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token")
+_INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token",
+                              "client_secret")   # an Entra application's secret (see _entra_token)
 # The hosted HarnessRouter service as a model provider. One origin, three routes: the provider
 # front door the runners call (OpenAI and Anthropic shapes and Gemini's native path, all under one
 # base), the model list it serves, and the connect flow that hands a key to this instance.
@@ -3975,6 +3984,78 @@ def _provider_base_url(provider: str, base_url: str) -> str:
     return base
 
 
+# ── an Azure connection that signs in with Microsoft Entra instead of an API key ────────────────
+# An organization that does not issue API keys reaches Azure OpenAI and Foundry as an application
+# registered in its own directory: a tenant id, a client id and a client secret, held where a key is
+# held today and never handed to a sandbox. The broker asks Entra for a token for the Azure AI scope
+# (the client-credentials grant), keeps it until shortly before it expires, and presents it as the
+# bearer in place of the `api-key` header. Built on the hosted service first (2026-10-06) and taken
+# from there as it is; what differs here is only that such a connection is brokered in owner trust
+# too (see _auth_from_conn).
+_ENTRA_PROVIDERS = ("azure", "azure-foundry")
+_ENTRA_AUTHORITY = os.environ.get("HR_ENTRA_AUTHORITY", "https://login.microsoftonline.com").rstrip("/")
+_ENTRA_SCOPE = "https://cognitiveservices.azure.com/.default"
+_ENTRA_FIELDS = ("tenant_id", "client_id", "client_secret")
+_ENTRA_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
+_ENTRA_EARLY_S = 300          # a token is replaced this long before Entra would refuse it
+_entra_tokens: dict[str, tuple[str, float]] = {}
+_entra_locks: dict[str, asyncio.Lock] = {}
+
+
+def _entra_conn(conn: dict | None) -> bool:
+    return str((conn or {}).get("auth") or "").strip().lower() == "entra"
+
+
+def _entra_config_error(provider: str, cfg: dict) -> str:
+    """Why an integration's Entra settings cannot be saved, "" when they can."""
+    if provider not in _ENTRA_PROVIDERS:
+        return "Microsoft Entra sign-in is available for Azure OpenAI and Azure AI Foundry connections"
+    missing = [f for f in _ENTRA_FIELDS if not str(cfg.get(f) or "").strip()]
+    if missing:
+        return "missing " + ", ".join(missing)
+    for f in ("tenant_id", "client_id"):
+        if not _ENTRA_ID_RE.match(str(cfg[f]).strip()):
+            return f"{f} is the directory's or the application's id, written as a GUID"
+    if not str(cfg.get("base_url") or "").strip():
+        return "missing base_url, the resource's endpoint"
+    return ""
+
+
+async def _entra_token(conn: dict) -> str:
+    """A bearer token for this connection's application, from Entra or from this process's memory."""
+    tenant, client, secret = (str(conn.get(f) or "").strip() for f in _ENTRA_FIELDS)
+    scope = str(conn.get("entra_scope") or _ENTRA_SCOPE).strip()
+    if not (tenant and client and secret):
+        raise HTTPException(502, "this connection signs in with Microsoft Entra and is missing its tenant id, client id or client secret")
+    k = hashlib.sha256(f"{tenant}|{client}|{scope}|{secret}".encode()).hexdigest()
+    hit = _entra_tokens.get(k)
+    if hit and hit[1] > time.time():
+        return hit[0]
+    async with _entra_locks.setdefault(k, asyncio.Lock()):
+        hit = _entra_tokens.get(k)
+        if hit and hit[1] > time.time():
+            return hit[0]
+        try:
+            r = await _client().post(f"{_ENTRA_AUTHORITY}/{tenant}/oauth2/v2.0/token", timeout=20.0,
+                                     data={"grant_type": "client_credentials", "client_id": client,
+                                           "client_secret": secret, "scope": scope})
+            doc = r.json() if r.content else {}
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"Microsoft Entra could not be reached for this connection's sign-in: {type(e).__name__}")
+        token = str((doc or {}).get("access_token") or "")
+        if r.status_code != 200 or not token:
+            # Entra's own code and first sentence (AADSTS7000215: Invalid client secret provided...)
+            # are what the person fixing the connection needs; neither carries the secret.
+            why = str((doc or {}).get("error_description") or (doc or {}).get("error") or f"HTTP {r.status_code}").split("\r\n")[0].split("\n")[0][:300]
+            raise HTTPException(502, f"Microsoft Entra refused this connection's sign-in: {why}")
+        try:
+            life = max(60.0, float(doc.get("expires_in") or 3600) - _ENTRA_EARLY_S)
+        except (TypeError, ValueError):
+            life = 3000.0
+        _entra_tokens[k] = (token, time.time() + life)
+        return token
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
     claims = _verify_turn_cred(_broker_token(request))
@@ -4006,7 +4087,10 @@ async def llm_broker(path: str, request: Request):
     provider = str(conn.get("provider") or "")
     # Present the real credential the way THIS provider expects it.
     if provider in ("azure", "azure-foundry"):
-        headers["api-key"] = key
+        if _entra_conn(conn):
+            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
+        else:
+            headers["api-key"] = key
     elif provider == "anthropic":
         headers["x-api-key"] = key
     else:
@@ -5007,6 +5091,14 @@ _PROVIDER_CATALOG: dict[str, dict] = {
                     "placeholder": "https://<resource>.openai.azure.com/openai/v1"}],
         "secret": "api_key",
         "secret_label": "API Key",
+        # The other way in: as an application in the organization's own Microsoft Entra directory,
+        # for an organization that issues no API keys (see _entra_token). The form offers the choice
+        # and asks for these in place of the key.
+        "entra": {"fields": [{"key": "tenant_id", "label": "Directory (tenant) ID",
+                              "placeholder": "00000000-0000-0000-0000-000000000000"},
+                             {"key": "client_id", "label": "Application (client) ID",
+                              "placeholder": "00000000-0000-0000-0000-000000000000"}],
+                  "secret": "client_secret", "secret_label": "Client secret"},
     },
     "bedrock": {
         "label": "AWS Bedrock",
@@ -5162,6 +5254,7 @@ def _provider_catalog_public() -> list[dict]:
                     "secret": meta["secret"],
                     "secret_label": meta["secret_label"],
                     "key_hint": meta.get("key_hint", ""),
+                    **({"entra": meta["entra"]} if meta.get("entra") else {}),
                     "models": [{"canonical": c, "provider_id": v}
                                for c, v in _VENDOR_MODELS.get(pid, {}).items()],
                     # The custom provider's rows name any canonical; the form offers this list.
@@ -5389,6 +5482,20 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
                 if not prior_cfg.get(k):
                     raise HTTPException(400, f"integration '{name}': missing {k}")
                 cfg[k] = prior_cfg[k]
+        # How the connection signs in: an API key (nothing said, as before) or Microsoft Entra.
+        how = str(cfg.get("auth") or "").strip().lower()
+        if how in ("", "key", "api_key"):
+            # ...and a connection switched back to a key keeps nothing of the application it was
+            for k in ("auth", *_ENTRA_FIELDS, "entra_scope"):
+                cfg.pop(k, None)
+        elif how == "entra":
+            cfg = {**{k: (str(v).strip() if isinstance(v, str) else v) for k, v in cfg.items()}, "auth": "entra"}
+            cfg.pop("api_key", None)      # one way in per connection: a key left beside it would never be used
+            why = _entra_config_error(provider, cfg)
+            if why:
+                raise HTTPException(400, f"integration '{name}': {why}")
+        else:
+            raise HTTPException(400, f"integration '{name}': auth is \"key\" or \"entra\"")
         # A provider whose endpoint we know supplies its own base_url. Asking the user for a
         # value we can look up is a question with exactly one right answer and many wrong ones.
         known_base = (_PROVIDER_CATALOG.get(provider) or {}).get("base_url")
