@@ -6,6 +6,47 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## Claude Haiku 5.5 (2026-10-07)
+
+Added in 0.31.12 beside Haiku 4.5 on every base that offers Haiku 4.5 except aider, with every
+provider naming its own id, read off the vendors' lists that day: Anthropic `claude-haiku-5-5`,
+OpenRouter and Vercel `anthropic/claude-haiku-5.5` (OpenRouter serves it as
+`anthropic/claude-haiku-5.5-20261007`, the same model), Bedrock `us.anthropic.claude-haiku-5-5`
+(from Anthropic's Bedrock id and the inference-profile form of the other 5.5 models; no Bedrock
+connection was measured). TokenRouter and llmtr do not list it, so it is in
+`_TOKENROUTER_NO_CHANNEL`. The same reading found Opus 5.5 on TokenRouter's and llmtr's lists; both
+now route it.
+
+Its price is set by prompt length (Anthropic's pricing page): up to 100,000 prompt tokens $0.10
+input, $0.01 cache read, $0.125 and $0.20 cache writes, $0.50 output per million tokens; over
+100,000, five times each. This instance keeps no price table of its own.
+
+Measured through the console of a side container (0.31.11 with this change), one column per
+connection, Haiku 4.5 as the switch partner:
+
+- Anthropic: 15 of 16 bases pass all five scenarios. aider failed the recycle scenario (after the
+  recycle it answered a word that was never asked for) in two of three runs, so Haiku 5.5 is left
+  out of aider's catalog. Claude Code runs it on the CLI the image pins (2.1.280); no bump.
+- Vercel AI Gateway: 17 of 17 bases pass all five.
+- OpenRouter: 16 of 16 pass all five (Claude Code cannot use an OpenRouter connection).
+- Findings that are not about Haiku 5.5 and appear for Haiku 4.5 on the same bases: through the
+  Anthropic connection agentzero, aider, cline, grok, kimi, minimax and qwen read no prompt cache
+  (they do not ask Anthropic to cache, so every call pays the full input price); cline and dsh report
+  no served model, so the same-model rule cannot judge their turns.
+
+Thinking. The probe (`scripts/support-matrix/thinking/probe.py`) on Vercel and OpenRouter, chat
+and Messages: every level is accepted, `none` included (OpenRouter refuses to turn Opus and Sonnet
+5.5 off, not this one), and high and xhigh think more than medium; low thought as little as none on
+the probe's question. On Messages OpenRouter refuses `thinking: between_tools` for it by name and
+both routes accept `disabled`, so the runner now sends `between_tools` only for Opus and Sonnet 5.5.
+The thinking column on OpenRouter, where the provider counts thinking tokens: hermes, pi, opencode
+and goose pass (none spends nothing, low less than high). Through the Anthropic connection, which
+reports no thinking count, hermes passes, Claude Code and opencode record every level applied and
+fail only the output-token stand-in check (adaptive low spends about what none does), and pi records
+no level applied; pi does the same with Sonnet 5.5 there, so that is pi on an Anthropic connection,
+not this model. The same probe found Opus 5.5 through TokenRouter refuses every way of turning
+thinking off (`disabled`, `between_tools`, a budget), so `none` is not offered for it there.
+
 ## Claude Sonnet 5.5 (2026-09-30)
 
 Added in 0.26.18 beside Sonnet 5 on every base that offers Sonnet 5, with every provider naming

@@ -38,7 +38,9 @@ _MODEL_LEVELS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # Anthropic. fable-5.1 refuses both of the API's ways of turning thinking off (fable-5 is taken
     # to be the same; it was not measured).
     (r"^claude-fable-5", ("low", "medium", "high", "xhigh")),
-    (r"^claude-(haiku-4[.-]5|sonnet-4[.-]6|opus-4[.-][78]|sonnet-5|opus-5)", ("none", "low", "medium", "high", "xhigh")),
+    # haiku-5.5 (2026-10-07, Vercel and OpenRouter, chat and Messages): every level accepted, off included
+    # (unlike the larger 5.5 models, OpenRouter lets it be turned off); high and xhigh think more.
+    (r"^claude-(haiku-[45][.-]5|sonnet-4[.-]6|opus-4[.-][78]|sonnet-5|opus-5)", ("none", "low", "medium", "high", "xhigh")),
     # Google. The pro model and the 3.7 and 3.8 flash models only work thinking, and refuse `minimal`.
     (r"^gemini-3\.1-pro|^gemini-3\.[78]-flash$", ("low", "medium", "high")),
     (r"^gemini-3(\.[156])?-flash(-lite|-preview)?$", ("none", "minimal", "low", "medium", "high")),
@@ -61,6 +63,7 @@ _ROUTE_LACKS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("openrouter", r"^claude-(opus|sonnet)-5[.-]5", ("none",)),   # "Reasoning is mandatory for this endpoint"
     ("openrouter", r"^gemini-", ("none",)),                       # the same refusal, every Gemini
     ("vercel", r"^claude-opus-5[.-]5", ("none",)),                # accepted and not honoured
+    ("tokenrouter", r"^claude-opus-5[.-]5", ("none",)),           # disabled, between_tools and a budget all refused (2026-10-07)
     ("tokenrouter", r"^deepseek-v4-pro$", ("none",)),             # "must be one of: low, medium, high, xhigh, max"
     ("tokenrouter", r"^gemini-3\.1-pro", ("medium",)),            # low and high were measured, medium was not
     ("google", r"^gemini-.*-flash-lite", ("minimal",)),
@@ -176,12 +179,14 @@ def _responses(doc: dict, b: str, level: str) -> bool:
 
 def _messages(doc: dict, b: str, level: str) -> bool:
     """Anthropic's Messages API, as the API itself answered through a pass-through door: the older
-    model takes a budget and refuses an effort, the newer ones the reverse, and the 5.5 line names
-    its own way of turning thinking off."""
+    model takes a budget and refuses an effort, the newer ones the reverse, and the larger 5.5
+    models name their own way of turning thinking off. haiku-5.5 takes the usual one: OpenRouter
+    refuses between_tools for it by name, and Vercel and OpenRouter both accept disabled
+    (measured 2026-10-07)."""
     if _family(b) != "claude":
         return False
     if level == "none":
-        doc["thinking"] = {"type": "between_tools" if re.search(r"-5[.-]5", b) else "disabled"}
+        doc["thinking"] = {"type": "between_tools" if re.search(r"(opus|sonnet)-5[.-]5", b) else "disabled"}
         return True
     if re.search(r"^claude-haiku-4", b):
         cap = doc.get("max_tokens")
