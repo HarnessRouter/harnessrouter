@@ -299,7 +299,14 @@ INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
 # service-to-service (the engine executor) and keep header trust — key possession is the service
 # credential. Modes: observe (count/log, keep header trust) -> enforce (claims are authoritative;
 # key + a present-but-invalid Authorization is REJECTED).
-HR_IDENTITY_MODE = os.environ.get("HR_IDENTITY_MODE", "observe")
+#
+# Unset, or anything but "off" or "observe", means enforce. A console that is not in self-hosted mode
+# attaches the internal key to every request that carries an Authorization header, so a gateway that
+# trusted the identity headers by default let a junk bearer assert any organization and member
+# (reported privately, GHSA-qrr8-m92f-7vfp). The self-hosted entrypoint sets "off" on purpose: its
+# console pins the one organization and gives the key only to a signed-in session. "observe" is a
+# migration step a multi-tenant operator chooses, never a default.
+HR_IDENTITY_MODE = {"off": "off", "observe": "observe"}.get(os.environ.get("HR_IDENTITY_MODE", "").strip().lower(), "enforce")
 AUTH_JWT_SECRET = os.environ.get("AUTH_JWT_SECRET", "")
 # Deploy fingerprint (baked at image build via the GIT_SHA build-arg, see Dockerfile) — lets
 # release verification bind this running instance to the exact source commit it was built from.

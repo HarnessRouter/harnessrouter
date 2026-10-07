@@ -953,6 +953,8 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HARNESS_RESP_HOLD_S` | `3` | How long the gateway lets the runner hold a request for a turn's events. `0` asks every 1.2 s as before 0.30.1. |
 | `HARNESS_INTERNAL_KEY` | generated | Per-container; never leaves the process tree. |
 
+Outside this image the gateway's own default for `HR_IDENTITY_MODE` is `enforce`: a request that carries the internal key beside a sign-in token is answered as the organization and member the token proves, and refused when the token does not verify. Set `off` only where, as here, the console in front of the gateway pins the one organization itself.
+
 </details>
 
 ## Using the API
