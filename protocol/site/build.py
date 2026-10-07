@@ -594,18 +594,18 @@ JS = """
   var tb=document.getElementById('tbtn'),tm=tb&&tb.parentElement.querySelector('.tmenu');
   if(tb&&tm){
     function cur(){try{return localStorage.getItem('theme')||'auto';}catch(e){return 'auto';}}
-    function mark(){var v=cur();tm.querySelectorAll('[data-theme-set]').forEach(function(x){
+    function markTheme(){var v=cur();tm.querySelectorAll('[data-theme-set]').forEach(function(x){
       x.setAttribute('aria-checked', x.getAttribute('data-theme-set')===v?'true':'false');});}
     function set(v){try{ if(v==='auto'){localStorage.removeItem('theme');delete document.documentElement.dataset.theme;}
       else{localStorage.setItem('theme',v);document.documentElement.dataset.theme=v;} }catch(e){}
-      mark();}
-    function openM(o){tm.hidden=!o;tb.setAttribute('aria-expanded',o?'true':'false');if(o)mark();}
+      markTheme();}
+    function openM(o){tm.hidden=!o;tb.setAttribute('aria-expanded',o?'true':'false');if(o)markTheme();}
     tb.addEventListener('click',function(e){e.stopPropagation();openM(tm.hidden);});
     tm.querySelectorAll('[data-theme-set]').forEach(function(x){
       x.addEventListener('click',function(){set(x.getAttribute('data-theme-set'));openM(false);});});
     document.addEventListener('click',function(){if(!tm.hidden)openM(false);});
     document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!tm.hidden)openM(false);});
-    mark();
+    markTheme();
   }
 
   // Version dropdown: toggle the menu, close on outside click or Escape.
@@ -982,6 +982,17 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
 """
 
 
+def check_script(js: str) -> None:
+    """Fail the build when the page script declares one function name twice. The script is not
+    strict, so a function declared inside a block replaces the outer one of the same name as soon
+    as that block runs: the theme menu's mark() replaced search's mark(), and every search result
+    read "undefined" (live on the site until 2026-10-07)."""
+    names = re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(", js)
+    twice = sorted({n for n in names if names.count(n) > 1})
+    if twice:
+        raise SystemExit(f"the page script declares {', '.join(twice)} more than once")
+
+
 def check_links(dist: pathlib.Path) -> None:
     """Fail the build on any broken same-site link, so a dead cross-link can never reach deploy.
 
@@ -1244,6 +1255,7 @@ def build() -> int:
     # GitHub and on the generated site. Merge them after the site's brand assets, preserving both.
     if (ROOT / "assets").is_dir():
         shutil.copytree(ROOT / "assets", DIST / "assets", dirs_exist_ok=True)
+    check_script(JS)
     for name, text in SITE_FILES.items():
         (DIST / "assets" / name).write_text(text, encoding="utf-8")
 
