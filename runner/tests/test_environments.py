@@ -325,3 +325,41 @@ def test_a_package_check_asks_the_registry_and_refuses_what_is_not_there(monkeyp
     apt = E.check_package("apt", "jq=1.7.1-3")
     assert apt["exists"] is True and apt["latest"] == "1.7.1-3" and apt["version"] == "1.7.1-3"
     assert E.check_package("apt", "nope")["exists"] is False
+
+
+def test_a_git_import_lands_files_and_directories_and_never_follows_a_link(store, tmp_path, monkeypatch):
+    """A link a repository commits is dropped and counted, like an archive's; following it as root
+    wrote what it pointed at into the source (reported privately). The clone gets the build's
+    environment, without the runner's secrets."""
+    outside = tmp_path / "outside"
+    (outside / "dir").mkdir(parents=True)
+    (outside / "private.txt").write_text("not for the environment")
+    (outside / "dir" / "inner.txt").write_text("nor this")
+    monkeypatch.setenv("HR_SECRET_KEY", "runner-secret-value")
+    monkeypatch.setenv("HARNESS_INTERNAL_KEY", "runner-internal-value")
+    seen = {}
+
+    def fake_clone(cmd, **kw):
+        seen["env"] = kw.get("env") or {}
+        repo = pathlib.Path(cmd[-1])
+        (repo / ".git").mkdir(parents=True)
+        (repo / "src").mkdir()
+        (repo / "README.md").write_text("hello\n")
+        (repo / "src" / "run.sh").write_text("echo hi\n")
+        os.chmod(repo / "src" / "run.sh", 0o755)
+        os.symlink(outside / "private.txt", repo / "leak.txt")
+        os.symlink(outside / "dir", repo / "src" / "linked-dir")
+        os.symlink("README.md", repo / "readme-alias")
+        return None
+    monkeypatch.setattr(E.subprocess, "run", fake_clone)
+    out = E.import_git("henv_g", "https://example.com/repo.git")
+    assert out["written"] == 2 and out["skipped"] == 3, out
+    files = {e["path"] for e in E.tree("henv_g") if not e["dir"]}
+    assert files == {"README.md", "src/run.sh"}
+    src = E.source_dir("henv_g")
+    assert not any(p.is_symlink() for p in src.rglob("*"))
+    assert all("not for the environment" not in p.read_text() and "nor this" not in p.read_text()
+               for p in src.rglob("*") if p.is_file())
+    assert os.stat(src / "src" / "run.sh").st_mode & 0o111
+    assert "HR_SECRET_KEY" not in seen["env"] and "HARNESS_INTERNAL_KEY" not in seen["env"]
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"

@@ -16787,6 +16787,28 @@ class EnvironmentImportBody(BaseModel):
     replace: bool = False
 
 
+async def _git_url_refused(url: str) -> str | None:
+    """Why this server will not clone from that address, or None: the rule an MCP address follows
+    (_ssrf_check). A self-hosted box's private network is its operator's own and is allowed; on a
+    shared deployment an address that resolves to a private, local or metadata range is refused,
+    since the clone runs on this side (reported privately, GHSA-mw9j-m5jf-5r56)."""
+    if _pool_is_local():
+        return None
+    from urllib.parse import urlparse
+    u = str(url or "")
+    if u.startswith("git@"):
+        host, port = u[4:].split(":", 1)[0], 22
+    else:
+        try:
+            p = urlparse(u)
+            host, port = p.hostname or "", p.port or {"http": 80, "ssh": 22}.get(p.scheme, 443)
+        except ValueError:
+            return "invalid url"
+    if not host:
+        return "url has no host"
+    return await _internal_target(host, port)
+
+
 @app.post("/v1/environments/{env_id}/import")
 async def environment_import(env_id: str, request: Request, replace: int = 0) -> dict:
     """A whole project at once, keeping its tree: a zip or tar archive as the body, or a JSON body
@@ -16798,6 +16820,9 @@ async def environment_import(env_id: str, request: Request, replace: int = 0) ->
         git = body.git or {}
         if not str(git.get("url") or ""):
             raise uhp_error(422, "environment_invalid", "Name a git url, or send an archive as the body.", "git.url")
+        refused = await _git_url_refused(str(git.get("url")))
+        if refused:
+            raise uhp_error(422, "environment_invalid", f"That git address cannot be used: {refused}.", "git.url")
         r = await _env_runner("POST", f"/environments/{env_id}/import", env_id, timeout=900.0,
                               params={"replace": int(bool(replace or body.replace)), "git_url": str(git.get("url")),
                                       "git_ref": str(git.get("ref") or "")}, content=b"")

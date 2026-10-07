@@ -432,15 +432,51 @@ def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dic
     return {"written": written, "skipped": skipped, **source_stat(env_id)}
 
 
+def _copy_without_links(src_root: str, dst: pathlib.Path) -> tuple[int, int]:
+    """Copy a tree's regular files and directories into dst; a link, a device or a fifo is counted
+    and left behind, never followed. Returns (written, skipped)."""
+    written = skipped = 0
+    for dirpath, dirnames, filenames in os.walk(src_root):   # os.walk does not descend a linked directory
+        keep = []
+        for d in dirnames:
+            if os.path.islink(os.path.join(dirpath, d)):
+                skipped += 1
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        rel = os.path.relpath(dirpath, src_root)
+        out = dst if rel == "." else dst / rel
+        out.mkdir(parents=True, exist_ok=True)
+        for f in filenames:
+            p = os.path.join(dirpath, f)
+            st = os.lstat(p)
+            if not stat.S_ISREG(st.st_mode):
+                skipped += 1
+                continue
+            target = out / f
+            if target.is_symlink():
+                target.unlink()
+            shutil.copyfile(p, target, follow_symlinks=False)
+            if st.st_mode & 0o111:
+                os.chmod(target, 0o755)
+            written += 1
+    return written, skipped
+
+
 def import_git(env_id: str, url: str, ref: str = "", *, replace: bool = False) -> dict:
-    """Clone a repository's tree (shallow, one ref) into the source, without its .git."""
+    """Clone a repository's tree (shallow, one ref) into the source, without its .git. As with an
+    archive, only regular files and directories land: a link the repository commits is dropped and
+    counted, never followed. The copy runs as root, and following a committed link (say, to
+    /proc/self/environ) wrote what it pointed at into the source, where the files route reads it
+    back (reported privately, GHSA-mw9j-m5jf-5r56). The clone runs with the environment a build's
+    commands get, without the runner's own secrets."""
     if not str(url).startswith(("https://", "http://", "git@", "ssh://")):
         raise HTTPException(400, "git url must be https://, http://, ssh:// or git@")
     with tempfile.TemporaryDirectory(prefix="hr-env-git-") as tmp:
         cmd = ["git", "clone", "--depth", "1", "--quiet"] + (["--branch", ref] if ref else []) + [url, tmp + "/repo"]
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600,
-                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                           env={**_tool_env(), "GIT_TERMINAL_PROMPT": "0"})
         except subprocess.CalledProcessError as e:
             raise HTTPException(400, f"git clone failed: {(e.stderr or '')[-400:].strip()}")
         except subprocess.TimeoutExpired:
@@ -449,9 +485,8 @@ def import_git(env_id: str, url: str, ref: str = "", *, replace: bool = False) -
         src = source_dir(env_id)
         if replace and src.exists():
             shutil.rmtree(src)
-        src.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(tmp + "/repo", src, dirs_exist_ok=True, symlinks=False)
-    return {"imported": "git", "url": url, "ref": ref, **source_stat(env_id)}
+        written, skipped = _copy_without_links(tmp + "/repo", _source(env_id))
+    return {"imported": "git", "url": url, "ref": ref, "written": written, "skipped": skipped, **source_stat(env_id)}
 
 
 # ── runtimes ────────────────────────────────────────────────────────────────────────────────────

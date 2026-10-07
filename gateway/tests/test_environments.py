@@ -268,3 +268,25 @@ def test_a_request_that_does_not_validate_is_answered_without_its_body():
     j = r.json()
     assert j["error"]["code"] == "invalid_request" and j["error"]["param"] == "model_map" and "model_map" in j["error"]["message"]
     assert j["detail"][0]["loc"] == ["body", "model_map"] and set(j["detail"][0]) == {"loc", "msg", "type"}
+
+
+def test_a_git_address_on_a_private_network_is_refused_on_a_shared_deployment(api, monkeypatch):
+    """The clone runs on this side, so the rule an MCP address follows applies: on a shared
+    deployment a private, local or metadata address is refused before anything is cloned; a
+    self-hosted box's own network is its operator's and is allowed."""
+    eid = api.post("/v1/environments", json={"name": "git-env"}).json()["id"]
+    forwarded = []
+
+    async def recorder(method, path, env_id, **kw):
+        forwarded.append(path)
+        raise AssertionError("nothing should reach the runner")
+    monkeypatch.setattr(app, "_env_runner", recorder)
+    monkeypatch.setattr(app, "_pool_is_local", lambda: False)
+    for url in ("https://10.0.0.5/team/repo.git", "http://169.254.169.254/latest/", "git@127.0.0.1:team/repo.git",
+                "ssh://git@[::1]/team/repo.git", "https:///no-host"):
+        r = api.post(f"/v1/environments/{eid}/import", json={"git": {"url": url}})
+        assert r.status_code == 422 and "cannot be used" in r.text, (url, r.text)
+    assert forwarded == []
+    assert __import__("asyncio").run(app._git_url_refused("https://140.82.112.3/team/repo.git")) is None   # a public address
+    monkeypatch.setattr(app, "_pool_is_local", lambda: True)
+    assert __import__("asyncio").run(app._git_url_refused("https://10.0.0.5/team/repo.git")) is None
