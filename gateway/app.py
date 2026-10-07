@@ -6205,6 +6205,7 @@ _BEDROCK_CLAUDE = {
     "sonnet-4.6": "us.anthropic.claude-sonnet-4-6", "sonnet-4.5": "us.anthropic.claude-sonnet-4-5",
     "opus-5": "us.anthropic.claude-opus-5", "sonnet-5": "us.anthropic.claude-sonnet-5",
     "opus-5.5": "us.anthropic.claude-opus-5-5", "sonnet-5.5": "us.anthropic.claude-sonnet-5-5",
+    "haiku-5.5": "us.anthropic.claude-haiku-5-5",
     "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "fable-5": "us.anthropic.claude-fable-5",
     "fable-5.1": "us.anthropic.claude-fable-5-1",
 }
@@ -6212,7 +6213,7 @@ _ANTHROPIC_CLAUDE = {
     "opus-4.8": "claude-opus-4-8", "opus-4.7": "claude-opus-4-7", "opus-4.6": "claude-opus-4-6",
     "opus-4.5": "claude-opus-4-5", "sonnet-4.6": "claude-sonnet-4-6", "sonnet-4.5": "claude-sonnet-4-5",
     "opus-5": "claude-opus-5", "sonnet-5": "claude-sonnet-5",
-    "opus-5.5": "claude-opus-5-5", "sonnet-5.5": "claude-sonnet-5-5",
+    "opus-5.5": "claude-opus-5-5", "sonnet-5.5": "claude-sonnet-5-5", "haiku-5.5": "claude-haiku-5-5",
     "haiku-4.5": "claude-haiku-4-5-20251001", "fable-5": "claude-fable-5",
     "fable-5.1": "claude-fable-5-1",
 }
@@ -6242,6 +6243,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-sonnet-5":   "claude-sonnet-5",
         "claude-opus-4.7":   "claude-opus-4-7",
         "claude-sonnet-4.6": "claude-sonnet-4-6",
+        "claude-haiku-5.5":  "claude-haiku-5-5",
         "claude-haiku-4.5":  "claude-haiku-4-5-20251001",
     },
     "bedrock": {
@@ -6254,6 +6256,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-sonnet-5":   "us.anthropic.claude-sonnet-5",
         "claude-opus-4.7":   "us.anthropic.claude-opus-4-7",
         "claude-sonnet-4.6": "us.anthropic.claude-sonnet-4-6",
+        "claude-haiku-5.5":  "us.anthropic.claude-haiku-5-5",
         "claude-haiku-4.5":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     },
     "openai": {
@@ -6306,6 +6309,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-sonnet-5":    "anthropic/claude-sonnet-5",
         "claude-opus-4.7":    "anthropic/claude-opus-4.7",
         "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
+        "claude-haiku-5.5":   "anthropic/claude-haiku-5.5",
         "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
         # The Gemini text family, each id read from the aggregator's own /v1/models on 2026-09-06
         # (OpenRouter serves all eleven; TokenRouter lacks four, see _TOKENROUTER_NO_CHANNEL; Vercel
@@ -6433,6 +6437,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
         "gpt-5.5":            "openai/gpt-5.5",
         "gpt-5.3-codex":      "openai/gpt-5.3-codex",
+        "claude-opus-5.5":    "anthropic/claude-opus-5.5",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
         "claude-fable-5-1":    "anthropic/claude-fable-5.1",
@@ -6486,7 +6491,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
-    "claude-opus-5.5",   # not on TokenRouter's /v1/models (2026-09-22): the vendor and the other aggregators serve it
+    "claude-haiku-5.5",   # not on TokenRouter's /v1/models (2026-10-07): the vendor, OpenRouter and Vercel serve it
     # No Meta id is on TokenRouter's list (2026-09-13).
     "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
     "llama-4-maverick", "llama-3.3-70b",
@@ -6647,7 +6652,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
     # Anthropic
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
-    "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+    "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
     # Google
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
     "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
@@ -6813,7 +6818,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # falling through to the unmapped default it used at launch.
     "claude": {"default": "claude-sonnet-4.6",
                "models": ["claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"]},
+                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5"]},
     # hermes (NousResearch hermes-agent) is multi-family — it runs any frontier model through
     # the matching provider connection (family-aware chain selection in _resp_execute). Friendly
     # names are shared with the codex/claude catalogs, so pricing/billing metrics stay identical
@@ -6824,7 +6829,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
                           "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
@@ -6857,7 +6862,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
@@ -6873,7 +6878,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                            "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                            "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
@@ -6899,6 +6904,10 @@ _MODEL_CATALOG: dict[str, dict] = {
     # them to a DIFFERENT model on a DIFFERENT provider. No id this catalog serves is in that table
     # today — `gemini-2.5-pro` was, and left with #196 — but the overlap is upstream's to change in
     # any release, and the prefix skips the table entirely rather than tracking it.
+    #
+    # claude-haiku-5.5 is NOT offered here: on 2026-10-07 aider passed the first four scenarios on it
+    # and failed the recycle scenario in two of three runs (after a recycle it answered a word that
+    # was never asked for), while every other base held the conversation. Re-measure before adding it.
     "aider": {"default": "gpt-5.4",
               "models": [
                   "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
@@ -6930,7 +6939,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                 "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                  "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
@@ -6958,7 +6967,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                     "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                     "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                    "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                    "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                     "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                     "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
@@ -6979,7 +6988,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                 "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
@@ -7001,7 +7010,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                      "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                      "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                       "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                       "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                       "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
@@ -7020,7 +7029,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                          "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
                          "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
-                         "claude-sonnet-4.6", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
+                         "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
                          "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
                          "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
                          "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
@@ -7050,7 +7059,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
@@ -7072,7 +7081,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
-                         "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
+                         "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
@@ -7082,7 +7091,7 @@ _MODEL_CATALOG: dict[str, dict] = {
            "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
@@ -7152,7 +7161,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
-                         "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                         "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                          "gemini-3-flash-preview",
@@ -7268,7 +7277,7 @@ _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROP
 # sorts first. When nothing on the instance serves one, hermes keeps its default (the main
 # model), which is today's behaviour and the honest answer: we cannot route to a model that no
 # integration here can reach.
-_VISION_CAPABLE = ("claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
+_VISION_CAPABLE = ("claude-haiku-5.5", "claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
                    "gpt-5.4", "claude-sonnet-4.6", "claude-opus-5.5", "claude-opus-5", "gpt-5.5")
 
 
