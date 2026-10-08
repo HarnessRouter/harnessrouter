@@ -385,3 +385,9 @@ def test_a_deleted_environment_takes_down_only_its_own_path(store):
     E.delete_environment(a)                      # the sweep, 30 days later: no name given
     assert os.readlink(E.mount_path("data")) == str(E.active_link(b))
     assert not E.env_dir(a).exists()
+
+
+def test_taking_a_path_down_refuses_a_name_that_is_not_one_segment(store):
+    for slug in ("../outside", "a/b", "", ".."):
+        with pytest.raises(HTTPException):
+            E.drop_mount(slug, "henv_" + "a" * 32)

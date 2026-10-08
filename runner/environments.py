@@ -983,7 +983,10 @@ def drop_mount(slug: str, env_id: str = "") -> None:
     """Take the path down. Given the environment, only while the path is still that environment's:
     a deleted environment's name is free at once, and another environment may hold it by the time
     this one is removed for good."""
-    link = mount_path(slug)
+    base = os.path.realpath(ENV_MOUNT)
+    link = os.path.normpath(os.path.join(base, str(slug or "")))
+    if not slug_ok(slug) or not link.startswith(base + os.sep):
+        raise HTTPException(400, "environment slug is not a path segment")
     if not os.path.islink(link):
         return
     if env_id and os.readlink(link) != str(active_link(env_id)):
