@@ -259,3 +259,28 @@ def test_discovery_reports_the_version_this_build_is(api, monkeypatch):
     assert api.get("/v1/uhp").json()["implementation"]["version"] == "dev"
     monkeypatch.setenv("HR_VERSION", "0.9.1")
     assert api.get("/v1/uhp").json()["implementation"]["version"] == "0.9.1"
+
+
+def test_a_destination_on_a_private_network_is_refused_on_a_shared_deployment(api, cloud, monkeypatch):
+    """The test route fetches the destination for any caller with a key and returns what it
+    answers (reported privately). On a shared deployment the rule an MCP address follows applies:
+    https only, and no address that resolves to a private, local or metadata range; nothing is
+    fetched. A self-hosted box's own network stays allowed."""
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: False)
+    for base in ("https://10.0.0.5", "https://169.254.169.254", "https://127.0.0.1:8080", "https://[::1]",
+                 "http://cloud.example", "https:///no-host"):
+        for route in ("/v1/cloud-upload/targets/test", "/v1/cloud-upload/targets"):
+            r = api.post(route, json={"api_key": "sk-hr-good", "base_url": base})
+            assert r.status_code == 400 and "cannot be used" in r.text, (base, route, r.status_code, r.text[:200])
+    assert cloud.calls == []
+    assert asyncio.run(gw._cloud_base_refused("https://140.82.112.3")) is None          # a public address
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: True)
+    assert asyncio.run(gw._cloud_base_refused("http://10.0.0.5:3000")) is None           # the operator's own network
+
+
+def test_a_destination_stored_before_the_check_is_not_called(api, cloud, monkeypatch):
+    hid = _harness(api)
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: False)
+    before = list(cloud.calls)
+    out = asyncio.run(gw._cloud_upload_one(ORG, hid, {"base_url": "https://10.0.0.5", "api_key": "sk-hr-good"}, {}))
+    assert out["ok"] is False and "cannot be used" in out["error"] and cloud.calls == before

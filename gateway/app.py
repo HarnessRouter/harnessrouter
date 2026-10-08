@@ -18144,8 +18144,32 @@ async def _cloud_records() -> dict:
     return doc
 
 
+async def _cloud_base_refused(base: str) -> str | None:
+    """Why an upload destination's address will not be called, or None: the rule an MCP address
+    follows (_ssrf_check). On a self-hosted box any http(s) host, since the network is the operator's
+    own; on a shared deployment https only, and never an address that resolves to a private, local or
+    metadata range. The test route fetches the address for any caller with a key and returns what it
+    answers, so without this it reached whatever this server can reach (reported privately,
+    GHSA-c5g7-c47h-f6c3)."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(str(base or ""))
+    except ValueError:
+        return "invalid url"
+    if not u.hostname:
+        return "url has no host"
+    if _pool_is_local():
+        return None if u.scheme in ("http", "https") else "the address must be http or https"
+    if u.scheme != "https":
+        return "only https addresses are allowed"
+    return await _internal_target(u.hostname, u.port or 443)
+
+
 async def _cloud_me(base_url: str, api_key: str) -> dict:
     """Resolve a key to where an upload lands. Raises HTTPException with the hosted side's words."""
+    refused = await _cloud_base_refused(base_url)
+    if refused:
+        raise HTTPException(400, f"that address cannot be used: {refused}")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as c:
             r = await c.get(f"{base_url}/v1/me", headers={"authorization": f"Bearer {api_key}"})
@@ -18232,6 +18256,9 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     v = await _vertex_get(hid)
     if not v or str(v.get("org") or "") != org or str(v.get("deleted") or "") in ("1", "true"):
         return {"id": hid, "ok": False, "action": "skip", "error": "not found"}
+    refused = await _cloud_base_refused(target.get("base_url") or "")
+    if refused:          # a destination stored before the address was checked
+        return {"id": hid, "ok": False, "action": "skip", "error": f"that address cannot be used: {refused}"}
     plugins_ok = False
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as c:
