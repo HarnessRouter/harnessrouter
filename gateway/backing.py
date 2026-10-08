@@ -34,6 +34,7 @@ import mimetypes
 import os
 import posixpath
 import re
+import shutil
 import sqlite3
 import tarfile
 import time
@@ -270,6 +271,28 @@ class FileBlobStore:
                     break
             return True
         return await asyncio.to_thread(_do)
+
+    async def purge(self, kb: str, prefix: str) -> None:
+        """Remove everything under a folder-shaped prefix ("sessions/<sid>/"), including the
+        temporary files a torn write leaves and `list` does not show. A deleted session's folder
+        held a lone `changed.json.tmp` after every listed object was gone (hr-test copy,
+        2026-10-08)."""
+        def _do():
+            base = (self._root / kb).resolve()
+            if not prefix.endswith("/") or prefix.strip("/") == "":
+                return
+            top = (base / prefix).resolve()
+            if top == base or base not in top.parents or not top.is_dir():
+                return
+            shutil.rmtree(top, ignore_errors=True)
+            for parent in top.parents:
+                if parent == base or base not in parent.parents:
+                    break
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+        await asyncio.to_thread(_do)
 
     async def list(self, kb: str, prefix: str, limit: int = 20, cursor: str | None = None) -> dict:
         # Walk only the subtree the prefix names: everything before its last "/" is a directory

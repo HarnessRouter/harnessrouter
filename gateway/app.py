@@ -5127,6 +5127,10 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
         with contextlib.suppress(Exception):
             for it in await _blob_list_all(prefix, kb=kb):
                 await _blob_delete(str(it.get("file_id") or ""), kb=kb)
+        purge = getattr(BACKING.blob, "purge", None)       # what a listing does not show
+        if purge:
+            with contextlib.suppress(Exception):
+                await purge(kb, prefix)
     await _blob_delete(_ws_blob(sid), kb=BLOB_KB)
     # The live working folder is the session's memory on this box (the tarball above is its
     # durable copy); §6 says deletion frees it. Only the runner can remove it: the folder belongs

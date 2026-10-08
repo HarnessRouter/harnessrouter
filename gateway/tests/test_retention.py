@@ -114,6 +114,10 @@ def _a_session_with_everything() -> tuple[str, str]:
     _put(gw._ws_blob(sid), b"tarball")
     _put(f"media/{sid}/m1.mp4", b"video")
     _put(gw._media_scene_key(sid), b"{}")
+    # a torn write: the temporary file a listing does not show
+    torn = gw.BACKING.blob._root / gw.RESP_BLOB_KB / "sessions" / sid / "changed.json.tmp"
+    torn.parent.mkdir(parents=True, exist_ok=True)
+    torn.write_bytes(b'{"files": [')
     run(gw.BACKING.graph.upsert(gw._MEDIA_JOB_LABEL, "mjob_" + uuid.uuid4().hex[:16],
                                 {"session": sid, "status": "done", "prompt": "a sunrise"}))
     # a plugin call
