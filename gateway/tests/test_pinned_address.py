@@ -169,3 +169,74 @@ def test_a_database_outside_runs_and_a_self_hosted_one_inside_runs_too(monkeypat
     ran = _fake_pg(monkeypatch, "127.0.0.1")
     asyncio.run(sql_plane.run_query("postgres", "postgres://u:p@localhost/app", "SELECT 1"))
     assert len(ran) == 1
+
+
+def test_a_self_hosted_database_on_a_local_socket_runs(monkeypatch):
+    """A Unix socket has no peer address. 0.32.1 refused it everywhere; only a shared deployment
+    should, where an address that cannot be read is not one this server vouches for."""
+    import sql_plane
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: True)
+    ran = _fake_pg(monkeypatch, "")
+    asyncio.run(sql_plane.run_query("postgres", "postgres://u:p@/app?host=/var/run/postgresql", "SELECT 1"))
+    assert len(ran) == 1
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: False)
+    ran = _fake_pg(monkeypatch, "")
+    with pytest.raises(sql_plane.SqlError):
+        asyncio.run(sql_plane.run_query("postgres", "postgres://u:p@/app?host=/var/run/postgresql", "SELECT 1"))
+    assert ran == []
+
+
+def test_the_checked_clients_limits_are_the_ones_applied():
+    pool = gw._checked_http()._transport._pool
+    assert pool._max_connections == 200 and pool._max_keepalive_connections == 40
+
+
+def test_a_plugin_vendor_address_a_member_typed_cannot_reach_inside_even_by_redirect(monkeypatch):
+    """An InsForge plug names its backend by a typed url, and the answer goes back to the agent."""
+    import plugs_plane
+    monkeypatch.setattr(plugs_plane, "transport", None)
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: False)
+
+    async def classify(host, port):
+        return (["127.0.0.1"], None) if host == "public.test" else ([], "target resolves to a disallowed (internal) address")
+    monkeypatch.setattr(gw, "_classify_target", classify)
+
+    async def go():
+        inside, iport, iseen = await _server()
+
+        async def bounce(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(f"HTTP/1.1 302 Found\r\nlocation: http://inside.test:{iport}/api/secrets\r\n"
+                         f"content-length: 0\r\nconnection: close\r\n\r\n".encode())
+            await writer.drain()
+            writer.close()
+        outside = await asyncio.start_server(bounce, "127.0.0.1", 0)
+        oport = outside.sockets[0].getsockname()[1]
+        errors = []
+        for url in (f"http://inside.test:{iport}/api/health", f"http://public.test:{oport}/api/health"):
+            try:
+                async with plugs_plane.client() as c:
+                    await c.get(url)
+            except httpx.ConnectError as e:
+                errors.append(str(e))
+        inside.close()
+        outside.close()
+        return iseen, errors
+    seen, errors = asyncio.run(go())
+    assert len(errors) == 2 and all("cannot be used" in e for e in errors)
+    assert seen["connections"] == 0
+
+
+def test_a_self_hosted_plugin_vendor_on_the_boxs_own_network_still_works(monkeypatch):
+    import plugs_plane
+    monkeypatch.setattr(plugs_plane, "transport", None)
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: True)
+
+    async def go():
+        srv, port, seen = await _server()
+        async with plugs_plane.client() as c:
+            r = await c.get(f"http://127.0.0.1:{port}/api/health")
+        srv.close()
+        return r, seen
+    r, seen = asyncio.run(go())
+    assert r.status_code == 200 and seen["connections"] == 1
