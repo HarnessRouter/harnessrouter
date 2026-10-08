@@ -80,6 +80,35 @@ def test_import_strips_one_wrapping_directory_and_drops_escapes_and_links(store,
     assert {e["path"] for e in E.tree("henv_z") if not e["dir"]} == {"a.txt", "d/b.txt"}
 
 
+@pytest.mark.parametrize("archive_format", ["zip", "tar"])
+@pytest.mark.parametrize("wrapper, directory_entry", [("", False), ("project/", False), ("project/", True)])
+def test_import_keeps_a_single_file_with_or_without_a_wrapping_directory(
+    store, tmp_path, archive_format, wrapper, directory_entry,
+):
+    data = b"a single file\n"
+    p = tmp_path / ("single." + archive_format)
+    if archive_format == "zip":
+        with zipfile.ZipFile(p, "w") as zf:
+            if directory_entry:
+                zf.writestr(wrapper, b"")
+            zf.writestr(wrapper + "new.txt", data)
+    else:
+        with tarfile.open(p, "w") as tf:
+            if directory_entry:
+                directory = tarfile.TarInfo(wrapper)
+                directory.type = tarfile.DIRTYPE
+                tf.addfile(directory)
+            member = tarfile.TarInfo(wrapper + "new.txt")
+            member.size = len(data)
+            tf.addfile(member, io.BytesIO(data))
+
+    out = E.import_archive("henv_single", str(p))
+    assert out["written"] == 1 and out["skipped"] == 0
+    assert E.source_stat("henv_single") == {"count": 1, "bytes": len(data)}
+    assert E.read_file("henv_single", "new.txt")[0] == data
+    assert {e["path"] for e in E.tree("henv_single")} == {"new.txt"}
+
+
 def _wait(env_id, n, timeout=240):
     for _ in range(timeout * 4):
         rec = E.build_record(env_id, n)
@@ -325,3 +354,102 @@ def test_a_package_check_asks_the_registry_and_refuses_what_is_not_there(monkeyp
     apt = E.check_package("apt", "jq=1.7.1-3")
     assert apt["exists"] is True and apt["latest"] == "1.7.1-3" and apt["version"] == "1.7.1-3"
     assert E.check_package("apt", "nope")["exists"] is False
+
+
+def test_a_git_import_lands_files_and_directories_and_never_follows_a_link(store, tmp_path, monkeypatch):
+    """A link a repository commits is dropped and counted, like an archive's; following it as root
+    wrote what it pointed at into the source (reported privately). The clone gets the build's
+    environment, without the runner's secrets."""
+    outside = tmp_path / "outside"
+    (outside / "dir").mkdir(parents=True)
+    (outside / "private.txt").write_text("not for the environment")
+    (outside / "dir" / "inner.txt").write_text("nor this")
+    monkeypatch.setenv("HR_SECRET_KEY", "runner-secret-value")
+    monkeypatch.setenv("HARNESS_INTERNAL_KEY", "runner-internal-value")
+    seen = {}
+
+    def fake_clone(cmd, **kw):
+        seen["env"] = kw.get("env") or {}
+        repo = pathlib.Path(cmd[-1])
+        (repo / ".git").mkdir(parents=True)
+        (repo / "src").mkdir()
+        (repo / "README.md").write_text("hello\n")
+        (repo / "src" / "run.sh").write_text("echo hi\n")
+        os.chmod(repo / "src" / "run.sh", 0o755)
+        os.symlink(outside / "private.txt", repo / "leak.txt")
+        os.symlink(outside / "dir", repo / "src" / "linked-dir")
+        os.symlink("README.md", repo / "readme-alias")
+        return None
+    monkeypatch.setattr(E.subprocess, "run", fake_clone)
+    out = E.import_git("henv_g", "https://example.com/repo.git")
+    assert out["written"] == 2 and out["skipped"] == 3, out
+    files = {e["path"] for e in E.tree("henv_g") if not e["dir"]}
+    assert files == {"README.md", "src/run.sh"}
+    src = E.source_dir("henv_g")
+    assert not any(p.is_symlink() for p in src.rglob("*"))
+    assert all("not for the environment" not in p.read_text() and "nor this" not in p.read_text()
+               for p in src.rglob("*") if p.is_file())
+    assert os.stat(src / "src" / "run.sh").st_mode & 0o111
+    assert "HR_SECRET_KEY" not in seen["env"] and "HARNESS_INTERNAL_KEY" not in seen["env"]
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_a_deleted_environment_takes_down_only_its_own_path(store):
+    """Deleting keeps the files for 30 days and frees the name at once; by the time the files go,
+    another environment may be mounted under that name, and its path must stay."""
+    def point(env_id, slug):
+        E.env_dir(env_id).mkdir(parents=True, exist_ok=True)
+        os.makedirs(E.ENV_MOUNT, exist_ok=True)
+        link = E.mount_path(slug)
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(str(E.active_link(env_id)), link)
+
+    a, b = "henv_" + "a" * 32, "henv_" + "b" * 32
+    point(a, "data")
+    E.drop_mount("data", a)                      # the delete: its path goes, its files stay
+    assert not os.path.lexists(E.mount_path("data")) and E.env_dir(a).is_dir()
+    point(b, "data")                             # the name is taken by another environment
+    E.drop_mount("data", a)
+    E.delete_environment(a)                      # the sweep, 30 days later: no name given
+    assert os.readlink(E.mount_path("data")) == str(E.active_link(b))
+    assert not E.env_dir(a).exists()
+
+
+def test_taking_a_path_down_refuses_a_name_that_is_not_one_segment(store):
+    for slug in ("../outside", "a/b", "", ".."):
+        with pytest.raises(HTTPException):
+            E.drop_mount(slug, "henv_" + "a" * 32)
+
+
+def test_a_pinned_git_clone_connects_to_the_address_the_gateway_classified(store, monkeypatch):
+    """On a shared deployment the gateway hands over host:port:address; git must not resolve the
+    name again when it connects (a DNS rebind), nor follow a redirect to a name it would resolve."""
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        os.makedirs(cmd[-1], exist_ok=True)
+        pathlib.Path(cmd[-1], "README.md").write_text("hi\n")
+        return None
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    E.import_git("henv_" + "c" * 32, "https://git.example/team/repo.git", pin="git.example:443:140.82.112.3")
+    E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git", pin="git.example:22:140.82.112.3")
+    E.import_git("henv_" + "c" * 32, "https://git.example/team/repo.git")
+    https, ssh, unpinned = seen
+    assert https[:5] == ["git", "-c", "http.curloptResolve=git.example:443:140.82.112.3",
+                         "-c", "http.followRedirects=false"]
+    assert ssh[:3] == ["git", "-c", "core.sshCommand=ssh -o HostName=140.82.112.3 -o HostKeyAlias=git.example"]
+    assert unpinned[:2] == ["git", "clone"]
+    # through the route, as the gateway sends it
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(E.router)
+    r = TestClient(app).post(f"/environments/henv_{'c' * 32}/import",
+                             params={"git_url": "https://git.example/team/repo.git", "git_pin": "git.example:443:140.82.112.3"})
+    assert r.status_code == 200 and seen[-1][:3] == ["git", "-c", "http.curloptResolve=git.example:443:140.82.112.3"]
+    for bad in ("git.example:443:not-an-address", "git.example::140.82.112.3", "a b:22:140.82.112.3"):
+        with pytest.raises(HTTPException):
+            E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git" if " " in bad else
+                         "https://git.example/team/repo.git", pin=bad)

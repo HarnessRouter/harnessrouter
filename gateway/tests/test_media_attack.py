@@ -182,6 +182,7 @@ def hostile(monkeypatch):
     h = Hostile()
     cl = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: h.handle(r)), timeout=30)
     monkeypatch.setattr(app, "_media_client", lambda: cl)
+    monkeypatch.setattr(app, "_media_fetch_client", lambda: cl)
     app._media_quarantine.clear()
     yield h
     asyncio.run(cl.aclose())

@@ -149,6 +149,35 @@ def _jsonable(v):
     return str(v)
 
 
+# Set by the gateway on a deployment shared by several organizations: given the address a
+# connection actually reached, why it must not be used, or None. The host was checked when the
+# connection was saved, by name; a name can answer differently by the time a query runs (a DNS
+# change, or a rebind), so the address is checked again where it is a fact, on the open socket,
+# before any query is sent.
+PEER_CHECK = None
+
+
+def _peer_of(conn) -> str:
+    """The address a driver's connection reached: asyncpg keeps its transport, aiomysql its
+    stream writer. Empty when neither answers (a local socket, or a driver that changed)."""
+    for holder in (getattr(conn, "_transport", None), getattr(conn, "_writer", None)):
+        if holder is not None:
+            peer = holder.get_extra_info("peername")
+            if isinstance(peer, (tuple, list)) and peer:
+                return str(peer[0])
+    return ""
+
+
+async def _vet_peer(conn) -> None:
+    """The gateway decides, including for an address that could not be read: on a self-hosted box
+    that is a database on a local socket, the normal case there (0.32.1 refused it)."""
+    if PEER_CHECK is None:
+        return
+    why = await PEER_CHECK(_peer_of(conn))
+    if why:
+        raise SqlError(f"This server cannot use that database: {why}.")
+
+
 async def _pg_query(dsn: str, sql: str, timeout: float, max_rows: int) -> dict:
     try:
         import asyncpg
@@ -157,6 +186,7 @@ async def _pg_query(dsn: str, sql: str, timeout: float, max_rows: int) -> dict:
     conn = None
     try:
         conn = await asyncio.wait_for(asyncpg.connect(dsn), timeout=timeout)
+        await _vet_peer(conn)
         # A read-only transaction: the gate above is a parser, this is the database's own opinion.
         # Belt and braces, and this one cannot be fooled by clever text.
         async with conn.transaction(readonly=True):
@@ -183,6 +213,7 @@ async def _mysql_query(dsn: str, sql: str, timeout: float, max_rows: int) -> dic
     conn = None
     try:
         conn = await asyncio.wait_for(aiomysql.connect(**parsed), timeout=timeout)
+        await _vet_peer(conn)
         async with conn.cursor() as cur:
             # MySQL has no read-only transaction that survives a plain connection cleanly, so the
             # session is set read-only where the server supports it and the parser carries the

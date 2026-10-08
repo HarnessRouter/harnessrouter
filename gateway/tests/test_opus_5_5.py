@@ -18,9 +18,9 @@ def test_every_provider_that_serves_opus_5_5_names_its_own_id():
     assert gw._ANTHROPIC_CLAUDE["opus-5.5"] == "claude-opus-5-5" and gw._BEDROCK_CLAUDE["opus-5.5"] == "us.anthropic.claude-opus-5-5"
 
 
-def test_aggregators_that_do_not_list_it_do_not_promise_it():
-    assert "claude-opus-5.5" not in gw._VENDOR_MODELS["tokenrouter"]      # TokenRouter's list, 2026-09-22
-    assert "claude-opus-5.5" not in gw._VENDOR_MODELS["llmtr"]            # llmtr's list, 2026-09-22
+def test_aggregators_promise_it_exactly_where_they_list_it():
+    assert gw._VENDOR_MODELS["tokenrouter"]["claude-opus-5.5"] == "anthropic/claude-opus-5.5"   # listed by 2026-10-07
+    assert gw._VENDOR_MODELS["llmtr"]["claude-opus-5.5"] == "anthropic/claude-opus-5.5"         # listed by 2026-10-07
 
 
 def test_it_sits_beside_opus_5_in_every_catalog_that_offers_opus_5():

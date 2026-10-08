@@ -6,9 +6,21 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "redirects": [
-    { "source": "/spec", "destination": "/spec/2026-10-04", "permanent": false }
+    { "source": "/spec", "destination": "/spec/2026-10-04", "permanent": false },
+    { "source": "/spec/index", "destination": "/spec/2026-10-04", "permanent": false },
+    { "source": "/spec/:chapter(architecture|lifecycle|harnesses|plugins|environments|memories|tasks|streaming|sessions|files|errors|security|schema)", "destination": "/spec/2026-10-04/:chapter", "permanent": false }
   ],
   "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; upgrade-insecure-requests" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
+        { "key": "X-Frame-Options", "value": "DENY" }
+      ]
+    },
     {
       "source": "/schema/(.*).json",
       "headers": [

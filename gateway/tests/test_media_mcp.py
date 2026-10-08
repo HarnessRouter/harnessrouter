@@ -350,6 +350,7 @@ def provider(monkeypatch):
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: p.handle(r)),
                                timeout=30)
     monkeypatch.setattr(app, "_media_client", lambda: client)
+    monkeypatch.setattr(app, "_media_fetch_client", lambda: client)
     app._media_quarantine.clear()
     yield p
     asyncio.run(client.aclose())

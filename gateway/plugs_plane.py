@@ -38,10 +38,15 @@ TEXT_CAP = 200_000             # the most text one tool result carries back to t
 
 # Tests set an httpx transport here so every vendor call is exercised and nothing is spent.
 transport: httpx.BaseTransport | None = None
+# Set by the gateway: a transport whose connections go only to an address it classified in the
+# same step, so a vendor address a member typed cannot reach the private network on a shared
+# deployment, a redirect included (every connection, redirected or not, goes through it).
+checked_transport = None
 
 
 def client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=CALL_TIMEOUT_S, transport=transport, follow_redirects=True)
+    t = transport if transport is not None else (checked_transport() if checked_transport else None)
+    return httpx.AsyncClient(timeout=CALL_TIMEOUT_S, transport=t, follow_redirects=True)
 
 
 class PlugToolError(RuntimeError):
